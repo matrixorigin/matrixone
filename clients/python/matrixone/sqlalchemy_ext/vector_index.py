@@ -25,11 +25,757 @@ class VectorOpType:
     VECTOR_COSINE_OPS = "vector_cosine_ops"
 
 
+class IVFVectorIndex(Index):
+    """
+    SQLAlchemy Index for IVFFLAT vector columns with MatrixOne-specific syntax.
+    
+    Specialized class for IVFFLAT vector indexes with type safety and clear API.
+    
+    Usage Examples:
+    
+    1. Class Methods (Recommended for one-time operations):
+    
+        # Create index using class method
+        success = IVFVectorIndex.create_index(
+            engine=engine,
+            table_name='my_table',
+            name='idx_embedding',
+            column='embedding',
+            lists=100,
+            op_type=VectorOpType.VECTOR_L2_OPS
+        )
+        
+        # Drop index using class method
+        success = IVFVectorIndex.drop_index(
+            engine=engine,
+            table_name='my_table',
+            name='idx_embedding'
+        )
+        
+        # Create index within existing transaction
+        with engine.begin() as conn:
+            success = IVFVectorIndex.create_index_in_transaction(
+                connection=conn,
+                table_name='my_table',
+                name='idx_embedding',
+                column='embedding',
+                lists=100
+            )
+        
+        # Drop index within existing transaction
+        with engine.begin() as conn:
+            success = IVFVectorIndex.drop_index_in_transaction(
+                connection=conn,
+                table_name='my_table',
+                name='idx_embedding'
+            )
+    
+    2. Instance Methods (Useful for reusable index configurations):
+    
+        # Create index object
+        index = IVFVectorIndex('idx_embedding', 'embedding', lists=100)
+        
+        # Create index using instance method
+        success = index.create(engine, 'my_table')
+        
+        # Drop index using instance method
+        success = index.drop(engine, 'my_table')
+        
+        # Create index within existing transaction
+        with engine.begin() as conn:
+            success = index.create_in_transaction(conn, 'my_table')
+        
+        # Drop index within existing transaction
+        with engine.begin() as conn:
+            success = index.drop_in_transaction(conn, 'my_table')
+    
+    3. SQLAlchemy ORM Integration:
+    
+        # In table definition
+        class Document(Base):
+            __tablename__ = 'documents'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(128, "f32")
+            
+            # Note: For ORM integration, create table first, then create index separately
+            # __table_args__ = (IVFVectorIndex('idx_embedding', 'embedding', lists=100),)
+        
+        # Create table first
+        Base.metadata.create_all(engine)
+        
+        # Then create index separately
+        IVFVectorIndex.create_index(engine, 'documents', 'idx_embedding', 'embedding', lists=100)
+    
+    4. Client Chain Operations:
+    
+        # Using client.vector_index.create_ivf() method
+        client.vector_index.create_ivf('my_table', 'idx_embedding', 'embedding', lists=100)
+        
+        # Using client.vector_index.create_ivf_in_transaction() method
+        with client.transaction() as tx:
+            client.vector_index.create_ivf_in_transaction('my_table', 'idx_embedding', 'embedding', tx.connection, lists=100)
+    
+    Parameters:
+        name (str): Index name
+        column (Union[str, Column]): Vector column to index
+        lists (int): Number of lists for IVFFLAT (default: 100)
+        op_type (str): Vector operation type (default: vector_l2_ops)
+        **kwargs: Additional index parameters
+    
+    Note:
+        - MatrixOne supports only ONE index per vector column
+        - Enable IVF indexing before creating IVFFLAT indexes: SET experimental_ivf_index = 1
+        - Set probe limit for search: SET probe_limit = 1
+    """
+
+    def __init__(
+        self,
+        name: str,
+        column: Union[str, Column],
+        lists: int = 100,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ):
+        """
+        Initialize IVFVectorIndex.
+
+        Args:
+            name: Index name
+            column: Vector column to index
+            lists: Number of lists for IVFFLAT (default: 100)
+            op_type: Vector operation type (default: vector_l2_ops)
+            **kwargs: Additional index parameters
+        """
+        self.index_type = VectorIndexType.IVFFLAT
+        self.lists = lists
+        self.op_type = op_type
+
+        # Store column name for later use
+        self._column_name = str(column) if not isinstance(column, str) else column
+
+        # Call parent constructor first
+        super().__init__(name, column, **kwargs)
+
+        # Set dialect options after initialization to bind to matrixone dialect
+        self.dialect_options["matrixone"] = {"length": None, "using": None}
+        # Also provide mysql fallback for compatibility
+        self.dialect_options["mysql"] = {"length": None, "using": None, "with_parser": None}
+
+    def _create_index_sql(self, table_name: str) -> str:
+        """Generate the CREATE INDEX SQL for IVFFLAT vector index."""
+        column_name = self._column_name
+        sql_parts = [f"CREATE INDEX {self.name} USING {self.index_type} ON {table_name}({column_name})"]
+        sql_parts.append(f"LISTS {self.lists}")
+        sql_parts.append(f"op_type '{self.op_type}'")
+        return " ".join(sql_parts)
+
+    def create_sql(self, table_name: str) -> str:
+        """Generate CREATE INDEX SQL for the given table name."""
+        return self._create_index_sql(table_name)
+
+    def drop_sql(self, table_name: str) -> str:
+        """Generate DROP INDEX SQL for the given table name."""
+        return f"DROP INDEX {self.name} ON {table_name}"
+
+    @classmethod
+    def create_index(
+        cls,
+        engine,
+        table_name: str,
+        name: str,
+        column: Union[str, Column],
+        lists: int = 100,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> bool:
+        """
+        Create an IVFFLAT vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            lists: Number of lists for IVFFLAT (default: 100)
+            op_type: Vector operation type (default: vector_l2_ops)
+            **kwargs: Additional index parameters
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            index = cls(name, column, lists, op_type, **kwargs)
+            sql = index.create_sql(table_name)
+
+            with engine.begin() as conn:
+                # Enable IVF indexing
+                conn.execute(text("SET experimental_ivf_index = 1"))
+                conn.execute(text("SET probe_limit = 1"))
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create IVFFLAT vector index: {e}")
+            return False
+
+    @classmethod
+    def create_index_in_transaction(
+        cls,
+        connection,
+        table_name: str,
+        name: str,
+        column: Union[str, Column],
+        lists: int = 100,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> bool:
+        """
+        Create an IVFFLAT vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            lists: Number of lists for IVFFLAT (default: 100)
+            op_type: Vector operation type (default: vector_l2_ops)
+            **kwargs: Additional index parameters
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            index = cls(name, column, lists, op_type, **kwargs)
+            sql = index.create_sql(table_name)
+
+            # Enable IVF indexing
+            connection.execute(text("SET experimental_ivf_index = 1"))
+            connection.execute(text("SET probe_limit = 1"))
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create IVFFLAT vector index in transaction: {e}")
+            return False
+
+    @classmethod
+    def drop_index(cls, engine, table_name: str, name: str) -> bool:
+        """
+        Drop an IVFFLAT vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop IVFFLAT vector index: {e}")
+            return False
+
+    @classmethod
+    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
+        """
+        Drop an IVFFLAT vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop IVFFLAT vector index in transaction: {e}")
+            return False
+
+    def create(self, engine, table_name: str) -> bool:
+        """
+        Create this IVFFLAT vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.create_sql(table_name)
+
+            with engine.begin() as conn:
+                # Enable IVF indexing
+                conn.execute(text("SET experimental_ivf_index = 1"))
+                conn.execute(text("SET probe_limit = 1"))
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create IVFFLAT vector index: {e}")
+            return False
+
+    def drop(self, engine, table_name: str) -> bool:
+        """
+        Drop this IVFFLAT vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.drop_sql(table_name)
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop IVFFLAT vector index: {e}")
+            return False
+
+    def create_in_transaction(self, connection, table_name: str) -> bool:
+        """
+        Create this IVFFLAT vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.create_sql(table_name)
+
+            # Enable IVF indexing
+            connection.execute(text("SET experimental_ivf_index = 1"))
+            connection.execute(text("SET probe_limit = 1"))
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create IVFFLAT vector index in transaction: {e}")
+            return False
+
+    def drop_in_transaction(self, connection, table_name: str) -> bool:
+        """
+        Drop this IVFFLAT vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.drop_sql(table_name)
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop IVFFLAT vector index in transaction: {e}")
+            return False
+
+
+class HnswVectorIndex(Index):
+    """
+    SQLAlchemy Index for HNSW vector columns with MatrixOne-specific syntax.
+    
+    Specialized class for HNSW vector indexes with type safety and clear API.
+    
+    Usage Examples:
+    
+    1. Class Methods (Recommended for one-time operations):
+    
+        # Create index using class method
+        success = HnswVectorIndex.create_index(
+            engine=engine,
+            table_name='my_table',
+            name='idx_embedding',
+            column='embedding',
+            m=16,
+            ef_construction=200,
+            ef_search=50,
+            op_type=VectorOpType.VECTOR_L2_OPS
+        )
+        
+        # Drop index using class method
+        success = HnswVectorIndex.drop_index(
+            engine=engine,
+            table_name='my_table',
+            name='idx_embedding'
+        )
+        
+        # Create index within existing transaction
+        with engine.begin() as conn:
+            success = HnswVectorIndex.create_index_in_transaction(
+                connection=conn,
+                table_name='my_table',
+                name='idx_embedding',
+                column='embedding',
+                m=16,
+                ef_construction=200,
+                ef_search=50
+            )
+        
+        # Drop index within existing transaction
+        with engine.begin() as conn:
+            success = HnswVectorIndex.drop_index_in_transaction(
+                connection=conn,
+                table_name='my_table',
+                name='idx_embedding'
+            )
+    
+    2. Instance Methods (Useful for reusable index configurations):
+    
+        # Create index object
+        index = HnswVectorIndex('idx_embedding', 'embedding', m=16, ef_construction=200, ef_search=50)
+        
+        # Create index using instance method
+        success = index.create(engine, 'my_table')
+        
+        # Drop index using instance method
+        success = index.drop(engine, 'my_table')
+        
+        # Create index within existing transaction
+        with engine.begin() as conn:
+            success = index.create_in_transaction(conn, 'my_table')
+        
+        # Drop index within existing transaction
+        with engine.begin() as conn:
+            success = index.drop_in_transaction(conn, 'my_table')
+    
+    3. SQLAlchemy ORM Integration:
+    
+        # In table definition (requires BigInteger primary key for HNSW)
+        class Document(Base):
+            __tablename__ = 'documents'
+            id = Column(BigInteger, primary_key=True)  # BigInteger required for HNSW
+            embedding = create_vector_column(128, "f32")
+            
+            # Note: For ORM integration, create table first, then create index separately
+            # __table_args__ = (HnswVectorIndex('idx_embedding', 'embedding', m=16),)
+        
+        # Create table first
+        Base.metadata.create_all(engine)
+        
+        # Then create index separately
+        HnswVectorIndex.create_index(engine, 'documents', 'idx_embedding', 'embedding', m=16)
+    
+    4. Client Chain Operations:
+    
+        # Using client.vector_index.create_hnsw() method
+        client.vector_index.create_hnsw('my_table', 'idx_embedding', 'embedding', m=16, ef_construction=200)
+        
+        # Using client.vector_index.create_hnsw_in_transaction() method
+        with client.transaction() as tx:
+            client.vector_index.create_hnsw_in_transaction('my_table', 'idx_embedding', 'embedding', tx.connection, m=16)
+    
+    Parameters:
+        name (str): Index name
+        column (Union[str, Column]): Vector column to index
+        m (int): Number of bi-directional links for HNSW (default: 16)
+        ef_construction (int): Size of dynamic candidate list for HNSW construction (default: 200)
+        ef_search (int): Size of dynamic candidate list for HNSW search (default: 50)
+        op_type (str): Vector operation type (default: vector_l2_ops)
+        **kwargs: Additional index parameters
+    
+    Note:
+        - MatrixOne supports only ONE index per vector column
+        - Enable HNSW indexing before creating HNSW indexes: SET experimental_hnsw_index = 1
+        - HNSW indexes require BigInteger primary key in the table
+        - Higher M values provide better recall but slower construction
+        - Higher ef_construction provides better index quality but slower construction
+        - Higher ef_search provides better recall but slower search
+    """
+
+    def __init__(
+        self,
+        name: str,
+        column: Union[str, Column],
+        m: int = 16,
+        ef_construction: int = 200,
+        ef_search: int = 50,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ):
+        """
+        Initialize HnswVectorIndex.
+
+        Args:
+            name: Index name
+            column: Vector column to index
+            m: Number of bi-directional links for HNSW (default: 16)
+            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
+            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
+            op_type: Vector operation type (default: vector_l2_ops)
+            **kwargs: Additional index parameters
+        """
+        self.index_type = VectorIndexType.HNSW
+        self.m = m
+        self.ef_construction = ef_construction
+        self.ef_search = ef_search
+        self.op_type = op_type
+
+        # Store column name for later use
+        self._column_name = str(column) if not isinstance(column, str) else column
+
+        # Call parent constructor first
+        super().__init__(name, column, **kwargs)
+
+        # Set dialect options after initialization to bind to matrixone dialect
+        self.dialect_options["matrixone"] = {"length": None, "using": None}
+        # Also provide mysql fallback for compatibility
+        self.dialect_options["mysql"] = {"length": None, "using": None, "with_parser": None}
+
+    def _create_index_sql(self, table_name: str) -> str:
+        """Generate the CREATE INDEX SQL for HNSW vector index."""
+        column_name = self._column_name
+        sql_parts = [f"CREATE INDEX {self.name} USING {self.index_type} ON {table_name}({column_name})"]
+        sql_parts.append(f"M {self.m}")
+        sql_parts.append(f"EF_CONSTRUCTION {self.ef_construction}")
+        sql_parts.append(f"EF_SEARCH {self.ef_search}")
+        sql_parts.append(f"op_type '{self.op_type}'")
+        return " ".join(sql_parts)
+
+    def create_sql(self, table_name: str) -> str:
+        """Generate CREATE INDEX SQL for the given table name."""
+        return self._create_index_sql(table_name)
+
+    def drop_sql(self, table_name: str) -> str:
+        """Generate DROP INDEX SQL for the given table name."""
+        return f"DROP INDEX {self.name} ON {table_name}"
+
+    @classmethod
+    def create_index(
+        cls,
+        engine,
+        table_name: str,
+        name: str,
+        column: Union[str, Column],
+        m: int = 16,
+        ef_construction: int = 200,
+        ef_search: int = 50,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> bool:
+        """
+        Create an HNSW vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            m: Number of bi-directional links for HNSW (default: 16)
+            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
+            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
+            op_type: Vector operation type (default: vector_l2_ops)
+            **kwargs: Additional index parameters
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            index = cls(name, column, m, ef_construction, ef_search, op_type, **kwargs)
+            sql = index.create_sql(table_name)
+
+            with engine.begin() as conn:
+                # Enable HNSW indexing
+                conn.execute(text("SET experimental_hnsw_index = 1"))
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create HNSW vector index: {e}")
+            return False
+
+    @classmethod
+    def create_index_in_transaction(
+        cls,
+        connection,
+        table_name: str,
+        name: str,
+        column: Union[str, Column],
+        m: int = 16,
+        ef_construction: int = 200,
+        ef_search: int = 50,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> bool:
+        """
+        Create an HNSW vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            m: Number of bi-directional links for HNSW (default: 16)
+            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
+            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
+            op_type: Vector operation type (default: vector_l2_ops)
+            **kwargs: Additional index parameters
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            index = cls(name, column, m, ef_construction, ef_search, op_type, **kwargs)
+            sql = index.create_sql(table_name)
+
+            # Enable HNSW indexing
+            connection.execute(text("SET experimental_hnsw_index = 1"))
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create HNSW vector index in transaction: {e}")
+            return False
+
+    @classmethod
+    def drop_index(cls, engine, table_name: str, name: str) -> bool:
+        """
+        Drop an HNSW vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop HNSW vector index: {e}")
+            return False
+
+    @classmethod
+    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
+        """
+        Drop an HNSW vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop HNSW vector index in transaction: {e}")
+            return False
+
+    def create(self, engine, table_name: str) -> bool:
+        """
+        Create this HNSW vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.create_sql(table_name)
+
+            with engine.begin() as conn:
+                # Enable HNSW indexing
+                conn.execute(text("SET experimental_hnsw_index = 1"))
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create HNSW vector index: {e}")
+            return False
+
+    def drop(self, engine, table_name: str) -> bool:
+        """
+        Drop this HNSW vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.drop_sql(table_name)
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop HNSW vector index: {e}")
+            return False
+
+    def create_in_transaction(self, connection, table_name: str) -> bool:
+        """
+        Create this HNSW vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.create_sql(table_name)
+
+            # Enable HNSW indexing
+            connection.execute(text("SET experimental_hnsw_index = 1"))
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create HNSW vector index in transaction: {e}")
+            return False
+
+    def drop_in_transaction(self, connection, table_name: str) -> bool:
+        """
+        Drop this HNSW vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection object
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = self.drop_sql(table_name)
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop HNSW vector index in transaction: {e}")
+            return False
+
+
 class VectorIndex(Index):
     """
     SQLAlchemy Index for vector columns with MatrixOne-specific syntax.
 
     Supports creating vector indexes with various algorithms and operation types.
+
+    Note: This is the legacy generic class. For better type safety, consider using
+    IVFVectorIndex or HnswVectorIndex instead.
     """
 
     def __init__(
@@ -76,7 +822,7 @@ class VectorIndex(Index):
         # Set dialect options after initialization to bind to matrixone dialect
         self.dialect_options["matrixone"] = {"length": None, "using": None}
         # Also provide mysql fallback for compatibility
-        self.dialect_options["mysql"] = {"length": None, "using": None}
+        self.dialect_options["mysql"] = {"length": None, "using": None, "with_parser": None}
 
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for vector index."""

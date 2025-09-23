@@ -21,11 +21,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from matrixone import Client
 from matrixone.config import get_connection_params, print_config
 from matrixone.sqlalchemy_ext import (
-    VectorIndex, VectorIndexType, VectorOpType, create_hnsw_index,
+    HnswVectorIndex, VectorIndexType, VectorOpType, create_hnsw_index,
     create_ivfflat_index, enable_hnsw_indexing, enable_ivf_indexing,
     Vectorf32, Vectorf64
 )
-from sqlalchemy import Column, BigInteger, Integer
+from sqlalchemy import Column, BigInteger, Integer, text
 
 
 def main():
@@ -58,17 +58,28 @@ def main():
         # Demo 2: DDL Table Creation with HNSW Index using ORM interface
         print("\n--- Demo 2: DDL Table Creation with HNSW Index using ORM interface ---")
         
-        # Create table with HNSW index using new ORM interface
+        # Create table first without index
         client.create_table_orm(
             'vector_docs_hnsw_demo',
             Column('a', BigInteger, primary_key=True),
             Column('b', Vectorf32(128)),
-            Column('c', Integer),
-            VectorIndex('idx_hnsw', 'b', index_type=VectorIndexType.HNSW, 
-                       m=48, ef_construction=64, ef_search=64, 
-                       op_type=VectorOpType.VECTOR_L2_OPS)
+            Column('c', Integer)
         )
-        print("✓ Created table with HNSW index using ORM interface")
+        print("✓ Created table")
+        
+        # Enable HNSW indexing and create index separately
+        engine = client.get_sqlalchemy_engine()
+        with engine.begin() as conn:
+            conn.execute(text("SET experimental_hnsw_index = 1"))
+            
+            # Create HNSW index using specialized class
+            hnsw_index = HnswVectorIndex('idx_hnsw', 'b', 
+                                       m=48, ef_construction=64, ef_search=64, 
+                                       op_type=VectorOpType.VECTOR_L2_OPS)
+            sql = hnsw_index.create_sql('vector_docs_hnsw_demo')
+            conn.execute(text(sql))
+        
+        print("✓ Created HNSW index using specialized HnswVectorIndex class")
         
         # Demo 3: CREATE INDEX Statement for HNSW
         print("\n--- Demo 3: CREATE INDEX Statement for HNSW ---")
@@ -111,7 +122,6 @@ def main():
         print("✓ Inserted sample data")
         
         # Create HNSW index using CREATE INDEX statement in the same session
-        from sqlalchemy import text
         engine = client.get_sqlalchemy_engine()
         with engine.begin() as conn:
             # Enable HNSW indexing in this session

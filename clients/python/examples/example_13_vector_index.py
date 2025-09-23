@@ -29,7 +29,7 @@ from matrixone import Client
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
 from matrixone.sqlalchemy_ext import (
-    create_vector_column, VectorIndex, VectorIndexType, VectorOpType,
+    create_vector_column, IVFVectorIndex, VectorIndexType, VectorOpType,
     create_vector_index, create_ivfflat_index, vector_index_builder,
     IVFConfig, create_ivf_config
 )

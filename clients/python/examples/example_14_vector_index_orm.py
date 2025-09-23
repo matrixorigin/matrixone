@@ -19,7 +19,7 @@ from matrixone import Client
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
 from matrixone.sqlalchemy_ext import (
-    VectorIndex,
+    IVFVectorIndex,
     VectorIndexType,
     VectorOpType,
     create_vector_column,
@@ -86,12 +86,11 @@ def main():
     
     # Demo 1: Class method create_index
     print("\n--- Demo 1: Class Method create_index ---")
-    success = VectorIndex.create_index(
+    success = IVFVectorIndex.create_index(
         engine=engine,
         table_name="vector_orm_demo",
         name="idx_embedding_class_method",
         column="embedding",
-        index_type=VectorIndexType.IVFFLAT,
         lists=32,
         op_type=VectorOpType.VECTOR_L2_OPS
     )
@@ -106,7 +105,7 @@ def main():
     
     # Demo 2: Class method drop_index
     print("\n--- Demo 2: Class Method drop_index ---")
-    success = VectorIndex.drop_index(
+    success = IVFVectorIndex.drop_index(
         engine=engine,
         table_name="vector_orm_demo",
         name="idx_embedding_class_method"
@@ -122,10 +121,9 @@ def main():
     
     # Demo 3: Instance method create
     print("\n--- Demo 3: Instance Method create ---")
-    index = VectorIndex(
+    index = IVFVectorIndex(
         name="idx_embedding_instance_method",
         column="embedding",
-        index_type=VectorIndexType.IVFFLAT,
         lists=64,
         op_type=VectorOpType.VECTOR_L2_OPS
     )
@@ -156,12 +154,11 @@ def main():
     print("\n--- Demo 5: Different Index Configurations ---")
     
     # Create index with different lists parameter
-    success = VectorIndex.create_index(
+    success = IVFVectorIndex.create_index(
         engine=engine,
         table_name="vector_orm_demo",
         name="idx_embedding_different_config",
         column="embedding",
-        index_type=VectorIndexType.IVFFLAT,
         lists=16,
         op_type=VectorOpType.VECTOR_L2_OPS
     )
@@ -175,7 +172,7 @@ def main():
         print(f"✓ Indexes in table: {index_names}")
     
     # Drop the index
-    success = VectorIndex.drop_index(
+    success = IVFVectorIndex.drop_index(
         engine=engine,
         table_name="vector_orm_demo",
         name="idx_embedding_different_config"
@@ -186,7 +183,7 @@ def main():
     print("\n--- Demo 6: Error Handling ---")
     
     # Try to drop non-existent index
-    success = VectorIndex.drop_index(
+    success = IVFVectorIndex.drop_index(
         engine=engine,
         table_name="vector_orm_demo",
         name="non_existent_index"
@@ -194,12 +191,11 @@ def main():
     print(f"✓ Drop non-existent index result: {success} (should be False)")
     
     # Try to create index on non-existent table
-    success = VectorIndex.create_index(
+    success = IVFVectorIndex.create_index(
         engine=engine,
         table_name="non_existent_table",
         name="idx_test",
         column="embedding",
-        index_type=VectorIndexType.IVFFLAT,
         lists=32,
         op_type=VectorOpType.VECTOR_L2_OPS
     )

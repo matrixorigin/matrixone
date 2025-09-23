@@ -2085,19 +2085,17 @@ class VectorIndexManager:
         Returns:
             VectorIndexManager: Self for chaining
         """
-        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
+        from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
         # Convert string parameters to enum values
-        index_type = VectorIndexType.IVFFLAT
         if op_type == "vector_l2_ops":
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        success = VectorIndex.create_index(
+        success = IVFVectorIndex.create_index(
             engine=self.client.get_sqlalchemy_engine(),
             table_name=table_name,
             name=name,
             column=column,
-            index_type=index_type,
             lists=lists,
             op_type=op_type,
         )
@@ -2132,23 +2130,21 @@ class VectorIndexManager:
         Returns:
             VectorIndexManager: Self for chaining
         """
-        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
+        from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
         # Convert string parameters to enum values
-        index_type = VectorIndexType.HNSW
         if op_type == "vector_l2_ops":
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        success = VectorIndex.create_index(
+        success = HnswVectorIndex.create_index(
             engine=self.client.get_sqlalchemy_engine(),
             table_name=table_name,
             name=name,
             column=column,
-            index_type=index_type,
-            op_type=op_type,
             m=m,
             ef_construction=ef_construction,
             ef_search=ef_search,
+            op_type=op_type,
         )
 
         if not success:

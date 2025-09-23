@@ -14,8 +14,9 @@ from .ivf_config import (IVFConfig, create_ivf_config, disable_ivf_indexing,
 from .table_builder import (VectorTableBuilder, create_document_vector_table,
                             create_product_vector_table,
                             create_vector_index_table, create_vector_table)
-from .vector_index import (CreateVectorIndex, VectorIndex, VectorIndexBuilder,
-                           VectorIndexType, VectorOpType, create_hnsw_index,
+from .vector_index import (CreateVectorIndex, HnswVectorIndex, IVFVectorIndex,
+                           VectorIndex, VectorIndexBuilder, VectorIndexType,
+                           VectorOpType, create_hnsw_index,
                            create_ivfflat_index, create_vector_index,
                            vector_index_builder)
 # Import SQLAlchemy extensions
@@ -38,6 +39,8 @@ __all__ = [
     "create_document_vector_table",
     "create_product_vector_table",
     "VectorIndex",
+    "IVFVectorIndex",
+    "HnswVectorIndex",
     "VectorIndexType",
     "VectorOpType",
     "CreateVectorIndex",
