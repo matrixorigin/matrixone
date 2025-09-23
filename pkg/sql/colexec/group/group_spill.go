@@ -137,7 +137,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 
 	for _, bat := range group.ctr.result1.ToPopped {
 		if bat != nil {
-			bat.CleanOnlyData()
+			bat.Clean(proc.Mp())
 		}
 	}
 	group.ctr.result1.ToPopped = group.ctr.result1.ToPopped[:0]
