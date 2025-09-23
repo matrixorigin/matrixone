@@ -101,7 +101,7 @@ class TestSnapshotManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_client._connection = Mock()
+        self.mock_client._engine = Mock()
         self.snapshot_manager = SnapshotManager(self.mock_client)
     
     def test_init(self):
@@ -186,7 +186,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_create_snapshot_not_connected(self):
         """Test creating snapshot when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.create("test_snap", "cluster")
@@ -227,7 +227,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_list_snapshots_not_connected(self):
         """Test listing snapshots when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.list()
@@ -271,7 +271,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_get_snapshot_not_connected(self):
         """Test getting snapshot when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.get("test_snap")
@@ -297,7 +297,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_delete_snapshot_not_connected(self):
         """Test deleting snapshot when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.delete("test_snap")
@@ -512,7 +512,7 @@ class TestCloneManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_client._connection = Mock()
+        self.mock_client._engine = Mock()
         self.mock_client.snapshots = Mock()  # Mock snapshots manager for snapshot verification
         self.snapshot_manager = CloneManager(self.mock_client)
     
@@ -555,7 +555,7 @@ class TestCloneManager(unittest.TestCase):
     
     def test_clone_database_not_connected(self):
         """Test database clone when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.clone_database("target_db", "source_db")
@@ -619,7 +619,7 @@ class TestCloneManager(unittest.TestCase):
     
     def test_clone_table_not_connected(self):
         """Test table clone when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.clone_table("target_table", "source_table")
@@ -706,7 +706,7 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_client._connection = Mock()
+        self.mock_client._engine = Mock()
         self.snapshot_manager = SnapshotManager(self.mock_client)
     
     def test_full_workflow(self):
@@ -752,12 +752,12 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
     def test_error_propagation(self):
         """Test that errors are properly propagated"""
         # Test connection error
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         with self.assertRaises(MatrixOneConnectionError):
             self.snapshot_manager.create("test", "cluster")
         
         # Test execution error
-        self.mock_client._connection = Mock()
+        self.mock_client._engine = Mock()
         self.mock_client.execute = Mock(side_effect=Exception("DB Error"))
         with self.assertRaises(SnapshotError):
             self.snapshot_manager.create("test", "cluster")

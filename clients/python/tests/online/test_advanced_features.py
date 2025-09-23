@@ -86,7 +86,7 @@ class TestAdvancedFeatures:
         test_client.execute("USE target_db")
         
         for row in result.rows:
-            test_client.execute("INSERT INTO clone_test VALUES (%s, %s, %s)", row)
+            test_client.execute(f"INSERT INTO clone_test VALUES ({row[0]}, '{row[1]}', {row[2]})")
         
         # Verify clone
         result = test_client.execute("SELECT COUNT(*) FROM clone_test")

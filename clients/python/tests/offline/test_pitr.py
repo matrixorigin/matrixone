@@ -22,10 +22,12 @@ class TestPitrManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
-        self.client._connection = Mock()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        self.pitr_manager = self.client.pitr
+        # Initialize managers manually for testing
+        from matrixone.pitr import PitrManager
+        self.pitr_manager = PitrManager(self.client)
     
     def test_create_cluster_pitr_success(self):
         """Test successful cluster PITR creation"""
@@ -265,10 +267,12 @@ class TestAsyncPitrManager(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up async test fixtures"""
         self.client = AsyncClient()
-        self.client._connection = Mock()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        self.pitr_manager = self.client.pitr
+        # Initialize managers manually for testing
+        from matrixone.async_client import AsyncPitrManager
+        self.pitr_manager = AsyncPitrManager(self.client)
     
     async def test_async_create_cluster_pitr_success(self):
         """Test successful async cluster PITR creation"""
@@ -439,6 +443,7 @@ class TestTransactionPitrManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
         self.transaction_wrapper = Mock()

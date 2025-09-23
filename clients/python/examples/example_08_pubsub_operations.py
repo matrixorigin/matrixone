@@ -24,141 +24,6 @@ logger = create_default_logger(
 )
 
 
-def demo_basic_pubsub_operations():
-    """Demonstrate basic PubSub operations within the same account"""
-    logger.info("=== Basic PubSub Operations Demo ===")
-    
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    client = Client(logger=logger, enable_full_sql_logging=True)
-    
-    try:
-        # Connect to MatrixOne
-        client.connect(host, port, user, password, database)
-        logger.info("✅ Connected to MatrixOne")
-        
-        # Create test database and tables
-        logger.info("\n📊 Setting up test environment")
-        client.execute("CREATE DATABASE IF NOT EXISTS pubsub_test")
-        client.execute("USE pubsub_test")
-        
-        client.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                name VARCHAR(100) NOT NULL,
-                price DECIMAL(10,2),
-                category VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        client.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                product_id INT,
-                quantity INT,
-                total_amount DECIMAL(10,2),
-                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES products(id)
-            )
-        """)
-        
-        # Insert sample data
-        client.execute("DELETE FROM orders")
-        client.execute("DELETE FROM products")
-        
-        products_data = [
-            ("Laptop", 999.99, "Electronics"),
-            ("Mouse", 29.99, "Electronics"),
-            ("Keyboard", 79.99, "Electronics"),
-            ("Monitor", 299.99, "Electronics")
-        ]
-        
-        for name, price, category in products_data:
-            client.execute(
-                "INSERT INTO products (name, price, category) VALUES (%s, %s, %s)",
-                (name, price, category)
-            )
-        
-        logger.info("   ✅ Created test database with sample data")
-        
-        # Create publications
-        logger.info("\n📤 Creating Publications")
-        
-        # Note: For basic demo, we'll skip publication creation since we can't publish to self
-        # In a real scenario, you would create publications for other accounts
-        logger.info("   ℹ️ Skipping publication creation (can't publish to self in basic demo)")
-        
-        # Simulate publication names for demonstration
-        db_pub_name = f"products_db_pub_{int(time.time())}"
-        table_pub_name = f"products_table_pub_{int(time.time())}"
-        
-        # List publications
-        publications = client.pubsub.list_publications()
-        logger.info(f"   📊 Total publications: {len(publications)}")
-        for pub in publications:
-            logger.info(f"     - {pub.name}: {pub.database}.{pub.tables}")
-        
-        # Create subscriptions
-        logger.info("\n📥 Creating Subscriptions")
-        
-        # Note: For basic demo, we'll skip subscription creation since we don't have publications
-        # In a real scenario, you would create subscriptions to publications from other accounts
-        logger.info("   ℹ️ Skipping subscription creation (no publications in basic demo)")
-        
-        # Simulate subscription names for demonstration
-        db_sub_name = f"products_db_sub_{int(time.time())}"
-        table_sub_name = f"products_table_sub_{int(time.time())}"
-        
-        # List subscriptions
-        subscriptions = client.pubsub.list_subscriptions()
-        logger.info(f"   📊 Total subscriptions: {len(subscriptions)}")
-        for sub in subscriptions:
-            logger.info(f"     - {sub.sub_name}: {sub.pub_name}")
-        
-        # Demonstrate data synchronization
-        logger.info("\n🔄 Demonstrating Data Synchronization")
-        
-        # Add new data
-        client.execute(
-            "INSERT INTO products (name, price, category) VALUES (%s, %s, %s)",
-            ("Tablet", 399.99, "Electronics")
-        )
-        logger.info("   📤 Added new product: Tablet")
-        
-        # Update existing data
-        client.execute(
-            "UPDATE products SET price = %s WHERE name = %s",
-            (1099.99, "Laptop")
-        )
-        logger.info("   📤 Updated product: Laptop price")
-        
-        # Show current data
-        result = client.execute("SELECT COUNT(*) FROM products")
-        product_count = result.rows[0][0]
-        logger.info(f"   📊 Total products: {product_count}")
-        
-        # Show product details
-        result = client.execute("SELECT name, price, category FROM products ORDER BY name")
-        logger.info("   📋 Product catalog:")
-        for row in result.rows:
-            logger.info(f"     - {row[0]}: ${row[1]} ({row[2]})")
-        
-        # Cleanup
-        logger.info("\n🧹 Cleanup")
-        # Note: No subscriptions or publications to drop in this demo
-        client.execute("DROP DATABASE pubsub_test")
-        
-        logger.info("   ✅ Cleaned up test environment")
-        
-    except Exception as e:
-        logger.error(f"❌ Basic PubSub demo failed: {e}")
-    finally:
-        client.disconnect()
-        logger.info("✅ Disconnected from MatrixOne")
-
-
 def demo_cross_account_pubsub():
     """Demonstrate cross-account PubSub operations"""
     logger.info("=== Cross-Account PubSub Operations Demo ===")
@@ -270,8 +135,7 @@ def demo_cross_account_pubsub():
         
         for product, qty, price in sales_data:
             pub_admin_client.execute(
-                "INSERT INTO sales_data (product_name, quantity, price) VALUES (%s, %s, %s)",
-                (product, qty, price)
+                f"INSERT INTO sales_data (product_name, quantity, price) VALUES ('{product}', {qty}, {price})"
             )
         
         customer_data = [
@@ -282,8 +146,7 @@ def demo_cross_account_pubsub():
         
         for name, email, phone in customer_data:
             pub_admin_client.execute(
-                "INSERT INTO customer_data (customer_name, email, phone) VALUES (%s, %s, %s)",
-                (name, email, phone)
+                f"INSERT INTO customer_data (customer_name, email, phone) VALUES ('{name}', '{email}', '{phone}')"
             )
         
         pub_admin_client.disconnect()
@@ -327,8 +190,7 @@ def demo_cross_account_pubsub():
         pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
         
         pub_admin_client.execute(
-            "INSERT INTO sales_data (product_name, quantity, price) VALUES (%s, %s, %s)",
-            ("Apple Watch", 3, 399.99)
+            f"INSERT INTO sales_data (product_name, quantity, price) VALUES ('Apple Watch', 3, 399.99)"
         )
         logger.info("   📤 Added new sales data: Apple Watch")
         
@@ -431,8 +293,7 @@ async def demo_async_pubsub_operations():
         
         for event_type, event_data in events_data:
             await client.execute(
-                "INSERT INTO events (event_type, event_data, source) VALUES (%s, %s, %s)",
-                (event_type, event_data, "web_app")
+                f"INSERT INTO events (event_type, event_data, source) VALUES ('{event_type}', '{event_data}', 'web_app')"
             )
         
         logger.info("   ✅ Created async test database with sample data")
@@ -468,8 +329,7 @@ async def demo_async_pubsub_operations():
             event_data = f'{{"event_id": {i+1}, "timestamp": "{datetime.now().isoformat()}", "data": "streaming_data_{i+1}"}}'
             
             await client.execute(
-                "INSERT INTO events (event_type, event_data, source) VALUES (%s, %s, %s)",
-                (event_type, event_data, "async_stream")
+                f"INSERT INTO events (event_type, event_data, source) VALUES ('{event_type}', '{event_data}', 'async_stream')"
             )
             
             logger.info(f"   📤 Streamed async event: {event_type}")
@@ -546,8 +406,7 @@ def demo_pubsub_best_practices():
                 quantity INT,
                 total_amount DECIMAL(10,2),
                 status VARCHAR(20) DEFAULT 'pending',
-                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES products(id)
+                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
@@ -558,15 +417,34 @@ def demo_pubsub_best_practices():
                 old_quantity INT,
                 new_quantity INT,
                 change_reason VARCHAR(100),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES products(id)
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
-        # Insert sample data
-        client.execute("DELETE FROM inventory_logs")
-        client.execute("DELETE FROM orders")
-        client.execute("DELETE FROM products")
+        # Insert sample data - clear existing data
+        try:
+            client.execute("TRUNCATE TABLE inventory_logs")
+        except Exception as e:
+            try:
+                client.execute("DELETE FROM inventory_logs")
+            except Exception as e2:
+                logger.info(f"   ℹ️ Could not clear inventory_logs table: {e2}")
+        
+        try:
+            client.execute("TRUNCATE TABLE orders")
+        except Exception as e:
+            try:
+                client.execute("DELETE FROM orders")
+            except Exception as e2:
+                logger.info(f"   ℹ️ Could not clear orders table: {e2}")
+        
+        try:
+            client.execute("TRUNCATE TABLE products")
+        except Exception as e:
+            try:
+                client.execute("DELETE FROM products")
+            except Exception as e2:
+                logger.info(f"   ℹ️ Could not clear products table: {e2}")
         
         # Note: MatrixOne doesn't support ALTER TABLE AUTO_INCREMENT, so we'll skip this
         
@@ -580,8 +458,7 @@ def demo_pubsub_best_practices():
         
         for name, price, stock, category in products_data:
             client.execute(
-                "INSERT INTO products (name, price, stock_quantity, category) VALUES (%s, %s, %s, %s)",
-                (name, price, stock, category)
+                f"INSERT INTO products (name, price, stock_quantity, category) VALUES ('{name}', {price}, {stock}, '{category}')"
             )
         
         logger.info("   ✅ Created e-commerce database with sample data")
@@ -616,8 +493,7 @@ def demo_pubsub_best_practices():
         # Scenario 1: New product launch
         logger.info("\n📦 Scenario 1: New Product Launch")
         client.execute(
-            "INSERT INTO products (name, price, stock_quantity, category) VALUES (%s, %s, %s, %s)",
-            ("iPhone 16 Pro", 1099.99, 100, "Electronics")
+            f"INSERT INTO products (name, price, stock_quantity, category) VALUES ('iPhone 16 Pro', 1099.99, 100, 'Electronics')"
         )
         logger.info("   📤 Launched new product: iPhone 16 Pro")
         
@@ -627,11 +503,13 @@ def demo_pubsub_best_practices():
         result = client.execute("SELECT id FROM products WHERE name = 'iPhone 15 Pro' LIMIT 1")
         if result.rows:
             product_id = result.rows[0][0]
-            client.execute(
-                "INSERT INTO orders (customer_id, product_id, quantity, total_amount) VALUES (%s, %s, %s, %s)",
-                (1001, product_id, 2, 1999.98)  # 2x iPhone 15 Pro
-            )
-            logger.info("   📤 Customer placed order: 2x iPhone 15 Pro")
+            try:
+                client.execute(
+                    f"INSERT INTO orders (customer_id, product_id, quantity, total_amount) VALUES (1001, {product_id}, 2, 1999.98)"
+                )
+                logger.info("   📤 Customer placed order: 2x iPhone 15 Pro")
+            except Exception as e:
+                logger.info(f"   ℹ️ Could not place order: {e}")
         else:
             logger.info("   ℹ️ iPhone 15 Pro not found, skipping order creation")
         
@@ -640,27 +518,29 @@ def demo_pubsub_best_practices():
         result = client.execute("SELECT id FROM products WHERE name = 'iPhone 15 Pro' LIMIT 1")
         if result.rows:
             product_id = result.rows[0][0]
-            client.execute(
-                "UPDATE products SET stock_quantity = %s WHERE id = %s",
-                (48, product_id)  # Reduce iPhone 15 Pro stock by 2
-            )
-            
-            # Log inventory change
-            client.execute(
-                "INSERT INTO inventory_logs (product_id, old_quantity, new_quantity, change_reason) VALUES (%s, %s, %s, %s)",
-                (product_id, 50, 48, "Order fulfillment")
-            )
-            logger.info("   📤 Updated inventory: iPhone 15 Pro stock reduced")
+            try:
+                client.execute(
+                    f"UPDATE products SET stock_quantity = 48 WHERE id = {product_id}"
+                )
+                # Log inventory change
+                client.execute(
+                    f"INSERT INTO inventory_logs (product_id, old_quantity, new_quantity, change_reason) VALUES ({product_id}, 50, 48, 'Order fulfillment')"
+                )
+                logger.info("   📤 Updated inventory: iPhone 15 Pro stock reduced")
+            except Exception as e:
+                logger.info(f"   ℹ️ Could not update inventory: {e}")
         else:
             logger.info("   ℹ️ iPhone 15 Pro not found, skipping inventory update")
         
         # Scenario 4: Price adjustment
         logger.info("\n💰 Scenario 4: Price Adjustment")
-        client.execute(
-            "UPDATE products SET price = %s WHERE name = %s",
-            (2299.99, "MacBook Pro 16-inch")  # Price increase
-        )
-        logger.info("   📤 Adjusted price: MacBook Pro 16-inch")
+        try:
+            client.execute(
+                f"UPDATE products SET price = 2299.99 WHERE name = 'MacBook Pro 16-inch'"
+            )
+            logger.info("   📤 Adjusted price: MacBook Pro 16-inch")
+        except Exception as e:
+            logger.info(f"   ℹ️ Could not adjust MacBook Pro price: {e}")
         
         # Show business analytics
         logger.info("\n📊 Business Analytics")
@@ -697,9 +577,20 @@ def demo_pubsub_best_practices():
         # Cleanup
         logger.info("\n🧹 Business Scenario Cleanup")
         # Note: No subscriptions or publications to drop in this demo
-        client.execute("DROP DATABASE ecommerce")
-        
-        logger.info("   ✅ Cleaned up business scenario")
+        try:
+            client.execute("DROP DATABASE ecommerce")
+            logger.info("   ✅ Cleaned up business scenario")
+        except Exception as e:
+            logger.info(f"   ℹ️ Could not drop database (may already be cleaned up): {e}")
+            # Try to clean up tables individually
+            try:
+                client.execute("USE ecommerce")
+                client.execute("DROP TABLE IF EXISTS inventory_logs")
+                client.execute("DROP TABLE IF EXISTS orders")
+                client.execute("DROP TABLE IF EXISTS products")
+                logger.info("   ✅ Cleaned up tables individually")
+            except Exception as e2:
+                logger.info(f"   ℹ️ Could not clean up tables: {e2}")
         
     except Exception as e:
         logger.error(f"❌ PubSub best practices demo failed: {e}")
@@ -714,7 +605,6 @@ def main():
     logger.info("=" * 70)
     
     # Run all PubSub demos
-    demo_basic_pubsub_operations()
     demo_cross_account_pubsub()
     demo_pubsub_best_practices()
     

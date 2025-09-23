@@ -52,7 +52,7 @@ class TestSnapshotManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_client._connection = Mock()
+        self.mock_client._engine = Mock()
         self.snapshot_manager = SnapshotManager(self.mock_client)
     
     def test_init(self):
@@ -137,7 +137,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_create_snapshot_not_connected(self):
         """Test creating snapshot when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.create("test_snap", "cluster")
@@ -178,7 +178,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_list_snapshots_not_connected(self):
         """Test listing snapshots when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.list()
@@ -222,7 +222,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_get_snapshot_not_connected(self):
         """Test getting snapshot when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.get("test_snap")
@@ -248,7 +248,7 @@ class TestSnapshotManager(unittest.TestCase):
     
     def test_delete_snapshot_not_connected(self):
         """Test deleting snapshot when not connected"""
-        self.mock_client._connection = None
+        self.mock_client._engine = None
         
         with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.delete("test_snap")
@@ -440,7 +440,7 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_client._connection = Mock()
+        self.mock_client._engine = Mock()
         self.snapshot_manager = SnapshotManager(self.mock_client)
     
     def test_full_workflow(self):

@@ -358,15 +358,15 @@ def demo_account_management():
         except Exception as e:
             logger.warning(f"⚠️ Could not grant privilege: {e}")
         
-        # Grant privilege to user (MatrixOne treats users as roles)
+        # Grant privilege to role (MatrixOne requires roles for privileges)
         try:
             demo_account_manager.grant_privilege(
                 privilege='SELECT',
                 object_type='DATABASE',
                 object_name='mo_catalog',
-                to_user='analyst1'
+                to_role='analyst_role'
             )
-            logger.info("✅ Granted SELECT privilege to analyst1")
+            logger.info("✅ Granted SELECT privilege to analyst_role")
         except Exception as e:
             logger.warning(f"⚠️ Could not grant privilege: {e}")
         

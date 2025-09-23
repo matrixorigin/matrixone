@@ -21,9 +21,11 @@ class TestRestoreManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
-        self.client._connection = Mock()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
-        self.restore_manager = self.client.restore
+        # Initialize managers manually for testing
+        from matrixone.restore import RestoreManager
+        self.restore_manager = RestoreManager(self.client)
     
     def test_restore_cluster_success(self):
         """Test successful cluster restore"""
@@ -275,9 +277,11 @@ class TestAsyncRestoreManager(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up async test fixtures"""
         self.client = AsyncClient()
-        self.client._connection = Mock()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
-        self.restore_manager = self.client.restore
+        # Initialize managers manually for testing
+        from matrixone.async_client import AsyncRestoreManager
+        self.restore_manager = AsyncRestoreManager(self.client)
     
     async def test_async_restore_cluster_success(self):
         """Test successful async cluster restore"""
@@ -370,6 +374,7 @@ class TestTransactionRestoreManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.transaction_wrapper = Mock()
         self.transaction_restore_manager = TransactionRestoreManager(self.client, self.transaction_wrapper)

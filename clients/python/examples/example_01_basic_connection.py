@@ -91,11 +91,13 @@ def demo_login_formats():
     try:
         client = Client(logger=logger, enable_sql_logging=True)
         client.connect(host, port, user, password, database, role='admin')
+        # Try to execute a query to trigger role validation
+        client.execute("SELECT 1")
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
         client.disconnect()
     except Exception as e:
-        logger.info(f"   ⚠️ Expected failure: {e}")
+        logger.info(f"   ⚠️ Expected failure (role 'admin' doesn't exist): {e}")
     
     # Format 4: Account with separate parameters
     logger.info("\n🔌 Format 4: Account with separate parameters")
@@ -121,6 +123,8 @@ def demo_connection_error_handling():
     try:
         client = Client(logger=logger, enable_error_sql_logging=True)
         client.connect(host, port, 'invalid_user', 'invalid_pass', database)
+        # Try to execute a query to trigger authentication
+        client.execute("SELECT 1")
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
         logger.info(f"   ✅ Correctly failed: {e}")
@@ -130,6 +134,8 @@ def demo_connection_error_handling():
     try:
         client = Client(logger=logger, enable_error_sql_logging=True)
         client.connect('192.168.1.999', port, user, password, database)
+        # Try to execute a query to trigger connection validation
+        client.execute("SELECT 1")
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
         logger.info(f"   ✅ Correctly failed: {e}")
@@ -139,6 +145,8 @@ def demo_connection_error_handling():
     try:
         client = Client(logger=logger, enable_error_sql_logging=True)
         client.connect(host, 9999, user, password, database)
+        # Try to execute a query to trigger connection validation
+        client.execute("SELECT 1")
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
         logger.info(f"   ✅ Correctly failed: {e}")

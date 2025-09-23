@@ -227,13 +227,8 @@ class TestSQLAlchemyIntegration:
 
     def test_sqlalchemy_connection_pooling(self, test_client):
         """Test SQLAlchemy connection pooling"""
-        # Create engine with connection pooling
-        engine = test_client.get_sqlalchemy_engine(
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_recycle=3600
-        )
+        # Get the default engine (which already has connection pooling configured)
+        engine = test_client.get_sqlalchemy_engine()
         
         # Create independent Base and models for this test
         Base = declarative_base()

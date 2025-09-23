@@ -22,10 +22,12 @@ class TestPubSubManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
-        self.client._connection = Mock()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        self.pubsub_manager = self.client.pubsub
+        # Initialize managers manually for testing
+        from matrixone.pubsub import PubSubManager
+        self.pubsub_manager = PubSubManager(self.client)
     
     def test_create_database_publication_success(self):
         """Test successful database publication creation"""
@@ -224,10 +226,12 @@ class TestAsyncPubSubManager(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up async test fixtures"""
         self.client = AsyncClient()
-        self.client._connection = Mock()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        self.pubsub_manager = self.client.pubsub
+        # Initialize managers manually for testing
+        from matrixone.async_client import AsyncPubSubManager
+        self.pubsub_manager = AsyncPubSubManager(self.client)
     
     async def test_async_create_database_publication_success(self):
         """Test successful async database publication creation"""
@@ -401,6 +405,7 @@ class TestTransactionPubSubManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
+        self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
         self.transaction_wrapper = Mock()

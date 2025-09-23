@@ -5,7 +5,6 @@ MatrixOne Client - Basic implementation
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import pymysql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -24,11 +23,11 @@ from .version import get_version_manager
 
 class Client:
     """
-    MatrixOne Client - Main client class for database operations.
+    MatrixOne Client - SQLAlchemy wrapper for database operations.
 
     This class provides a high-level interface for connecting to and interacting
-    with MatrixOne databases. It supports both synchronous and asynchronous
-    operations, transaction management, and various database features like
+    with MatrixOne databases using SQLAlchemy engine and connection pooling.
+    It supports transaction management and various database features like
     snapshots, PITR, and account management.
 
     Examples:
@@ -36,8 +35,7 @@ class Client:
 
             from matrixone import Client
 
-            client = Client()
-            client.connect(
+            client = Client(
                 host='localhost',
                 port=6001,
                 user='root',
@@ -47,7 +45,6 @@ class Client:
 
             result = client.execute("SELECT 1 as test")
             print(result.fetchall())
-            client.disconnect()
 
         With transaction::
 
@@ -57,17 +54,28 @@ class Client:
                 # Transaction will be committed automatically
 
     Attributes:
-        host (str): Database host address
-        port (int): Database port number
-        user (str): Database username
-        password (str): Database password
-        database (str): Database name
+        engine (Engine): SQLAlchemy engine instance
         connected (bool): Connection status
         backend_version (str): Detected backend version
     """
 
     def __init__(
         self,
+        host: str = None,
+        port: int = None,
+        user: str = None,
+        password: str = None,
+        database: str = None,
+        ssl_mode: str = "preferred",
+        ssl_ca: Optional[str] = None,
+        ssl_cert: Optional[str] = None,
+        ssl_key: Optional[str] = None,
+        account: Optional[str] = None,
+        role: Optional[str] = None,
+        pool_size: int = 10,
+        max_overflow: int = 20,
+        pool_timeout: int = 30,
+        pool_recycle: int = 3600,
         connection_timeout: int = 30,
         query_timeout: int = 300,
         auto_commit: bool = True,
@@ -84,6 +92,21 @@ class Client:
         Initialize MatrixOne client
 
         Args:
+            host: Database host (optional, can be set later via connect)
+            port: Database port (optional, can be set later via connect)
+            user: Username (optional, can be set later via connect)
+            password: Password (optional, can be set later via connect)
+            database: Database name (optional, can be set later via connect)
+            ssl_mode: SSL mode (disabled, preferred, required)
+            ssl_ca: SSL CA certificate path
+            ssl_cert: SSL client certificate path
+            ssl_key: SSL client key path
+            account: Optional account name
+            role: Optional role name
+            pool_size: Connection pool size
+            max_overflow: Maximum overflow connections
+            pool_timeout: Pool timeout in seconds
+            pool_recycle: Connection recycle time in seconds
             connection_timeout: Connection timeout in seconds
             query_timeout: Query timeout in seconds
             auto_commit: Enable auto-commit mode
@@ -100,6 +123,10 @@ class Client:
         self.query_timeout = query_timeout
         self.auto_commit = auto_commit
         self.charset = charset
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
 
         # Initialize logger
         if logger is not None:
@@ -114,24 +141,39 @@ class Client:
                 slow_sql_threshold=slow_sql_threshold,
             )
 
-        self._connection = None
         self._engine = None
         self._connection_params = {}
         self._login_info = None
-        self._snapshots = SnapshotManager(self)
-        self._clone = CloneManager(self)
-        self._moctl = MoCtlManager(self)
-        self._restore = RestoreManager(self)
-        self._pitr = PitrManager(self)
-        self._pubsub = PubSubManager(self)
-        self._account = AccountManager(self)
-        self._vector_index = VectorIndexManager(self)
-        self._vector_query = VectorQueryManager(self)
-        self._vector_data = VectorDataManager(self)
+        self._snapshots = None
+        self._clone = None
+        self._moctl = None
+        self._restore = None
+        self._pitr = None
+        self._pubsub = None
+        self._account = None
+        self._vector_index = None
+        self._vector_query = None
+        self._vector_data = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
         self._backend_version = None
+
+        # Auto-connect if connection parameters are provided
+        if all([host, port, user, password, database]):
+            self.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=database,
+                ssl_mode=ssl_mode,
+                ssl_ca=ssl_ca,
+                ssl_cert=ssl_cert,
+                ssl_key=ssl_key,
+                account=account,
+                role=role,
+            )
 
     def connect(
         self,
@@ -148,7 +190,7 @@ class Client:
         role: Optional[str] = None,
     ) -> None:
         """
-        Connect to MatrixOne database
+        Connect to MatrixOne database using SQLAlchemy engine
 
         Args:
             host: Database host
@@ -192,8 +234,12 @@ class Client:
             self._connection_params["ssl_key"] = ssl_key
 
         try:
-            self._connection = pymysql.connect(**self._connection_params)
+            # Create SQLAlchemy engine with connection pooling
+            self._engine = self._create_engine()
             self.logger.log_connection(host, port, final_user, database, success=True)
+
+            # Initialize managers after engine is created
+            self._initialize_managers()
 
             # Try to detect backend version after successful connection
             try:
@@ -206,21 +252,62 @@ class Client:
             self.logger.log_error(e, context="Connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
 
+    def _create_engine(self) -> Engine:
+        """Create SQLAlchemy engine with connection pooling"""
+        # Build connection string
+        connection_string = (
+            f"mysql+pymysql://{self._connection_params['user']}:"
+            f"{self._connection_params['password']}@"
+            f"{self._connection_params['host']}:"
+            f"{self._connection_params['port']}/"
+            f"{self._connection_params['database']}"
+        )
+
+        # Add SSL parameters if needed
+        if "ssl_ca" in self._connection_params:
+            connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
+
+        # Create engine with connection pooling
+        engine = create_engine(
+            connection_string,
+            pool_size=self.pool_size,
+            max_overflow=self.max_overflow,
+            pool_timeout=self.pool_timeout,
+            pool_recycle=self.pool_recycle,
+            pool_pre_ping=True,  # Enable connection health checks
+        )
+
+        # Replace the dialect with MatrixOne dialect for proper vector type support
+        original_dbapi = engine.dialect.dbapi
+        engine.dialect = MatrixOneDialect()
+        engine.dialect.dbapi = original_dbapi
+
+        return engine
+
+    def _initialize_managers(self) -> None:
+        """Initialize all manager instances after engine is created"""
+        self._snapshots = SnapshotManager(self)
+        self._clone = CloneManager(self)
+        self._moctl = MoCtlManager(self)
+        self._restore = RestoreManager(self)
+        self._pitr = PitrManager(self)
+        self._pubsub = PubSubManager(self)
+        self._account = AccountManager(self)
+        self._vector_index = VectorIndexManager(self)
+        self._vector_query = VectorQueryManager(self)
+        self._vector_data = VectorDataManager(self)
+
     def disconnect(self) -> None:
-        """Disconnect from MatrixOne database"""
-        if self._connection:
+        """Disconnect from MatrixOne database and dispose engine"""
+        if self._engine:
             try:
-                self._connection.close()
-                self._connection = None
+                self._engine.dispose()
+                self._engine = None
                 self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
                 self.logger.log_error(e, context="Disconnection")
                 raise
-
-        if self._engine:
-            self._engine.dispose()
-            self._engine = None
 
     def get_login_info(self) -> Optional[dict]:
         """Get parsed login information"""
@@ -307,7 +394,7 @@ class Client:
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> "ResultSet":
         """
-        Execute SQL query
+        Execute SQL query using connection pool
 
         Args:
             sql: SQL query string
@@ -316,7 +403,7 @@ class Client:
         Returns:
             ResultSet object
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to database")
 
         import time
@@ -324,23 +411,23 @@ class Client:
         start_time = time.time()
 
         try:
-            with self._connection.cursor() as cursor:
-                cursor.execute(sql, params)
+            with self._engine.begin() as conn:
+                result = conn.execute(text(sql), params or {})
 
                 execution_time = time.time() - start_time
 
-                if cursor.description:
+                if result.returns_rows:
                     # SELECT query
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = cursor.fetchall()
-                    result = ResultSet(columns, rows)
+                    columns = list(result.keys())
+                    rows = result.fetchall()
+                    result_set = ResultSet(columns, rows)
                     self.logger.log_query(sql, execution_time, len(rows), success=True)
-                    return result
+                    return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
-                    result = ResultSet([], [], affected_rows=cursor.rowcount)
-                    self.logger.log_query(sql, execution_time, cursor.rowcount, success=True)
-                    return result
+                    result_set = ResultSet([], [], affected_rows=result.rowcount)
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+                    return result_set
 
         except Exception as e:
             execution_time = time.time() - start_time
@@ -348,57 +435,45 @@ class Client:
             self.logger.log_error(e, context="Query execution")
             raise QueryError(f"Query execution failed: {e}")
 
-    def get_sqlalchemy_engine(
-        self,
-        pool_size: int = 10,
-        max_overflow: int = 20,
-        pool_timeout: int = 30,
-        pool_recycle: int = 3600,
-        echo: bool = False,
-    ) -> Engine:
+    def get_sqlalchemy_engine(self, **pool_kwargs) -> Engine:
         """
         Get SQLAlchemy engine
 
         Args:
-            pool_size: Connection pool size
-            max_overflow: Maximum overflow connections
-            pool_timeout: Pool timeout in seconds
-            pool_recycle: Connection recycle time in seconds
-            echo: Enable SQL logging
+            **pool_kwargs: Optional connection pool parameters (pool_size, max_overflow, etc.)
 
         Returns:
             SQLAlchemy Engine
         """
-        if not self._connection_params:
+        if not self._engine:
             raise ConnectionError("Not connected to database")
 
-        # Build connection string
-        connection_string = (
-            f"mysql+pymysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database']}"
-        )
+        # If pool parameters are provided, create a new engine with those settings
+        if pool_kwargs:
+            # Build connection string
+            connection_string = (
+                f"mysql+pymysql://{self._connection_params['user']}:"
+                f"{self._connection_params['password']}@"
+                f"{self._connection_params['host']}:"
+                f"{self._connection_params['port']}/"
+                f"{self._connection_params['database']}"
+            )
 
-        # Add SSL parameters if needed
-        if "ssl_ca" in self._connection_params:
-            connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
+            # Add SSL parameters if needed
+            if "ssl_ca" in self._connection_params:
+                connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
 
-        # Create engine with default MySQL dialect first
-        self._engine = create_engine(
-            connection_string,
-            pool_size=pool_size,
-            max_overflow=max_overflow,
-            pool_timeout=pool_timeout,
-            pool_recycle=pool_recycle,
-            echo=echo,
-        )
+            # Create engine with custom connection pooling
+            engine = create_engine(
+                connection_string, pool_pre_ping=True, **pool_kwargs  # Enable connection health checks
+            )
 
-        # Replace the dialect with MatrixOne dialect for proper vector type support
-        original_dbapi = self._engine.dialect.dbapi
-        self._engine.dialect = MatrixOneDialect()
-        self._engine.dialect.dbapi = original_dbapi
+            # Replace the dialect with MatrixOne dialect for proper vector type support
+            original_dbapi = engine.dialect.dbapi
+            engine.dialect = MatrixOneDialect()
+            engine.dialect.dbapi = original_dbapi
+
+            return engine
 
         return self._engine
 
@@ -416,7 +491,7 @@ class Client:
             ResultSet object
         """
         if conn:
-            # Use SQLAlchemy connection
+            # Use provided SQLAlchemy connection
             snapshot_sql = f"{sql} FOR SNAPSHOT '{snapshot_name}'"
             result = conn.execute(text(snapshot_sql), params or {})
 
@@ -427,7 +502,7 @@ class Client:
             else:
                 return ResultSet([], [], affected_rows=result.rowcount)
         else:
-            # Use direct connection
+            # Use engine connection pool
             snapshot_sql = f"{sql} FOR SNAPSHOT '{snapshot_name}'"
             return self.execute(snapshot_sql, params)
 
@@ -443,38 +518,6 @@ class Client:
         """
         return SnapshotQueryBuilder(snapshot_name, self)
 
-    def get_snapshot_engine(self, snapshot_name: str, **kwargs) -> Engine:
-        """
-        Get SQLAlchemy engine with snapshot
-
-        Args:
-            snapshot_name: Name of the snapshot
-            **kwargs: Additional engine parameters
-
-        Returns:
-            SQLAlchemy Engine with snapshot configuration
-        """
-        if not self._connection_params:
-            raise ConnectionError("Not connected to database")
-
-        # Build connection string with snapshot
-        connection_string = (
-            f"mysql+pymysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database']}"
-        )
-
-        # Add snapshot parameter
-        connection_string += f"?snapshot={snapshot_name}"
-
-        # Add SSL parameters if needed
-        if "ssl_ca" in self._connection_params:
-            connection_string += f"&ssl_ca={self._connection_params['ssl_ca']}"
-
-        return create_engine(connection_string, **kwargs)
-
     @contextmanager
     def snapshot(self, snapshot_name: str):
         """
@@ -484,7 +527,7 @@ class Client:
             with client.snapshot("daily_backup") as snapshot_client:
                 result = snapshot_client.execute("SELECT * FROM users")
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to database")
 
         # Create a snapshot client wrapper
@@ -511,92 +554,83 @@ class Client:
                 session.add(user)
                 session.commit()
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to database")
 
         tx_wrapper = None
         try:
-            self._connection.begin()
-            tx_wrapper = TransactionWrapper(self._connection, self)
-            yield tx_wrapper
+            # Use engine's connection pool for transaction
+            with self._engine.begin() as conn:
+                tx_wrapper = TransactionWrapper(conn, self)
+                yield tx_wrapper
 
-            # Commit SQLAlchemy session first
-            tx_wrapper.commit_sqlalchemy()
-            # Then commit the main transaction
-            self._connection.commit()
+                # Commit SQLAlchemy session first
+                tx_wrapper.commit_sqlalchemy()
 
         except Exception as e:
             # Rollback SQLAlchemy session first
             if tx_wrapper:
                 tx_wrapper.rollback_sqlalchemy()
-            # Then rollback the main transaction
-            self._connection.rollback()
             raise e
         finally:
             # Clean up SQLAlchemy resources
             if tx_wrapper:
                 tx_wrapper.close_sqlalchemy()
 
-    def get_sqlalchemy_connection(self):
-        """
-        Get the underlying database connection for SQLAlchemy integration
-
-        Returns:
-            The raw database connection that can be used with SQLAlchemy
-        """
-        if not self._connection:
-            raise ConnectionError("Not connected to database")
-        return self._connection
-
     @property
-    def snapshots(self) -> SnapshotManager:
+    def snapshots(self) -> Optional[SnapshotManager]:
         """Get snapshot manager"""
         return self._snapshots
 
     @property
-    def clone(self) -> CloneManager:
+    def clone(self) -> Optional[CloneManager]:
         """Get clone manager"""
         return self._clone
 
     @property
-    def moctl(self) -> MoCtlManager:
+    def moctl(self) -> Optional[MoCtlManager]:
         """Get mo_ctl manager"""
         return self._moctl
 
     @property
-    def restore(self) -> RestoreManager:
+    def restore(self) -> Optional[RestoreManager]:
         """Get restore manager"""
         return self._restore
 
     @property
-    def pitr(self) -> PitrManager:
+    def pitr(self) -> Optional[PitrManager]:
         """Get PITR manager"""
         return self._pitr
 
     @property
-    def pubsub(self) -> PubSubManager:
+    def pubsub(self) -> Optional[PubSubManager]:
         """Get publish-subscribe manager"""
         return self._pubsub
 
     @property
-    def account(self) -> AccountManager:
+    def account(self) -> Optional[AccountManager]:
         """Get account manager"""
         return self._account
 
     @property
-    def vector_index(self) -> "VectorIndexManager":
+    def vector_index(self) -> Optional["VectorIndexManager"]:
         """Get vector index manager for vector index operations"""
         return self._vector_index
 
     @property
-    def vector_query(self) -> "VectorQueryManager":
+    def vector_query(self) -> Optional["VectorQueryManager"]:
         """Get vector query manager for vector query operations"""
         return self._vector_query
 
     @property
-    def vector_data(self) -> "VectorDataManager":
+    def vector_data(self) -> Optional["VectorDataManager"]:
         """Get vector data manager for vector data operations"""
         return self._vector_data
+
+    @property
+    def connected(self) -> bool:
+        """Check if client is connected to database"""
+        return self._engine is not None
 
     def version(self) -> str:
         """
@@ -610,12 +644,11 @@ class Client:
             QueryError: If version query fails
 
         Example:
-            >>> client = Client()
-            >>> client.connect('localhost', 6001, 'root', '111', 'test')
+            >>> client = Client('localhost', 6001, 'root', '111', 'test')
             >>> version = client.version()
             >>> print(f"MatrixOne version: {version}")
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to MatrixOne")
 
         try:
@@ -639,12 +672,11 @@ class Client:
             QueryError: If git version query fails
 
         Example:
-            >>> client = Client()
-            >>> client.connect('localhost', 6001, 'root', '111', 'test')
+            >>> client = Client('localhost', 6001, 'root', '111', 'test')
             >>> git_version = client.git_version()
             >>> print(f"MatrixOne git version: {git_version}")
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to MatrixOne")
 
         try:
@@ -1623,20 +1655,18 @@ class TransactionWrapper:
         self.vector_data = TransactionVectorDataManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
-        self._sqlalchemy_engine = None
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
         """Execute SQL within transaction"""
         try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(sql, params)
+            result = self.connection.execute(text(sql), params or {})
 
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = cursor.fetchall()
-                    return ResultSet(columns, rows)
-                else:
-                    return ResultSet([], [], affected_rows=cursor.rowcount)
+            if result.returns_rows:
+                columns = list(result.keys())
+                rows = result.fetchall()
+                return ResultSet(columns, rows)
+            else:
+                return ResultSet([], [], affected_rows=result.rowcount)
 
         except Exception as e:
             raise QueryError(f"Transaction query execution failed: {e}")
@@ -1649,30 +1679,11 @@ class TransactionWrapper:
             SQLAlchemy Session instance bound to this transaction
         """
         if self._sqlalchemy_session is None:
-            from sqlalchemy import create_engine
             from sqlalchemy.orm import sessionmaker
 
-            # Create engine using the same connection parameters
-            if not self.client._connection_params:
-                raise ConnectionError("Not connected to database")
-
-            connection_string = (
-                f"mysql+pymysql://{self.client._connection_params['user']}:"
-                f"{self.client._connection_params['password']}@"
-                f"{self.client._connection_params['host']}:"
-                f"{self.client._connection_params['port']}/"
-                f"{self.client._connection_params['database']}"
-            )
-
-            # Create engine that will use the same connection
-            self._sqlalchemy_engine = create_engine(connection_string, pool_pre_ping=True, pool_recycle=300)
-
-            # Create session factory
-            Session = sessionmaker(bind=self._sqlalchemy_engine)
-            self._sqlalchemy_session = Session()
-
-            # Begin SQLAlchemy transaction
-            self._sqlalchemy_session.begin()
+            # Create session factory using the client's engine
+            Session = sessionmaker(bind=self.client._engine)
+            self._sqlalchemy_session = Session(bind=self.connection)
 
         return self._sqlalchemy_session
 
@@ -1691,9 +1702,6 @@ class TransactionWrapper:
         if self._sqlalchemy_session:
             self._sqlalchemy_session.close()
             self._sqlalchemy_session = None
-        if self._sqlalchemy_engine:
-            self._sqlalchemy_engine.dispose()
-            self._sqlalchemy_engine = None
 
     def create_table(self, table_name: str, columns: dict, **kwargs) -> "TransactionWrapper":
         """

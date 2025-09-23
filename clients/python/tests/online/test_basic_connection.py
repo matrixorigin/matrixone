@@ -59,6 +59,8 @@ class TestBasicConnection:
         try:
             client = Client()
             client.connect(host=host, port=9999, user=user, password=password, database=database)
+            # With the new connection pool architecture, connection is tested on first query
+            client.execute("SELECT 1")
             assert False, "Should have failed with invalid port"
         except Exception as e:
             assert "connection" in str(e).lower() or "refused" in str(e).lower()

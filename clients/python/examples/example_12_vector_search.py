@@ -65,9 +65,17 @@ def main():
             @classmethod
             def setup_table(cls, engine):
                 """Drop and create table."""
-                cls.metadata.drop_all(engine, checkfirst=False)
-                cls.metadata.create_all(engine, checkfirst=True)
-                logger.info("✅ Table created: vector_distance_demo")
+                try:
+                    cls.metadata.drop_all(engine, checkfirst=True)
+                except Exception as e:
+                    logger.info(f"   ℹ️ Could not drop table (may not exist): {e}")
+                
+                try:
+                    cls.metadata.create_all(engine, checkfirst=True)
+                    logger.info("✅ Table created: vector_distance_demo")
+                except Exception as e:
+                    logger.info(f"   ℹ️ Table may already exist: {e}")
+                    logger.info("✅ Using existing table: vector_distance_demo")
         
         # Setup table
         logger.info("🗂️ Setting up vector distance demo table...")

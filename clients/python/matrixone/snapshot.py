@@ -84,7 +84,7 @@ class SnapshotManager:
         Returns:
             Snapshot object
         """
-        if not self.client._connection:
+        if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         # Convert string to enum if needed
@@ -133,7 +133,7 @@ class SnapshotManager:
         Returns:
             List of Snapshot objects
         """
-        if not self.client._connection:
+        if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         try:
@@ -185,7 +185,7 @@ class SnapshotManager:
         Returns:
             Snapshot object
         """
-        if not self.client._connection:
+        if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         try:
@@ -195,9 +195,9 @@ class SnapshotManager:
                 """
                 SELECT sname, ts, level, account_name, database_name, table_name
                 FROM mo_catalog.mo_snapshots
-                WHERE sname = %s
+                WHERE sname = :name
             """,
-                (name,),
+                {"name": name},
             )
 
             row = result.fetchone()
@@ -237,7 +237,7 @@ class SnapshotManager:
             name: Snapshot name
             executor: Optional executor (e.g., transaction wrapper)
         """
-        if not self.client._connection:
+        if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         try:
@@ -419,7 +419,7 @@ class CloneManager:
             ConnectionError: If not connected to database
             CloneError: If clone operation fails
         """
-        if not self.client._connection:
+        if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         # Build CLONE DATABASE SQL
@@ -461,7 +461,7 @@ class CloneManager:
             ConnectionError: If not connected to database
             CloneError: If clone operation fails
         """
-        if not self.client._connection:
+        if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         # Build CLONE TABLE SQL

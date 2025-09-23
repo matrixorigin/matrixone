@@ -53,8 +53,7 @@ class TestPubSubOperations:
             
             for name, price, category in products_data:
                 test_client.execute(
-                    "INSERT INTO products (name, price, category) VALUES (%s, %s, %s)",
-                    (name, price, category)
+                    f"INSERT INTO products (name, price, category) VALUES ('{name}', {price}, '{category}')"
                 )
             
             # Test 2: List publications (as per examples - should work even if empty)

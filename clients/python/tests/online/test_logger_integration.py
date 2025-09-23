@@ -100,8 +100,8 @@ class TestLoggerIntegration:
             client.execute("SHOW DATABASES")
             client.execute("SHOW TABLES")
             
-            # Test with parameters (use %s instead of ? for MySQL/MatrixOne)
-            client.execute("SELECT %s as param_value", (42,))
+            # Test with parameters (use SQLAlchemy parameter syntax)
+            client.execute("SELECT :param as param_value", {"param": 42})
             
         finally:
             client.disconnect()
