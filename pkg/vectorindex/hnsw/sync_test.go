@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -151,6 +152,59 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 
 	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
+}
+
+func TestSyncVariableError(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+
+	runSql = mock_runSql_2files
+	runSql_streaming = mock_runSql_streaming_2files
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 100)}
+
+	key := int64(0)
+	v := []float32{0.1, 0.2, 0.3}
+
+	// 0 - 199 key exists, 200 - 399 new insert
+	for i := 0; i < 400; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return int64(10), moerr.NewInternalErrorNoCtx("hnsw_max_index_capacity error")
+		case "hnsw_threads_build":
+			return int64(8), moerr.NewInternalErrorNoCtx("hnsw_threads_build error")
+		default:
+			return int64(0), nil
+		}
+	})
+
+	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	fmt.Println(err)
+	require.NotNil(t, err)
+
+	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return int64(10), moerr.NewInternalErrorNoCtx("hnsw_max_index_capacity error")
+		case "hnsw_threads_build":
+			//return int64(8), moerr.NewInternalErrorNoCtx("hnsw_threads_build error")
+			return int64(10), nil
+		default:
+			return int64(0), nil
+		}
+	})
+
+	err = CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	//fmt.Println(err)
+	require.NotNil(t, err)
 }
 
 func TestSyncUpsert(t *testing.T) {
