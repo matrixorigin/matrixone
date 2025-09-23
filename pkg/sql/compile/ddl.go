@@ -286,8 +286,12 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			}
 			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
+				if strings.Contains(err.Error(), "can not find table by id") {
+					continue
+				}
 				return err
 			}
+
 			err = s.removeParentTblIdFromChildTable(c, childTable, tblId)
 			if err != nil {
 				return err
