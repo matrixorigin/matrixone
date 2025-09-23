@@ -2496,6 +2496,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		minWriteTime = writeTime
 	}
 
+	const maxRetries = 100                // Maximum number of consecutive errors
+	const maxTotalTime = 30 * time.Minute // Maximum total consecutive processing time
+	var consecutiveErrors int
+	consecutiveLoopStartTime := time.Now()
+
 	for {
 		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
@@ -2503,6 +2508,27 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				err = nil
 				break
 			}
+			// Increment consecutive error counter
+			consecutiveErrors++
+			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
+
+			// Check if we've exceeded max consecutive errors
+			if consecutiveErrors >= maxRetries {
+				ses.Errorf(execCtx.reqCtx, "processLoadLocal: exceeded maximum consecutive errors (%d), aborting", maxRetries)
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: too many consecutive errors (%d)", maxRetries)
+			}
+
+			// Check if we've exceeded total consecutive processing time
+			if time.Since(consecutiveLoopStartTime) > maxTotalTime {
+				ses.Errorf(execCtx.reqCtx, "processLoadLocal: exceeded maximum consecutive processing time (%v), aborting", maxTotalTime)
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: processing timeout after %v", maxTotalTime)
+			}
+
+			// Add a small delay before retry to avoid overwhelming the system
+			time.Sleep(10 * time.Millisecond)
+		} else {
+			consecutiveErrors = 0
+			consecutiveLoopStartTime = time.Now()
 		}
 
 		if readTime > maxReadTime {
