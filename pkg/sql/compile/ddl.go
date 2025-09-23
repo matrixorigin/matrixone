@@ -27,7 +27,6 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
