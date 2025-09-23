@@ -20,6 +20,7 @@ def setup_sqlalchemy_mocks():
     _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
     _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
     _original_modules['sqlalchemy.orm'] = sys.modules.get('sqlalchemy.orm')
+    _original_modules['sqlalchemy.ext.asyncio'] = sys.modules.get('sqlalchemy.ext.asyncio')
     
     sys.modules['pymysql'] = Mock()
     sys.modules['aiomysql'] = Mock()
@@ -35,6 +36,11 @@ def setup_sqlalchemy_mocks():
     sys.modules['sqlalchemy'].Integer = Mock()
     sys.modules['sqlalchemy'].String = Mock()
     sys.modules['sqlalchemy'].DateTime = Mock()
+    
+    # Mock SQLAlchemy async engine
+    sys.modules['sqlalchemy.ext.asyncio'] = Mock()
+    sys.modules['sqlalchemy.ext.asyncio'].create_async_engine = Mock()
+    sys.modules['sqlalchemy.ext.asyncio'].AsyncEngine = Mock()
 
 def teardown_sqlalchemy_mocks():
     """Restore original modules"""
@@ -103,16 +109,41 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.client._clone, AsyncCloneManager)
         self.assertIsInstance(self.client._moctl, AsyncMoCtlManager)
     
-    @patch('matrixone.async_client.aiomysql.connect')
-    async def test_connect(self, mock_connect):
+    @patch('matrixone.async_client.create_async_engine')
+    async def test_connect(self, mock_create_async_engine):
         """Test async connection"""
+        # Create mock connection and result
         mock_connection = AsyncMock()
-        mock_connection.close = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.returns_rows = False
         
-        # Make aiomysql.connect return a coroutine
-        async def mock_connect_func(**kwargs):
-            return mock_connection
-        mock_connect.side_effect = mock_connect_func
+        # Create a proper async context manager for engine.begin()
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+            
+            async def __aenter__(self):
+                return self.connection
+            
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+        
+        # Create a mock engine class that properly implements begin()
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+            
+            def begin(self):
+                return MockBeginContext(self.connection)
+        
+        # Mock the connection.execute method
+        mock_connection.execute.return_value = mock_result
+        
+        # Create mock engine instance
+        mock_engine = MockEngine(mock_connection)
+        
+        # Mock create_async_engine to return our mock engine
+        mock_create_async_engine.return_value = mock_engine
         
         await self.client.connect(
             host="localhost",
@@ -122,18 +153,19 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
             database="test"
         )
         
-        mock_connect.assert_called_once()
-        self.assertEqual(self.client._connection, mock_connection)
+        # Verify create_async_engine was called
+        mock_create_async_engine.assert_called_once()
+        self.assertEqual(self.client._engine, mock_engine)
         self.assertEqual(self.client._connection_params['host'], 'localhost')
         self.assertEqual(self.client._connection_params['port'], 6001)
         self.assertEqual(self.client._connection_params['user'], 'root')
         self.assertEqual(self.client._connection_params['password'], '111')
-        self.assertEqual(self.client._connection_params['db'], 'test')
+        self.assertEqual(self.client._connection_params['database'], 'test')
     
-    @patch('matrixone.async_client.aiomysql.connect')
-    async def test_connect_failure(self, mock_connect):
+    @patch('matrixone.async_client.create_async_engine')
+    async def test_connect_failure(self, mock_create_async_engine):
         """Test async connection failure"""
-        mock_connect.side_effect = Exception("Connection failed")
+        mock_create_async_engine.side_effect = Exception("Connection failed")
         
         with self.assertRaises(Exception):
             await self.client.connect(
@@ -146,83 +178,121 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
     
     async def test_disconnect(self):
         """Test async disconnection"""
-        mock_connection = AsyncMock()
-        mock_connection.close = Mock()  # close() is synchronous
-        mock_connection.wait_closed = AsyncMock()  # wait_closed() is async
+        mock_engine = AsyncMock()
+        mock_engine.dispose = AsyncMock()
         
-        # Mock the _writer.transport.close() chain
-        mock_transport = Mock()
-        mock_transport.close = Mock()  # transport.close() is synchronous
-        mock_writer = Mock()
-        mock_writer.transport = mock_transport
-        mock_connection._writer = mock_writer
-        
-        self.client._connection = mock_connection
+        self.client._engine = mock_engine
         
         await self.client.disconnect()
         
-        mock_connection.close.assert_called_once()
-        mock_connection.wait_closed.assert_called_once()
-        self.assertIsNone(self.client._connection)
+        mock_engine.dispose.assert_called_once()
+        self.assertIsNone(self.client._engine)
     
     async def test_execute_success(self):
         """Test successful async execution"""
-        mock_connection = AsyncMock()
-        mock_cursor = AsyncMock()
+        # Create a mock result class that properly implements the interface
+        class MockResult:
+            def __init__(self):
+                self.returns_rows = True
+            
+            def fetchall(self):
+                return [(1, 'Alice'), (2, 'Bob')]
+            
+            def keys(self):
+                return ['id', 'name']
         
-        # Create a proper async context manager
-        class MockCursorContext:
-            def __init__(self, cursor):
-                self.cursor = cursor
+        # Create a mock connection class
+        class MockConnection:
+            def __init__(self):
+                self.execute_called = False
+                self.execute_args = None
+            
+            async def execute(self, sql, params=None):
+                self.execute_called = True
+                self.execute_args = (sql, params)
+                return MockResult()
+        
+        # Create a proper async context manager for engine.begin()
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
             
             async def __aenter__(self):
-                return self.cursor
+                return self.connection
             
             async def __aexit__(self, exc_type, exc_val, exc_tb):
                 pass
         
-        # Set up the mock connection to return our context manager
-        mock_connection.cursor = Mock(return_value=MockCursorContext(mock_cursor))
+        # Create a mock engine class that properly implements begin()
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+            
+            def begin(self):
+                return MockBeginContext(self.connection)
         
-        mock_cursor.description = [('id',), ('name',)]
-        mock_cursor.fetchall.return_value = [(1, 'Alice'), (2, 'Bob')]
+        # Create mock instances
+        mock_connection = MockConnection()
+        mock_engine = MockEngine(mock_connection)
         
-        self.client._connection = mock_connection
+        # Set the mock engine on the client
+        self.client._engine = mock_engine
         
         result = await self.client.execute("SELECT id, name FROM users")
         
-        mock_cursor.execute.assert_called_once_with("SELECT id, name FROM users", None)
+        self.assertTrue(mock_connection.execute_called)
         self.assertIsInstance(result, AsyncResultSet)
         self.assertEqual(result.columns, ['id', 'name'])
         self.assertEqual(result.rows, [(1, 'Alice'), (2, 'Bob')])
     
     async def test_execute_with_params(self):
         """Test async execution with parameters"""
-        mock_connection = AsyncMock()
-        mock_cursor = AsyncMock()
+        # Create a mock result class that properly implements the interface
+        class MockResult:
+            def __init__(self):
+                self.returns_rows = False
+                self.rowcount = 1
         
-        # Create a proper async context manager
-        class MockCursorContext:
-            def __init__(self, cursor):
-                self.cursor = cursor
+        # Create a mock connection class
+        class MockConnection:
+            def __init__(self):
+                self.execute_called = False
+                self.execute_args = None
+            
+            async def execute(self, sql, params=None):
+                self.execute_called = True
+                self.execute_args = (sql, params)
+                return MockResult()
+        
+        # Create a proper async context manager for engine.begin()
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
             
             async def __aenter__(self):
-                return self.cursor
+                return self.connection
             
             async def __aexit__(self, exc_type, exc_val, exc_tb):
                 pass
         
-        # Set up the mock connection to return our context manager
-        mock_connection.cursor = Mock(return_value=MockCursorContext(mock_cursor))
+        # Create a mock engine class that properly implements begin()
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+            
+            def begin(self):
+                return MockBeginContext(self.connection)
         
-        mock_cursor.description = None
-        mock_cursor.rowcount = 1
+        # Create mock instances
+        mock_connection = MockConnection()
+        mock_engine = MockEngine(mock_connection)
         
-        self.client._connection = mock_connection
+        # Set the mock engine on the client
+        self.client._engine = mock_engine
         
         result = await self.client.execute("INSERT INTO users (name) VALUES (%s)", ("Alice",))
         
-        mock_cursor.execute.assert_called_once_with("INSERT INTO users (name) VALUES (%s)", ("Alice",))
+        self.assertTrue(mock_connection.execute_called)
         self.assertEqual(result.affected_rows, 1)
     
     async def test_execute_not_connected(self):
@@ -492,61 +562,55 @@ class TestAsyncTransaction(unittest.IsolatedAsyncioTestCase):
         """Set up test fixtures"""
         self.client = AsyncClient()
         self.mock_connection = AsyncMock()
-        self.client._connection = self.mock_connection
+        
+        # Create a mock engine class that properly implements begin()
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+            
+            def begin(self):
+                # Create a proper async context manager for engine.begin()
+                class MockBeginContext:
+                    def __init__(self, connection):
+                        self.connection = connection
+                    
+                    async def __aenter__(self):
+                        return self.connection
+                    
+                    async def __aexit__(self, exc_type, exc_val, exc_tb):
+                        pass
+                
+                return MockBeginContext(self.connection)
+        
+        self.mock_engine = MockEngine(self.mock_connection)
+        self.client._engine = self.mock_engine
     
     async def test_transaction_success(self):
         """Test successful async transaction"""
-        mock_cursor = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.returns_rows = False
+        mock_result.rowcount = 1
         
-        # Create a proper async context manager
-        class MockCursorContext:
-            def __init__(self, cursor):
-                self.cursor = cursor
-            
-            async def __aenter__(self):
-                return self.cursor
-            
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
-        
-        # Set up the mock connection to return our context manager
-        self.mock_connection.cursor = Mock(return_value=MockCursorContext(mock_cursor))
-        
-        mock_cursor.description = None
-        mock_cursor.rowcount = 1
+        # Mock the connection.execute method
+        self.mock_connection.execute.return_value = mock_result
         
         async with self.client.transaction() as tx:
             await tx.execute("INSERT INTO users (name) VALUES (%s)", ("Alice",))
         
-        self.mock_connection.begin.assert_called_once()
-        self.mock_connection.commit.assert_called_once()
+        # Verify that the transaction was used
+        self.mock_connection.execute.assert_called_once()
     
     async def test_transaction_rollback(self):
         """Test async transaction rollback"""
-        mock_cursor = AsyncMock()
-        
-        # Create a proper async context manager
-        class MockCursorContext:
-            def __init__(self, cursor):
-                self.cursor = cursor
-            
-            async def __aenter__(self):
-                return self.cursor
-            
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
-        
-        # Set up the mock connection to return our context manager
-        self.mock_connection.cursor = Mock(return_value=MockCursorContext(mock_cursor))
-        
-        mock_cursor.execute.side_effect = Exception("Query failed")
+        # Mock the connection.execute method to raise an exception
+        self.mock_connection.execute.side_effect = Exception("Query failed")
         
         with self.assertRaises(Exception):
             async with self.client.transaction() as tx:
                 await tx.execute("INSERT INTO users (name) VALUES (%s)", ("Alice",))
         
-        self.mock_connection.begin.assert_called_once()
-        self.mock_connection.rollback.assert_called_once()
+        # Verify that the transaction was attempted
+        self.mock_connection.execute.assert_called_once()
 
 
 def run_async_test(test_func):

@@ -28,13 +28,13 @@ class VectorOpType:
 class IVFVectorIndex(Index):
     """
     SQLAlchemy Index for IVFFLAT vector columns with MatrixOne-specific syntax.
-    
+
     Specialized class for IVFFLAT vector indexes with type safety and clear API.
-    
+
     Usage Examples:
-    
+
     1. Class Methods (Recommended for one-time operations):
-    
+
         # Create index using class method
         success = IVFVectorIndex.create_index(
             engine=engine,
@@ -44,14 +44,14 @@ class IVFVectorIndex(Index):
             lists=100,
             op_type=VectorOpType.VECTOR_L2_OPS
         )
-        
+
         # Drop index using class method
         success = IVFVectorIndex.drop_index(
             engine=engine,
             table_name='my_table',
             name='idx_embedding'
         )
-        
+
         # Create index within existing transaction
         with engine.begin() as conn:
             success = IVFVectorIndex.create_index_in_transaction(
@@ -61,7 +61,7 @@ class IVFVectorIndex(Index):
                 column='embedding',
                 lists=100
             )
-        
+
         # Drop index within existing transaction
         with engine.begin() as conn:
             success = IVFVectorIndex.drop_index_in_transaction(
@@ -69,59 +69,61 @@ class IVFVectorIndex(Index):
                 table_name='my_table',
                 name='idx_embedding'
             )
-    
+
     2. Instance Methods (Useful for reusable index configurations):
-    
+
         # Create index object
         index = IVFVectorIndex('idx_embedding', 'embedding', lists=100)
-        
+
         # Create index using instance method
         success = index.create(engine, 'my_table')
-        
+
         # Drop index using instance method
         success = index.drop(engine, 'my_table')
-        
+
         # Create index within existing transaction
         with engine.begin() as conn:
             success = index.create_in_transaction(conn, 'my_table')
-        
+
         # Drop index within existing transaction
         with engine.begin() as conn:
             success = index.drop_in_transaction(conn, 'my_table')
-    
+
     3. SQLAlchemy ORM Integration:
-    
+
         # In table definition
         class Document(Base):
             __tablename__ = 'documents'
             id = Column(Integer, primary_key=True)
             embedding = create_vector_column(128, "f32")
-            
+
             # Note: For ORM integration, create table first, then create index separately
             # __table_args__ = (IVFVectorIndex('idx_embedding', 'embedding', lists=100),)
-        
+
         # Create table first
         Base.metadata.create_all(engine)
-        
+
         # Then create index separately
         IVFVectorIndex.create_index(engine, 'documents', 'idx_embedding', 'embedding', lists=100)
-    
+
     4. Client Chain Operations:
-    
+
         # Using client.vector_index.create_ivf() method
         client.vector_index.create_ivf('my_table', 'idx_embedding', 'embedding', lists=100)
-        
+
         # Using client.vector_index.create_ivf_in_transaction() method
         with client.transaction() as tx:
-            client.vector_index.create_ivf_in_transaction('my_table', 'idx_embedding', 'embedding', tx.connection, lists=100)
-    
+            client.vector_index.create_ivf_in_transaction(
+                'my_table', 'idx_embedding', 'embedding', tx.connection, lists=100
+            )
+
     Parameters:
         name (str): Index name
         column (Union[str, Column]): Vector column to index
         lists (int): Number of lists for IVFFLAT (default: 100)
         op_type (str): Vector operation type (default: vector_l2_ops)
         **kwargs: Additional index parameters
-    
+
     Note:
         - MatrixOne supports only ONE index per vector column
         - Enable IVF indexing before creating IVFFLAT indexes: SET experimental_ivf_index = 1
@@ -389,13 +391,13 @@ class IVFVectorIndex(Index):
 class HnswVectorIndex(Index):
     """
     SQLAlchemy Index for HNSW vector columns with MatrixOne-specific syntax.
-    
+
     Specialized class for HNSW vector indexes with type safety and clear API.
-    
+
     Usage Examples:
-    
+
     1. Class Methods (Recommended for one-time operations):
-    
+
         # Create index using class method
         success = HnswVectorIndex.create_index(
             engine=engine,
@@ -407,14 +409,14 @@ class HnswVectorIndex(Index):
             ef_search=50,
             op_type=VectorOpType.VECTOR_L2_OPS
         )
-        
+
         # Drop index using class method
         success = HnswVectorIndex.drop_index(
             engine=engine,
             table_name='my_table',
             name='idx_embedding'
         )
-        
+
         # Create index within existing transaction
         with engine.begin() as conn:
             success = HnswVectorIndex.create_index_in_transaction(
@@ -426,7 +428,7 @@ class HnswVectorIndex(Index):
                 ef_construction=200,
                 ef_search=50
             )
-        
+
         # Drop index within existing transaction
         with engine.begin() as conn:
             success = HnswVectorIndex.drop_index_in_transaction(
@@ -434,52 +436,54 @@ class HnswVectorIndex(Index):
                 table_name='my_table',
                 name='idx_embedding'
             )
-    
+
     2. Instance Methods (Useful for reusable index configurations):
-    
+
         # Create index object
         index = HnswVectorIndex('idx_embedding', 'embedding', m=16, ef_construction=200, ef_search=50)
-        
+
         # Create index using instance method
         success = index.create(engine, 'my_table')
-        
+
         # Drop index using instance method
         success = index.drop(engine, 'my_table')
-        
+
         # Create index within existing transaction
         with engine.begin() as conn:
             success = index.create_in_transaction(conn, 'my_table')
-        
+
         # Drop index within existing transaction
         with engine.begin() as conn:
             success = index.drop_in_transaction(conn, 'my_table')
-    
+
     3. SQLAlchemy ORM Integration:
-    
+
         # In table definition (requires BigInteger primary key for HNSW)
         class Document(Base):
             __tablename__ = 'documents'
             id = Column(BigInteger, primary_key=True)  # BigInteger required for HNSW
             embedding = create_vector_column(128, "f32")
-            
+
             # Note: For ORM integration, create table first, then create index separately
             # __table_args__ = (HnswVectorIndex('idx_embedding', 'embedding', m=16),)
-        
+
         # Create table first
         Base.metadata.create_all(engine)
-        
+
         # Then create index separately
         HnswVectorIndex.create_index(engine, 'documents', 'idx_embedding', 'embedding', m=16)
-    
+
     4. Client Chain Operations:
-    
+
         # Using client.vector_index.create_hnsw() method
         client.vector_index.create_hnsw('my_table', 'idx_embedding', 'embedding', m=16, ef_construction=200)
-        
+
         # Using client.vector_index.create_hnsw_in_transaction() method
         with client.transaction() as tx:
-            client.vector_index.create_hnsw_in_transaction('my_table', 'idx_embedding', 'embedding', tx.connection, m=16)
-    
+            client.vector_index.create_hnsw_in_transaction(
+                'my_table', 'idx_embedding', 'embedding', tx.connection, m=16
+            )
+
     Parameters:
         name (str): Index name
         column (Union[str, Column]): Vector column to index
@@ -488,7 +492,7 @@ class HnswVectorIndex(Index):
         ef_search (int): Size of dynamic candidate list for HNSW search (default: 50)
         op_type (str): Vector operation type (default: vector_l2_ops)
         **kwargs: Additional index parameters
-    
+
     Note:
         - MatrixOne supports only ONE index per vector column
         - Enable HNSW indexing before creating HNSW indexes: SET experimental_hnsw_index = 1

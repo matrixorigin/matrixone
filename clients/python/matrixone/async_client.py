@@ -8,6 +8,15 @@ try:
     import aiomysql
 except ImportError:
     aiomysql = None
+
+try:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+except ImportError:
+    create_async_engine = None
+    AsyncEngine = None
+    text = None
+
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -105,9 +114,9 @@ class AsyncSnapshotManager:
         sql = """
             SELECT sname, ts, level, account_name, database_name, table_name
             FROM mo_catalog.mo_snapshots
-            WHERE sname = %s
+            WHERE sname = :name
         """
-        result = await self.client.execute(sql, (name,))
+        result = await self.client.execute(sql, {"name": name})
 
         if not result.rows:
             raise SnapshotError(f"Snapshot '{name}' not found")
@@ -1131,9 +1140,13 @@ class AsyncClient:
                 slow_sql_threshold=slow_sql_threshold,
             )
 
-        self._connection = None
+        # Connection management - using SQLAlchemy async engine instead of direct aiomysql connection
+        self._engine = None
+        self._connection = None  # Keep for backward compatibility, but will be managed by engine
         self._connection_params = {}
         self._login_info = None
+
+        # Initialize managers
         self._snapshots = AsyncSnapshotManager(self)
         self._clone = AsyncCloneManager(self)
         self._moctl = AsyncMoCtlManager(self)
@@ -1171,18 +1184,25 @@ class AsyncClient:
             # Store parsed info for later use
             self._login_info = parsed_info
 
+            # Store connection parameters for engine creation
             self._connection_params = {
                 "host": host,
                 "port": port,
                 "user": final_user,
                 "password": password,
-                "db": database,  # aiomysql uses 'db' instead of 'database'
+                "database": database,
                 "charset": self.charset,
                 "autocommit": self.auto_commit,
                 "connect_timeout": self.connection_timeout,
             }
 
-            self._connection = await aiomysql.connect(**self._connection_params)
+            # Create SQLAlchemy async engine instead of direct aiomysql connection
+            self._engine = self._create_async_engine()
+
+            # Test the connection by executing a simple query
+            async with self._engine.begin() as conn:
+                await conn.execute(text("SELECT 1"))
+
             self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
         except Exception as e:
@@ -1190,33 +1210,101 @@ class AsyncClient:
             self.logger.log_error(e, context="Async connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
 
+    def _create_async_engine(self) -> AsyncEngine:
+        """Create SQLAlchemy async engine with connection pooling"""
+        if not create_async_engine:
+            raise ConnectionError("SQLAlchemy async engine not available. Please install sqlalchemy[asyncio]")
+
+        # Build connection string for async engine
+        connection_string = (
+            f"mysql+aiomysql://{self._connection_params['user']}:"
+            f"{self._connection_params['password']}@"
+            f"{self._connection_params['host']}:"
+            f"{self._connection_params['port']}/"
+            f"{self._connection_params['database'] or ''}"
+            f"?charset={self._connection_params['charset']}"
+        )
+
+        # Create async engine with connection pooling
+        engine = create_async_engine(
+            connection_string,
+            pool_size=10,  # Default pool size
+            max_overflow=20,  # Default max overflow
+            pool_timeout=30,  # Default pool timeout
+            pool_recycle=3600,  # Recycle connections after 1 hour
+            echo=False,  # Set to True for SQL logging
+        )
+
+        return engine
+
     async def disconnect(self):
         """Disconnect from MatrixOne database asynchronously"""
-        if self._connection:
+        if self._engine:
             try:
-                # Properly close the aiomysql connection
-                if hasattr(self._connection, "close"):
-                    self._connection.close()
-
-                # Wait for connection to be properly closed
-                if hasattr(self._connection, "wait_closed"):
-                    await self._connection.wait_closed()
-                elif hasattr(self._connection, "ensure_closed"):
-                    await self._connection.ensure_closed()
-
-                # Additional cleanup for aiomysql connections
-                if hasattr(self._connection, "_writer") and self._connection._writer:
-                    if hasattr(self._connection._writer, "transport") and self._connection._writer.transport:
-                        self._connection._writer.transport.close()
-
+                # Dispose the SQLAlchemy async engine
+                await self._engine.dispose()
+                self._engine = None
+                self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
                 self.logger.log_error(e, context="Async disconnection")
                 # Ignore errors during cleanup
                 pass
             finally:
+                # Clear connection reference for backward compatibility
                 self._connection = None
-                self.logger.log_disconnection(success=True)
+
+    def get_sqlalchemy_engine(self) -> AsyncEngine:
+        """
+        Get SQLAlchemy async engine
+
+        Returns:
+            SQLAlchemy AsyncEngine
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+        return self._engine
+
+    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
+        """
+        Execute SQL query asynchronously using SQLAlchemy async engine
+
+        Args:
+            sql: SQL query string
+            params: Query parameters
+
+        Returns:
+            AsyncResultSet with query results
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+
+        import time
+
+        start_time = time.time()
+
+        try:
+            async with self._engine.begin() as conn:
+                result = await conn.execute(text(sql), params or {})
+
+                execution_time = time.time() - start_time
+
+                if result.returns_rows:
+                    rows = result.fetchall()
+                    columns = list(result.keys()) if hasattr(result, "keys") else []
+                    async_result = AsyncResultSet(columns, rows)
+                    self.logger.log_query(sql, execution_time, len(rows), success=True)
+                    return async_result
+                else:
+                    async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+                    return async_result
+
+        except Exception as e:
+            execution_time = time.time() - start_time
+            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_error(e, context="Async query execution")
+            raise QueryError(f"Query execution failed: {e}")
 
     def __del__(self):
         """Cleanup when object is garbage collected"""
@@ -1317,47 +1405,6 @@ class AsyncClient:
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """
-        Execute SQL query asynchronously
-
-        Args:
-            sql: SQL query string
-            params: Query parameters
-
-        Returns:
-            AsyncResultSet with query results
-        """
-        if not self._connection:
-            raise ConnectionError("Not connected to database")
-
-        import time
-
-        start_time = time.time()
-
-        try:
-            async with self._connection.cursor() as cursor:
-                await cursor.execute(sql, params)
-
-                execution_time = time.time() - start_time
-
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = await cursor.fetchall()
-                    result = AsyncResultSet(columns, rows)
-                    self.logger.log_query(sql, execution_time, len(rows), success=True)
-                    return result
-                else:
-                    result = AsyncResultSet([], [], affected_rows=cursor.rowcount)
-                    self.logger.log_query(sql, execution_time, cursor.rowcount, success=True)
-                    return result
-
-        except Exception as e:
-            execution_time = time.time() - start_time
-            self.logger.log_query(sql, execution_time, success=False)
-            self.logger.log_error(e, context="Async query execution")
-            raise QueryError(f"Query execution failed: {e}")
-
     async def snapshot_query(self, snapshot_name: str, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
         """
         Execute query with snapshot asynchronously
@@ -1401,29 +1448,21 @@ class AsyncClient:
                 await tx.snapshots.create("snap1", "table", database="db1", table="t1")
                 await tx.clone.clone_database("target_db", "source_db")
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to database")
 
         tx_wrapper = None
         try:
-            await self._connection.begin()
-            tx_wrapper = AsyncTransactionWrapper(self._connection, self)
-            yield tx_wrapper
-
-            # Commit SQLAlchemy session first
-            await tx_wrapper.commit_sqlalchemy()
-            # Then commit the main transaction
-            await self._connection.commit()
+            # Use SQLAlchemy async engine for transaction
+            async with self._engine.begin() as conn:
+                tx_wrapper = AsyncTransactionWrapper(conn, self)
+                yield tx_wrapper
 
         except Exception as e:
-            # Rollback SQLAlchemy session first
-            if tx_wrapper:
-                await tx_wrapper.rollback_sqlalchemy()
-            # Then rollback the main transaction
-            await self._connection.rollback()
+            # Transaction will be automatically rolled back by SQLAlchemy
             raise e
         finally:
-            # Clean up SQLAlchemy resources
+            # Clean up transaction wrapper
             if tx_wrapper:
                 await tx_wrapper.close_sqlalchemy()
 
@@ -1548,15 +1587,14 @@ class AsyncTransactionWrapper:
     async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
         """Execute SQL within transaction asynchronously"""
         try:
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(sql, params)
+            result = await self.connection.execute(text(sql), params or {})
 
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = await cursor.fetchall()
-                    return AsyncResultSet(columns, rows)
-                else:
-                    return AsyncResultSet([], [], affected_rows=cursor.rowcount)
+            if result.returns_rows:
+                rows = result.fetchall()
+                columns = list(result.keys()) if hasattr(result, "keys") else []
+                return AsyncResultSet(columns, rows)
+            else:
+                return AsyncResultSet([], [], affected_rows=result.rowcount)
 
         except Exception as e:
             raise QueryError(f"Transaction query execution failed: {e}")

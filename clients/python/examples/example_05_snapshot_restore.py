@@ -320,9 +320,9 @@ def demo_snapshot_error_handling():
         snapshot_created = False
         try:
             # Create test table first
-            client.execute("CREATE TABLE IF NOT EXISTS snapshot_test (id INT PRIMARY KEY, name VARCHAR(50))")
+            client.execute("CREATE TABLE IF NOT EXISTS snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
             client.execute("DELETE FROM snapshot_test")
-            client.execute("INSERT INTO snapshot_test VALUES (1, 'test')")
+            client.execute("INSERT INTO snapshot_test VALUES (1, 'test', 100)")
             
             snapshot = client.snapshots.create(
                 name=snapshot_name,
