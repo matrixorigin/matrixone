@@ -22,9 +22,19 @@ import (
 
 func TestIsIndexAsync(t *testing.T) {
 
-	var json string
+	var (
+		json string
+		err  error
+		ok   bool
+	)
+
+	json = ""
+	ok, err = IsIndexAsync(json)
+	require.Nil(t, err)
+	require.Equal(t, ok, false)
+
 	json = "{}"
-	ok, err := IsIndexAsync(json)
+	ok, err = IsIndexAsync(json)
 	require.Nil(t, err)
 	require.Equal(t, ok, false)
 
