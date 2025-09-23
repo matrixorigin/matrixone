@@ -229,6 +229,16 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		}
 
 		group.ctr.dataSourceIsEmpty = false
+
+		// Check if we need to spill before processing this batch
+		group.updateMemoryUsage(proc)
+		if group.shouldSpill() {
+			if err := group.spillPartialResults(proc); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
 			return nil, err
 		}
@@ -327,11 +337,8 @@ func (group *Group) consumeBatchToGetFinalResult(
 		}
 	}
 
+	// Update memory usage after processing the batch
 	group.updateMemoryUsage(proc)
-	if group.shouldSpill() {
-		return group.spillPartialResults(proc)
-	}
-
 	return nil
 }
 
