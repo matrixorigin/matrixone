@@ -2496,8 +2496,8 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		minWriteTime = writeTime
 	}
 
-	const maxRetries = 500                // Maximum number of consecutive errors
-	const maxTotalTime = 30 * time.Minute // Maximum total consecutive processing time
+	const maxRetries = 1000               // Maximum number of consecutive errors
+	const maxTotalTime = 10 * time.Minute // Maximum total consecutive processing time
 	var consecutiveErrors int
 	consecutiveLoopStartTime := time.Now()
 
