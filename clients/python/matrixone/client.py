@@ -588,6 +588,40 @@ class Client:
         """Get vector index manager for vector index operations"""
         return self._vector_index
 
+    def get_vector_index(
+        self, table_name: str, vector_column: str, id_column: str = "id", metadata_columns: List[str] = None
+    ):
+        """
+        Get a SearchVectorIndex object for vector search operations.
+
+        This method creates a Pinecone-compatible vector search interface
+        that automatically parses the table schema and vector index configuration.
+
+        Args:
+            table_name: Name of the table containing vectors
+            vector_column: Name of the vector column
+            id_column: Name of the ID column (default: "id")
+            metadata_columns: List of metadata column names
+
+        Returns:
+            SearchVectorIndex object with Pinecone-compatible API
+
+        Example:
+            >>> index = client.get_vector_index("documents", "embedding", "doc_id", ["title", "category"])
+            >>> results = index.query([0.1, 0.2, 0.3], top_k=5)
+            >>> for match in results.matches:
+            ...     print(f"ID: {match.id}, Score: {match.score}")
+        """
+        from .search_vector_index import SearchVectorIndex
+
+        return SearchVectorIndex(
+            client=self,
+            table_name=table_name,
+            vector_column=vector_column,
+            id_column=id_column,
+            metadata_columns=metadata_columns,
+        )
+
     @property
     def fulltext_index(self) -> Optional["FulltextIndexManager"]:
         """Get fulltext index manager for fulltext index operations"""

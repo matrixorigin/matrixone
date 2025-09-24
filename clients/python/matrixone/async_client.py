@@ -1427,10 +1427,10 @@ class AsyncClient:
     def _initialize_vector_managers(self) -> None:
         """Initialize vector managers after successful connection"""
         try:
-            from .client import (VectorDataManager, VectorIndexManager,
-                                 VectorQueryManager)
+            from .async_vector_index_manager import AsyncVectorIndexManager
+            from .client import VectorDataManager, VectorQueryManager
 
-            self._vector_index = VectorIndexManager(self)
+            self._vector_index = AsyncVectorIndexManager(self)
             self._vector_query = VectorQueryManager(self)
             self._vector_data = VectorDataManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)
@@ -1756,6 +1756,40 @@ class AsyncClient:
     def vector_index(self):
         """Get vector index manager for vector index operations"""
         return self._vector_index
+
+    def get_vector_index(
+        self, table_name: str, vector_column: str, id_column: str = "id", metadata_columns: List[str] = None
+    ):
+        """
+        Get a SearchVectorIndex object for vector search operations.
+
+        This method creates a Pinecone-compatible vector search interface
+        that automatically parses the table schema and vector index configuration.
+
+        Args:
+            table_name: Name of the table containing vectors
+            vector_column: Name of the vector column
+            id_column: Name of the ID column (default: "id")
+            metadata_columns: List of metadata column names
+
+        Returns:
+            SearchVectorIndex object with Pinecone-compatible API
+
+        Example:
+            >>> index = await client.get_vector_index("documents", "embedding", "doc_id", ["title", "category"])
+            >>> results = await index.query_async([0.1, 0.2, 0.3], top_k=5)
+            >>> for match in results.matches:
+            ...     print(f"ID: {match.id}, Score: {match.score}")
+        """
+        from .search_vector_index import SearchVectorIndex
+
+        return SearchVectorIndex(
+            client=self,
+            table_name=table_name,
+            vector_column=vector_column,
+            id_column=id_column,
+            metadata_columns=metadata_columns,
+        )
 
     @property
     def fulltext_index(self):

@@ -9,6 +9,7 @@ This example demonstrates all vector operations available in MatrixOne:
 - Vector queries (similarity search, range search)
 - Transaction support
 - Performance optimization (column projection)
+- SearchVectorIndex (Pinecone-compatible API)
 - Best practices and error handling
 
 This replaces examples 16-19 with a single comprehensive demonstration.
@@ -466,6 +467,109 @@ def main():
         for result in all_results:
             print(f"  - ID: {result[0]}, Title: {result[1]}, Category: {result[2]}, Score: {result[3]}")
         
+        # Demo 13: SearchVectorIndex (Pinecone-compatible API)
+        print("\n--- Demo 13: SearchVectorIndex (Pinecone-compatible API) ---")
+        
+        # Create a dedicated table for SearchVectorIndex demo
+        client.execute("CREATE DATABASE IF NOT EXISTS pinecone_demo")
+        client.execute("USE pinecone_demo")
+        
+        client.execute("""
+            CREATE TABLE IF NOT EXISTS pinecone_docs (
+                id VARCHAR(50) PRIMARY KEY,
+                title VARCHAR(200),
+                content TEXT,
+                category VARCHAR(50),
+                embedding vecf32(128)
+            )
+        """)
+        
+        # Create vector index
+        client.vector_index.create_ivf(
+            table_name="pinecone_docs",
+            name="idx_pinecone_embedding",
+            column="embedding",
+            lists=10
+        )
+        
+        # Insert sample data
+        sample_docs = [
+            {
+                "id": "pinecone_doc1",
+                "title": "Pinecone-Compatible Search",
+                "content": "This demonstrates Pinecone-compatible vector search",
+                "category": "Demo",
+                "embedding": [0.1] * 128
+            },
+            {
+                "id": "pinecone_doc2", 
+                "title": "Vector Search API",
+                "content": "High-level vector search interface",
+                "category": "API",
+                "embedding": [0.2] * 128
+            }
+        ]
+        
+        for doc in sample_docs:
+            vector_str = "[" + ",".join(map(str, doc["embedding"])) + "]"
+            client.execute(f"""
+                INSERT INTO pinecone_docs (id, title, content, category, embedding) 
+                VALUES ('{doc["id"]}', '{doc["title"]}', '{doc["content"]}', '{doc["category"]}', '{vector_str}')
+            """)
+        
+        # Get SearchVectorIndex object (Pinecone-compatible interface)
+        index = client.get_vector_index(
+            table_name="pinecone_docs",
+            vector_column="embedding",
+            id_column="id",
+            metadata_columns=["title", "content", "category"]
+        )
+        
+        print(f"✓ Created SearchVectorIndex for table 'pinecone_docs'")
+        print(f"✓ Vector column: {index.vector_column}")
+        print(f"✓ ID column: {index.id_column}")
+        print(f"✓ Metadata columns: {index.metadata_columns}")
+        
+        # Query the index (Pinecone-compatible API)
+        query_vector = [0.15] * 128
+        results = index.query(
+            vector=query_vector,
+            top_k=2,
+            include_metadata=True,
+            include_values=False
+        )
+        
+        print(f"\n✓ Query results:")
+        print(f"  - Found {len(results.matches)} matches")
+        print(f"  - Namespace: {results.namespace}")
+        print(f"  - Usage: {results.usage}")
+        
+        for i, match in enumerate(results.matches):
+            print(f"\n  Match {i+1}:")
+            print(f"    - ID: {match.id}")
+            print(f"    - Score: {match.score:.4f}")
+            print(f"    - Title: {match.metadata.get('title', 'N/A')}")
+            print(f"    - Category: {match.metadata.get('category', 'N/A')}")
+        
+        # Test delete functionality (only for IVF indexes)
+        vector_str = "[" + ",".join(map(str, [0.4] * 128)) + "]"
+        client.execute(f"""
+            INSERT INTO pinecone_docs (id, title, content, category, embedding) VALUES
+            ('pinecone_doc3', 'Test Document', 'This is a test document', 'Test', '{vector_str}')
+        """)
+        print(f"\n✓ Inserted test vector using SQL")
+        
+        # Test delete functionality
+        index.delete(["pinecone_doc3"])
+        print(f"✓ Deleted vector with ID 'pinecone_doc3'")
+        
+        # Get index statistics
+        stats = index.describe_index_stats()
+        print(f"\n✓ Index statistics:")
+        print(f"  - Dimension: {stats['dimension']}")
+        print(f"  - Total vectors: {stats['total_vector_count']}")
+        print(f"  - Namespaces: {list(stats['namespaces'].keys())}")
+        
     except Exception as e:
         print(f"Error: {e}")
         import traceback
@@ -477,6 +581,8 @@ def main():
         try:
             client.drop_table("vector_docs_comprehensive")
             client.drop_table("vector_docs_tx")
+            client.execute("DROP TABLE IF EXISTS pinecone_docs")
+            client.execute("DROP DATABASE IF EXISTS pinecone_demo")
             print("✓ Cleaned up test tables")
         except:
             pass
@@ -487,6 +593,7 @@ def main():
     
     print("\n" + "=" * 80)
     print("Vector Operations Comprehensive Demo Completed")
+    print("Including Pinecone-compatible SearchVectorIndex API")
     print("=" * 80)
 
 
