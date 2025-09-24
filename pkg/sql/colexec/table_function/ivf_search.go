@@ -15,10 +15,10 @@
 package table_function
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -137,7 +137,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
-			err = sonic.Unmarshal([]byte(tf.Params), &u.param)
+			err = json.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
 				return err
 			}
@@ -172,7 +172,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err := sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
+		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
 		if err != nil {
 			return err
 		}
