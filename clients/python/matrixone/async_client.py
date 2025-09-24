@@ -1445,8 +1445,21 @@ class AsyncClient:
         """Disconnect from MatrixOne database asynchronously"""
         if self._engine:
             try:
-                # Properly dispose of the engine - this closes all connections in the pool
+                # First, try to close any active connections in the pool
+                if hasattr(self._engine, "_pool") and self._engine._pool is not None:
+                    # Close all connections in the pool
+                    await self._engine._pool.close()
+                    # Wait for all connections to be properly closed
+                    await self._engine._pool.wait_closed()
+
+                # Then dispose of the engine - this closes all connections in the pool
                 await self._engine.dispose()
+
+                # Force garbage collection to ensure connections are cleaned up
+                import gc
+
+                gc.collect()
+
                 self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
@@ -1465,18 +1478,31 @@ class AsyncClient:
         """Synchronous disconnect for cleanup when event loop is closed"""
         if self._engine:
             try:
-                # For sync cleanup, we can't await, but we can try to close the pool
-                # The engine will be garbage collected and connections will be closed
-                # by the underlying connection pool's cleanup
-                self._engine = None
-                self._connection = None
+                # Try to close the connection pool synchronously
+                # SQLAlchemy AsyncEngine has a sync_engine property that can be disposed
+                if hasattr(self._engine, "sync_engine") and self._engine.sync_engine is not None:
+                    # Close all connections in the pool synchronously
+                    self._engine.sync_engine.dispose()
+                elif hasattr(self._engine, "_pool") and self._engine._pool is not None:
+                    # Direct access to connection pool for cleanup
+                    try:
+                        self._engine._pool.close()
+                    except Exception:
+                        pass
+
                 self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
                 self.logger.log_error(e, context="Sync disconnection")
-                # Ensure cleanup even if logging fails
+            finally:
+                # Ensure all references are cleared regardless of success/failure
                 self._engine = None
                 self._connection = None
+                # Clear any cached managers
+                self._vector_index = None
+                self._vector_query = None
+                self._vector_data = None
+                self._fulltext_index = None
 
     def __del__(self):
         """Cleanup when object is garbage collected"""
@@ -1757,29 +1783,28 @@ class AsyncClient:
         """Get vector index manager for vector index operations"""
         return self._vector_index
 
-    def get_pinecone_index(
-        self, table_name: str, vector_column: str, id_column: str = "id", metadata_columns: List[str] = None
-    ):
+    def get_pinecone_index(self, table_name: str, vector_column: str):
         """
         Get a PineconeCompatibleIndex object for vector search operations.
 
         This method creates a Pinecone-compatible vector search interface
         that automatically parses the table schema and vector index configuration.
+        The primary key column is automatically detected, and all other columns
+        except the vector column will be included as metadata.
 
         Args:
             table_name: Name of the table containing vectors
             vector_column: Name of the vector column
-            id_column: Name of the ID column (default: "id")
-            metadata_columns: List of metadata column names
 
         Returns:
             PineconeCompatibleIndex object with Pinecone-compatible API
 
         Example:
-            >>> index = await client.get_pinecone_index("documents", "embedding", "doc_id", ["title", "category"])
+            >>> index = await client.get_pinecone_index("documents", "embedding")
             >>> results = await index.query_async([0.1, 0.2, 0.3], top_k=5)
             >>> for match in results.matches:
             ...     print(f"ID: {match.id}, Score: {match.score}")
+            ...     print(f"Metadata: {match.metadata}")
         """
         from .search_vector_index import PineconeCompatibleIndex
 
@@ -1787,8 +1812,6 @@ class AsyncClient:
             client=self,
             table_name=table_name,
             vector_column=vector_column,
-            id_column=id_column,
-            metadata_columns=metadata_columns,
         )
 
     @property
@@ -1823,7 +1846,7 @@ class AsyncClient:
             >>> version = await client.version()
             >>> print(f"MatrixOne version: {version}")
         """
-        if not self._connection:
+        if not self.connected():
             raise ConnectionError("Not connected to MatrixOne")
 
         try:
@@ -1852,7 +1875,7 @@ class AsyncClient:
             >>> git_version = await client.git_version()
             >>> print(f"MatrixOne git version: {git_version}")
         """
-        if not self._connection:
+        if not self.connected():
             raise ConnectionError("Not connected to MatrixOne")
 
         try:
@@ -1869,7 +1892,9 @@ class AsyncClient:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.disconnect()
+        # Only disconnect if we're actually connected
+        if self.connected():
+            await self.disconnect()
 
     async def create_table(self, table_name: str, columns: dict, **kwargs) -> "AsyncClient":
         """

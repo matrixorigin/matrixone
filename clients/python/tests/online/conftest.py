@@ -14,6 +14,15 @@ from matrixone.logger import create_default_logger
 from .test_config import online_config
 
 
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create an instance of the default event loop for the test session."""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    yield loop
+    loop.close()
+
+
 def pytest_configure(config):
     """Configure pytest with online test settings"""
     config.addinivalue_line("markers", "online: mark test as requiring database connection")
@@ -177,5 +186,14 @@ async def test_async_client(db_helper, async_db_connection_test):
     try:
         yield client
     finally:
-        # Simple cleanup - let the client handle its own cleanup
-        await client.disconnect()
+        # Clean disconnect - the improved disconnect method should handle cleanup properly
+        try:
+            await client.disconnect()
+        except Exception as e:
+            # If async disconnect fails, try sync cleanup as fallback
+            try:
+                client.disconnect_sync()
+            except Exception:
+                pass
+            # Log the error for debugging
+            print(f"Warning: Failed to disconnect async client: {e}")

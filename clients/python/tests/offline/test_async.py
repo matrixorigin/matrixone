@@ -358,12 +358,16 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
     async def test_context_manager(self):
         """Test async context manager"""
         with patch.object(self.client, 'connect') as mock_connect, \
-             patch.object(self.client, 'disconnect') as mock_disconnect:
+             patch.object(self.client, 'disconnect') as mock_disconnect, \
+             patch.object(self.client, 'connected') as mock_connected:
+            
+            # Mock connected to return True so disconnect will be called
+            mock_connected.return_value = True
             
             async with self.client as client:
                 self.assertEqual(client, self.client)
             
-            # Only disconnect should be called since __aenter__ doesn't call connect
+            # disconnect should be called since connected() returns True
             mock_disconnect.assert_called_once()
 
 

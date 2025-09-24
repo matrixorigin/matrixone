@@ -588,29 +588,28 @@ class Client:
         """Get vector index manager for vector index operations"""
         return self._vector_index
 
-    def get_pinecone_index(
-        self, table_name: str, vector_column: str, id_column: str = "id", metadata_columns: List[str] = None
-    ):
+    def get_pinecone_index(self, table_name: str, vector_column: str):
         """
         Get a PineconeCompatibleIndex object for vector search operations.
 
         This method creates a Pinecone-compatible vector search interface
         that automatically parses the table schema and vector index configuration.
+        The primary key column is automatically detected, and all other columns
+        except the vector column will be included as metadata.
 
         Args:
             table_name: Name of the table containing vectors
             vector_column: Name of the vector column
-            id_column: Name of the ID column (default: "id")
-            metadata_columns: List of metadata column names
 
         Returns:
             PineconeCompatibleIndex object with Pinecone-compatible API
 
         Example:
-            >>> index = client.get_pinecone_index("documents", "embedding", "doc_id", ["title", "category"])
+            >>> index = client.get_pinecone_index("documents", "embedding")
             >>> results = index.query([0.1, 0.2, 0.3], top_k=5)
             >>> for match in results.matches:
             ...     print(f"ID: {match.id}, Score: {match.score}")
+            ...     print(f"Metadata: {match.metadata}")
         """
         from .search_vector_index import PineconeCompatibleIndex
 
@@ -618,8 +617,6 @@ class Client:
             client=self,
             table_name=table_name,
             vector_column=vector_column,
-            id_column=id_column,
-            metadata_columns=metadata_columns,
         )
 
     @property
@@ -2495,7 +2492,7 @@ class VectorQueryManager:
 
         # Build distance function based on type
         if distance_type == "l2":
-            distance_func = "l2_distance"
+            distance_func = "l2_distance_sq"
         elif distance_type == "cosine":
             distance_func = "cosine_distance"
         elif distance_type == "inner_product":

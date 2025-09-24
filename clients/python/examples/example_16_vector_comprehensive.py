@@ -520,15 +520,13 @@ def main():
         # Get PineconeCompatibleIndex object (Pinecone-compatible interface)
         index = client.get_pinecone_index(
             table_name="pinecone_docs",
-            vector_column="embedding",
-            id_column="id",
-            metadata_columns=["title", "content", "category"]
+            vector_column="embedding"
         )
         
         print(f"✓ Created PineconeCompatibleIndex for table 'pinecone_docs'")
         print(f"✓ Vector column: {index.vector_column}")
-        print(f"✓ ID column: {index.id_column}")
-        print(f"✓ Metadata columns: {index.metadata_columns}")
+        print(f"✓ ID column: {index._get_id_column()}")
+        print(f"✓ Metadata columns: {index._get_metadata_columns()}")
         
         # Query the index (Pinecone-compatible API)
         query_vector = [0.15] * 128

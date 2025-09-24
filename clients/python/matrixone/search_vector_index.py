@@ -35,25 +35,126 @@ class PineconeCompatibleIndex:
     Pinecone to MatrixOne.
     """
 
-    def __init__(
-        self, client, table_name: str, vector_column: str, id_column: str = "id", metadata_columns: List[str] = None
-    ):
+    def __init__(self, client, table_name: str, vector_column: str):
         """
-        Initialize SearchVectorIndex.
+        Initialize PineconeCompatibleIndex.
 
         Args:
             client: MatrixOne client instance
             table_name: Name of the table containing vectors
             vector_column: Name of the vector column
-            id_column: Name of the ID column (default: "id")
-            metadata_columns: List of metadata column names
         """
         self.client = client
         self.table_name = table_name
         self.vector_column = vector_column
-        self.id_column = id_column
-        self.metadata_columns = metadata_columns or []
         self._index_info = None
+        self._metadata_columns = None  # Will be auto-detected
+        self._id_column = None  # Will be auto-detected as primary key
+
+    @property
+    def metadata_columns(self):
+        """Get metadata columns (all columns except id and vector columns)"""
+        # Check if this is an async client
+        if hasattr(self.client, "execute") and hasattr(self.client.execute, "__call__"):
+            import asyncio
+
+            if asyncio.iscoroutinefunction(self.client.execute):
+                raise RuntimeError("Use _get_metadata_columns_async() for async clients")
+        return self._get_metadata_columns()
+
+    def _get_id_column(self):
+        """Get the primary key column name"""
+        if self._id_column is not None:
+            return self._id_column
+
+        # Check if this is an async client
+        if hasattr(self.client, "execute") and hasattr(self.client.execute, "__call__"):
+            # Check if execute returns a coroutine (async client)
+            import asyncio
+
+            if asyncio.iscoroutinefunction(self.client.execute):
+                raise RuntimeError("Use _get_id_column_async() for async clients")
+
+        # Get table schema to find primary key
+        schema_result = self.client.execute(f"DESCRIBE {self.table_name}")
+        if not schema_result.rows:
+            # Fallback to 'id' if table not found
+            self._id_column = "id"
+            return self._id_column
+
+        # Find primary key column
+        for row in schema_result.rows:
+            column_name = row[0]
+            key_info = row[3] if len(row) > 3 else ""  # Key column
+            if "PRI" in key_info.upper():
+                self._id_column = column_name
+                return self._id_column
+
+        # Fallback to 'id' if no primary key found
+        self._id_column = "id"
+        return self._id_column
+
+    async def _get_id_column_async(self):
+        """Get the primary key column name - async version"""
+        if self._id_column is not None:
+            return self._id_column
+
+        # Get table schema to find primary key
+        schema_result = await self.client.execute(f"DESCRIBE {self.table_name}")
+        if not schema_result.rows:
+            # Fallback to 'id' if table not found
+            self._id_column = "id"
+            return self._id_column
+
+        # Find primary key column
+        for row in schema_result.rows:
+            column_name = row[0]
+            key_info = row[3] if len(row) > 3 else ""  # Key column
+            if "PRI" in key_info.upper():
+                self._id_column = column_name
+                return self._id_column
+
+        # Fallback to 'id' if no primary key found
+        self._id_column = "id"
+        return self._id_column
+
+    def _get_metadata_columns(self):
+        """Get metadata columns (all columns except id and vector columns)"""
+        if self._metadata_columns is not None:
+            return self._metadata_columns
+
+        # Get table schema
+        schema_result = self.client.execute(f"DESCRIBE {self.table_name}")
+        if not schema_result.rows:
+            self._metadata_columns = []
+            return self._metadata_columns
+
+        # Extract column names, excluding id and vector columns
+        all_columns = [row[0] for row in schema_result.rows]
+        id_column = self._get_id_column()
+        self._metadata_columns = [
+            col for col in all_columns if col.lower() not in [id_column.lower(), self.vector_column.lower()]
+        ]
+        return self._metadata_columns
+
+    async def _get_metadata_columns_async(self):
+        """Get metadata columns (all columns except id and vector columns) - async version"""
+        if self._metadata_columns is not None:
+            return self._metadata_columns
+
+        # Get table schema
+        schema_result = await self.client.execute(f"DESCRIBE {self.table_name}")
+        if not schema_result.rows:
+            self._metadata_columns = []
+            return self._metadata_columns
+
+        # Extract column names, excluding id and vector columns
+        all_columns = [row[0] for row in schema_result.rows]
+        id_column = await self._get_id_column_async()
+        self._metadata_columns = [
+            col for col in all_columns if col.lower() not in [id_column.lower(), self.vector_column.lower()]
+        ]
+        return self._metadata_columns
 
     async def _get_index_info_async(self):
         """Get index information for async client"""
@@ -176,9 +277,11 @@ class PineconeCompatibleIndex:
         index_info = self._get_index_info()
 
         # Build similarity search query
-        select_columns = [self.id_column]
-        if include_metadata and self.metadata_columns:
-            select_columns.extend(self.metadata_columns)
+        id_column = self._get_id_column()
+        select_columns = [id_column]
+        if include_metadata:
+            metadata_columns = self._get_metadata_columns()
+            select_columns.extend(metadata_columns)
         if include_values:
             select_columns.append(self.vector_column)
 
@@ -210,15 +313,19 @@ class PineconeCompatibleIndex:
 
             # Extract metadata
             metadata = {}
-            if include_metadata and self.metadata_columns:
-                for i, col in enumerate(self.metadata_columns):
+            if include_metadata:
+                metadata_columns = self._get_metadata_columns()
+                for i, col in enumerate(metadata_columns):
                     if i + 1 < len(row):
                         metadata[col] = row[i + 1]
 
             # Extract vector values if requested
             values = None
             if include_values and self.vector_column in select_columns:
-                vector_idx = select_columns.index(self.vector_column)
+                # Find vector column index case-insensitively
+                vector_idx = next(
+                    i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower()
+                )
                 if vector_idx < len(row):
                     values = row[vector_idx]
 
@@ -252,9 +359,11 @@ class PineconeCompatibleIndex:
         index_info = await self._get_index_info_async()
 
         # Build similarity search query
-        select_columns = [self.id_column]
-        if include_metadata and self.metadata_columns:
-            select_columns.extend(self.metadata_columns)
+        id_column = await self._get_id_column_async()
+        select_columns = [id_column]
+        if include_metadata:
+            metadata_columns = await self._get_metadata_columns_async()
+            select_columns.extend(metadata_columns)
         if include_values:
             select_columns.append(self.vector_column)
 
@@ -280,7 +389,7 @@ class PineconeCompatibleIndex:
         else:
             # Ensure vector_column is included for distance calculation
             columns_to_select = list(select_columns)
-            if self.vector_column not in columns_to_select:
+            if not any(col.lower() == self.vector_column.lower() for col in columns_to_select):
                 columns_to_select.append(self.vector_column)
             select_clause = ", ".join(columns_to_select)
 
@@ -304,15 +413,19 @@ class PineconeCompatibleIndex:
 
             # Extract metadata
             metadata = {}
-            if include_metadata and self.metadata_columns:
-                for i, col in enumerate(self.metadata_columns):
+            if include_metadata:
+                metadata_columns = await self._get_metadata_columns_async()
+                for i, col in enumerate(metadata_columns):
                     if i + 1 < len(row):
                         metadata[col] = row[i + 1]
 
             # Extract vector values if requested
             values = None
             if include_values and self.vector_column in select_columns:
-                vector_idx = select_columns.index(self.vector_column)
+                # Find vector column index case-insensitively
+                vector_idx = next(
+                    i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower()
+                )
                 if vector_idx < len(row):
                     values = row[vector_idx]
 
@@ -342,8 +455,9 @@ class PineconeCompatibleIndex:
 
         if ids:
             # Convert all IDs to strings and create IN clause
+            id_column = self._get_id_column()
             id_list = "', '".join(str(id) for id in ids)
-            self.client.execute(f"DELETE FROM {self.table_name} WHERE {self.id_column} IN ('{id_list}')")
+            self.client.execute(f"DELETE FROM {self.table_name} WHERE {id_column} IN ('{id_list}')")
 
     async def delete_async(self, ids: List[Any], namespace: str = ""):
         """
@@ -367,8 +481,9 @@ class PineconeCompatibleIndex:
 
         if ids:
             # Convert all IDs to strings and create IN clause
+            id_column = await self._get_id_column_async()
             id_list = "', '".join(str(id) for id in ids)
-            await self.client.execute(f"DELETE FROM {self.table_name} WHERE {self.id_column} IN ('{id_list}')")
+            await self.client.execute(f"DELETE FROM {self.table_name} WHERE {id_column} IN ('{id_list}')")
 
     def describe_index_stats(self) -> Dict[str, Any]:
         """

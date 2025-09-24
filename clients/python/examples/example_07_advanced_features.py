@@ -570,7 +570,12 @@ async def demo_async_version_context_manager():
     
     try:
         async with AsyncClient(enable_full_sql_logging=True) as client:
+            # Connect to the database
             await client.connect(host, port, user, password, database)
+            
+            # Verify connection
+            if not client.connected():
+                raise ConnectionError("Failed to establish connection")
             
             logger.info("✅ Connected using async context manager")
             
@@ -586,6 +591,8 @@ async def demo_async_version_context_manager():
             
     except Exception as e:
         logger.error(f"❌ Async context manager demo failed: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
 
 
 def demo_performance_monitoring():
