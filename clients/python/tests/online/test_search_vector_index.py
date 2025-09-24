@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Test SearchVectorIndex functionality - Pinecone-compatible vector search interface
+Test PineconeCompatibleIndex functionality - Pinecone-compatible vector search interface
 """
 
 import pytest
 import pytest_asyncio
 from matrixone import Client, AsyncClient
-from matrixone.search_vector_index import SearchVectorIndex, VectorMatch, QueryResponse
+from matrixone.search_vector_index import PineconeCompatibleIndex, VectorMatch, QueryResponse
 
 
-class TestSearchVectorIndex:
-    """Test SearchVectorIndex functionality"""
+class TestPineconeCompatibleIndex:
+    """Test PineconeCompatibleIndex functionality"""
 
-    def test_get_vector_index_sync(self, test_client):
-        """Test getting SearchVectorIndex from sync client"""
+    def test_get_pinecone_index_sync(self, test_client):
+        """Test getting PineconeCompatibleIndex from sync client"""
         # Create a test table with vector column
         test_client.execute("CREATE DATABASE IF NOT EXISTS search_vector_test")
         test_client.execute("USE search_vector_test")
@@ -36,15 +36,15 @@ class TestSearchVectorIndex:
         )
         
         try:
-            # Get SearchVectorIndex object
-            index = test_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_client.get_pinecone_index(
                 table_name="test_vectors",
                 vector_column="embedding",
                 id_column="id",
                 metadata_columns=["title", "content"]
             )
             
-            assert isinstance(index, SearchVectorIndex)
+            assert isinstance(index, PineconeCompatibleIndex)
             assert index.table_name == "test_vectors"
             assert index.vector_column == "embedding"
             assert index.id_column == "id"
@@ -56,8 +56,8 @@ class TestSearchVectorIndex:
             test_client.execute("DROP DATABASE search_vector_test")
 
     @pytest.mark.asyncio
-    async def test_get_vector_index_async(self, test_async_client):
-        """Test getting SearchVectorIndex from async client"""
+    async def test_get_pinecone_index_async(self, test_async_client):
+        """Test getting PineconeCompatibleIndex from async client"""
         # Create a test table with vector column
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_search_vector_test")
         await test_async_client.execute("USE async_search_vector_test")
@@ -80,15 +80,15 @@ class TestSearchVectorIndex:
         )
         
         try:
-            # Get SearchVectorIndex object
-            index = test_async_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_async_client.get_pinecone_index(
                 table_name="test_vectors_async",
                 vector_column="embedding",
                 id_column="id",
                 metadata_columns=["title", "content"]
             )
             
-            assert isinstance(index, SearchVectorIndex)
+            assert isinstance(index, PineconeCompatibleIndex)
             assert index.table_name == "test_vectors_async"
             assert index.vector_column == "embedding"
             assert index.id_column == "id"
@@ -126,8 +126,8 @@ class TestSearchVectorIndex:
         )
         
         try:
-            # Get SearchVectorIndex object
-            index = test_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_client.get_pinecone_index(
                 table_name="test_parse",
                 vector_column="embedding",
                 id_column="id"
@@ -179,8 +179,8 @@ class TestSearchVectorIndex:
         """)
         
         try:
-            # Get SearchVectorIndex object
-            index = test_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_client.get_pinecone_index(
                 table_name="test_query",
                 vector_column="embedding",
                 id_column="id",
@@ -239,8 +239,8 @@ class TestSearchVectorIndex:
         """)
         
         try:
-            # Get SearchVectorIndex object
-            index = test_async_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_async_client.get_pinecone_index(
                 table_name="test_query_async",
                 vector_column="embedding",
                 id_column="id",
@@ -292,8 +292,8 @@ class TestSearchVectorIndex:
         )
         
         try:
-            # Get SearchVectorIndex object
-            index = test_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_client.get_pinecone_index(
                 table_name="test_upsert",
                 vector_column="embedding",
                 id_column="id",
@@ -357,8 +357,8 @@ class TestSearchVectorIndex:
         """)
         
         try:
-            # Get SearchVectorIndex object
-            index = test_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_client.get_pinecone_index(
                 table_name="test_stats",
                 vector_column="embedding",
                 id_column="id"
@@ -408,8 +408,8 @@ class TestSearchVectorIndex:
         )
         
         try:
-            # Get SearchVectorIndex object
-            index = test_client.get_vector_index(
+            # Get PineconeCompatibleIndex object
+            index = test_client.get_pinecone_index(
                 table_name="test_hnsw_upsert",
                 vector_column="embedding",
                 id_column="id",

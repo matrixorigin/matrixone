@@ -1757,11 +1757,11 @@ class AsyncClient:
         """Get vector index manager for vector index operations"""
         return self._vector_index
 
-    def get_vector_index(
+    def get_pinecone_index(
         self, table_name: str, vector_column: str, id_column: str = "id", metadata_columns: List[str] = None
     ):
         """
-        Get a SearchVectorIndex object for vector search operations.
+        Get a PineconeCompatibleIndex object for vector search operations.
 
         This method creates a Pinecone-compatible vector search interface
         that automatically parses the table schema and vector index configuration.
@@ -1773,17 +1773,17 @@ class AsyncClient:
             metadata_columns: List of metadata column names
 
         Returns:
-            SearchVectorIndex object with Pinecone-compatible API
+            PineconeCompatibleIndex object with Pinecone-compatible API
 
         Example:
-            >>> index = await client.get_vector_index("documents", "embedding", "doc_id", ["title", "category"])
+            >>> index = await client.get_pinecone_index("documents", "embedding", "doc_id", ["title", "category"])
             >>> results = await index.query_async([0.1, 0.2, 0.3], top_k=5)
             >>> for match in results.matches:
             ...     print(f"ID: {match.id}, Score: {match.score}")
         """
-        from .search_vector_index import SearchVectorIndex
+        from .search_vector_index import PineconeCompatibleIndex
 
-        return SearchVectorIndex(
+        return PineconeCompatibleIndex(
             client=self,
             table_name=table_name,
             vector_column=vector_column,

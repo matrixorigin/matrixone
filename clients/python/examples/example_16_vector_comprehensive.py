@@ -9,7 +9,7 @@ This example demonstrates all vector operations available in MatrixOne:
 - Vector queries (similarity search, range search)
 - Transaction support
 - Performance optimization (column projection)
-- SearchVectorIndex (Pinecone-compatible API)
+- PineconeCompatibleIndex (Pinecone-compatible API)
 - Best practices and error handling
 
 This replaces examples 16-19 with a single comprehensive demonstration.
@@ -467,10 +467,10 @@ def main():
         for result in all_results:
             print(f"  - ID: {result[0]}, Title: {result[1]}, Category: {result[2]}, Score: {result[3]}")
         
-        # Demo 13: SearchVectorIndex (Pinecone-compatible API)
-        print("\n--- Demo 13: SearchVectorIndex (Pinecone-compatible API) ---")
+        # Demo 13: PineconeCompatibleIndex (Pinecone-compatible API)
+        print("\n--- Demo 13: PineconeCompatibleIndex (Pinecone-compatible API) ---")
         
-        # Create a dedicated table for SearchVectorIndex demo
+        # Create a dedicated table for PineconeCompatibleIndex demo
         client.execute("CREATE DATABASE IF NOT EXISTS pinecone_demo")
         client.execute("USE pinecone_demo")
         
@@ -517,15 +517,15 @@ def main():
                 VALUES ('{doc["id"]}', '{doc["title"]}', '{doc["content"]}', '{doc["category"]}', '{vector_str}')
             """)
         
-        # Get SearchVectorIndex object (Pinecone-compatible interface)
-        index = client.get_vector_index(
+        # Get PineconeCompatibleIndex object (Pinecone-compatible interface)
+        index = client.get_pinecone_index(
             table_name="pinecone_docs",
             vector_column="embedding",
             id_column="id",
             metadata_columns=["title", "content", "category"]
         )
         
-        print(f"✓ Created SearchVectorIndex for table 'pinecone_docs'")
+        print(f"✓ Created PineconeCompatibleIndex for table 'pinecone_docs'")
         print(f"✓ Vector column: {index.vector_column}")
         print(f"✓ ID column: {index.id_column}")
         print(f"✓ Metadata columns: {index.metadata_columns}")
@@ -593,7 +593,7 @@ def main():
     
     print("\n" + "=" * 80)
     print("Vector Operations Comprehensive Demo Completed")
-    print("Including Pinecone-compatible SearchVectorIndex API")
+    print("Including Pinecone-compatible PineconeCompatibleIndex API")
     print("=" * 80)
 
 

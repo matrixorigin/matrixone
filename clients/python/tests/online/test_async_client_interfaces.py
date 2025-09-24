@@ -231,10 +231,10 @@ class TestAsyncClientMissingInterfaces:
             # Test vector index creation (if supported)
             try:
                 # Enable IVF
-                client.vector_index.enable_ivf()
+                await client.vector_index.enable_ivf()
                 
                 # Create IVFFLAT index
-                client.vector_index.create_ivf(
+                await client.vector_index.create_ivf(
                     table_name=table_name,
                     name="idx_embedding_ivf",
                     column="embedding",

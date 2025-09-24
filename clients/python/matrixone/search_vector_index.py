@@ -26,7 +26,7 @@ class QueryResponse:
     usage: Optional[Dict[str, Any]] = None
 
 
-class SearchVectorIndex:
+class PineconeCompatibleIndex:
     """
     A Pinecone-compatible vector search interface for MatrixOne.
 
