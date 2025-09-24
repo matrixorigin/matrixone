@@ -26,6 +26,7 @@ import (
 
 func (group *Group) shouldSpill() bool {
 	return group.SpillThreshold > 0 &&
+		group.SpillManager != nil &&
 		group.ctr.currentMemUsage > group.SpillThreshold &&
 		len(group.ctr.result1.AggList) > 0 &&
 		len(group.ctr.result1.ToPopped) > 0
@@ -63,12 +64,6 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		if agg != nil {
 			marshaledData, err := aggexec.MarshalAggFuncExec(agg)
 			if err != nil {
-				// Clean up already marshaled states
-				for j := 0; j < i; j++ {
-					if marshaledAggStates[j] != nil {
-						group.SpillManager.Delete(SpillID(fmt.Sprintf("temp_%d", j)))
-					}
-				}
 				return err
 			}
 			marshaledAggStates[i] = marshaledData
@@ -83,6 +78,13 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	}
 
 	if totalGroups == 0 {
+		for _, agg := range group.ctr.result1.AggList {
+			if agg != nil {
+				agg.Free()
+			}
+		}
+		group.ctr.result1.AggList = nil
+		group.ctr.result1.ToPopped = group.ctr.result1.ToPopped[:0]
 		return nil
 	}
 
@@ -109,12 +111,6 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 							for j := range groupVecs {
 								if groupVecs[j] != nil {
 									groupVecs[j].Free(proc.Mp())
-								}
-							}
-							// Clean up already marshaled states
-							for _, state := range marshaledAggStates {
-								if state != nil {
-									// We can't delete the state yet as it doesn't have an ID
 								}
 							}
 							return err
@@ -238,7 +234,6 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		chunkSize := aggexec.GetMinAggregatorsChunkSize(spillState.GroupVectors, aggs)
 		aggexec.SyncAggregatorsToChunkSize(aggs, chunkSize)
 		group.ctr.result1.ChunkSize = chunkSize
-
 		group.ctr.result1.AggList = aggs
 
 		if len(spillState.GroupVectors) > 0 && spillState.GroupCount > 0 {
