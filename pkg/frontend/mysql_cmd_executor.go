@@ -2453,6 +2453,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	defer func() {
 		close(quitC)
 	}()
+	var retErr error
 	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
@@ -2481,6 +2482,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
+		retErr = err
 	}
 	if readTime > maxReadTime {
 		maxReadTime = readTime
@@ -2496,26 +2498,23 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		minWriteTime = writeTime
 	}
 
-	const maxRetries = 1000               // Maximum number of consecutive errors
-	const maxTotalTime = 10 * time.Minute // Maximum total consecutive processing time
+	const maxRetries = 100               // Maximum number of consecutive errors
+	const maxTotalTime = 3 * time.Minute // Maximum total consecutive processing time
 	var consecutiveErrors int
 	consecutiveLoopStartTime := time.Now()
 
 	for {
-		// Check if context is cancelled first
-		select {
-		case <-execCtx.reqCtx.Done():
-			ses.Infof(execCtx.reqCtx, "processLoadLocal: context cancelled, stopping load local operation")
-			return execCtx.reqCtx.Err()
-		default:
-		}
-
 		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
-				err = nil
+				if retErr != nil {
+					err = retErr
+				} else {
+					err = nil
+				}
 				break
 			}
+			retErr = err
 			// Increment consecutive error counter
 			consecutiveErrors++
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
