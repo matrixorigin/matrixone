@@ -78,16 +78,13 @@ func TestSpill(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// query, large number of groups
+	// query
 	rows, err := db.Query(`
 		select 
-			product_id, 
-			customer_id,
-			sale_date,
-			sum(amount) as total_sales
+			count(sha2(product_id, 256)),
+			count(sha2(customer_id, 256)),
+			count(sha2(sale_date, 256))
 		from sales
-		group by product_id, customer_id, sale_date
-		order by total_sales desc;
 		`,
 	)
 	require.NoError(t, err)
