@@ -2520,7 +2520,8 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
 
 			if consecutiveErrors >= maxRetries || time.Since(consecutiveLoopStartTime) > maxTotalTime {
-				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: consecutive errors (%d), timeout after %v", maxTotalTime)
+				return moerr.NewInternalErrorf(execCtx.reqCtx,
+					"load local file failed: consecutive errors (%d), timeout after %v", maxRetries, maxTotalTime)
 			}
 
 			time.Sleep(10 * time.Millisecond)
