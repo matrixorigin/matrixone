@@ -27,7 +27,6 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -41,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -268,15 +268,36 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				continue
 			}
 
-			_, _, parentTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkey.ForeignTbl)
-			if err != nil {
+			var parentTable engine.Relation
+			if _, _, parentTable, err = c.e.GetRelationById(
+				c.proc.Ctx, c.proc.GetTxnOperator(), fkey.ForeignTbl,
+			); err != nil {
+				// A has keys reference on B, we cannot find the B when drop A.
+				// what's going on?
+				//
+				// if there has no mistake on the constraints when create A and B, we cannot
+				// find B means B has dropped already, but how can we drop a table when there has
+				// a table refer to it?
+				// the FOREIGN_KEY_CHECKS disabled !!!
+				// so this inexistence is expected, no need to return an error.
+				if strings.Contains(err.Error(), "can not find table by id") {
+					logutil.Warn(
+						"cannot find the referred table when drop database",
+						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+						zap.Int("referred table id", int(fkey.ForeignTbl)),
+						zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+						zap.Error(err),
+					)
+					continue
+				}
 				return err
-			}
-			err = s.removeChildTblIdFromParentTable(c, parentTable, tblId)
-			if err != nil {
-				return err
+			} else {
+				if err = s.removeChildTblIdFromParentTable(c, parentTable, tblId); err != nil {
+					return err
+				}
 			}
 		}
+
 		//remove tblId from the child table
 		for _, childId := range refChild.Tables {
 			if childId == 0 {
@@ -2583,14 +2604,35 @@ func (s *Scope) DropTable(c *Compile) error {
 			//fk self refer
 			continue
 		}
-		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
-		if err != nil {
-			return err
-		}
 
-		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblID)
-		if err != nil {
+		var fkRelation engine.Relation
+		if _, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId); err != nil {
+			// A has keys reference on B, we cannot find the B when drop A.
+			// what's going on?
+			//
+			// if there has no mistake on the constraints when create A and B, we cannot
+			// find B means B has dropped already, but how can we drop a table when there has
+			// a table refer to it?
+			// the FOREIGN_KEY_CHECKS disabled !!!
+			// so this inexistence is expected, no need to return an error.
+			if strings.Contains(err.Error(), "can not find table by id") {
+				logutil.Warn(
+					"cannot find the referred table when drop table",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
+					zap.Int("referred table id", int(fkTblId)),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
+
+		} else {
+			if err = s.removeChildTblIdFromParentTable(
+				c, fkRelation, tblID,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
