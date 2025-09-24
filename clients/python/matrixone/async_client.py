@@ -1144,6 +1144,124 @@ class AsyncFulltextIndexManager:
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} on table {table_name}: {e}")
 
+    async def fulltext_search(
+        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
+    ):
+        """
+        Execute a fulltext search and return results.
+
+        Args:
+            table_name: Table to search in
+            columns: Column(s) to search in
+            search_term: Search term
+            mode: Search mode
+
+        Returns:
+            AsyncResultSet: Search results
+        """
+        from .sqlalchemy_ext import FulltextSearchBuilder
+
+        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
+        sql = builder.build_sql()
+        return await self.client.execute(sql)
+
+    async def fulltext_search_in_transaction(
+        self,
+        table_name: str,
+        columns: Union[str, List[str]],
+        search_term: str,
+        mode: str = "natural language mode",
+        connection=None,
+    ):
+        """
+        Execute a fulltext search within an existing transaction and return results.
+
+        Args:
+            table_name: Table to search in
+            columns: Column(s) to search in
+            search_term: Search term
+            mode: Search mode
+            connection: Database connection (required for transaction support)
+
+        Returns:
+            AsyncResultSet: Search results
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy import text
+
+        from .sqlalchemy_ext import FulltextSearchBuilder
+
+        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
+        sql = builder.build_sql()
+
+        result = await connection.execute(text(sql))
+        if result.returns_rows:
+            columns = list(result.keys())
+            rows = result.fetchall()
+            return AsyncResultSet(columns, rows)
+        else:
+            return AsyncResultSet([], [], affected_rows=result.rowcount)
+
+
+class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
+    """Async fulltext index manager that executes operations within a transaction"""
+
+    def __init__(self, client: "AsyncClient", transaction_wrapper):
+        """Initialize async transaction fulltext index manager"""
+        super().__init__(client)
+        self.transaction_wrapper = transaction_wrapper
+
+    async def create(
+        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+    ) -> "AsyncTransactionFulltextIndexManager":
+        """Create a fulltext index within transaction"""
+        try:
+            if isinstance(columns, str):
+                columns = [columns]
+
+            columns_str = ", ".join(columns)
+            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
+
+            await self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create fulltext index {name} on table {table_name} in transaction: {e}")
+
+    async def drop(self, table_name: str, name: str) -> "AsyncTransactionFulltextIndexManager":
+        """Drop a fulltext index within transaction"""
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            await self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
+
+    async def fulltext_search(
+        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
+    ):
+        """
+        Execute a fulltext search within transaction and return results.
+
+        Args:
+            table_name: Table to search in
+            columns: Column(s) to search in
+            search_term: Search term
+            mode: Search mode
+
+        Returns:
+            AsyncResultSet: Search results
+        """
+        from .sqlalchemy_ext import FulltextSearchBuilder
+
+        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
+        sql = builder.build_sql()
+        return await self.transaction_wrapper.execute(sql)
+
 
 class AsyncClient:
     """
@@ -1859,13 +1977,14 @@ class AsyncTransactionWrapper:
     def __init__(self, connection, client):
         self.connection = connection
         self.client = client
-        # Create snapshot, clone, restore, PITR, pubsub, and account managers that use this transaction
+        # Create snapshot, clone, restore, PITR, pubsub, account, and fulltext managers that use this transaction
         self.snapshots = AsyncTransactionSnapshotManager(client, self)
         self.clone = AsyncTransactionCloneManager(client, self)
         self.restore = AsyncTransactionRestoreManager(client, self)
         self.pitr = AsyncTransactionPitrManager(client, self)
         self.pubsub = AsyncTransactionPubSubManager(client, self)
         self.account = AsyncTransactionAccountManager(self)
+        self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None

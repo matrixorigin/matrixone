@@ -3043,11 +3043,11 @@ class FulltextIndexManager:
 
         return self
 
-    def search(
+    def fulltext_search(
         self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
     ):
         """
-        Create a fulltext search builder.
+        Execute a fulltext search and return results.
 
         Args:
             table_name: Table to search in
@@ -3056,11 +3056,55 @@ class FulltextIndexManager:
             mode: Search mode
 
         Returns:
-            FulltextSearchBuilder: Search builder instance
+            ResultSet: Search results
         """
         from .sqlalchemy_ext import FulltextSearchBuilder
 
-        return FulltextSearchBuilder(table_name, columns).search(search_term).mode(mode)
+        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
+        sql = builder.build_sql()
+        return self.client.execute(sql)
+
+    def fulltext_search_in_transaction(
+        self,
+        table_name: str,
+        columns: Union[str, List[str]],
+        search_term: str,
+        mode: str = "natural language mode",
+        connection=None,
+    ):
+        """
+        Execute a fulltext search within an existing transaction and return results.
+
+        Args:
+            table_name: Table to search in
+            columns: Column(s) to search in
+            search_term: Search term
+            mode: Search mode
+            connection: Database connection (required for transaction support)
+
+        Returns:
+            ResultSet: Search results
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy import text
+
+        from .sqlalchemy_ext import FulltextSearchBuilder
+
+        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
+        sql = builder.build_sql()
+
+        result = connection.execute(text(sql))
+        if result.returns_rows:
+            columns = list(result.keys())
+            rows = result.fetchall()
+            return ResultSet(columns, rows)
+        else:
+            return ResultSet([], [], affected_rows=result.rowcount)
 
 
 class TransactionFulltextIndexManager(FulltextIndexManager):
@@ -3095,3 +3139,24 @@ class TransactionFulltextIndexManager(FulltextIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
+
+    def fulltext_search(
+        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
+    ):
+        """
+        Execute a fulltext search within transaction and return results.
+
+        Args:
+            table_name: Table to search in
+            columns: Column(s) to search in
+            search_term: Search term
+            mode: Search mode
+
+        Returns:
+            ResultSet: Search results
+        """
+        from .sqlalchemy_ext import FulltextSearchBuilder
+
+        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
+        sql = builder.build_sql()
+        return self.transaction_wrapper.execute(sql)
