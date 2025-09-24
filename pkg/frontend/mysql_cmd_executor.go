@@ -2519,16 +2519,8 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			consecutiveErrors++
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
 
-			// Check if we've exceeded max consecutive errors
-			if consecutiveErrors >= maxRetries {
-				ses.Errorf(execCtx.reqCtx, "processLoadLocal: exceeded maximum consecutive errors (%d), aborting", maxRetries)
-				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: too many consecutive errors (%d)", maxRetries)
-			}
-
-			// Check if we've exceeded total consecutive processing time
-			if time.Since(consecutiveLoopStartTime) > maxTotalTime {
-				ses.Errorf(execCtx.reqCtx, "processLoadLocal: exceeded maximum consecutive processing time (%v), aborting", maxTotalTime)
-				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: processing timeout after %v", maxTotalTime)
+			if consecutiveErrors >= maxRetries || time.Since(consecutiveLoopStartTime) > maxTotalTime {
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: consecutive errors (%d), timeout after %v", maxTotalTime)
 			}
 
 			time.Sleep(10 * time.Millisecond)
