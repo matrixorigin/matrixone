@@ -17,9 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -365,6 +366,40 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	switch qry.AlgorithmType {
 	case plan.AlterTable_COPY:
 		return s.doAlterTable(c)
+	case plan.AlterTable_AddPartitionTables:
+		stmt, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+
+		return ps.AddPartitions(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			stmt.(*tree.AlterTable).PartitionOption.(*tree.AlterPartitionAddPartitionClause).Partitions,
+			c.proc.GetTxnOperator(),
+		)
+	case plan.AlterTable_DropPartitionTables:
+		stmt, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+
+		names := stmt.(*tree.AlterTable).PartitionOption.(*tree.AlterPartitionDropPartitionClause).PartitionNames
+		partitions := make([]string, 0, len(names))
+		for _, p := range names {
+			partitions = append(partitions, p.String())
+		}
+
+		return ps.DropPartitions(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			partitions,
+			c.proc.GetTxnOperator(),
+		)
 	default:
 		// alter primary table
 		if err := s.doAlterTable(c); err != nil {

@@ -16,11 +16,14 @@ package partitionservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -85,6 +88,127 @@ func (s *Service) Create(
 		def,
 		stmt,
 		metadata,
+		txnOp,
+	)
+}
+
+func (s *Service) AddPartitions(
+	ctx context.Context,
+	tableID uint64,
+	partitions []*tree.Partition,
+	txnOp client.TxnOperator,
+) error {
+	if s.cfg.Disable {
+		return nil
+	}
+
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	switch metadata.Method {
+	case partition.PartitionMethod_Hash,
+		partition.PartitionMethod_Key,
+		partition.PartitionMethod_LinearHash,
+		partition.PartitionMethod_LinearKey:
+		return moerr.NewNotSupportedNoCtx("add partition is not supported for hash/key partitioned table")
+	case partition.PartitionMethod_Range:
+		// TODO: check overlapping range
+
+	case partition.PartitionMethod_List:
+		// TODO: check overlapping list values
+	default:
+		panic("BUG: unsupported partition method")
+	}
+
+	var values []partition.Partition
+	n := len(metadata.Partitions)
+	for i, p := range partitions {
+		values = append(values,
+			partition.Partition{
+				Name:               p.Name.String(),
+				PartitionTableName: GetPartitionTableName(def.Name, p.Name.String()),
+				Position:           uint32(i + n),
+				ExprStr:            getExpr(p),
+				Expr:               newTestValuesInExpr2(p.Name.String()),
+			},
+		)
+	}
+
+	return s.store.AddPartitions(
+		ctx,
+		def,
+		metadata,
+		values,
+		txnOp,
+	)
+}
+
+func (s *Service) DropPartitions(
+	ctx context.Context,
+	tableID uint64,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	if s.cfg.Disable {
+		return nil
+	}
+
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	switch metadata.Method {
+	case partition.PartitionMethod_Hash,
+		partition.PartitionMethod_Key,
+		partition.PartitionMethod_LinearHash,
+		partition.PartitionMethod_LinearKey:
+		return moerr.NewNotSupportedNoCtx("drop partition is not supported for hash/key partitioned table")
+	case partition.PartitionMethod_Range:
+	case partition.PartitionMethod_List:
+	default:
+		panic("BUG: unsupported partition method")
+	}
+
+	return s.store.DropPartitions(
+		ctx,
+		def,
+		metadata,
+		partitions,
 		txnOp,
 	)
 }
@@ -194,13 +318,7 @@ func (s *Service) readMetadata(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) (partition.PartitionMetadata, error) {
-	s.mu.RLock()
-	c, ok := s.mu.tables[tableID]
-	s.mu.RUnlock()
-	if ok {
-		return c.metadata, nil
-	}
-
+	// TODO: use cache
 	metadata, ok, err := s.store.GetMetadata(
 		ctx,
 		tableID,
@@ -212,10 +330,6 @@ func (s *Service) readMetadata(
 	if !ok {
 		return partition.PartitionMetadata{}, nil
 	}
-
-	s.mu.Lock()
-	s.mu.tables[tableID] = newMetadataCache(metadata)
-	s.mu.Unlock()
 	return metadata, nil
 }
 
@@ -256,13 +370,16 @@ func (s *Service) getManualPartitions(
 
 type metadataCache struct {
 	metadata partition.PartitionMetadata
+	ts       timestamp.Timestamp
 }
 
 func newMetadataCache(
 	metadata partition.PartitionMetadata,
+	ts timestamp.Timestamp,
 ) metadataCache {
 	return metadataCache{
 		metadata: metadata,
+		ts:       ts,
 	}
 }
 
@@ -271,4 +388,92 @@ func GetPartitionTableName(
 	partitionName string,
 ) string {
 	return "%!%" + partitionName + "%!%" + tableName
+}
+
+func getExpr(p *tree.Partition) string {
+	ctx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	p.Values.Format(ctx)
+	return ctx.String()
+}
+
+func newTestValuesInExpr2(col string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: 10},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "in",
+					Obj:     506806140934,
+				},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{Id: 22},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: col},
+						},
+					},
+					{
+						Typ: plan.Type{Id: 202},
+						Expr: &plan.Expr_List{
+							List: &plan.ExprList{
+								List: []*plan.Expr{
+									{
+										Typ: plan.Type{Id: 22},
+										Expr: &plan.Expr_F{
+											F: &plan.Function{
+												Func: &plan.ObjectRef{
+													Obj:     90194313216,
+													ObjName: "cast",
+												},
+												Args: []*plan.Expr{
+													{
+														Typ: plan.Type{Id: 23},
+														Expr: &plan.Expr_Lit{
+															Lit: &plan.Literal{
+																Value: &plan.Literal_I64Val{I64Val: 1},
+															},
+														},
+													},
+													{
+														Typ:  plan.Type{Id: 23},
+														Expr: &plan.Expr_T{T: &plan.TargetType{}},
+													},
+												},
+											},
+										},
+									},
+									{
+										Typ: plan.Type{Id: 22},
+										Expr: &plan.Expr_F{
+											F: &plan.Function{
+												Func: &plan.ObjectRef{ObjName: "cast", Obj: 90194313216},
+												Args: []*plan.Expr{
+													{
+														Typ: plan.Type{Id: 23},
+														Expr: &plan.Expr_Lit{
+															Lit: &plan.Literal{
+																Value: &plan.Literal_I64Val{I64Val: 2},
+															},
+														},
+													},
+													{
+														Typ:  plan.Type{Id: 22},
+														Expr: &plan.Expr_T{T: &plan.TargetType{}},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }

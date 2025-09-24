@@ -1389,6 +1389,8 @@ message AlterTable {
 		COPY  = 1;
 		INSTANT  = 2;
 		INPLACE  = 3;
+		AddPartitionTables = 4;
+		DropPartitionTables = 5;
 	}
 	message Action {
 		oneof action {
@@ -1652,3 +1654,4 @@ message CloneTable {
 	string dst_database_name = 5;
 	string dst_table_name = 6;
 }
+

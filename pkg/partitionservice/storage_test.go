@@ -182,6 +182,26 @@ func (s *memStorage) nextTableID() uint64 {
 	return atomic.AddUint64(&s.id, 1)
 }
 
+func (s *memStorage) AddPartitions(
+	ctx context.Context,
+	def *plan.TableDef,
+	metadata partition.PartitionMetadata,
+	partitions []partition.Partition,
+	txnOp client.TxnOperator,
+) error {
+	return nil
+}
+
+func (s *memStorage) DropPartitions(
+	ctx context.Context,
+	def *plan.TableDef,
+	metadata partition.PartitionMetadata,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	return nil
+}
+
 type partitionTable struct {
 	metadata   partition.PartitionMetadata
 	def        *plan.TableDef

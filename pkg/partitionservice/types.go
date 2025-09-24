@@ -69,6 +69,20 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
+	AddPartitions(
+		ctx context.Context,
+		tableID uint64,
+		partitions []*tree.Partition,
+		txnOp client.TxnOperator,
+	) error
+
+	DropPartitions(
+		ctx context.Context,
+		tableID uint64,
+		partitions []string,
+		txnOp client.TxnOperator,
+	) error
+
 	GetPartitionMetadata(
 		ctx context.Context,
 		tableID uint64,
@@ -92,6 +106,22 @@ type PartitionStorage interface {
 		def *plan.TableDef,
 		stmt *tree.CreateTable,
 		metadata partition.PartitionMetadata,
+		txnOp client.TxnOperator,
+	) error
+
+	AddPartitions(
+		ctx context.Context,
+		def *plan.TableDef,
+		metadata partition.PartitionMetadata,
+		partitions []partition.Partition,
+		txnOp client.TxnOperator,
+	) error
+
+	DropPartitions(
+		ctx context.Context,
+		def *plan.TableDef,
+		metadata partition.PartitionMetadata,
+		partitions []string,
 		txnOp client.TxnOperator,
 	) error
 

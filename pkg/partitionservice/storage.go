@@ -20,12 +20,14 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -275,6 +277,170 @@ func (s *Storage) Create(
 	)
 }
 
+func (s *Storage) AddPartitions(
+	ctx context.Context,
+	def *plan.TableDef,
+	metadata partition.PartitionMetadata,
+	partitions []partition.Partition,
+	txnOp client.TxnOperator,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	opts := executor.Options{}.
+		WithTxn(txnOp).
+		WithAccountID(accountID).
+		WithAdjustTableExtraFunc(
+			func(extra *api.SchemaExtra) error {
+				extra.ParentTableID = metadata.TableID
+				extra.FeatureFlag |= features.Partition
+				return nil
+			},
+		)
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
+	metadata.Partitions = append(metadata.Partitions, partitions...)
+	return s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			res, err := txn.Exec(
+				fmt.Sprintf("show create table `%s`.`%s`", def.DbName, metadata.TableName),
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			createSQL := ""
+			res.ReadRows(
+				func(rows int, cols []*vector.Vector) bool {
+					createSQL = executor.GetStringRows(cols[1])[0]
+					return true
+				},
+			)
+			res.Close()
+
+			stmt, _ := parsers.ParseOne(
+				ctx,
+				dialect.MYSQL,
+				createSQL,
+				1,
+			)
+
+			err = s.updatePartitionCount(
+				metadata,
+				txn,
+			)
+			if err != nil {
+				return err
+			}
+
+			for _, p := range partitions {
+				err := s.createPartitionTable(
+					def,
+					stmt.(*tree.CreateTable),
+					metadata,
+					p,
+					txn,
+				)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		opts,
+	)
+}
+
+func (s *Storage) DropPartitions(
+	ctx context.Context,
+	def *plan.TableDef,
+	metadata partition.PartitionMetadata,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	opts := executor.Options{}.
+		WithTxn(txnOp).
+		WithAccountID(accountID)
+
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
+	whereCause := ""
+	tables := make([]string, 0, len(partitions))
+	for _, p := range partitions {
+		found := false
+		for i, mp := range metadata.Partitions {
+			if p == mp.Name {
+				metadata.Partitions = append(metadata.Partitions[:i], metadata.Partitions[i+1:]...)
+				whereCause += fmt.Sprintf("'%s',", p)
+				tables = append(tables, mp.PartitionTableName)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("partition %s not found", p))
+		}
+	}
+
+	return s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txn.Use(catalog.MO_CATALOG)
+			err = s.updatePartitionCount(
+				metadata,
+				txn,
+			)
+			if err != nil {
+				return err
+			}
+
+			res, err := txn.Exec(
+				fmt.Sprintf("delete from %s where primary_table_id = %d and partition_name in (%s)",
+					catalog.MOPartitionTables,
+					metadata.TableID,
+					whereCause[:len(whereCause)-1],
+				),
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			res.Close()
+
+			txn.Use(metadata.DatabaseName)
+			for _, name := range tables {
+				res, err = txn.Exec(
+					fmt.Sprintf(
+						"drop table `%s`",
+						name,
+					),
+					executor.StatementOption{}.
+						WithIgnoreForeignKey().
+						WithIgnorePublish(),
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return nil
+		},
+		opts,
+	)
+}
+
 func (s *Storage) Delete(
 	ctx context.Context,
 	metadata partition.PartitionMetadata,
@@ -330,7 +496,6 @@ func (s *Storage) Delete(
 						p.PartitionTableName,
 					),
 					executor.StatementOption{}.
-						WithIgnoreForeignKey().
 						WithIgnorePublish().
 						WithIgnoreForeignKey(),
 				)
@@ -492,6 +657,34 @@ func (s *Storage) createPartitionMetadata(
 		return err
 	}
 
+	res.Close()
+	return nil
+}
+
+func (s *Storage) updatePartitionCount(
+	metadata partition.PartitionMetadata,
+	txn executor.TxnExecutor,
+) error {
+	txn.Use(catalog.MO_CATALOG)
+
+	sql := fmt.Sprintf(`
+		update %s.%s
+		set partition_count = %d
+		where table_id = %d
+	`,
+		catalog.MO_CATALOG,
+		catalog.MOPartitionMetadata,
+		len(metadata.Partitions),
+		metadata.TableID,
+	)
+
+	res, err := txn.Exec(
+		sql,
+		executor.StatementOption{},
+	)
+	if err != nil {
+		return err
+	}
 	res.Close()
 	return nil
 }
