@@ -324,7 +324,9 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	if upsert {
 		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
 	} else {
-		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+		// IMPORTANT: even it is a INSERT but we still use REPLACE
+		// sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
 	}
 
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
@@ -640,7 +642,9 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	if upsert {
 		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
 	} else {
-		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
+		// IMPORTANT: even it is a INSERT but we still use REPLACE
+		//	sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
 	}
 
 	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
