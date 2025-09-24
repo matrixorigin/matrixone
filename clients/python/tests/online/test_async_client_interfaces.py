@@ -12,6 +12,7 @@ import pytest_asyncio
 from matrixone import AsyncClient
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params
+from .test_config import online_config
 
 
 class TestAsyncClientMissingInterfaces:
@@ -82,7 +83,7 @@ class TestAsyncClientMissingInterfaces:
             await client.snapshots.create(
                 name="test_snapshot_ctx",
                 level="table",
-                database="test",
+                database=online_config.get_test_database(),
                 table="test_snapshot_table"
             )
             

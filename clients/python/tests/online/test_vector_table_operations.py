@@ -9,6 +9,7 @@ from matrixone.sqlalchemy_ext import (
     Vectorf32, Vectorf64, VectorTableBuilder, MatrixOneDialect,
     create_vector_table, create_vector_index_table
 )
+from .test_config import online_config
 
 
 class TestVectorTableOperations:
@@ -17,8 +18,9 @@ class TestVectorTableOperations:
     @pytest.fixture(scope="class")
     def engine(self):
         """Create engine for testing."""
-        # Use the same connection parameters as other online tests
-        connection_string = "mysql+pymysql://root:111@localhost:6001/test"
+        # Use configurable connection parameters
+        host, port, user, password, database = online_config.get_connection_params()
+        connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
         engine = create_engine(connection_string)
         # Replace the dialect with our MatrixOne dialect but preserve dbapi
         original_dbapi = engine.dialect.dbapi
@@ -49,10 +51,10 @@ class TestVectorTableOperations:
             conn.execute(CreateTable(table))
             
             # Verify table was created
-            result = conn.execute(text("""
+            result = conn.execute(text(f"""
                 SELECT table_name 
                 FROM information_schema.tables 
-                WHERE table_schema = 'test' 
+                WHERE table_schema = '{online_config.get_test_database()}' 
                 AND table_name = 'test_vector_table_1'
             """))
             assert result.fetchone() is not None
@@ -122,10 +124,10 @@ class TestVectorTableOperations:
             conn.execute(CreateTable(table))
             
             # Verify table structure
-            result = conn.execute(text("""
+            result = conn.execute(text(f"""
                 SELECT column_name, data_type, column_type
                 FROM information_schema.columns 
-                WHERE table_schema = 'test' 
+                WHERE table_schema = '{online_config.get_test_database()}' 
                 AND table_name = 'test_builder_table'
                 ORDER BY ordinal_position
             """))
@@ -153,10 +155,10 @@ class TestVectorTableOperations:
             conn.execute(CreateTable(table))
             
             # Verify table structure matches expected schema
-            result = conn.execute(text("""
+            result = conn.execute(text(f"""
                 SELECT column_name, column_type
                 FROM information_schema.columns 
-                WHERE table_schema = 'test' 
+                WHERE table_schema = '{online_config.get_test_database()}' 
                 AND table_name = 'test_index_table'
                 ORDER BY ordinal_position
             """))
@@ -241,10 +243,10 @@ class TestVectorTableOperations:
         # Test dialect introspection - use raw SQL instead of inspector
         with engine.begin() as conn:
             # Query column information directly
-            result = conn.execute(text("""
+            result = conn.execute(text(f"""
                 SELECT column_name, column_type, data_type
                 FROM information_schema.columns 
-                WHERE table_schema = 'test' 
+                WHERE table_schema = '{online_config.get_test_database()}' 
                 AND table_name = 'test_dialect_introspection'
                 ORDER BY ordinal_position
             """))
@@ -288,10 +290,10 @@ class TestVectorTableOperations:
             conn.execute(text("CREATE INDEX idx_score ON test_vector_with_indexes (score)"))
             
             # Verify indexes were created
-            result = conn.execute(text("""
+            result = conn.execute(text(f"""
                 SELECT index_name 
                 FROM information_schema.statistics 
-                WHERE table_schema = 'test' 
+                WHERE table_schema = '{online_config.get_test_database()}' 
                 AND table_name = 'test_vector_with_indexes'
                 AND index_name != 'PRIMARY'
             """))

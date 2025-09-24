@@ -8,6 +8,7 @@ import pytest
 import time
 from matrixone import Client, AsyncClient
 from matrixone.logger import create_default_logger
+from .test_config import online_config
 
 
 @pytest.mark.online
@@ -32,7 +33,7 @@ class TestSnapshotRestore:
             snapshot = test_client.snapshots.create(
                 name=snapshot_name,
                 level="table",
-                database="test",
+                database=online_config.get_test_database(),
                 table="snapshot_test",
                 description="Test snapshot for basic operations"
             )
@@ -82,7 +83,7 @@ class TestSnapshotRestore:
                 snapshot = test_client.snapshots.create(
                     name=snapshot_name,
                     level="table",
-                    database="test",
+                    database=online_config.get_test_database(),
                     table="snapshot_test",
                     description=f"Test snapshot {i}"
                 )
@@ -126,7 +127,7 @@ class TestSnapshotRestore:
             snapshot = test_client.snapshots.create(
                 name=snapshot_name,
                 level="table",
-                database="test",
+                database=online_config.get_test_database(),
                 table="snapshot_test",
                 description="Test snapshot for restore operations"
             )
@@ -171,7 +172,7 @@ class TestSnapshotRestore:
             test_client.snapshots.create(
                 name="",  # Empty name should fail
                 level="table",
-                database="test",
+                database=online_config.get_test_database(),
                 table="nonexistent_table",
                 description="Test invalid snapshot"
             )
@@ -217,7 +218,7 @@ class TestSnapshotRestore:
             snapshot = await test_async_client.snapshots.create(
                 name=snapshot_name,
                 level="table",
-                database="test",
+                database=online_config.get_test_database(),
                 table="snapshot_test",
                 description="Test async snapshot"
             )
@@ -260,7 +261,7 @@ class TestSnapshotRestore:
                 snapshot = client.snapshots.create(
                     name=snapshot_name,
                     level="table",
-                    database="test",
+                    database=online_config.get_test_database(),
                     table="snapshot_test",
                     description="Test snapshot with logging"
                 )

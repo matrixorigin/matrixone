@@ -19,7 +19,7 @@ from matrixone.sqlalchemy_ext import (
     create_vector_column, vector_distance_functions
 )
 from matrixone.config import get_connection_params
-from tests.online.test_config import OnlineTestConfig
+from .test_config import online_config
 
 
 class TestVectorExamplesIntegration:
@@ -28,14 +28,14 @@ class TestVectorExamplesIntegration:
     @pytest.fixture(scope="class")
     def client(self):
         """Create and connect MatrixOne client."""
-        config = OnlineTestConfig()
         client = Client()
+        host, port, user, password, database = online_config.get_connection_params()
         client.connect(
-            host=config.host,
-            port=config.port,
-            user=config.user,
-            password=config.password,
-            database=config.database
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database
         )
         yield client
         if hasattr(client, 'disconnect'):

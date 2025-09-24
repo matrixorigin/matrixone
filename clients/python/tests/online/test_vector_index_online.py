@@ -23,7 +23,7 @@ from matrixone.sqlalchemy_ext import (
     enable_ivf_indexing, disable_ivf_indexing, set_probe_limit, get_ivf_status
 )
 from matrixone.config import get_connection_params
-from tests.online.test_config import OnlineTestConfig
+from .test_config import online_config
 
 
 class TestVectorIndexOnline:
@@ -32,14 +32,14 @@ class TestVectorIndexOnline:
     @pytest.fixture(scope="class")
     def client(self):
         """Create and connect MatrixOne client."""
-        config = OnlineTestConfig()
         client = Client()
+        host, port, user, password, database = online_config.get_connection_params()
         client.connect(
-            host=config.host,
-            port=config.port,
-            user=config.user,
-            password=config.password,
-            database=config.database
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database
         )
         yield client
         # Client doesn't have a close method, just disconnect

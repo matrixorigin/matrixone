@@ -84,6 +84,48 @@ def connection_params():
 
 
 @pytest.fixture(scope="session")
+def test_database():
+    """Provide test database name"""
+    return online_config.get_test_database()
+
+
+@pytest.fixture(scope="session")
+def sys_database():
+    """Provide system database name"""
+    return online_config.get_sys_database()
+
+
+@pytest.fixture(scope="session")
+def test_account():
+    """Provide test account name"""
+    return online_config.get_test_account()
+
+
+@pytest.fixture(scope="session")
+def table_prefix():
+    """Provide table prefix for tests"""
+    return online_config.table_prefix
+
+
+@pytest.fixture(scope="session")
+def snapshot_prefix():
+    """Provide snapshot prefix for tests"""
+    return online_config.snapshot_prefix
+
+
+@pytest.fixture(scope="session")
+def vector_dimensions():
+    """Provide vector dimensions for tests"""
+    return online_config.get_vector_dimensions()
+
+
+@pytest.fixture(scope="session")
+def vector_test_data_size():
+    """Provide vector test data size"""
+    return online_config.get_vector_test_data_size()
+
+
+@pytest.fixture(scope="session")
 def db_helper():
     """Provide database helper instance"""
     return DatabaseTestHelper()

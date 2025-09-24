@@ -10,6 +10,7 @@ from matrixone.sqlalchemy_ext import (
     VectorType, Vectorf32, Vectorf64, VectorTypeDecorator,
     MatrixOneDialect
 )
+from .test_config import online_config
 
 
 class TestSQLAlchemyVectorExtensions:
@@ -18,7 +19,9 @@ class TestSQLAlchemyVectorExtensions:
     @pytest.fixture(scope="class")
     def engine(self):
         """Create engine for testing."""
-        connection_string = "mysql+pymysql://root:111@localhost:6001/test"
+        # Use configurable connection parameters
+        host, port, user, password, database = online_config.get_connection_params()
+        connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
         engine = create_engine(connection_string)
         # Replace the dialect with our MatrixOne dialect but preserve dbapi
         original_dbapi = engine.dialect.dbapi
@@ -334,10 +337,10 @@ class TestSQLAlchemyVectorExtensions:
             assert row[2] == "technology"
             
             # Verify indexes exist
-            index_result = conn.execute(text("""
+            index_result = conn.execute(text(f"""
                 SELECT index_name 
                 FROM information_schema.statistics 
-                WHERE table_schema = 'test' 
+                WHERE table_schema = '{online_config.get_test_database()}' 
                 AND table_name = 'test_complex_vector_schema'
                 AND index_name != 'PRIMARY'
             """))

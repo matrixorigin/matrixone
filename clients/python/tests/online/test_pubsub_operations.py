@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from matrixone import Client, AsyncClient
 from matrixone.logger import create_default_logger
+from .test_config import online_config
 
 
 @pytest.mark.online
@@ -161,7 +162,7 @@ class TestPubSubOperations:
             test_client.pubsub.create_database_publication(
                 name="",  # Empty name should fail
                 database="nonexistent_db",
-                account="sys"
+                account=online_config.get_test_account()
             )
             assert False, "Should have failed with empty name"
         except Exception:
@@ -172,7 +173,7 @@ class TestPubSubOperations:
             test_client.pubsub.create_subscription(
                 name="",  # Empty name should fail
                 publication="nonexistent_publication",
-                account="sys"
+                account=online_config.get_test_account()
             )
             assert False, "Should have failed with empty name"
         except Exception:
