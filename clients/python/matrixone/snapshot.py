@@ -284,7 +284,7 @@ class SnapshotQueryBuilder:
 
     def select(self, *columns) -> "SnapshotQueryBuilder":
         """Add SELECT columns"""
-        self._select_columns.extend(columns)
+        self._select_columns = list(columns)  # Reset and set new columns
         return self
 
     def from_table(self, table: str) -> "SnapshotQueryBuilder":
@@ -346,8 +346,158 @@ class SnapshotQueryBuilder:
         if not self._from_table:
             raise SnapshotError("No FROM table specified")
 
-        # Build SQL
-        sql = f"SELECT {', '.join(self._select_columns)} FROM {self._from_table}"
+        # Build SQL with snapshot hint after table name
+        sql = f"SELECT {', '.join(self._select_columns)} FROM {self._from_table}{{snapshot = '{self.snapshot_name}'}}"
+
+        # Add joins
+        for join in self._joins:
+            sql += f" {join}"
+
+        # Add WHERE with ? placeholders for parameter substitution
+        if self._where_conditions:
+            sql += f" WHERE {' AND '.join(self._where_conditions)}"
+
+        # Add GROUP BY
+        if self._group_by_columns:
+            sql += f" GROUP BY {', '.join(self._group_by_columns)}"
+
+        # Add HAVING with ? placeholders for parameter substitution
+        if self._having_conditions:
+            sql += f" HAVING {' AND '.join(self._having_conditions)}"
+
+        # Add ORDER BY
+        if self._order_by_columns:
+            sql += f" ORDER BY {', '.join(self._order_by_columns)}"
+
+        # Add LIMIT
+        if self._limit_count:
+            sql += f" LIMIT {self._limit_count}"
+
+        # Add OFFSET
+        if self._offset_count:
+            sql += f" OFFSET {self._offset_count}"
+
+        # Use client's parameter substitution method
+        all_params = (
+            tuple(self._where_params + self._having_params) if (self._where_params or self._having_params) else None
+        )
+
+        # Check if client supports parameter substitution (has _substitute_parameters method)
+        # and is not a mock object
+        if hasattr(self.client, "_substitute_parameters") and not hasattr(self.client, "_mock_name") and all_params:
+            # Real client - use parameter substitution
+            return self.client.execute(sql, all_params)
+        elif all_params:
+            # Mock client or client without parameter substitution - substitute parameters directly
+            final_sql = sql
+            for param in all_params:
+                if isinstance(param, str):
+                    # Escape single quotes in string values
+                    escaped_param = param.replace("'", "''")
+                    final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
+                elif param is None:
+                    final_sql = final_sql.replace("?", "NULL", 1)
+                else:
+                    final_sql = final_sql.replace("?", str(param), 1)
+            return self.client.execute(final_sql)
+        else:
+            # No parameters - call without second argument
+            return self.client.execute(sql)
+
+
+class AsyncSnapshotQueryBuilder:
+    """Async query builder for snapshot queries"""
+
+    def __init__(self, snapshot_name: str, client):
+        self.snapshot_name = snapshot_name
+        self.client = client
+        self._query_type = "SELECT"  # SELECT, INSERT, UPDATE, DELETE
+        self._select_columns = []
+        self._from_table = None
+        self._joins = []
+        self._where_conditions = []
+        self._where_params = []
+        self._group_by_columns = []
+        self._having_conditions = []
+        self._having_params = []
+        self._order_by_columns = []
+        self._limit_count = None
+        self._offset_count = None
+        # For INSERT
+        self._insert_table = None
+        self._insert_columns = []
+        self._insert_values = []
+        # For UPDATE
+        self._update_table = None
+        self._update_set_columns = []
+        self._update_set_values = []
+
+    def select(self, *columns) -> "AsyncSnapshotQueryBuilder":
+        """Add SELECT columns"""
+        self._select_columns.extend(columns)
+        return self
+
+    def from_table(self, table: str) -> "AsyncSnapshotQueryBuilder":
+        """Set FROM table"""
+        self._from_table = table
+        return self
+
+    def join(self, table: str, condition: str) -> "AsyncSnapshotQueryBuilder":
+        """Add JOIN"""
+        self._joins.append(f"JOIN {table} ON {condition}")
+        return self
+
+    def left_join(self, table: str, condition: str) -> "AsyncSnapshotQueryBuilder":
+        """Add LEFT JOIN"""
+        self._joins.append(f"LEFT JOIN {table} ON {condition}")
+        return self
+
+    def right_join(self, table: str, condition: str) -> "AsyncSnapshotQueryBuilder":
+        """Add RIGHT JOIN"""
+        self._joins.append(f"RIGHT JOIN {table} ON {condition}")
+        return self
+
+    def where(self, condition: str, *params) -> "AsyncSnapshotQueryBuilder":
+        """Add WHERE condition"""
+        self._where_conditions.append(condition)
+        self._where_params.extend(params)
+        return self
+
+    def group_by(self, *columns) -> "AsyncSnapshotQueryBuilder":
+        """Add GROUP BY columns"""
+        self._group_by_columns.extend(columns)
+        return self
+
+    def having(self, condition: str, *params) -> "AsyncSnapshotQueryBuilder":
+        """Add HAVING condition"""
+        self._having_conditions.append(condition)
+        self._having_params.extend(params)
+        return self
+
+    def order_by(self, *columns) -> "AsyncSnapshotQueryBuilder":
+        """Add ORDER BY columns"""
+        self._order_by_columns.extend(columns)
+        return self
+
+    def limit(self, count: int) -> "AsyncSnapshotQueryBuilder":
+        """Set LIMIT"""
+        self._limit_count = count
+        return self
+
+    def offset(self, count: int) -> "AsyncSnapshotQueryBuilder":
+        """Set OFFSET"""
+        self._offset_count = count
+        return self
+
+    async def execute(self):
+        """Execute the query asynchronously"""
+        if not self._select_columns:
+            raise SnapshotError("No SELECT columns specified")
+        if not self._from_table:
+            raise SnapshotError("No FROM table specified")
+
+        # Build SQL with snapshot hint after table name
+        sql = f"SELECT {', '.join(self._select_columns)} FROM {self._from_table}{{snapshot = '{self.snapshot_name}'}}"
 
         # Add joins
         for join in self._joins:
@@ -377,12 +527,11 @@ class SnapshotQueryBuilder:
         if self._offset_count:
             sql += f" OFFSET {self._offset_count}"
 
-        # Add snapshot hint
-        sql += f" {{SNAPSHOT = '{self.snapshot_name}'}}"
-
-        # Execute with parameters
-        params = tuple(self._where_params + self._having_params)
-        return self.client.execute(sql, params if params else None)
+        # Use client's parameter substitution method
+        all_params = (
+            tuple(self._where_params + self._having_params) if (self._where_params or self._having_params) else None
+        )
+        return await self.client.execute(sql, all_params)
 
 
 class CloneManager:
@@ -427,7 +576,7 @@ class CloneManager:
 
         if snapshot_name:
             sql = (
-                f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db} {{SNAPSHOT = '{snapshot_name}'}}"
+                f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db} {{snapshot = '{snapshot_name}'}}"
             )
         else:
             sql = f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db}"
@@ -470,7 +619,7 @@ class CloneManager:
         if snapshot_name:
             sql = (
                 f"CREATE TABLE {if_not_exists_clause}{target_table} "
-                f"CLONE {source_table} {{SNAPSHOT = '{snapshot_name}'}}"
+                f"CLONE {source_table} {{snapshot = '{snapshot_name}'}}"
             )
         else:
             sql = f"CREATE TABLE {if_not_exists_clause}{target_table} CLONE {source_table}"

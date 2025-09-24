@@ -413,8 +413,11 @@ class Client:
         start_time = time.time()
 
         try:
+            # Handle parameter substitution for MatrixOne compatibility
+            final_sql = self._substitute_parameters(sql, params)
+
             with self._engine.begin() as conn:
-                result = conn.execute(text(sql), params or {})
+                result = conn.execute(text(final_sql))
 
                 execution_time = time.time() - start_time
 
@@ -436,6 +439,50 @@ class Client:
             self.logger.log_query(sql, execution_time, success=False)
             self.logger.log_error(e, context="Query execution")
             raise QueryError(f"Query execution failed: {e}")
+
+    def _substitute_parameters(self, sql: str, params=None) -> str:
+        """
+        Substitute ? placeholders or named parameters with actual values since MatrixOne
+        doesn't support prepared statements
+
+        Args:
+            sql: SQL query string with ? placeholders or named parameters (:name)
+            params: Tuple of parameter values or dict of named parameters
+
+        Returns:
+            SQL string with parameters substituted
+        """
+        if not params:
+            return sql
+
+        final_sql = sql
+
+        # Handle named parameters (dict)
+        if isinstance(params, dict):
+            for key, value in params.items():
+                placeholder = f":{key}"
+                if placeholder in final_sql:
+                    if isinstance(value, str):
+                        # Escape single quotes in string values
+                        escaped_value = value.replace("'", "''")
+                        final_sql = final_sql.replace(placeholder, f"'{escaped_value}'")
+                    elif value is None:
+                        final_sql = final_sql.replace(placeholder, "NULL")
+                    else:
+                        final_sql = final_sql.replace(placeholder, str(value))
+        # Handle positional parameters (tuple/list)
+        elif isinstance(params, (tuple, list)):
+            for param in params:
+                if isinstance(param, str):
+                    # Escape single quotes in string values
+                    escaped_param = param.replace("'", "''")
+                    final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
+                elif param is None:
+                    final_sql = final_sql.replace("?", "NULL", 1)
+                else:
+                    final_sql = final_sql.replace("?", str(param), 1)
+
+        return final_sql
 
     def get_sqlalchemy_engine(self) -> Engine:
         """
@@ -461,10 +508,23 @@ class Client:
         Returns:
             ResultSet object
         """
+        # Insert snapshot hint after the first table name in FROM clause
+        import re
+
+        # Find the first table name after FROM and insert snapshot hint
+        pattern = r"(\bFROM\s+)(\w+)(\s|$)"
+
+        def replace_func(match):
+            return f"{match.group(1)}{match.group(2)}{{snapshot = '{snapshot_name}'}}{match.group(3)}"
+
+        snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
+
+        # Handle parameter substitution for MatrixOne compatibility
+        final_sql = self._substitute_parameters(snapshot_sql, params)
+
         if conn:
             # Use provided SQLAlchemy connection
-            snapshot_sql = f"{sql} {{SNAPSHOT = '{snapshot_name}'}}"
-            result = conn.execute(text(snapshot_sql), params or {})
+            result = conn.execute(text(final_sql))
 
             if result.returns_rows:
                 columns = list(result.keys())
@@ -474,8 +534,7 @@ class Client:
                 return ResultSet([], [], affected_rows=result.rowcount)
         else:
             # Use engine connection pool
-            snapshot_sql = f"{sql} {{SNAPSHOT = '{snapshot_name}'}}"
-            return self.execute(snapshot_sql, params)
+            return self.execute(final_sql)
 
     def snapshot_query_builder(self, snapshot_name: str) -> SnapshotQueryBuilder:
         """
@@ -488,6 +547,12 @@ class Client:
             SnapshotQueryBuilder instance
         """
         return SnapshotQueryBuilder(snapshot_name, self)
+
+    def query(self, model_class):
+        """Get MatrixOne query builder - SQLAlchemy style"""
+        from .orm import MatrixOneQuery
+
+        return MatrixOneQuery(model_class, self)
 
     @contextmanager
     def snapshot(self, snapshot_name: str):
@@ -1607,24 +1672,39 @@ class ResultSet:
         self.columns = columns
         self.rows = rows
         self.affected_rows = affected_rows
+        self._cursor = 0  # Track current position in result set
 
     def fetchall(self) -> List[Tuple]:
-        """Fetch all rows"""
-        return self.rows
+        """Fetch all remaining rows"""
+        remaining_rows = self.rows[self._cursor :]
+        self._cursor = len(self.rows)
+        return remaining_rows
 
     def fetchone(self) -> Optional[Tuple]:
         """Fetch one row"""
-        return self.rows[0] if self.rows else None
+        if self._cursor < len(self.rows):
+            row = self.rows[self._cursor]
+            self._cursor += 1
+            return row
+        return None
 
     def fetchmany(self, size: int = 1) -> List[Tuple]:
         """Fetch many rows"""
-        return self.rows[:size]
+        start = self._cursor
+        end = min(start + size, len(self.rows))
+        rows = self.rows[start:end]
+        self._cursor = end
+        return rows
 
     def scalar(self) -> Any:
         """Get scalar value (first column of first row)"""
         if self.rows and self.columns:
             return self.rows[0][0]
         return None
+
+    def keys(self):
+        """Get column names"""
+        return iter(self.columns)
 
     def __iter__(self):
         return iter(self.rows)

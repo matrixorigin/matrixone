@@ -359,16 +359,9 @@ def demo_account_management():
             logger.warning(f"⚠️ Could not grant privilege: {e}")
         
         # Grant privilege to role (MatrixOne requires roles for privileges)
-        try:
-            demo_account_manager.grant_privilege(
-                privilege='SELECT',
-                object_type='DATABASE',
-                object_name='mo_catalog',
-                to_role='analyst_role'
-            )
-            logger.info("✅ Granted SELECT privilege to analyst_role")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not grant privilege: {e}")
+        # Note: MatrixOne only supports SELECT privilege on TABLE level, not DATABASE level
+        # Skip this test as demo_account doesn't have access to mo_catalog tables
+        logger.info("ℹ️ Skipping SELECT privilege grant - demo_account doesn't have access to mo_catalog tables")
         
         # Revoke privilege from role
         try:

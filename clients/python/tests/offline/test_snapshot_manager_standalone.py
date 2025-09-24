@@ -438,8 +438,8 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
         
         result = self.builder.execute()
         
-        expected_sql = "SELECT col1, col2 FROM test_table {SNAPSHOT = 'test_snapshot'}"
-        self.mock_client.execute.assert_called_once_with(expected_sql, None)
+        expected_sql = "SELECT col1, col2 FROM test_table{snapshot = 'test_snapshot'}"
+        self.mock_client.execute.assert_called_once_with(expected_sql)
         self.assertEqual(result, mock_result)
     
     def test_execute_complex_query(self):
@@ -460,17 +460,16 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
         
         result = self.builder.execute()
         
-        expected_sql = ("SELECT col1, col2, COUNT(*) FROM test_table "
+        expected_sql = ("SELECT col1, col2, COUNT(*) FROM test_table{snapshot = 'test_snapshot'} "
                        "JOIN table2 ON test_table.id = table2.id "
-                       "WHERE col1 > ? "
+                       "WHERE col1 > 100 "
                        "GROUP BY col1 "
-                       "HAVING COUNT(*) > ? "
+                       "HAVING COUNT(*) > 5 "
                        "ORDER BY col1, col2 DESC "
                        "LIMIT 10 "
-                       "OFFSET 20 "
-                       "{SNAPSHOT = 'test_snapshot'}")
+                       "OFFSET 20")
         
-        self.mock_client.execute.assert_called_once_with(expected_sql, (100, 5))
+        self.mock_client.execute.assert_called_once_with(expected_sql)
         self.assertEqual(result, mock_result)
     
     def test_execute_no_select_columns(self):
@@ -540,7 +539,7 @@ class TestCloneManager(unittest.TestCase):
         
         self.snapshot_manager.clone_database("target_db", "source_db", snapshot_name="test_snapshot")
         
-        expected_sql = "CREATE DATABASE target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE DATABASE target_db CLONE source_db {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_database_with_snapshot_and_if_not_exists(self):
@@ -550,7 +549,7 @@ class TestCloneManager(unittest.TestCase):
         self.snapshot_manager.clone_database("target_db", "source_db", 
                                            snapshot_name="test_snapshot", if_not_exists=True)
         
-        expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_database_not_connected(self):
@@ -604,7 +603,7 @@ class TestCloneManager(unittest.TestCase):
         
         self.snapshot_manager.clone_table("target_table", "source_table", snapshot_name="test_snapshot")
         
-        expected_sql = "CREATE TABLE target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE TABLE target_table CLONE source_table {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_table_with_snapshot_and_if_not_exists(self):
@@ -614,7 +613,7 @@ class TestCloneManager(unittest.TestCase):
         self.snapshot_manager.clone_table("target_table", "source_table", 
                                         snapshot_name="test_snapshot", if_not_exists=True)
         
-        expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_table_not_connected(self):
@@ -643,7 +642,7 @@ class TestCloneManager(unittest.TestCase):
         
         self.snapshot_manager.clone_database_with_snapshot("target_db", "source_db", "test_snapshot")
         
-        expected_sql = "CREATE DATABASE target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE DATABASE target_db CLONE source_db {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_database_with_snapshot_not_exists(self):
@@ -664,7 +663,7 @@ class TestCloneManager(unittest.TestCase):
         
         self.snapshot_manager.clone_table_with_snapshot("target_table", "source_table", "test_snapshot")
         
-        expected_sql = "CREATE TABLE target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE TABLE target_table CLONE source_table {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_table_with_snapshot_not_exists(self):
@@ -685,7 +684,7 @@ class TestCloneManager(unittest.TestCase):
         self.snapshot_manager.clone_database_with_snapshot("target_db", "source_db", 
                                                          "test_snapshot", if_not_exists=True)
         
-        expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
     
     def test_clone_table_with_snapshot_and_if_not_exists(self):
@@ -696,7 +695,7 @@ class TestCloneManager(unittest.TestCase):
         self.snapshot_manager.clone_table_with_snapshot("target_table", "source_table", 
                                                       "test_snapshot", if_not_exists=True)
         
-        expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {snapshot = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
 
 
