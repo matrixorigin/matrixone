@@ -4,112 +4,30 @@ MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 
 from typing import Any, List, Optional, Type, TypeVar
 
-from .orm import Model
+from .orm import BaseMatrixOneQuery, Model
 
 T = TypeVar("T")
 
 
-class AsyncMatrixOneQuery:
+class AsyncMatrixOneQuery(BaseMatrixOneQuery):
     """Async MatrixOne Query builder that mimics SQLAlchemy Query interface"""
 
     def __init__(self, model_class: Type[Model], client, database: str = None):
-        self.model_class = model_class
-        self.client = client
+        super().__init__(model_class, client)
         self.database = database
-        self._snapshot_name = None
-        self._where_conditions = []
-        self._where_params = []
-        self._order_by_columns = []
-        self._limit_count = None
-        self._offset_count = None
-
-    def snapshot(self, snapshot_name: str) -> "AsyncMatrixOneQuery":
-        """Add snapshot support - SQLAlchemy style chaining"""
-        self._snapshot_name = snapshot_name
-        return self
-
-    def filter_by(self, **kwargs) -> "AsyncMatrixOneQuery":
-        """Add WHERE conditions from keyword arguments - SQLAlchemy style"""
-        for key, value in kwargs.items():
-            if key in self.model_class._columns:
-                if isinstance(value, str):
-                    self._where_conditions.append(f"{key} = '{value}'")
-                else:
-                    self._where_conditions.append(f"{key} = {value}")
-        return self
-
-    def filter(self, condition: str, *params) -> "AsyncMatrixOneQuery":
-        """Add WHERE condition - SQLAlchemy style"""
-        # Replace ? placeholders with actual values
-        formatted_condition = condition
-        for param in params:
-            if isinstance(param, str):
-                formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
-            else:
-                formatted_condition = formatted_condition.replace("?", str(param), 1)
-        self._where_conditions.append(formatted_condition)
-        return self
-
-    def order_by(self, *columns) -> "AsyncMatrixOneQuery":
-        """Add ORDER BY clause - SQLAlchemy style"""
-        for col in columns:
-            if isinstance(col, str):
-                self._order_by_columns.append(col)
-            else:
-                self._order_by_columns.append(str(col))
-        return self
-
-    def limit(self, count: int) -> "AsyncMatrixOneQuery":
-        """Add LIMIT clause - SQLAlchemy style"""
-        self._limit_count = count
-        return self
-
-    def offset(self, count: int) -> "AsyncMatrixOneQuery":
-        """Add OFFSET clause - SQLAlchemy style"""
-        self._offset_count = count
-        return self
 
     def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build SQL query"""
-        table_name = self.model_class._table_name
-
+        """Build SQL query with database prefix support"""
         # Add database prefix if provided
+        original_table_name = self._table_name
         if self.database:
-            table_name = f"{self.database}.{table_name}"
+            self._table_name = f"{self.database}.{original_table_name}"
 
-        # Build FROM clause
-        from_clause = f"FROM {table_name}"
+        # Call parent's _build_sql method
+        sql, params = super()._build_sql()
 
-        # Build snapshot hint (must come before WHERE clause)
-        snapshot_hint = ""
-        if self._snapshot_name:
-            snapshot_hint = f"{{snapshot = '{self._snapshot_name}'}}"
-
-        # Build WHERE clause
-        where_clause = ""
-        params = []
-        if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
-
-        # Build ORDER BY clause
-        order_by_clause = ""
-        if self._order_by_columns:
-            order_by_clause = "ORDER BY " + ", ".join(self._order_by_columns)
-
-        # Build LIMIT clause
-        limit_clause = ""
-        if self._limit_count is not None:
-            limit_clause = f"LIMIT {self._limit_count}"
-
-        # Build OFFSET clause
-        offset_clause = ""
-        if self._offset_count is not None:
-            offset_clause = f"OFFSET {self._offset_count}"
-
-        # Combine all clauses
-        sql_parts = ["SELECT *", from_clause, snapshot_hint, where_clause, order_by_clause, limit_clause, offset_clause]
-
-        sql = " ".join(filter(None, sql_parts))
+        # Restore original table name
+        self._table_name = original_table_name
 
         return sql, params
 
@@ -120,12 +38,34 @@ class AsyncMatrixOneQuery:
 
         models = []
         for row in result.rows:
-            # Convert row to dictionary
-            row_dict = {}
-            for i, col_name in enumerate(self.model_class._columns.keys()):
-                if i < len(row):
-                    row_dict[col_name] = row[i]
-            models.append(self.model_class.from_dict(row_dict))
+            # Check if this is an aggregate query (has custom select columns)
+            if self._select_columns:
+                # For aggregate queries, return raw row data as a simple object
+                select_cols = self._extract_select_columns()
+                row_data = self._create_row_data(row, select_cols)
+                models.append(row_data)
+            else:
+                # Regular model query
+                if self._is_sqlalchemy_model:
+                    # For SQLAlchemy models, create instance directly
+                    row_dict = {}
+                    for i, col_name in enumerate(self._columns.keys()):
+                        if i < len(row):
+                            row_dict[col_name] = row[i]
+
+                    # Create SQLAlchemy model instance
+                    model = self.model_class(**row_dict)
+                    models.append(model)
+                else:
+                    # For MatrixOne models, use from_dict method
+                    row_dict = {}
+                    for i, col_name in enumerate(self._columns.keys()):
+                        if i < len(row):
+                            row_dict[col_name] = row[i]
+
+                    # Create MatrixOne model instance
+                    model = self.model_class.from_dict(row_dict)
+                    models.append(model)
 
         return models
 

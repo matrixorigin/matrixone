@@ -18,10 +18,11 @@ import os
 import time
 
 # Add the matrixone module to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from matrixone.client import Client
 from matrixone.logger import create_default_logger, create_custom_logger
+from matrixone.config import get_connection_params, print_config
 import logging
 
 
@@ -30,6 +31,9 @@ def demonstrate_basic_sql_logging():
     print("🔍 Basic SQL Logging Demo")
     print("=" * 50)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Create client with basic SQL logging enabled
     client = Client(
         enable_sql_logging=True
@@ -37,13 +41,7 @@ def demonstrate_basic_sql_logging():
     
     try:
         # Connect to MatrixOne
-        client.connect(
-            host='127.0.0.1',
-            port=6001,
-            user='root',
-            password='111',
-            database='test'
-        )
+        client.connect(host, port, user, password, database)
         
         print("✅ Connected to MatrixOne")
         print("📝 Executing queries with basic SQL logging...")
@@ -66,6 +64,9 @@ def demonstrate_full_sql_logging():
     print("\n🔍 Full SQL Logging Demo")
     print("=" * 50)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Create client with full SQL logging enabled
     client = Client(
         enable_full_sql_logging=True
@@ -73,13 +74,7 @@ def demonstrate_full_sql_logging():
     
     try:
         # Connect to MatrixOne
-        client.connect(
-            host='127.0.0.1',
-            port=6001,
-            user='root',
-            password='111',
-            database='test'
-        )
+        client.connect(host, port, user, password, database)
         
         print("✅ Connected to MatrixOne")
         print("📝 Executing queries with full SQL logging (no truncation)...")
@@ -125,6 +120,9 @@ def demonstrate_slow_sql_logging():
     print("\n🔍 Slow SQL Logging Demo")
     print("=" * 50)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Create client with slow SQL logging enabled (threshold: 0.1 seconds)
     client = Client(
         enable_slow_sql_logging=True,
@@ -133,13 +131,7 @@ def demonstrate_slow_sql_logging():
     
     try:
         # Connect to MatrixOne
-        client.connect(
-            host='127.0.0.1',
-            port=6001,
-            user='root',
-            password='111',
-            database='test'
-        )
+        client.connect(host, port, user, password, database)
         
         print("✅ Connected to MatrixOne")
         print("📝 Executing queries with slow SQL logging (threshold: 0.1s)...")
@@ -166,6 +158,9 @@ def demonstrate_error_sql_logging():
     print("\n🔍 Error SQL Logging Demo")
     print("=" * 50)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Create client with error SQL logging enabled
     client = Client(
         enable_error_sql_logging=True
@@ -173,13 +168,7 @@ def demonstrate_error_sql_logging():
     
     try:
         # Connect to MatrixOne
-        client.connect(
-            host='127.0.0.1',
-            port=6001,
-            user='root',
-            password='111',
-            database='test'
-        )
+        client.connect(host, port, user, password, database)
         
         print("✅ Connected to MatrixOne")
         print("📝 Executing queries with error SQL logging...")
@@ -209,6 +198,9 @@ def demonstrate_combined_logging():
     print("\n🔍 Combined SQL Logging Demo")
     print("=" * 50)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Create client with multiple logging options enabled
     client = Client(
         enable_sql_logging=True,
@@ -220,13 +212,7 @@ def demonstrate_combined_logging():
     
     try:
         # Connect to MatrixOne
-        client.connect(
-            host='127.0.0.1',
-            port=6001,
-            user='root',
-            password='111',
-            database='test'
-        )
+        client.connect(host, port, user, password, database)
         
         print("✅ Connected to MatrixOne")
         print("📝 Executing queries with combined logging options...")
@@ -293,14 +279,11 @@ def demonstrate_custom_logger():
     )
     
     try:
+        # Get connection parameters from config
+        host, port, user, password, database = get_connection_params()
+        
         # Connect to MatrixOne
-        client.connect(
-            host='127.0.0.1',
-            port=6001,
-            user='root',
-            password='111',
-            database='test'
-        )
+        client.connect(host, port, user, password, database)
         
         print("✅ Connected to MatrixOne with custom logger")
         print("📝 Executing queries with custom logger...")
@@ -328,6 +311,10 @@ def main():
     print("- Error SQL logging (failed queries only)")
     print("- Combined logging options")
     print("- Custom logger integration")
+    print()
+    
+    # Print current configuration
+    print_config()
     print()
     
     try:

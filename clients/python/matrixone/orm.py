@@ -11,6 +11,40 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+class func:
+    """SQL function helper class - SQLAlchemy style"""
+
+    @staticmethod
+    def count(column):
+        """COUNT function"""
+        return f"COUNT({column})"
+
+    @staticmethod
+    def sum(column):
+        """SUM function"""
+        return f"SUM({column})"
+
+    @staticmethod
+    def avg(column):
+        """AVG function"""
+        return f"AVG({column})"
+
+    @staticmethod
+    def min(column):
+        """MIN function"""
+        return f"MIN({column})"
+
+    @staticmethod
+    def max(column):
+        """MAX function"""
+        return f"MAX({column})"
+
+    @staticmethod
+    def distinct(column):
+        """DISTINCT function"""
+        return f"DISTINCT {column}"
+
+
 @dataclass
 class Column:
     """Represents a database column"""
@@ -32,8 +66,8 @@ class ModelMeta(type):
             for key, value in attrs.items():
                 if isinstance(value, Column):
                     columns[key] = value
-            attrs["_columns"] = columns
-            attrs["_table_name"] = attrs.get("__tablename__", name.lower())
+            attrs["_columns"] = attrs.get("_columns", columns)
+            attrs["_table_name"] = attrs.get("_table_name", attrs.get("__tablename__", name.lower()))
         return super().__new__(cls, name, bases, attrs)
 
 
@@ -369,16 +403,21 @@ class Query:
             raise ValueError(f"Unknown query type: {self._query_type}")
 
 
-# MatrixOne Snapshot Query Builder - SQLAlchemy style
-class MatrixOneQuery:
-    """MatrixOne Query builder that mimics SQLAlchemy Query interface"""
+# Base Query Builder - SQLAlchemy style
+class BaseMatrixOneQuery:
+    """Base MatrixOne Query builder that contains common SQL building logic"""
 
     def __init__(self, model_class, client):
         self.model_class = model_class
         self.client = client
         self._snapshot_name = None
+        self._select_columns = []
+        self._joins = []
         self._where_conditions = []
         self._where_params = []
+        self._group_by_columns = []
+        self._having_conditions = []
+        self._having_params = []
         self._order_by_columns = []
         self._limit_count = None
         self._offset_count = None
@@ -403,12 +442,52 @@ class MatrixOneQuery:
             and hasattr(self.model_class, "__table__")
         )
 
-    def snapshot(self, snapshot_name: str) -> "MatrixOneQuery":
+    def select(self, *columns) -> "BaseMatrixOneQuery":
+        """Add SELECT columns - SQLAlchemy style"""
+        self._select_columns = list(columns)
+        return self
+
+    def join(self, table, on=None, isouter=False) -> "BaseMatrixOneQuery":
+        """Add JOIN clause - SQLAlchemy style"""
+        join_type = "LEFT JOIN" if isouter else "JOIN"
+        if on:
+            join_clause = f"{join_type} {table} ON {on}"
+        else:
+            join_clause = f"{join_type} {table}"
+        self._joins.append(join_clause)
+        return self
+
+    def outerjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+        """Add LEFT OUTER JOIN clause - SQLAlchemy style"""
+        return self.join(table, on, isouter=True)
+
+    def group_by(self, *columns) -> "BaseMatrixOneQuery":
+        """Add GROUP BY clause - SQLAlchemy style"""
+        for col in columns:
+            if isinstance(col, str):
+                self._group_by_columns.append(col)
+            else:
+                self._group_by_columns.append(str(col))
+        return self
+
+    def having(self, condition: str, *params) -> "BaseMatrixOneQuery":
+        """Add HAVING clause - SQLAlchemy style"""
+        # Replace ? placeholders with actual values
+        formatted_condition = condition
+        for param in params:
+            if isinstance(param, str):
+                formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
+            else:
+                formatted_condition = formatted_condition.replace("?", str(param), 1)
+        self._having_conditions.append(formatted_condition)
+        return self
+
+    def snapshot(self, snapshot_name: str) -> "BaseMatrixOneQuery":
         """Add snapshot support - SQLAlchemy style chaining"""
         self._snapshot_name = snapshot_name
         return self
 
-    def filter_by(self, **kwargs) -> "MatrixOneQuery":
+    def filter_by(self, **kwargs) -> "BaseMatrixOneQuery":
         """Add WHERE conditions from keyword arguments - SQLAlchemy style"""
         for key, value in kwargs.items():
             if key in self._columns:
@@ -418,7 +497,7 @@ class MatrixOneQuery:
                     self._where_conditions.append(f"{key} = {value}")
         return self
 
-    def filter(self, condition: str, *params) -> "MatrixOneQuery":
+    def filter(self, condition: str, *params) -> "BaseMatrixOneQuery":
         """Add WHERE condition - SQLAlchemy style"""
         # Replace ? placeholders with actual values
         formatted_condition = condition
@@ -430,7 +509,7 @@ class MatrixOneQuery:
         self._where_conditions.append(formatted_condition)
         return self
 
-    def order_by(self, *columns) -> "MatrixOneQuery":
+    def order_by(self, *columns) -> "BaseMatrixOneQuery":
         """Add ORDER BY clause - SQLAlchemy style"""
         for col in columns:
             if isinstance(col, str):
@@ -439,12 +518,12 @@ class MatrixOneQuery:
                 self._order_by_columns.append(str(col))
         return self
 
-    def limit(self, count: int) -> "MatrixOneQuery":
+    def limit(self, count: int) -> "BaseMatrixOneQuery":
         """Add LIMIT clause - SQLAlchemy style"""
         self._limit_count = count
         return self
 
-    def offset(self, count: int) -> "MatrixOneQuery":
+    def offset(self, count: int) -> "BaseMatrixOneQuery":
         """Add OFFSET clause - SQLAlchemy style"""
         self._offset_count = count
         return self
@@ -452,6 +531,12 @@ class MatrixOneQuery:
     def _build_sql(self) -> tuple[str, List[Any]]:
         """Build SQL query"""
         table_name = self._table_name
+
+        # Build SELECT clause
+        if self._select_columns:
+            select_clause = "SELECT " + ", ".join(self._select_columns)
+        else:
+            select_clause = "SELECT *"
 
         # Build FROM clause
         from_clause = f"FROM {table_name}"
@@ -461,11 +546,26 @@ class MatrixOneQuery:
         if self._snapshot_name:
             snapshot_hint = f"{{snapshot = '{self._snapshot_name}'}}"
 
+        # Build JOIN clauses
+        join_clause = ""
+        if self._joins:
+            join_clause = " " + " ".join(self._joins)
+
         # Build WHERE clause
         where_clause = ""
         params = []
         if self._where_conditions:
             where_clause = "WHERE " + " AND ".join(self._where_conditions)
+
+        # Build GROUP BY clause
+        group_clause = ""
+        if self._group_by_columns:
+            group_clause = "GROUP BY " + ", ".join(self._group_by_columns)
+
+        # Build HAVING clause
+        having_clause = ""
+        if self._having_conditions:
+            having_clause = "HAVING " + " AND ".join(self._having_conditions)
 
         # Build ORDER BY clause
         order_by_clause = ""
@@ -483,11 +583,71 @@ class MatrixOneQuery:
             offset_clause = f"OFFSET {self._offset_count}"
 
         # Combine all clauses
-        sql_parts = ["SELECT *", from_clause, snapshot_hint, where_clause, order_by_clause, limit_clause, offset_clause]
+        sql_parts = [
+            select_clause,
+            from_clause + snapshot_hint + join_clause,
+            where_clause,
+            group_clause,
+            having_clause,
+            order_by_clause,
+            limit_clause,
+            offset_clause,
+        ]
 
         sql = " ".join(filter(None, sql_parts))
 
         return sql, params
+
+    def _create_row_data(self, row, select_cols):
+        """Create RowData object for aggregate queries"""
+
+        class RowData:
+            def __init__(self, values, columns):
+                for i, col in enumerate(columns):
+                    if i < len(values):
+                        # Replace spaces with underscores for valid Python attribute names
+                        attr_name = col.replace(" ", "_")
+                        setattr(self, attr_name, values[i])
+                # Also support indexing for backward compatibility
+                self._values = values
+
+            def __getitem__(self, index):
+                return self._values[index]
+
+            def __len__(self):
+                return len(self._values)
+
+        return RowData(row, select_cols)
+
+    def _extract_select_columns(self):
+        """Extract column names from select columns"""
+        select_cols = []
+        for col in self._select_columns:
+            if " as " in col.lower():
+                # Handle "column as alias" syntax
+                select_cols.append(col.split(" as ")[-1].strip())
+            else:
+                # Handle function calls like "COUNT(id)" or "DISTINCT category"
+                if "(" in col and ")" in col:
+                    # Extract the function name and column
+                    func_name = col.split("(")[0].strip()
+                    col_name = col.split("(")[1].split(")")[0].strip()
+                    # Handle special cases
+                    if func_name.upper() == "DISTINCT":
+                        select_cols.append(f"DISTINCT_{col_name}")
+                    else:
+                        select_cols.append(f"{func_name}_{col_name}")
+                else:
+                    select_cols.append(col)
+        return select_cols
+
+
+# MatrixOne Snapshot Query Builder - SQLAlchemy style
+class MatrixOneQuery(BaseMatrixOneQuery):
+    """MatrixOne Query builder that mimics SQLAlchemy Query interface"""
+
+    def __init__(self, model_class, client):
+        super().__init__(model_class, client)
 
     def all(self) -> List:
         """Execute query and return all results - SQLAlchemy style"""
@@ -496,26 +656,34 @@ class MatrixOneQuery:
 
         models = []
         for row in result.rows:
-            if self._is_sqlalchemy_model:
-                # For SQLAlchemy models, create instance directly
-                row_dict = {}
-                for i, col_name in enumerate(self._columns.keys()):
-                    if i < len(row):
-                        row_dict[col_name] = row[i]
-
-                # Create SQLAlchemy model instance
-                model = self.model_class(**row_dict)
-                models.append(model)
+            # Check if this is an aggregate query (has custom select columns)
+            if self._select_columns:
+                # For aggregate queries, return raw row data as a simple object
+                select_cols = self._extract_select_columns()
+                row_data = self._create_row_data(row, select_cols)
+                models.append(row_data)
             else:
-                # For MatrixOne models, use from_dict method
-                row_dict = {}
-                for i, col_name in enumerate(self._columns.keys()):
-                    if i < len(row):
-                        row_dict[col_name] = row[i]
+                # Regular model query
+                if self._is_sqlalchemy_model:
+                    # For SQLAlchemy models, create instance directly
+                    row_dict = {}
+                    for i, col_name in enumerate(self._columns.keys()):
+                        if i < len(row):
+                            row_dict[col_name] = row[i]
 
-                # Create MatrixOne model instance
-                model = self.model_class.from_dict(row_dict)
-                models.append(model)
+                    # Create SQLAlchemy model instance
+                    model = self.model_class(**row_dict)
+                    models.append(model)
+                else:
+                    # For MatrixOne models, use from_dict method
+                    row_dict = {}
+                    for i, col_name in enumerate(self._columns.keys()):
+                        if i < len(row):
+                            row_dict[col_name] = row[i]
+
+                    # Create MatrixOne model instance
+                    model = self.model_class.from_dict(row_dict)
+                    models.append(model)
 
         return models
 
