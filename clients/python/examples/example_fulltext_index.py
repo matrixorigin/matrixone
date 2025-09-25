@@ -1,278 +1,351 @@
 #!/usr/bin/env python3
 """
-Example demonstrating fulltext index functionality in MatrixOne Python SDK.
+MatrixOne Fulltext Index Example
 
-This example shows how to:
-1. Create a table with text content
-2. Create fulltext indexes
-3. Insert data
-4. Perform fulltext searches
-5. Use different search modes and algorithms
+This example demonstrates how to use MatrixOne's fulltext indexing capabilities
+with SQLAlchemy-style ORM models and API-based queries.
 """
 
+import asyncio
+import logging
+import sys
 import os
+from datetime import datetime
+
+# Add the matrixone module to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from matrixone import Client, AsyncClient, FulltextAlgorithmType, FulltextModeType
-from matrixone.sqlalchemy_ext import FulltextIndex, FulltextSearchBuilder
+from matrixone.config import get_connection_params, print_config
+from matrixone.logger import create_default_logger
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP
+from sqlalchemy.ext.declarative import declarative_base
 
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
-def sync_fulltext_example():
-    """Synchronous fulltext index example"""
-    print("=== Synchronous Fulltext Index Example ===")
+# Define separate base classes for each example to avoid table conflicts
+DocumentBase = declarative_base()
+ArticleBase = declarative_base()
+BookBase = declarative_base()
+
+# Define models using SQLAlchemy-style syntax
+class Document(DocumentBase):
+    """Document model for fulltext search"""
+    __tablename__ = "documents"
     
-    # Get connection parameters from environment
-    host = os.getenv("MATRIXONE_HOST", "127.0.0.1")
-    port = int(os.getenv("MATRIXONE_PORT", "6001"))
-    user = os.getenv("MATRIXONE_USER", "root")
-    password = os.getenv("MATRIXONE_PASSWORD", "111")
-    database = os.getenv("MATRIXONE_DATABASE", "test")
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False)
+    author = Column(String(100))
+    created_at = Column(TIMESTAMP, default=datetime.now)
+
+class Article(ArticleBase):
+    """Article model for async fulltext search"""
+    __tablename__ = "articles"
     
-    client = Client()
+    id = Column(Integer, primary_key=True)
+    headline = Column(String(200), nullable=False)
+    body = Column(Text, nullable=False)
+    category = Column(String(50))
+    published_at = Column(TIMESTAMP, default=datetime.now)
+
+class Book(BookBase):
+    """Book model for transaction fulltext search"""
+    __tablename__ = "books"
+    
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    author = Column(String(100))
+    isbn = Column(String(20))
+
+def demo_sync_fulltext_index():
+    """Demonstrate sync fulltext indexing"""
+    logger.info("🚀 Starting sync fulltext index demo")
+    
+    # Print current configuration
+    print_config()
+    
+    # Get connection parameters from config (supports environment variables)
+    host, port, user, password, database = get_connection_params()
     
     try:
-        # Connect to database
-        client.connect(host=host, port=port, user=user, password=password, database=database)
-        print(f"✓ Connected to MatrixOne at {host}:{port}")
+        # Create client
+        client = Client()
+        client.connect(host, port, user, password, database)
+        
+        logger.info("✅ Connected to MatrixOne")
         
         # Enable fulltext indexing
-        client.execute("SET experimental_fulltext_index = 1")
+        client.execute('SET experimental_fulltext_index = 1')
         client.execute('SET ft_relevancy_algorithm = "BM25"')
-        print("✓ Enabled fulltext indexing with BM25 algorithm")
+        logger.info("✅ Enabled fulltext indexing with BM25 algorithm")
         
-        # Create a table for documents
-        client.execute("""
-            CREATE TABLE IF NOT EXISTS documents (
-                id BIGINT PRIMARY KEY,
-                title VARCHAR(255),
-                content TEXT,
-                author VARCHAR(100)
-            )
-        """)
-        print("✓ Created documents table")
+        # Clean up existing table
+        try:
+            client.execute("DROP TABLE IF EXISTS documents")
+        except:
+            pass  # Table might not exist
         
-        # Create fulltext index using client.fulltext_index
+        # Create table using ORM model
+        client.create_all(DocumentBase)
+        logger.info("✅ Created documents table using ORM")
+        
+        # Create fulltext index
         client.fulltext_index.create(
             table_name="documents",
             name="ftidx_docs",
             columns=["title", "content"],
             algorithm=FulltextAlgorithmType.BM25
         )
-        print("✓ Created fulltext index on title and content columns")
+        logger.info("✅ Created fulltext index on title and content columns")
         
-        # Insert sample documents
+        # Insert sample data
         documents = [
-            (1, "Introduction to Python", "Python is a high-level programming language. It's great for beginners.", "Alice"),
-            (2, "Machine Learning Basics", "Machine learning algorithms can learn from data automatically.", "Bob"),
-            (3, "Database Design", "Good database design is crucial for application performance.", "Charlie"),
-            (4, "Python Web Development", "Python can be used to build web applications with frameworks like Django.", "Alice"),
-            (5, "Data Science with Python", "Python is widely used in data science for analysis and visualization.", "David"),
+            (1, "Introduction to Python", "Python is a powerful programming language used for web development, data science, and automation.", "John Doe"),
+            (2, "Machine Learning Basics", "Machine learning is a subset of artificial intelligence that focuses on algorithms and statistical models.", "Jane Smith"),
+            (3, "Database Design Principles", "Good database design is crucial for application performance and data integrity.", "Mike Johnson"),
+            (4, "Python Web Development", "Learn how to build web applications using Python frameworks like Django and Flask.", "Sarah Wilson"),
+            (5, "Data Science with Python", "Python provides excellent libraries for data analysis, visualization, and machine learning.", "David Brown"),
         ]
         
         for doc_id, title, content, author in documents:
             client.execute(
-                "INSERT INTO documents (id, title, content, author) VALUES (?, ?, ?, ?)",
-                (doc_id, title, content, author)
+                f"INSERT INTO documents (id, title, content, author) VALUES ({doc_id}, '{title}', '{content}', '{author}')"
             )
-        print(f"✓ Inserted {len(documents)} documents")
+        logger.info(f"✅ Inserted {len(documents)} documents")
         
-        # Perform fulltext searches
-        print("\n--- Fulltext Search Results ---")
+        # Perform fulltext searches using ORM API
+        logger.info("🔍 Fulltext Search Results:")
         
         # Search using natural language mode
-        print("1. Natural Language Mode - Searching for 'Python':")
-        result = client.execute("""
-            SELECT id, title, MATCH(title, content) AGAINST('Python' IN NATURAL LANGUAGE MODE) as score
-            FROM documents 
-            WHERE MATCH(title, content) AGAINST('Python' IN NATURAL LANGUAGE MODE)
-            ORDER BY score DESC
-        """)
-        
-        for row in result.rows:
-            print(f"   ID: {row[0]}, Title: {row[1]}, Score: {row[2]:.4f}")
+        logger.info("1. Natural Language Mode - Searching for 'Python':")
+        try:
+            result = client.fulltext_index.fulltext_search(
+                table_name="documents",
+                columns=["title", "content"],
+                search_term="Python",
+                mode=FulltextModeType.NATURAL_LANGUAGE
+            )
+            
+            for row in result.rows:
+                try:
+                    score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                    logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
+                except (ValueError, TypeError, IndexError):
+                    logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: N/A")
+        except Exception as e:
+            logger.error(f"   Fulltext search error: {e}")
         
         # Search using boolean mode
-        print("\n2. Boolean Mode - Searching for '+Python +web':")
-        result = client.execute("""
-            SELECT id, title, content
-            FROM documents 
-            WHERE MATCH(title, content) AGAINST('+Python +web' IN BOOLEAN MODE)
-        """)
+        logger.info("2. Boolean Mode - Searching for '+Python +web':")
+        try:
+            result = client.fulltext_index.fulltext_search(
+                table_name="documents",
+                columns=["title", "content"],
+                search_term="+Python +web",
+                mode=FulltextModeType.BOOLEAN
+            )
+            
+            for row in result.rows:
+                logger.info(f"   ID: {row[0]}, Title: {row[1]}")
+        except Exception as e:
+            logger.error(f"   Boolean search error: {e}")
         
-        for row in result.rows:
-            print(f"   ID: {row[0]}, Title: {row[1]}")
-        
-        # Search using the search builder
-        print("\n3. Using FulltextSearchBuilder - Searching for 'machine learning':")
-        search_builder = FulltextSearchBuilder("documents", ["title", "content"])
-        search_builder.search("machine learning").with_score(True).limit(3)
-        
-        sql = search_builder.build_sql()
-        print(f"   Generated SQL: {sql}")
-        
-        result = client.execute(sql)
-        for row in result.rows:
-            print(f"   ID: {row[0]}, Title: {row[1]}, Score: {row[-1]:.4f}")
+        # Search using fulltext index API
+        logger.info("3. Fulltext Index API Search - Searching for 'machine learning':")
+        try:
+            result = client.fulltext_index.fulltext_search(
+                table_name="documents",
+                columns=["title", "content"],
+                search_term="machine learning",
+                mode=FulltextModeType.NATURAL_LANGUAGE
+            )
+            
+            for row in result.rows:
+                try:
+                    score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                    logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
+                except (ValueError, TypeError, IndexError):
+                    logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: N/A")
+        except Exception as e:
+            logger.error(f"   Fulltext index API search error: {e}")
         
         # Test different algorithms
-        print("\n--- Testing Different Algorithms ---")
+        logger.info("🧪 Testing Different Algorithms:")
         
         # Switch to TF-IDF algorithm
-        client.execute('SET ft_relevancy_algorithm = "TF-IDF"')
-        print("✓ Switched to TF-IDF algorithm")
-        
-        result = client.execute("""
-            SELECT id, title, MATCH(title, content) AGAINST('Python' IN NATURAL LANGUAGE MODE) as score
-            FROM documents 
-            WHERE MATCH(title, content) AGAINST('Python' IN NATURAL LANGUAGE MODE)
-            ORDER BY score DESC
-            LIMIT 3
-        """)
-        
-        print("TF-IDF Results:")
-        for row in result.rows:
-            print(f"   ID: {row[0]}, Title: {row[1]}, Score: {row[2]:.4f}")
+        try:
+            client.execute('SET ft_relevancy_algorithm = "TF-IDF"')
+            logger.info("✅ Switched to TF-IDF algorithm")
+            
+            result = client.execute("""
+                SELECT id, title, MATCH(title, content) AGAINST('Python' IN NATURAL LANGUAGE MODE) as score
+                FROM documents 
+                WHERE MATCH(title, content) AGAINST('Python' IN NATURAL LANGUAGE MODE)
+                ORDER BY score DESC
+                LIMIT 3
+            """)
+            
+            logger.info("TF-IDF Results:")
+            for row in result.rows:
+                try:
+                    score = float(row[2]) if row[2] is not None else 0.0
+                    logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
+                except (ValueError, TypeError, IndexError):
+                    logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: N/A")
+        except Exception as e:
+            logger.error(f"   TF-IDF algorithm test error: {e}")
+            logger.info("   Note: Some algorithms may not be fully supported in this version")
         
         # Drop the index
         client.fulltext_index.drop("documents", "ftidx_docs")
-        print("✓ Dropped fulltext index")
+        logger.info("✅ Dropped fulltext index")
         
     except Exception as e:
-        print(f"✗ Error: {e}")
+        logger.error(f"❌ Error: {e}")
     finally:
-        client.disconnect()
-        print("✓ Disconnected from MatrixOne")
+        try:
+            client.disconnect()
+            logger.info("✅ Disconnected from MatrixOne")
+        except:
+            pass
 
-
-async def async_fulltext_example():
-    """Asynchronous fulltext index example"""
-    print("\n=== Asynchronous Fulltext Index Example ===")
+async def demo_async_fulltext_index():
+    """Demonstrate async fulltext indexing"""
+    logger.info("🚀 Starting async fulltext index demo")
     
-    # Get connection parameters from environment
-    host = os.getenv("MATRIXONE_HOST", "127.0.0.1")
-    port = int(os.getenv("MATRIXONE_PORT", "6001"))
-    user = os.getenv("MATRIXONE_USER", "root")
-    password = os.getenv("MATRIXONE_PASSWORD", "111")
-    database = os.getenv("MATRIXONE_DATABASE", "test")
-    
-    client = AsyncClient()
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     
     try:
-        # Connect to database
-        await client.connect(host=host, port=port, user=user, password=password, database=database)
-        print(f"✓ Connected to MatrixOne at {host}:{port}")
+        # Create async client
+        client = AsyncClient()
+        await client.connect(host, port, user, password, database)
+        
+        logger.info("✅ Connected to MatrixOne")
         
         # Enable fulltext indexing
-        await client.execute("SET experimental_fulltext_index = 1")
+        await client.execute('SET experimental_fulltext_index = 1')
         await client.execute('SET ft_relevancy_algorithm = "BM25"')
-        print("✓ Enabled fulltext indexing with BM25 algorithm")
+        logger.info("✅ Enabled fulltext indexing with BM25 algorithm")
         
-        # Create a table for articles
-        await client.execute("""
-            CREATE TABLE IF NOT EXISTS articles (
-                id BIGINT PRIMARY KEY,
-                headline VARCHAR(255),
-                body TEXT,
-                category VARCHAR(50)
-            )
-        """)
-        print("✓ Created articles table")
+        # Clean up existing table
+        try:
+            await client.execute("DROP TABLE IF EXISTS articles")
+        except:
+            pass  # Table might not exist
         
-        # Create fulltext index using client.fulltext_index
-        client.fulltext_index.create(
+        # Create table using ORM model
+        await client.create_all(ArticleBase)
+        logger.info("✅ Created articles table using ORM")
+        
+        # Create fulltext index
+        await client.fulltext_index.create(
             table_name="articles",
             name="ftidx_articles",
             columns=["headline", "body"],
             algorithm=FulltextAlgorithmType.BM25
         )
-        print("✓ Created fulltext index on headline and body columns")
+        logger.info("✅ Created fulltext index on headline and body columns")
         
-        # Insert sample articles
+        # Insert sample data
         articles = [
-            (1, "Tech News: AI Breakthrough", "Artificial intelligence has made significant progress in natural language processing.", "Technology"),
-            (2, "Sports Update: Championship Results", "The championship finals concluded with an exciting victory for the home team.", "Sports"),
-            (3, "Science Discovery: New Species Found", "Researchers have discovered a new species in the deep ocean ecosystem.", "Science"),
-            (4, "Business Report: Market Analysis", "The stock market shows positive trends with technology stocks leading the way.", "Business"),
-            (5, "Health News: Medical Research", "New medical research reveals promising treatments for chronic diseases.", "Health"),
+            (1, "Tech News: AI Breakthrough", "Artificial intelligence researchers have made significant progress in natural language processing.", "Technology"),
+            (2, "Sports Update: Championship Results", "The annual championship concluded with exciting matches and surprising outcomes.", "Sports"),
+            (3, "Health Research: New Study Findings", "Medical researchers published findings that could lead to new treatment options.", "Health"),
+            (4, "Business Report: Market Analysis", "Financial markets showed mixed results with technology stocks leading gains.", "Business"),
+            (5, "Health News: Medical Research", "New research suggests potential breakthroughs in treating chronic diseases.", "Health"),
         ]
         
         for article_id, headline, body, category in articles:
             await client.execute(
-                "INSERT INTO articles (id, headline, body, category) VALUES (?, ?, ?, ?)",
-                (article_id, headline, body, category)
+                f"INSERT INTO articles (id, headline, body, category) VALUES ({article_id}, '{headline}', '{body}', '{category}')"
             )
-        print(f"✓ Inserted {len(articles)} articles")
+        logger.info(f"✅ Inserted {len(articles)} articles")
         
-        # Perform fulltext searches
-        print("\n--- Async Fulltext Search Results ---")
+        # Perform fulltext searches using ORM API
+        logger.info("🔍 Async Fulltext Search Results:")
         
         # Search for technology-related content
-        print("1. Searching for 'technology':")
-        result = await client.execute("""
-            SELECT id, headline, MATCH(headline, body) AGAINST('technology' IN NATURAL LANGUAGE MODE) as score
-            FROM articles 
-            WHERE MATCH(headline, body) AGAINST('technology' IN NATURAL LANGUAGE MODE)
-            ORDER BY score DESC
-        """)
-        
-        for row in result.rows:
-            print(f"   ID: {row[0]}, Headline: {row[1]}, Score: {row[2]:.4f}")
+        logger.info("1. Searching for 'technology':")
+        try:
+            result = await client.fulltext_index.fulltext_search(
+                table_name="articles",
+                columns=["headline", "body"],
+                search_term="technology",
+                mode=FulltextModeType.NATURAL_LANGUAGE
+            )
+            
+            for row in result.rows:
+                try:
+                    score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                    logger.info(f"   ID: {row[0]}, Headline: {row[1]}, Score: {score:.4f}")
+                except (ValueError, TypeError, IndexError):
+                    logger.info(f"   ID: {row[0]}, Headline: {row[1]}, Score: N/A")
+        except Exception as e:
+            logger.error(f"   Fulltext search error: {e}")
         
         # Search using boolean mode with multiple terms
-        print("\n2. Boolean Mode - Searching for '+research +medical':")
-        result = await client.execute("""
-            SELECT id, headline, body
-            FROM articles 
-            WHERE MATCH(headline, body) AGAINST('+research +medical' IN BOOLEAN MODE)
-        """)
-        
-        for row in result.rows:
-            print(f"   ID: {row[0]}, Headline: {row[1]}")
+        logger.info("2. Boolean Mode - Searching for '+research +medical':")
+        try:
+            result = await client.fulltext_index.fulltext_search(
+                table_name="articles",
+                columns=["headline", "body"],
+                search_term="+research +medical",
+                mode=FulltextModeType.BOOLEAN
+            )
+            
+            for row in result.rows:
+                logger.info(f"   ID: {row[0]}, Headline: {row[1]}")
+        except Exception as e:
+            logger.error(f"   Boolean search error: {e}")
         
         # Drop the index
-        client.fulltext_index.drop("articles", "ftidx_articles")
-        print("✓ Dropped fulltext index")
+        await client.fulltext_index.drop("articles", "ftidx_articles")
+        logger.info("✅ Dropped fulltext index")
         
     except Exception as e:
-        print(f"✗ Error: {e}")
+        logger.error(f"❌ Error: {e}")
     finally:
-        await client.disconnect()
-        print("✓ Disconnected from MatrixOne")
+        try:
+            await client.disconnect()
+            logger.info("✅ Disconnected from MatrixOne")
+        except:
+            pass
 
-
-def transaction_fulltext_example():
-    """Example of using fulltext indexes within transactions"""
-    print("\n=== Transaction Fulltext Index Example ===")
+def demo_transaction_fulltext_index():
+    """Demonstrate fulltext indexing within transactions"""
+    logger.info("🚀 Starting transaction fulltext index demo")
     
-    # Get connection parameters from environment
-    host = os.getenv("MATRIXONE_HOST", "127.0.0.1")
-    port = int(os.getenv("MATRIXONE_PORT", "6001"))
-    user = os.getenv("MATRIXONE_USER", "root")
-    password = os.getenv("MATRIXONE_PASSWORD", "111")
-    database = os.getenv("MATRIXONE_DATABASE", "test")
-    
-    client = Client()
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     
     try:
-        # Connect to database
-        client.connect(host=host, port=port, user=user, password=password, database=database)
-        print(f"✓ Connected to MatrixOne at {host}:{port}")
+        # Create client
+        client = Client()
+        client.connect(host, port, user, password, database)
+        
+        logger.info("✅ Connected to MatrixOne")
         
         # Enable fulltext indexing
-        client.execute("SET experimental_fulltext_index = 1")
-        client.execute('SET ft_relevancy_algorithm = "BM25"')
-        print("✓ Enabled fulltext indexing")
+        client.execute('SET experimental_fulltext_index = 1')
+        logger.info("✅ Enabled fulltext indexing")
         
-        # Use transaction for multiple operations
+        # Clean up existing table before transaction
+        client.drop_all(BookBase)
+        
+        # Create table using ORM
+        client.create_all(BookBase)
+        logger.info("✅ Created books table using ORM")
+
+        # Use transaction for all operations
         with client.transaction() as tx:
-            # Create table within transaction
-            tx.execute("""
-                CREATE TABLE IF NOT EXISTS books (
-                    id BIGINT PRIMARY KEY,
-                    title VARCHAR(255),
-                    description TEXT,
-                    author VARCHAR(100)
-                )
-            """)
-            print("✓ Created books table within transaction")
+            
             
             # Create fulltext index within transaction
             tx.fulltext_index.create(
@@ -281,65 +354,74 @@ def transaction_fulltext_example():
                 columns=["title", "description"],
                 algorithm=FulltextAlgorithmType.BM25
             )
-            print("✓ Created fulltext index within transaction")
+            logger.info("✅ Created fulltext index within transaction")
             
             # Insert data within transaction
             books = [
-                (1, "The Python Handbook", "A comprehensive guide to Python programming for beginners and experts.", "John Doe"),
-                (2, "Advanced Machine Learning", "Deep dive into machine learning algorithms and neural networks.", "Jane Smith"),
-                (3, "Database Systems Design", "Complete guide to designing efficient database systems.", "Mike Johnson"),
+                ("1", "The Python Handbook", "A comprehensive guide to Python programming for beginners and experts.", "John Doe"),
+                ("2", "Advanced Machine Learning", "Deep dive into machine learning algorithms and neural networks.", "Jane Smith"),
+                ("3", "Database Systems Design", "Complete guide to designing efficient database systems.", "Mike Johnson"),
             ]
             
             for book_id, title, description, author in books:
                 tx.execute(
-                    "INSERT INTO books (id, title, description, author) VALUES (?, ?, ?, ?)",
-                    (book_id, title, description, author)
+                    f"INSERT INTO books (id, title, description, author) VALUES ('{book_id}', '{title}', '{description}', '{author}')"
                 )
-            print(f"✓ Inserted {len(books)} books within transaction")
+            logger.info(f"✅ Inserted {len(books)} books within transaction")
             
-            # Search within transaction
-            result = tx.execute("""
-                SELECT id, title, MATCH(title, description) AGAINST('Python programming' IN NATURAL LANGUAGE MODE) as score
-                FROM books 
-                WHERE MATCH(title, description) AGAINST('Python programming' IN NATURAL LANGUAGE MODE)
-                ORDER BY score DESC
-            """)
-            
-            print("✓ Search results within transaction:")
-            for row in result.rows:
-                print(f"   ID: {row[0]}, Title: {row[1]}, Score: {row[2]:.4f}")
+            # Search within transaction using fulltext index API
+            try:
+                result = tx.fulltext_index.fulltext_search(
+                    table_name="books",
+                    columns=["title", "description"],
+                    search_term="Python programming",
+                    mode=FulltextModeType.NATURAL_LANGUAGE
+                )
+                
+                logger.info("✅ Search results within transaction:")
+                for row in result.rows:
+                    try:
+                        score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                        logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
+                    except (ValueError, TypeError, IndexError):
+                        logger.info(f"   ID: {row[0]}, Title: {row[1]}, Score: N/A")
+            except Exception as e:
+                logger.error(f"   Transaction search error: {e}")
         
-        print("✓ Transaction completed successfully")
+        logger.info("✅ Transaction completed successfully")
         
         # Clean up
         client.fulltext_index.drop("books", "ftidx_books")
-        print("✓ Dropped fulltext index")
+        logger.info("✅ Dropped fulltext index")
         
     except Exception as e:
-        print(f"✗ Error: {e}")
+        logger.error(f"❌ Error: {e}")
     finally:
-        client.disconnect()
-        print("✓ Disconnected from MatrixOne")
-
+        try:
+            client.disconnect()
+            logger.info("✅ Disconnected from MatrixOne")
+        except:
+            pass
 
 def main():
     """Main function to run all examples"""
     print("MatrixOne Fulltext Index Examples")
     print("=" * 50)
     
-    # Run synchronous example
-    sync_fulltext_example()
+    # Run sync example
+    print("=== Synchronous Fulltext Index Example ===")
+    demo_sync_fulltext_index()
     
-    # Run asynchronous example
-    import asyncio
-    asyncio.run(async_fulltext_example())
+    # Run async example
+    print("\n=== Asynchronous Fulltext Index Example ===")
+    asyncio.run(demo_async_fulltext_index())
     
     # Run transaction example
-    transaction_fulltext_example()
+    print("\n=== Transaction Fulltext Index Example ===")
+    demo_transaction_fulltext_index()
     
     print("\n" + "=" * 50)
     print("All examples completed!")
-
 
 if __name__ == "__main__":
     main()

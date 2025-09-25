@@ -13,44 +13,43 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from matrixone import Client
-from matrixone.orm import Model, Column
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
-from sqlalchemy import func
+from sqlalchemy import func, Column, Integer, String, DECIMAL, Date
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 
 
 # Define sample models
-class User(Model):
+class User(Base):
     """User model for CTE demo"""
-    _table_name = "test_users_cte"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "department_id": Column("department_id", "INT", nullable=True),
-        "salary": Column("salary", "DECIMAL(10,2)", nullable=True),
-        "email": Column("email", "VARCHAR(100)", nullable=True),
-    }
+    __tablename__ = "test_users_cte"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    department_id = Column(Integer, nullable=True)
+    salary = Column(DECIMAL(10, 2), nullable=True)
+    email = Column(String(100), nullable=True)
 
 
-class Department(Model):
+class Department(Base):
     """Department model for CTE demo"""
-    _table_name = "test_departments_cte"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "budget": Column("budget", "DECIMAL(12,2)", nullable=True),
-    }
+    __tablename__ = "test_departments_cte"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    budget = Column(DECIMAL(12, 2), nullable=True)
 
 
-class Order(Model):
+class Order(Base):
     """Order model for CTE demo"""
-    _table_name = "test_orders_cte"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "user_id": Column("user_id", "INT", nullable=True),
-        "amount": Column("amount", "DECIMAL(10,2)", nullable=True),
-        "order_date": Column("order_date", "DATE", nullable=True),
-    }
+    __tablename__ = "test_orders_cte"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=True)
+    amount = Column(DECIMAL(10, 2), nullable=True)
+    order_date = Column(Date, nullable=True)
 
 
 def main():

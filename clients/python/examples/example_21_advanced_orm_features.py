@@ -17,10 +17,12 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from matrixone import Client, AsyncClient, SnapshotLevel
-from matrixone.orm import Column, Model
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
-from sqlalchemy import func
+from sqlalchemy import func, Column, Integer, String, DECIMAL, TIMESTAMP
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 
 # Create MatrixOne logger for all logging
 logger = create_default_logger(
@@ -30,41 +32,38 @@ logger = create_default_logger(
 
 
 # Define models for the example
-class User(Model):
+class User(Base):
     """User model"""
-    _table_name = "demo_users_advanced"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "email": Column("email", "VARCHAR(100)", nullable=False),
-        "age": Column("age", "INT", nullable=True),
-        "department_id": Column("department_id", "INT", nullable=True),
-        "salary": Column("salary", "DECIMAL(10,2)", nullable=True),
-    }
+    __tablename__ = "demo_users_advanced"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(100), nullable=False)
+    age = Column(Integer, nullable=True)
+    department_id = Column(Integer, nullable=True)
+    salary = Column(DECIMAL(10, 2), nullable=True)
 
 
-class Department(Model):
+class Department(Base):
     """Department model"""
-    _table_name = "demo_departments_advanced"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "budget": Column("budget", "DECIMAL(10,2)", nullable=True),
-        "location": Column("location", "VARCHAR(100)", nullable=True),
-    }
+    __tablename__ = "demo_departments_advanced"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    budget = Column(DECIMAL(10, 2), nullable=True)
+    location = Column(String(100), nullable=True)
 
 
-class Product(Model):
+class Product(Base):
     """Product model"""
-    _table_name = "demo_products_advanced"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "price": Column("price", "DECIMAL(10,2)", nullable=False),
-        "category": Column("category", "VARCHAR(50)", nullable=False),
-        "quantity": Column("quantity", "INT", nullable=False),
-        "supplier_id": Column("supplier_id", "INT", nullable=True),
-    }
+    __tablename__ = "demo_products_advanced"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    price = Column(DECIMAL(10, 2), nullable=False)
+    category = Column(String(50), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    supplier_id = Column(Integer, nullable=True)
 
 
 def demo_sync_advanced_orm():

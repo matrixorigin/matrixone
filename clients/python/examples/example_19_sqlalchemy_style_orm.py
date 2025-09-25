@@ -9,7 +9,10 @@ You can use client.query(Model).snapshot("snapshot_name").filter_by(...).all() s
 import asyncio
 import logging
 from matrixone import Client, AsyncClient, SnapshotManager, SnapshotLevel
-from matrixone.orm import Column, Model, desc
+from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, desc
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
 
@@ -20,25 +23,25 @@ logger = create_default_logger(
 )
 
 # Define models using SQLAlchemy-style syntax
-class Product(Model):
+class Product(Base):
     """Product model"""
     __tablename__ = "products"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    price = Column("price", "DECIMAL(10,2)")
-    category = Column("category", "VARCHAR(50)")
-    created_at = Column("created_at", "TIMESTAMP")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    price = Column(DECIMAL(10, 2))
+    category = Column(String(50))
+    created_at = Column(TIMESTAMP)
 
-class Order(Model):
+class Order(Base):
     """Order model"""
     __tablename__ = "orders"
     
-    id = Column("id", "INT", primary_key=True)
-    product_id = Column("product_id", "INT")
-    quantity = Column("quantity", "INT")
-    total_amount = Column("total_amount", "DECIMAL(10,2)")
-    order_date = Column("order_date", "TIMESTAMP")
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer)
+    quantity = Column(Integer)
+    total_amount = Column(DECIMAL(10, 2))
+    order_date = Column(TIMESTAMP)
 
 def demo_sync_sqlalchemy_style_orm():
     """Demonstrate sync SQLAlchemy-style ORM usage"""
@@ -275,15 +278,15 @@ async def demo_async_sqlalchemy_style_orm():
             logger.info("🔍 SQLAlchemy-style async queries:")
             
             # Create a model for async products
-            class AsyncProduct(Model):
+            class AsyncProduct(Base):
                 """Async Product model"""
                 __tablename__ = "async_products"
                 
-                id = Column("id", "INT", primary_key=True)
-                name = Column("name", "VARCHAR(100)")
-                price = Column("price", "DECIMAL(10,2)")
-                category = Column("category", "VARCHAR(50)")
-                created_at = Column("created_at", "TIMESTAMP")
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                price = Column(DECIMAL(10, 2))
+                category = Column(String(50))
+                created_at = Column(TIMESTAMP)
             
             # 1. Basic async query
             logger.info("1. Get all products (async):")

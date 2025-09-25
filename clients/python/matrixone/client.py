@@ -1761,6 +1761,46 @@ class Client:
 
         return self
 
+    def create_all(self, base_class=None):
+        """
+        Create all tables defined in the given base class or default Base.
+
+        Args:
+            base_class: SQLAlchemy declarative base class. If None, uses the default Base.
+        """
+        if base_class is None:
+            from sqlalchemy.ext.declarative import declarative_base
+
+            base_class = declarative_base()
+
+        base_class.metadata.create_all(self._engine)
+        return self
+
+    def drop_all(self, base_class=None):
+        """
+        Drop all tables defined in the given base class or default Base.
+
+        Args:
+            base_class: SQLAlchemy declarative base class. If None, uses the default Base.
+        """
+        if base_class is None:
+            from sqlalchemy.ext.declarative import declarative_base
+
+            base_class = declarative_base()
+
+        # Get all table names from the metadata
+        table_names = list(base_class.metadata.tables.keys())
+
+        # Drop each table individually using direct SQL for better compatibility
+        for table_name in table_names:
+            try:
+                self.execute(f"DROP TABLE IF EXISTS {table_name}")
+            except Exception as e:
+                # Log the error but continue with other tables
+                print(f"Warning: Failed to drop table {table_name}: {e}")
+
+        return self
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
 

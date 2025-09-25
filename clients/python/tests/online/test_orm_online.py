@@ -11,29 +11,32 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
-from matrixone.orm import Model, Column
+from sqlalchemy import Column, Integer, String, DECIMAL
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 from matrixone.exceptions import QueryError
 from .test_config import online_config
 
 
-class User(Model):
+class User(Base):
     """Test user model"""
     __tablename__ = "test_users"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    email = Column("email", "VARCHAR(100)")
-    age = Column("age", "INT")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(100))
+    age = Column(Integer)
 
 
-class Product(Model):
+class Product(Base):
     """Test product model"""
     __tablename__ = "test_products"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    price = Column("price", "DECIMAL(10,2)")
-    category = Column("category", "VARCHAR(50)")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    price = Column(DECIMAL(10, 2))
+    category = Column(String(50))
 
 
 class TestORMOnline:
@@ -62,24 +65,8 @@ class TestORMOnline:
             test_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
             test_client.execute(f"USE {test_db}")
             
-            # Create test tables
-            test_client.execute("""
-                CREATE TABLE IF NOT EXISTS test_users (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    email VARCHAR(100),
-                    age INT
-                )
-            """)
-            
-            test_client.execute("""
-                CREATE TABLE IF NOT EXISTS test_products (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    price DECIMAL(10,2),
-                    category VARCHAR(50)
-                )
-            """)
+            # Create test tables using SQLAlchemy models
+            Base.metadata.create_all(test_client._engine)
             
             # Insert test data
             test_client.execute("""
@@ -114,33 +101,24 @@ class TestORMOnline:
         assert user.email == "test@example.com"
         assert user.age == 30
         
-        # Test to_dict method
-        user_dict = user.to_dict()
-        expected_dict = {
-            'id': 1,
-            'name': 'Test User',
-            'email': 'test@example.com',
-            'age': 30
-        }
-        assert user_dict == expected_dict
+        # Test attribute access (SQLAlchemy models don't have to_dict by default)
+        assert hasattr(user, 'id')
+        assert hasattr(user, 'name')
+        assert hasattr(user, 'email')
+        assert hasattr(user, 'age')
     
     def test_model_table_creation(self):
         """Test creating tables from models"""
         # This test verifies that the model metadata is correctly set up
-        assert User._table_name == "test_users"
-        assert Product._table_name == "test_products"
+        assert User.__tablename__ == "test_users"
+        assert Product.__tablename__ == "test_products"
         
         # Check that columns are properly defined
-        assert 'id' in User._columns
-        assert 'name' in User._columns
-        assert 'email' in User._columns
-        assert 'age' in User._columns
-        
-        # Check column properties
-        id_column = User._columns['id']
-        assert id_column.name == "id"
-        assert id_column.type == "INT"
-        assert id_column.primary_key is True
+        assert hasattr(User, '__table__')
+        assert 'id' in [col.name for col in User.__table__.columns]
+        assert 'name' in [col.name for col in User.__table__.columns]
+        assert 'email' in [col.name for col in User.__table__.columns]
+        assert 'age' in [col.name for col in User.__table__.columns]
     
     def test_orm_query_basic_operations(self, test_client, test_database):
         """Test basic ORM query operations"""

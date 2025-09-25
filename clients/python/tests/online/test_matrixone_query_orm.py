@@ -15,46 +15,50 @@ from typing import List, Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from matrixone import Client, AsyncClient, SnapshotManager, SnapshotLevel
-from matrixone.orm import Column, Model, desc
+from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP
+from sqlalchemy.ext.declarative import declarative_base
+from matrixone.orm import desc
+
+Base = declarative_base()
 from .test_config import online_config
 
 
 # Define test models
-class User(Model):
+class User(Base):
     """User model for testing"""
     __tablename__ = "test_users"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    email = Column("email", "VARCHAR(100)")
-    age = Column("age", "INT")
-    department = Column("department", "VARCHAR(50)")
-    salary = Column("salary", "DECIMAL(10,2)")
-    created_at = Column("created_at", "TIMESTAMP")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(100))
+    age = Column(Integer)
+    department = Column(String(50))
+    salary = Column(DECIMAL(10, 2))
+    created_at = Column(TIMESTAMP)
 
 
-class Product(Model):
+class Product(Base):
     """Product model for testing"""
     __tablename__ = "test_products"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    price = Column("price", "DECIMAL(10,2)")
-    category = Column("category", "VARCHAR(50)")
-    stock = Column("stock", "INT")
-    created_at = Column("created_at", "TIMESTAMP")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    price = Column(DECIMAL(10, 2))
+    category = Column(String(50))
+    stock = Column(Integer)
+    created_at = Column(TIMESTAMP)
 
 
-class Order(Model):
+class Order(Base):
     """Order model for testing"""
     __tablename__ = "test_orders"
     
-    id = Column("id", "INT", primary_key=True)
-    user_id = Column("user_id", "INT")
-    product_id = Column("product_id", "INT")
-    quantity = Column("quantity", "INT")
-    total_amount = Column("total_amount", "DECIMAL(10,2)")
-    order_date = Column("order_date", "TIMESTAMP")
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer)
+    product_id = Column(Integer)
+    quantity = Column(Integer)
+    total_amount = Column(DECIMAL(10, 2))
+    order_date = Column(TIMESTAMP)
 
 
 class TestMatrixOneQueryORM:
@@ -312,6 +316,25 @@ class TestMatrixOneQueryORM:
         assert empty_count == 0
 
 
+# Define a global AsyncUser class for all async tests
+class AsyncUser(Base):
+    __tablename__ = "async_test_users"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(100))
+    age = Column(Integer)
+    department = Column(String(50))
+    salary = Column(DECIMAL(10, 2))
+    created_at = Column(TIMESTAMP)
+
+
+# Define a global TestModel class for edge case tests
+class TempTable1(Base):
+    __tablename__ = "test_malformed_filter"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50))
+
+
 class TestAsyncMatrixOneQueryORM:
     """Test AsyncMatrixOneQuery ORM functionality"""
 
@@ -397,17 +420,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_basic_query_all(self, async_client, async_test_data_setup):
         """Test async basic query all functionality"""
-        # Create async model
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         users = await async_client.query(AsyncUser).all()
         assert len(users) == 5
         assert users[0].name == 'Async Alice'
@@ -415,16 +427,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_filter_by(self, async_client, async_test_data_setup):
         """Test async filter_by functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         engineering_users = await async_client.query(AsyncUser).filter_by(department='Engineering').all()
         assert len(engineering_users) == 3
         assert all(user.department == 'Engineering' for user in engineering_users)
@@ -432,16 +434,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_filter(self, async_client, async_test_data_setup):
         """Test async filter functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         high_salary_users = await async_client.query(AsyncUser).filter("salary > ?", 70000.0).all()
         assert len(high_salary_users) == 2
         assert all(user.salary > 70000.0 for user in high_salary_users)
@@ -449,16 +441,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_order_by(self, async_client, async_test_data_setup):
         """Test async order_by functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         users_by_salary_desc = await async_client.query(AsyncUser).order_by(desc('salary')).all()
         assert users_by_salary_desc[0].salary == 80000.0
         assert users_by_salary_desc[-1].salary == 60000.0
@@ -466,16 +448,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_limit_offset(self, async_client, async_test_data_setup):
         """Test async limit and offset functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         top_users = await async_client.query(AsyncUser).order_by(desc('salary')).limit(3).all()
         assert len(top_users) == 3
         assert top_users[0].salary == 80000.0
@@ -487,16 +459,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_count(self, async_client, async_test_data_setup):
         """Test async count functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         total_users = await async_client.query(AsyncUser).count()
         assert total_users == 5
 
@@ -506,16 +468,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_first(self, async_client, async_test_data_setup):
         """Test async first functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         first_user = await async_client.query(AsyncUser).order_by('id').first()
         assert first_user is not None
         assert first_user.id == 1
@@ -524,16 +476,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_complex_queries(self, async_client, async_test_data_setup):
         """Test async complex query combinations"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         result = (await async_client.query(AsyncUser)
                  .filter_by(department='Engineering')
                  .filter("salary > ?", 70000.0)
@@ -547,16 +489,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_snapshot_queries(self, async_client, async_test_data_setup):
         """Test async snapshot functionality"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         # Create a snapshot
         from matrixone.async_client import AsyncSnapshotManager
         async_snapshot_manager = AsyncSnapshotManager(async_client)
@@ -589,16 +521,6 @@ class TestAsyncMatrixOneQueryORM:
     @pytest.mark.asyncio
     async def test_async_empty_results(self, async_client, async_test_data_setup):
         """Test async queries that return empty results"""
-        class AsyncUser(Model):
-            __tablename__ = "async_test_users"
-            id = Column("id", "INT", primary_key=True)
-            name = Column("name", "VARCHAR(100)")
-            email = Column("email", "VARCHAR(100)")
-            age = Column("age", "INT")
-            department = Column("department", "VARCHAR(50)")
-            salary = Column("salary", "DECIMAL(10,2)")
-            created_at = Column("created_at", "TIMESTAMP")
-
         # Non-existent department
         empty_result = await async_client.query(AsyncUser).filter_by(department='NonExistent').all()
         assert len(empty_result) == 0
@@ -633,18 +555,18 @@ class TestMatrixOneQueryEdgeCases:
 
     def test_invalid_model(self, client):
         """Test query with invalid model"""
-        class InvalidModel(Model):
+        class InvalidModel(Base):
             __tablename__ = "non_existent_table"
-            id = Column("id", "INT", primary_key=True)
+            id = Column(Integer, primary_key=True)
 
         with pytest.raises(Exception):
             client.query(InvalidModel).all()
 
     def test_invalid_snapshot(self, client):
         """Test query with invalid snapshot"""
-        class TestModel(Model):
-            __tablename__ = "test_users"
-            id = Column("id", "INT", primary_key=True)
+        class TestModel(Base):
+            __tablename__ = "test_users_invalid_snapshot"
+            id = Column(Integer, primary_key=True)
 
         with pytest.raises(Exception):
             client.query(TestModel).snapshot("non_existent_snapshot").all()
@@ -657,14 +579,9 @@ class TestMatrixOneQueryEdgeCases:
             client.execute("CREATE TABLE test_malformed (id INT PRIMARY KEY, name VARCHAR(50))")
             client.execute("INSERT INTO test_malformed (id, name) VALUES (1, 'test')")
             
-            class TestModel(Model):
-                __tablename__ = "test_malformed"
-                id = Column("id", "INT", primary_key=True)
-                name = Column("name", "VARCHAR(50)")
-
             # This should raise an exception due to invalid SQL syntax
             with pytest.raises(Exception):
-                client.query(TestModel).filter("invalid_syntax").all()
+                client.query(TempTable1).filter("invalid_syntax").all()
                 
         finally:
             try:

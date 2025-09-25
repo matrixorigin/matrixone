@@ -11,59 +11,58 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
-from matrixone.orm import Model, Column
+from sqlalchemy import Column, Integer, String, DECIMAL, BigInteger, Text, TIMESTAMP
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 from sqlalchemy import func
 from .test_config import online_config
 
 
-class User(Model):
+class User(Base):
     """User model for testing"""
-    _table_name = "test_users_advanced"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "email": Column("email", "VARCHAR(100)", nullable=False),
-        "age": Column("age", "INT", nullable=True),
-        "department_id": Column("department_id", "INT", nullable=True),
-        "salary": Column("salary", "DECIMAL(10,2)", nullable=True),
-    }
+    __tablename__ = "test_users_advanced"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(100))
+    age = Column(Integer)
+    department_id = Column(Integer)
+    salary = Column(DECIMAL(10, 2))
 
 
-class Department(Model):
+class Department(Base):
     """Department model for testing"""
-    _table_name = "test_departments_advanced"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "budget": Column("budget", "DECIMAL(10,2)", nullable=True),
-    }
+    __tablename__ = "test_departments_advanced"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    budget = Column(DECIMAL(10, 2))
 
 
-class Product(Model):
+class Product(Base):
     """Product model for testing"""
-    _table_name = "test_products_advanced"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "price": Column("price", "DECIMAL(10,2)", nullable=False),
-        "category": Column("category", "VARCHAR(50)", nullable=False),
-        "quantity": Column("quantity", "INT", nullable=False),
-    }
+    __tablename__ = "test_products_advanced"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    price = Column(DECIMAL(10, 2))
+    category = Column(String(50))
+    quantity = Column(Integer)
 
 
-class AIDataset(Model):
+class AIDataset(Base):
     """AI Dataset model for testing vector operations"""
-    _table_name = "test_ai_dataset"
-    _columns = {
-        "id": Column("id", "BIGINT", nullable=False),
-        "question_embedding": Column("question_embedding", "VECF32(16)", nullable=True),
-        "question": Column("question", "VARCHAR(255)", nullable=True),
-        "type": Column("type", "VARCHAR(255)", nullable=True),
-        "output_result": Column("output_result", "TEXT", nullable=True),
-        "status": Column("status", "INT", nullable=True),
-        "created_at": Column("created_at", "TIMESTAMP", nullable=True),
-        "updated_at": Column("updated_at", "TIMESTAMP", nullable=True),
-    }
+    __tablename__ = "test_ai_dataset"
+    
+    id = Column(BigInteger, primary_key=True)
+    question_embedding = Column(String(100))  # VECF32(16) - using String as placeholder
+    question = Column(String(255))
+    type = Column(String(255))
+    output_result = Column(Text)
+    status = Column(Integer)
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
 
 
 class TestORMAdvancedFeatures:

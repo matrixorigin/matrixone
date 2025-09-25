@@ -11,10 +11,12 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from matrixone import Client
-from matrixone.orm import Column, Model
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
-from sqlalchemy import func
+from sqlalchemy import func, Column, Integer, String, DECIMAL
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 
 # Create MatrixOne logger
 logger = create_default_logger(
@@ -24,28 +26,26 @@ logger = create_default_logger(
 
 
 # Define models for the example
-class User(Model):
+class User(Base):
     """User model"""
-    _table_name = "demo_users_alias"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "email": Column("email", "VARCHAR(100)", nullable=False),
-        "salary": Column("salary", "DECIMAL(10,2)", nullable=True),
-        "department_id": Column("department_id", "INT", nullable=True),
-        "manager_id": Column("manager_id", "INT", nullable=True),
-    }
+    __tablename__ = "demo_users_alias"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(100), nullable=False)
+    salary = Column(DECIMAL(10, 2), nullable=True)
+    department_id = Column(Integer, nullable=True)
+    manager_id = Column(Integer, nullable=True)
 
 
-class Department(Model):
+class Department(Base):
     """Department model"""
-    _table_name = "demo_departments_alias"
-    _columns = {
-        "id": Column("id", "INT", nullable=False),
-        "name": Column("name", "VARCHAR(100)", nullable=False),
-        "budget": Column("budget", "DECIMAL(10,2)", nullable=True),
-        "manager_id": Column("manager_id", "INT", nullable=True),
-    }
+    __tablename__ = "demo_departments_alias"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    budget = Column(DECIMAL(10, 2), nullable=True)
+    manager_id = Column(Integer, nullable=True)
 
 
 def demo_table_aliases():

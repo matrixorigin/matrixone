@@ -13,8 +13,7 @@ This provides better type safety and integration with SQLAlchemy.
 """
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -38,60 +37,13 @@ T = TypeVar("T")
 # This provides better type safety, SQL generation, and integration with SQLAlchemy.
 
 
-@dataclass
-class Column:
-    """Represents a database column"""
-
-    name: str
-    type: str
-    nullable: bool = True
-    primary_key: bool = False
-    default: Any = None
-
-
-class ModelMeta(type):
-    """Metaclass for Model classes"""
-
-    def __new__(cls, name, bases, attrs):
-        if name != "Model":
-            # Collect columns from class attributes
-            columns = {}
-            for key, value in attrs.items():
-                if isinstance(value, Column):
-                    columns[key] = value
-            attrs["_columns"] = attrs.get("_columns", columns)
-            attrs["_table_name"] = attrs.get("_table_name", attrs.get("__tablename__", name.lower()))
-        return super().__new__(cls, name, bases, attrs)
-
-
-class Model(metaclass=ModelMeta):
-    """Base model class for ORM"""
-
-    _columns: Dict[str, Column] = {}
-    _table_name: str = ""
-
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert model instance to dictionary"""
-        result = {}
-        for key in self._columns.keys():
-            if hasattr(self, key):
-                result[key] = getattr(self, key)
-        return result
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Model":
-        """Create model instance from dictionary"""
-        return cls(**data)
+# Remove SimpleModel - use SQLAlchemy models directly
 
 
 class Query:
     """Query builder for ORM operations - SQLAlchemy style"""
 
-    def __init__(self, model_class: Type[Model], client, snapshot_name: Optional[str] = None):
+    def __init__(self, model_class, client, snapshot_name: Optional[str] = None):
         self.model_class = model_class
         self.client = client
         self.snapshot_name = snapshot_name
@@ -120,10 +72,13 @@ class Query:
     def select(self, *columns) -> "Query":
         """Select specific columns"""
         if not columns:
-            # Select all columns from the model
-            self._select_columns = list(self.model_class._columns.keys())
+            # Select all columns from the SQLAlchemy model
+            if hasattr(self.model_class, "__table__"):
+                self._select_columns = [col.name for col in self.model_class.__table__.columns]
+            else:
+                self._select_columns = []
         else:
-            self._select_columns = [col if isinstance(col, str) else col.name for col in columns]
+            self._select_columns = [str(col) for col in columns]
         return self
 
     def filter(self, condition: str, *params) -> "Query":
@@ -135,7 +90,10 @@ class Query:
     def filter_by(self, **kwargs) -> "Query":
         """Add WHERE conditions from keyword arguments"""
         for key, value in kwargs.items():
-            if key in self.model_class._columns:
+            # Check if the column exists in the SQLAlchemy model
+            if hasattr(self.model_class, "__table__") and key in [
+                col.name for col in self.model_class.__table__.columns
+            ]:
                 self._where_conditions.append(f"{key} = ?")
                 self._where_params.append(value)
         return self
@@ -147,7 +105,7 @@ class Query:
 
     def group_by(self, *columns) -> "Query":
         """Add GROUP BY clause"""
-        self._group_by_columns.extend([col if isinstance(col, str) else col.name for col in columns])
+        self._group_by_columns.extend([str(col) for col in columns])
         return self
 
     def having(self, condition: str, *params) -> "Query":
@@ -159,11 +117,7 @@ class Query:
     def order_by(self, *columns) -> "Query":
         """Add ORDER BY clause"""
         for col in columns:
-            if isinstance(col, str):
-                self._order_by_columns.append(col)
-            else:
-                # Handle desc() or asc() methods
-                self._order_by_columns.append(str(col))
+            self._order_by_columns.append(str(col))
         return self
 
     def limit(self, count: int) -> "Query":
@@ -244,7 +198,7 @@ class Query:
         sql = " ".join(filter(None, sql_parts))
         return sql, params
 
-    def all(self) -> List[Model]:
+    def all(self) -> List:
         """Execute query and return all results"""
         sql, params = self._build_select_sql()
         result = self.client.execute(sql, params)
@@ -253,14 +207,21 @@ class Query:
         for row in result.rows:
             # Convert row to dictionary
             row_dict = {}
-            for i, col_name in enumerate(self._select_columns or list(self.model_class._columns.keys())):
+            if hasattr(self.model_class, "__table__"):
+                column_names = [col.name for col in self.model_class.__table__.columns]
+            else:
+                column_names = self._select_columns or []
+
+            for i, col_name in enumerate(column_names):
                 if i < len(row):
                     row_dict[col_name] = row[i]
-            models.append(self.model_class.from_dict(row_dict))
+            # Create SQLAlchemy model instance
+            model = self.model_class(**row_dict)
+            models.append(model)
 
         return models
 
-    def first(self) -> Optional[Model]:
+    def first(self) -> Optional:
         """Execute query and return first result"""
         self._limit_count = 1
         results = self.all()
@@ -424,7 +385,7 @@ class BaseMatrixOneQuery:
             self._table_name = model_class.__tablename__
             self._columns = {col.name: col for col in model_class.__table__.columns}
         else:
-            # Fallback to MatrixOne Model
+            # Fallback to class name
             self._table_name = getattr(model_class, "_table_name", model_class.__name__.lower())
             self._columns = getattr(model_class, "_columns", {})
 
@@ -795,14 +756,14 @@ class MatrixOneQuery(BaseMatrixOneQuery):
                     model = self.model_class(**row_dict)
                     models.append(model)
                 else:
-                    # For MatrixOne models, use from_dict method
+                    # For non-SQLAlchemy models, create instance directly
                     row_dict = {}
                     for i, col_name in enumerate(self._columns.keys()):
                         if i < len(row):
                             row_dict[col_name] = row[i]
 
-                    # Create MatrixOne model instance
-                    model = self.model_class.from_dict(row_dict)
+                    # Create model instance
+                    model = self.model_class(**row_dict)
                     models.append(model)
 
         return models

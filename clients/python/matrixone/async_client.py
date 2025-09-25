@@ -1616,6 +1616,47 @@ class AsyncClient:
             raise ConnectionError("Not connected to database")
         return self._engine
 
+    async def create_all(self, base_class=None):
+        """
+        Create all tables defined in the given base class or default Base.
+
+        Args:
+            base_class: SQLAlchemy declarative base class. If None, uses the default Base.
+        """
+        if base_class is None:
+            from sqlalchemy.ext.declarative import declarative_base
+
+            base_class = declarative_base()
+
+        async with self._engine.begin() as conn:
+            await conn.run_sync(base_class.metadata.create_all)
+        return self
+
+    async def drop_all(self, base_class=None):
+        """
+        Drop all tables defined in the given base class or default Base.
+
+        Args:
+            base_class: SQLAlchemy declarative base class. If None, uses the default Base.
+        """
+        if base_class is None:
+            from sqlalchemy.ext.declarative import declarative_base
+
+            base_class = declarative_base()
+
+        # Get all table names from the metadata
+        table_names = list(base_class.metadata.tables.keys())
+
+        # Drop each table individually using direct SQL for better compatibility
+        for table_name in table_names:
+            try:
+                await self.execute(f"DROP TABLE IF EXISTS {table_name}")
+            except Exception as e:
+                # Log the error but continue with other tables
+                print(f"Warning: Failed to drop table {table_name}: {e}")
+
+        return self
+
     async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
         """
         Execute SQL query asynchronously using SQLAlchemy async engine

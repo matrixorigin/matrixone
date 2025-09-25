@@ -13,29 +13,60 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import AsyncClient
-from matrixone.orm import Model, Column
+from sqlalchemy import Column, Integer, String, DECIMAL
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
 from matrixone.exceptions import QueryError
 from .test_config import online_config
 
 
-class AsyncUser(Model):
+class AsyncUser(Base):
     """Test user model for async operations"""
     __tablename__ = "test_async_users"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    email = Column("email", "VARCHAR(100)")
-    age = Column("age", "INT")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(100))
+    age = Column(Integer)
+    
+    def to_dict(self):
+        """Convert model instance to dictionary"""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'email': self.email,
+            'age': self.age
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        """Create model instance from dictionary"""
+        return cls(**data)
 
 
-class AsyncProduct(Model):
+class AsyncProduct(Base):
     """Test product model for async operations"""
     __tablename__ = "test_async_products"
     
-    id = Column("id", "INT", primary_key=True)
-    name = Column("name", "VARCHAR(100)")
-    price = Column("price", "DECIMAL(10,2)")
-    category = Column("category", "VARCHAR(50)")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    price = Column(DECIMAL(10, 2))
+    category = Column(String(50))
+    
+    def to_dict(self):
+        """Convert model instance to dictionary"""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'price': float(self.price) if self.price is not None else None,
+            'category': self.category
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        """Create model instance from dictionary"""
+        return cls(**data)
 
 
 class TestAsyncORMOnline:

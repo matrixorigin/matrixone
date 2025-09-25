@@ -2,9 +2,9 @@
 MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 """
 
-from typing import Any, List, Optional, Type, TypeVar
+from typing import Any, List, Optional, TypeVar
 
-from .orm import BaseMatrixOneQuery, Model
+from .orm import BaseMatrixOneQuery
 
 T = TypeVar("T")
 
@@ -12,7 +12,7 @@ T = TypeVar("T")
 class AsyncMatrixOneQuery(BaseMatrixOneQuery):
     """Async MatrixOne Query builder that mimics SQLAlchemy Query interface"""
 
-    def __init__(self, model_class: Type[Model], client, database: str = None):
+    def __init__(self, model_class, client, database: str = None):
         super().__init__(model_class, client)
         self.database = database
 
@@ -31,7 +31,7 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
 
         return sql, params
 
-    async def all(self) -> List[Model]:
+    async def all(self) -> List:
         """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
         result = await self.client.execute(sql, params)
@@ -57,19 +57,19 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
                     model = self.model_class(**row_dict)
                     models.append(model)
                 else:
-                    # For MatrixOne models, use from_dict method
+                    # For non-SQLAlchemy models, create instance directly
                     row_dict = {}
                     for i, col_name in enumerate(self._columns.keys()):
                         if i < len(row):
                             row_dict[col_name] = row[i]
 
-                    # Create MatrixOne model instance
-                    model = self.model_class.from_dict(row_dict)
+                    # Create model instance
+                    model = self.model_class(**row_dict)
                     models.append(model)
 
         return models
 
-    async def first(self) -> Optional[Model]:
+    async def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
         self._limit_count = 1
         results = await self.all()
