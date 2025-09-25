@@ -2407,11 +2407,11 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	readTime = time.Since(start)
 
 	//empty packet means the file is over.
-	length := len(payload)
-	if length == 0 {
+	size := len(payload)
+	if size == 0 {
 		return skipWrite, readTime, writeTime, errorInvalidLength0
 	}
-	ses.CountPayload(length)
+	ses.CountPayload(size)
 
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
