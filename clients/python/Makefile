@@ -41,8 +41,14 @@ install: ## Install development dependencies
 .PHONY: install-dev
 install-dev: install ## Install development environment (including testing tools)
 	@echo "$(BLUE)Installing development tools...$(NC)"
-	$(PIP) install black flake8 mypy isort sphinx sphinx-rtd-theme
+	$(PIP) install black flake8 mypy isort sphinx sphinx-rtd-theme sphinx-autobuild sphinxcontrib-spelling sphinx-coverage
 	@echo "$(GREEN)Development tools installed!$(NC)"
+
+.PHONY: install-docs
+install-docs: ## Install documentation dependencies
+	@echo "$(BLUE)Installing documentation dependencies...$(NC)"
+	$(PIP) install sphinx sphinx-rtd-theme sphinx-autobuild sphinxcontrib-spelling sphinx-coverage
+	@echo "$(GREEN)Documentation dependencies installed!$(NC)"
 
 # Code quality checks
 .PHONY: lint
@@ -356,18 +362,51 @@ dev-setup: install-dev ## Setup development environment
 	@echo "  make lint        - Code quality checks"
 	@echo "  make format      - Format code"
 	@echo "  make examples    - Run examples"
+	@echo "  make docs        - Generate documentation"
 	@echo "  make build       - Build package"
 
 .PHONY: pre-commit
-pre-commit: format lint test ## Full pre-commit checks (format + lint + test)
+pre-commit: format lint test docs-check ## Full pre-commit checks (format + lint + test + docs)
 	@echo "$(GREEN)Full pre-commit checks completed!$(NC)"
+
+.PHONY: pre-release
+pre-release: format lint test docs-validate build-release check-build ## Pre-release complete checks
+	@echo "$(GREEN)Pre-release checks completed!$(NC)"
 
 # Documentation
 .PHONY: docs
-docs: ## Generate documentation
-	@echo "$(BLUE)Generating documentation...$(NC)"
+docs: ## Generate complete documentation (HTML)
+	@echo "$(BLUE)Generating complete documentation...$(NC)"
+	@echo "$(YELLOW)Including: Quick Start, ORM Guide, Vector Guide, Fulltext Guide, Examples, API Reference$(NC)"
 	$(PYTHON) -m sphinx -b html docs docs/_build/html
-	@echo "$(GREEN)Documentation generated! View: docs/_build/html/index.html$(NC)"
+	@echo "$(GREEN)Complete documentation generated! View: docs/_build/html/index.html$(NC)"
+
+.PHONY: docs-quick
+docs-quick: ## Generate quick documentation (HTML only, no API docs)
+	@echo "$(BLUE)Generating quick documentation...$(NC)"
+	@echo "$(YELLOW)Including: Quick Start, ORM Guide, Vector Guide, Fulltext Guide, Examples$(NC)"
+	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/quick
+	@echo "$(GREEN)Quick documentation generated! View: docs/_build/quick/index.html$(NC)"
+
+.PHONY: docs-api
+docs-api: ## Generate API documentation only
+	@echo "$(BLUE)Generating API documentation...$(NC)"
+	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/api
+	@echo "$(GREEN)API documentation generated! View: docs/_build/api/index.html$(NC)"
+
+.PHONY: docs-pdf
+docs-pdf: ## Generate PDF documentation
+	@echo "$(BLUE)Generating PDF documentation...$(NC)"
+	@echo "$(YELLOW)Note: Requires latexmk and pdflatex$(NC)"
+	$(PYTHON) -m sphinx -b latex docs docs/_build/latex
+	cd docs/_build/latex && make all-pdf
+	@echo "$(GREEN)PDF documentation generated! View: docs/_build/latex/matrixone.pdf$(NC)"
+
+.PHONY: docs-epub
+docs-epub: ## Generate EPUB documentation
+	@echo "$(BLUE)Generating EPUB documentation...$(NC)"
+	$(PYTHON) -m sphinx -b epub docs docs/_build/epub
+	@echo "$(GREEN)EPUB documentation generated! View: docs/_build/epub/matrixone.epub$(NC)"
 
 .PHONY: docs-clean
 docs-clean: ## Clean documentation build
@@ -376,16 +415,51 @@ docs-clean: ## Clean documentation build
 	@echo "$(GREEN)Documentation cleaned!$(NC)"
 
 .PHONY: docs-serve
-docs-serve: docs ## Generate and serve documentation
+docs-serve: docs ## Generate and serve documentation locally
 	@echo "$(BLUE)Serving documentation...$(NC)"
 	@echo "$(YELLOW)Open http://localhost:8000 in your browser$(NC)"
+	@echo "$(YELLOW)Press Ctrl+C to stop the server$(NC)"
 	cd docs/_build/html && $(PYTHON) -m http.server 8000
 
-.PHONY: docs-api
-docs-api: ## Generate API documentation only
-	@echo "$(BLUE)Generating API documentation...$(NC)"
-	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/api
-	@echo "$(GREEN)API documentation generated!$(NC)"
+.PHONY: docs-watch
+docs-watch: ## Watch for changes and rebuild documentation
+	@echo "$(BLUE)Watching for documentation changes...$(NC)"
+	@echo "$(YELLOW)Press Ctrl+C to stop watching$(NC)"
+	@echo "$(YELLOW)Documentation will be rebuilt automatically on file changes$(NC)"
+	$(PYTHON) -m sphinx_autobuild docs docs/_build/html --host 0.0.0.0 --port 8000
+
+.PHONY: docs-check
+docs-check: ## Check documentation for errors
+	@echo "$(BLUE)Checking documentation...$(NC)"
+	$(PYTHON) -m sphinx -b linkcheck docs docs/_build/linkcheck
+	@echo "$(GREEN)Documentation check completed!$(NC)"
+
+.PHONY: docs-spelling
+docs-spelling: ## Check documentation spelling
+	@echo "$(BLUE)Checking documentation spelling...$(NC)"
+	@echo "$(YELLOW)Note: Requires sphinxcontrib-spelling$(NC)"
+	$(PYTHON) -m sphinx -b spelling docs docs/_build/spelling
+	@echo "$(GREEN)Spelling check completed!$(NC)"
+
+.PHONY: docs-coverage
+docs-coverage: ## Check documentation coverage
+	@echo "$(BLUE)Checking documentation coverage...$(NC)"
+	@echo "$(YELLOW)Note: Requires sphinx-coverage$(NC)"
+	$(PYTHON) -m sphinx -b coverage docs docs/_build/coverage
+	@echo "$(GREEN)Coverage check completed!$(NC)"
+
+.PHONY: docs-validate
+docs-validate: docs-check docs-spelling ## Validate documentation (check + spelling)
+	@echo "$(GREEN)Documentation validation completed!$(NC)"
+
+.PHONY: docs-all
+docs-all: docs docs-api docs-pdf docs-epub ## Generate all documentation formats
+	@echo "$(GREEN)All documentation formats generated!$(NC)"
+	@echo "$(YELLOW)Available formats:$(NC)"
+	@echo "  HTML: docs/_build/html/index.html"
+	@echo "  API: docs/_build/api/index.html"
+	@echo "  PDF: docs/_build/latex/matrixone.pdf"
+	@echo "  EPUB: docs/_build/epub/matrixone.epub"
 
 # Version management
 .PHONY: version-update
@@ -452,6 +526,16 @@ info: ## Show project information
 	@echo "  Test files: $$(ls tests/test_*.py 2>/dev/null | wc -l)"
 	@echo "  Example files: $$(ls examples/example_*.py 2>/dev/null | wc -l)"
 	@echo "  Core modules: $$(ls matrixone/*.py 2>/dev/null | wc -l)"
+	@echo "  Documentation files: $$(ls docs/*.rst 2>/dev/null | wc -l)"
+	@echo ""
+	@echo "$(YELLOW)Documentation structure:$(NC)"
+	@echo "  Quick Start: docs/quickstart.rst"
+	@echo "  ORM Guide: docs/orm_guide.rst"
+	@echo "  Vector Guide: docs/vector_guide.rst"
+	@echo "  Fulltext Guide: docs/fulltext_guide.rst"
+	@echo "  Best Practices: docs/best_practices.rst"
+	@echo "  Examples: docs/examples.rst"
+	@echo "  API Reference: docs/api/index.rst"
 
 .PHONY: check-env
 check-env: ## Check Python environment configuration

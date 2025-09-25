@@ -13,6 +13,10 @@ table cloning, and mo-ctl integration.
 
    installation
    quickstart
+   orm_guide
+   vector_guide
+   fulltext_guide
+   best_practices
    api/index
    examples
    contributing
