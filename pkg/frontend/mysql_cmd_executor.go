@@ -2453,20 +2453,20 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	defer func() {
 		close(quitC)
 	}()
-	mysqlRrWr := ses.GetResponser().MysqlRrWr()
+	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
 			err = err2
 		}
 		//free load local buffer anyway
-		mysqlRrWr.FreeLoadLocal()
+		mysqlRwer.FreeLoadLocal()
 	}()
 	err = plan2.InitInfileParam(param)
 	if err != nil {
 		return
 	}
-	err = mysqlRrWr.WriteLocalInfileRequest(param.Filepath)
+	err = mysqlRwer.WriteLocalInfileRequest(param.Filepath)
 	if err != nil {
 		return
 	}
@@ -2477,7 +2477,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	start := time.Now()
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
-	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
+	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
@@ -2504,7 +2504,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	consecutiveLoopStartTime := time.Now()
 
 	for {
-		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
+		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
 				if retError != nil {
@@ -2515,16 +2515,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				break
 			}
 			retError = err
-			// Increment consecutive error counter
 			consecutiveErrors++
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
+			time.Sleep(10 * time.Millisecond)
 
 			if consecutiveErrors >= maxRetries || time.Since(consecutiveLoopStartTime) > maxTotalTime {
 				return moerr.NewInternalErrorf(execCtx.reqCtx,
 					"load local file failed: consecutive errors (%d), timeout after %v", maxRetries, maxTotalTime)
 			}
-
-			time.Sleep(10 * time.Millisecond)
 		} else {
 			consecutiveErrors = 0
 			consecutiveLoopStartTime = time.Now()
