@@ -2637,12 +2637,9 @@ class TransactionVectorIndexManager(VectorIndexManager):
         index = VectorIndex(name, column, index_type, lists, op_type)
 
         try:
-            # Enable IVF indexing using interface
-            from .sqlalchemy_ext import create_ivf_config
-
-            ivf_config = create_ivf_config(self.client._engine)
-            ivf_config.enable_ivf_indexing()
-            ivf_config.set_probe_limit(1)
+            # Enable IVF indexing within transaction
+            self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
+            self.transaction_wrapper.execute("SET probe_limit = 1")
 
             sql = index.create_sql(table_name)
             self.transaction_wrapper.execute(sql)
@@ -2672,11 +2669,8 @@ class TransactionVectorIndexManager(VectorIndexManager):
         index = VectorIndex(name, column, index_type, None, op_type, m, ef_construction, ef_search)
 
         try:
-            # Enable HNSW indexing using interface
-            from .sqlalchemy_ext import create_hnsw_config
-
-            hnsw_config = create_hnsw_config(self.client._engine)
-            hnsw_config.enable_hnsw_indexing()
+            # Enable HNSW indexing within transaction
+            self.transaction_wrapper.execute("SET experimental_hnsw_index = 1")
 
             sql = index.create_sql(table_name)
             self.transaction_wrapper.execute(sql)

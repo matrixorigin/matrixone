@@ -292,19 +292,15 @@ def main():
         # Demo 7: Different HNSW Configurations
         print("\n--- Demo 7: Different HNSW Configurations ---")
         
+        # Get engine for transaction operations
+        engine = client.get_sqlalchemy_engine()
+        
         # Create different HNSW configurations - each with its own table
         configs = [
             {"name": "hnsw_fast", "table": "vector_docs_hnsw_fast", "m": 16, "ef_construction": 32, "ef_search": 32},
             {"name": "hnsw_balanced", "table": "vector_docs_hnsw_balanced", "m": 48, "ef_construction": 64, "ef_search": 64},
             {"name": "hnsw_accurate", "table": "vector_docs_hnsw_accurate", "m": 64, "ef_construction": 128, "ef_search": 128}
         ]
-        
-        # Schema for HNSW configuration tables
-        schema3 = {
-            'id': {'type': 'bigint', 'primary_key': True},
-            'embedding': {'type': 'vector', 'dimension': 128, 'precision': 'f32'},
-            'text': {'type': 'varchar', 'length': 200}
-        }
         
         # Test data
         test_docs = [
@@ -317,7 +313,9 @@ def main():
                 # Enable HNSW indexing using interface
                 client.vector_index.enable_hnsw()
                 print("✓ HNSW indexing enabled using interface")
-                    
+                
+                # Create table and index in transaction
+                with engine.begin() as conn:
                     # Create table for this configuration using client interface in transaction
                     client.create_table_in_transaction(config["table"], {
                         'id': 'bigint',
