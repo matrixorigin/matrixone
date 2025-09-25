@@ -17,9 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -171,7 +172,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	//6. copy on writing unaffected index table
-	if err = cowUnaffectedIndexes(
+	if err = cloneUnaffectedIndexes(
 		c, dbName, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
 		return err
@@ -556,7 +557,7 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	return fatherRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
-func cowUnaffectedIndexes(
+func cloneUnaffectedIndexes(
 	c *Compile,
 	dbName string,
 	affectedCols []string,
@@ -564,6 +565,11 @@ func cowUnaffectedIndexes(
 	oriTblDef *plan.TableDef,
 	cloneSnapshot *plan.Snapshot,
 ) (err error) {
+
+	type IndexTypeInfo struct {
+		IndexTableName string
+		AlgoTableType  string
+	}
 
 	var (
 		clone *table_clone.TableClone
@@ -573,8 +579,8 @@ func cowUnaffectedIndexes(
 
 		newTblDef = newRel.GetTableDef(c.proc.Ctx)
 
-		oriIdxColNameToTblName  = make(map[string]string)
-		newIdxTColNameToTblName = make(map[string]string)
+		oriIdxColNameToTblName = make(map[string][]IndexTypeInfo)
+		newIdxColNameToTblName = make(map[string][]IndexTypeInfo)
 	)
 
 	releaseClone := func() {
@@ -590,15 +596,44 @@ func cowUnaffectedIndexes(
 	}()
 
 	for _, idxTbl := range oriTblDef.Indexes {
-		if slices.Index(affectedCols, idxTbl.IndexName) != -1 {
+		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
 			continue
 		}
 
-		oriIdxColNameToTblName[idxTbl.IndexName] = idxTbl.IndexTableName
+		affected := false
+		for _, part := range idxTbl.Parts {
+			if slices.Index(affectedCols, part) != -1 {
+				affected = true
+				break
+
+			}
+		}
+
+		if affected {
+			continue
+		}
+
+		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
+		if !ok {
+			m = make([]IndexTypeInfo, 0, 3)
+		}
+
+		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		oriIdxColNameToTblName[idxTbl.IndexName] = m
 	}
 
 	for _, idxTbl := range newTblDef.Indexes {
-		newIdxTColNameToTblName[idxTbl.IndexName] = idxTbl.IndexTableName
+		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
+			continue
+		}
+
+		m, ok := newIdxColNameToTblName[idxTbl.IndexName]
+		if !ok {
+			m = make([]IndexTypeInfo, 0, 3)
+		}
+
+		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		newIdxColNameToTblName[idxTbl.IndexName] = m
 	}
 
 	cctx := compilerContext{
@@ -608,38 +643,56 @@ func cowUnaffectedIndexes(
 		proc:      c.proc,
 	}
 
-	for colName, oriIdxTblName := range oriIdxColNameToTblName {
-		newIdxTblName, ok := newIdxTColNameToTblName[colName]
+	for idxName, oriIdxTblNames := range oriIdxColNameToTblName {
+		newIdxTblNames, ok := newIdxColNameToTblName[idxName]
 		if !ok {
 			continue
 		}
 
-		oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName, cloneSnapshot)
+		for _, oriIdxTblName := range oriIdxTblNames {
 
-		clonePlan := plan.CloneTable{
-			CreateTable:     nil,
-			ScanSnapshot:    cloneSnapshot,
-			SrcTableDef:     oriIdxTblDef,
-			SrcObjDef:       oriIdxObjRef,
-			DstDatabaseName: dbName,
-			DstTableName:    newIdxTblName,
-		}
+			var newIdxTblName IndexTypeInfo
+			found := false
+			for _, idxinfo := range newIdxTblNames {
+				if oriIdxTblName.AlgoTableType == idxinfo.AlgoTableType {
+					newIdxTblName = idxinfo
+					found = true
+					break
+				}
+			}
 
-		if clone, err = constructTableClone(c, &clonePlan); err != nil {
-			return err
-		}
+			if !found {
+				continue
+			}
 
-		if err = clone.Prepare(c.proc); err != nil {
+			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
+
+			clonePlan := plan.CloneTable{
+				CreateTable:     nil,
+				ScanSnapshot:    cloneSnapshot,
+				SrcTableDef:     oriIdxTblDef,
+				SrcObjDef:       oriIdxObjRef,
+				DstDatabaseName: dbName,
+				DstTableName:    newIdxTblName.IndexTableName,
+			}
+
+			if clone, err = constructTableClone(c, &clonePlan); err != nil {
+				return err
+			}
+
+			if err = clone.Prepare(c.proc); err != nil {
+				releaseClone()
+				return err
+			}
+
+			if _, err = clone.Call(c.proc); err != nil {
+				releaseClone()
+				return err
+			}
+
 			releaseClone()
-			return err
-		}
 
-		if _, err = clone.Call(c.proc); err != nil {
-			releaseClone()
-			return err
 		}
-
-		releaseClone()
 	}
 
 	return nil
