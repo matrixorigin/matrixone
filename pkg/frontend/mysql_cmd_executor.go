@@ -2386,7 +2386,7 @@ func canExecuteStatementInUncommittedTransaction(
 }
 
 func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (_ bool, _ time.Duration, _ time.Duration, err error) {
-	var readDuration, writeDuration time.Duration
+	var readTime, writeTime time.Duration
 	var payload []byte
 	start := time.Now()
 	defer func() {
@@ -2397,19 +2397,19 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	payload, err = mysqlRrWr.ReadLoadLocalPacket()
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
-			return skipWrite, readDuration, writeDuration, err
+			return skipWrite, readTime, writeTime, err
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 			err = moerr.NewInvalidInputf(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
-		return skipWrite, readDuration, writeDuration, err
+		return skipWrite, readTime, writeTime, err
 	}
-	readDuration = time.Since(start)
+	readTime = time.Since(start)
 
 	//empty packet means the file is over.
 	size := len(payload)
 	if size == 0 {
-		return skipWrite, readDuration, writeDuration, errorInvalidLength0
+		return skipWrite, readTime, writeTime, errorInvalidLength0
 	}
 	ses.CountPayload(size)
 
@@ -2429,10 +2429,10 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 				zap.Error(err))
 			skipWrite = true
 		}
-		writeDuration = time.Since(writeStart)
+		writeTime = time.Since(writeStart)
 
 	}
-	return skipWrite, readDuration, writeDuration, err
+	return skipWrite, readTime, writeTime, err
 }
 
 // processLoadLocal executes the load data local.
@@ -2475,7 +2475,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	var readTime, writeTime time.Duration
 	var retError error
 	start := time.Now()
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+	epoch, printTime, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
 	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 	if err != nil {
@@ -2542,7 +2542,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			minWriteTime = writeTime
 		}
 
-		if epoch%printEvery == 0 {
+		if epoch%printTime == 0 {
 			if execCtx.isIssue3482 {
 				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
 			}
