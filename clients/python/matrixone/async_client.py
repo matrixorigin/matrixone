@@ -1410,6 +1410,86 @@ class AsyncClient:
             self.logger.log_error(e, context="Async connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
 
+    @classmethod
+    def from_engine(cls, engine: AsyncEngine, **kwargs) -> "AsyncClient":
+        """
+        Create AsyncClient instance from existing SQLAlchemy AsyncEngine
+
+        Args:
+            engine: SQLAlchemy AsyncEngine instance (must use MySQL driver)
+            **kwargs: Additional client configuration options
+
+        Returns:
+            AsyncClient: Configured async client instance
+
+        Raises:
+            ConnectionError: If engine doesn't use MySQL driver
+
+        Examples:
+            Basic usage::
+
+                from sqlalchemy.ext.asyncio import create_async_engine
+                from matrixone import AsyncClient
+
+                engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
+                client = AsyncClient.from_engine(engine)
+
+            With custom configuration::
+
+                engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
+                client = AsyncClient.from_engine(
+                    engine,
+                    enable_sql_logging=True,
+                    slow_sql_threshold=0.5
+                )
+        """
+        # Check if engine uses MySQL driver
+        if not cls._is_mysql_async_engine(engine):
+            raise ConnectionError(
+                "MatrixOne AsyncClient only supports MySQL drivers. "
+                "Please use mysql+aiomysql:// connection strings. "
+                f"Current engine uses: {engine.dialect.name}"
+            )
+
+        # Create client instance with default parameters
+        client = cls(**kwargs)
+
+        # Set the provided engine
+        client._engine = engine
+
+        # Initialize vector managers after engine is set
+        client._initialize_vector_managers()
+
+        return client
+
+    @staticmethod
+    def _is_mysql_async_engine(engine: AsyncEngine) -> bool:
+        """
+        Check if the async engine uses a MySQL driver
+
+        Args:
+            engine: SQLAlchemy AsyncEngine instance
+
+        Returns:
+            bool: True if engine uses MySQL driver, False otherwise
+        """
+        # Check dialect name
+        dialect_name = engine.dialect.name.lower()
+
+        # Check if it's a MySQL dialect
+        if dialect_name == "mysql":
+            return True
+
+        # Check connection string for MySQL async drivers
+        url = str(engine.url)
+        mysql_async_drivers = [
+            "mysql+aiomysql",
+            "mysql+asyncmy",
+            "mysql+aiopg",  # Note: aiopg is PostgreSQL, but included for completeness
+        ]
+
+        return any(driver in url.lower() for driver in mysql_async_drivers)
+
     def _create_async_engine(self) -> AsyncEngine:
         """Create SQLAlchemy async engine with connection pooling"""
         if not create_async_engine:

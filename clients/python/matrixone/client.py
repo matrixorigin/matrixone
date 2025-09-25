@@ -253,6 +253,100 @@ class Client:
             self.logger.log_error(e, context="Connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
 
+    @classmethod
+    def from_engine(cls, engine: Engine, **kwargs) -> "Client":
+        """
+        Create Client instance from existing SQLAlchemy Engine
+
+        Args:
+            engine: SQLAlchemy Engine instance (must use MySQL driver)
+            **kwargs: Additional client configuration options
+
+        Returns:
+            Client: Configured client instance
+
+        Raises:
+            ConnectionError: If engine doesn't use MySQL driver
+
+        Examples:
+            Basic usage::
+
+                from sqlalchemy import create_engine
+                from matrixone import Client
+
+                engine = create_engine("mysql+pymysql://user:pass@host:port/db")
+                client = Client.from_engine(engine)
+
+            With custom configuration::
+
+                engine = create_engine("mysql+pymysql://user:pass@host:port/db")
+                client = Client.from_engine(
+                    engine,
+                    enable_sql_logging=True,
+                    slow_sql_threshold=0.5
+                )
+        """
+        # Check if engine uses MySQL driver
+        if not cls._is_mysql_engine(engine):
+            raise ConnectionError(
+                "MatrixOne Client only supports MySQL drivers. "
+                "Please use mysql+pymysql:// or mysql+mysqlconnector:// connection strings. "
+                f"Current engine uses: {engine.dialect.name}"
+            )
+
+        # Create client instance with default parameters
+        client = cls(**kwargs)
+
+        # Set the provided engine
+        client._engine = engine
+
+        # Replace the dialect with MatrixOne dialect for proper vector type support
+        original_dbapi = engine.dialect.dbapi
+        engine.dialect = MatrixOneDialect()
+        engine.dialect.dbapi = original_dbapi
+
+        # Initialize managers after engine is set
+        client._initialize_managers()
+
+        # Try to detect backend version
+        try:
+            client._detect_backend_version()
+        except Exception as e:
+            client.logger.warning(f"Failed to detect backend version: {e}")
+
+        return client
+
+    @staticmethod
+    def _is_mysql_engine(engine: Engine) -> bool:
+        """
+        Check if the engine uses a MySQL driver
+
+        Args:
+            engine: SQLAlchemy Engine instance
+
+        Returns:
+            bool: True if engine uses MySQL driver, False otherwise
+        """
+        # Check dialect name
+        dialect_name = engine.dialect.name.lower()
+
+        # Check if it's a MySQL dialect
+        if dialect_name == "mysql":
+            return True
+
+        # Check connection string for MySQL drivers
+        url = str(engine.url)
+        mysql_drivers = [
+            "mysql+pymysql",
+            "mysql+mysqlconnector",
+            "mysql+cymysql",
+            "mysql+oursql",
+            "mysql+gaerdbms",
+            "mysql+pyodbc",
+        ]
+
+        return any(driver in url.lower() for driver in mysql_drivers)
+
     def _create_engine(self) -> Engine:
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection string
