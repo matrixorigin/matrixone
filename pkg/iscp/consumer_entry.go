@@ -138,7 +138,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		return
 	}
 	needFlush = true
-	emptyStatus := &JobStatus{}
+	emptyStatus := &JobStatus{LSN: jobEntry.currentLSN + 1}
 	statusJson, err := MarshalJobStatus(emptyStatus)
 	if err != nil {
 		return
@@ -172,6 +172,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		)
 		return
 	}
+	jobEntry.state = ISCPJobState_Pending
 	result.Close()
 	jobEntry.persistedWatermark = jobEntry.watermark
 	return
