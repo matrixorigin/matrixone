@@ -339,6 +339,14 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 	// Update memory usage after processing the batch
 	group.updateMemoryUsage(proc)
+	
+	// Check if we need to spill after processing this batch
+	if group.shouldSpill() {
+		if err := group.spillPartialResults(proc); err != nil {
+			return err
+		}
+	}
+	
 	return nil
 }
 
