@@ -16,6 +16,7 @@ package ivfflat
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 
@@ -270,6 +271,10 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 			return nil, nil, moerr.NewInternalError(proc.Ctx, "ivf search: heap return key is not any")
 		}
 		resid = append(resid, sr.Id)
+		if metric.MetricType(idxcfg.Ivfflat.Metric) == metric.Metric_L2Distance {
+			// distance functino of L2Distance is l2sq so sqrt at the end
+			sr.Distance = math.Sqrt(sr.Distance)
+		}
 		resdist = append(resdist, sr.Distance)
 	}
 
