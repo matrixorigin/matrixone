@@ -51,6 +51,21 @@ class Product(Model):
     }
 
 
+class AIDataset(Model):
+    """AI Dataset model for testing vector operations"""
+    _table_name = "test_ai_dataset"
+    _columns = {
+        "id": Column("id", "BIGINT", nullable=False),
+        "question_embedding": Column("question_embedding", "VECF32(16)", nullable=True),
+        "question": Column("question", "VARCHAR(255)", nullable=True),
+        "type": Column("type", "VARCHAR(255)", nullable=True),
+        "output_result": Column("output_result", "TEXT", nullable=True),
+        "status": Column("status", "INT", nullable=True),
+        "created_at": Column("created_at", "TIMESTAMP", nullable=True),
+        "updated_at": Column("updated_at", "TIMESTAMP", nullable=True),
+    }
+
+
 class TestORMAdvancedFeatures:
     """Online tests for advanced ORM features"""
     
@@ -107,6 +122,24 @@ class TestORMAdvancedFeatures:
                 )
             """)
             
+            # Enable experimental IVF index feature
+            test_client.execute("SET experimental_ivf_index = 1")
+            
+            test_client.execute("""
+                CREATE TABLE IF NOT EXISTS test_ai_dataset (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    question_embedding VECF32(16) DEFAULT NULL,
+                    question VARCHAR(255) DEFAULT NULL,
+                    type VARCHAR(255) DEFAULT NULL,
+                    output_result TEXT DEFAULT NULL,
+                    status INT DEFAULT NULL COMMENT '是否在启用状态：1 是，0 否',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
+                    PRIMARY KEY (id),
+                    KEY q_v_idx USING ivfflat (question_embedding) lists = 256 op_type 'vector_l2_ops'
+                )
+            """)
+            
             # Insert test data
             test_client.execute("""
                 INSERT INTO test_users_advanced VALUES 
@@ -133,11 +166,20 @@ class TestORMAdvancedFeatures:
                 (5, 'Tablet', 499.99, 'Electronics', 8)
             """)
             
+            test_client.execute("""
+                INSERT INTO test_ai_dataset (question_embedding, question, type, output_result, status) VALUES 
+                ('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]', 'What is machine learning?', 'AI', 'Machine learning is a subset of artificial intelligence.', 1),
+                ('[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]', 'How does neural network work?', 'AI', 'Neural networks are computing systems inspired by biological neural networks.', 1),
+                ('[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', 'What is deep learning?', 'AI', 'Deep learning is a subset of machine learning using neural networks.', 0),
+                ('[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1]', 'Explain natural language processing', 'NLP', 'NLP is a field of AI that focuses on interaction between computers and human language.', 1)
+            """)
+            
             yield test_db
             
         finally:
             # Clean up
             try:
+                test_client.execute("DROP TABLE IF EXISTS test_ai_dataset")
                 test_client.execute(f"DROP DATABASE IF EXISTS {test_db}")
             except Exception as e:
                 print(f"Cleanup failed: {e}")
@@ -1751,6 +1793,64 @@ class TestORMAdvancedFeatures:
         # Check that we got high-budget departments
         budgets = [row.budget for row in results]
         assert all(budget > 60000 for budget in budgets)
+
+    def test_vector_similarity_search_with_cte(self, test_client, test_database):
+        """Test vector similarity search using CTE with L2 distance"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_ai_dataset WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_ai_dataset (question_embedding, question, type, output_result, status) VALUES 
+            ('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]', 'What is machine learning?', 'AI', 'Machine learning is a subset of artificial intelligence.', 1),
+            ('[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]', 'How does neural network work?', 'AI', 'Neural networks are computing systems inspired by biological neural networks.', 1),
+            ('[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', 'What is deep learning?', 'AI', 'Deep learning is a subset of machine learning using neural networks.', 0),
+            ('[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1]', 'Explain natural language processing', 'NLP', 'NLP is a field of AI that focuses on interaction between computers and human language.', 1)
+        """)
+        
+        # Test vector similarity search using CTE
+        # Create CTE for vector distance calculation
+        vector_distance_cte = test_client.query(AIDataset).select(
+            'question',
+            'type', 
+            'output_result',
+            'status',
+            'l2_distance(question_embedding, \'[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]\') as vec_dist'
+        )
+        
+        # Use CTE query builder to find similar vectors
+        cte_query = test_client.cte_query()
+        results = (cte_query
+                  .with_cte('t', vector_distance_cte)
+                  .select_from('t.question', 't.type', 't.output_result', 't.status', 't.vec_dist')
+                  .from_table('t')
+                  .where('t.status = ?', 1)
+                  .where('t.vec_dist < ?', 0.6)
+                  .order_by('t.vec_dist')
+                  .limit(1)
+                  .execute())
+        
+        # Verify results
+        assert len(results) >= 1  # Should find at least one similar vector
+        
+        # Check that we got the expected result
+        result = results[0]
+        assert hasattr(result, 'question')
+        assert hasattr(result, 'type')
+        assert hasattr(result, 'output_result')
+        assert hasattr(result, 'status')
+        assert hasattr(result, 'vec_dist')
+        
+        # Verify the result is from an active record (status = 1)
+        assert result.status == 1
+        
+        # Verify the vector distance is within the threshold
+        assert result.vec_dist < 0.6
+        
+        # The most similar should be the first record (exact match)
+        assert result.question == 'What is machine learning?'
+        assert result.type == 'AI'
+        assert 'Machine learning' in result.output_result
 
 
 if __name__ == "__main__":
