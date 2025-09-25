@@ -444,6 +444,10 @@ func (exec *ISCPTaskExecutor) GetJobType(accountID uint32, srcTableID uint64, jo
 }
 
 func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.TS) (err error) {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "stale read" {
+		err = moerr.NewErrStaleReadNoCtx("0-0", "0-0")
+		return
+	}
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
