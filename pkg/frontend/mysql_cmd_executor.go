@@ -2418,7 +2418,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
 	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
 
-	writeStart := time.Now()
+	start = time.Now()
 	if !skipWrite {
 		_, err = writer.Write(payload)
 		if err != nil {
@@ -2429,7 +2429,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 				zap.Error(err))
 			skipWrite = true
 		}
-		writeTime = time.Since(writeStart)
+		writeTime = time.Since(start)
 
 	}
 	return skipWrite, readTime, writeTime, err
