@@ -18,15 +18,12 @@ import (
 	"context"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 // `files` should be sorted by the end-ts in the asc order
@@ -153,121 +150,63 @@ func loadCheckpointMeta(
 	metaFiles []ioutil.TSRangeFile,
 	fs fileservice.FileService,
 ) (entries []*CheckpointEntry, err error) {
-	colNames := CheckpointSchema.Attrs()
-	colTypes := CheckpointSchema.Types()
-	bat := containers.NewBatch()
-	var (
-		tmpBat *batch.Batch
-	)
-	loader := func(meta *ioutil.TSRangeFile) (err error) {
-		var reader *ioutil.BlockReader
-		var bats []*batch.Batch
-		var closeCB func()
-		if reader, err = ioutil.NewFileReader(fs, meta.GetCKPFullName()); err != nil {
-			return err
-		}
-		bats, closeCB, err = reader.LoadAllColumns(ctx, nil, common.DebugAllocator)
+	// Collect all meta file names
+	fileNames := make([]string, len(metaFiles))
+	for i, metaFile := range metaFiles {
+		fileNames[i] = metaFile.GetCKPFullName()
+	}
+
+	// Create reader using NewCKPMetaReader
+	reader := NewCKPMetaReader(sid, "", fileNames, 0, fs)
+	getter := MetadataEntryGetter{reader: reader}
+	defer getter.Close()
+
+	// Read all entries
+	allEntries := make([]*CheckpointEntry, 0)
+	for {
+		batchEntries, err := getter.NextBatch(ctx, nil, common.DebugAllocator)
 		if err != nil {
-			return
-		}
-		defer func() {
-			if closeCB != nil {
-				closeCB()
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				break
 			}
-		}()
-
-		if len(bats) > 1 {
-			panic("unexpected multiple batches in a checkpoint file")
+			return nil, err
 		}
-		if len(bats) == 0 {
-			return
-		}
-		bats[0].SetAttributes(colNames)
-		if tmpBat == nil {
-			tmpBat, err = bats[0].Dup(common.DebugAllocator)
-			if err != nil {
-				return
-			}
-		} else {
-			// The incremental checkpoint meta records an interval,
-			// and you need to add the specified checkpoint information to tmpBat
-			// according to start and end.
-			// start is file name start, end is file name end
-			appendCheckpointToBatch(tmpBat, bats[0], meta.GetStart(), meta.GetEnd(), common.DebugAllocator)
-		}
-		return
+		allEntries = append(allEntries, batchEntries...)
 	}
 
-	for _, metaFile := range metaFiles {
-		if err = loader(&metaFile); err != nil {
-			return
-		}
-	}
-
-	for i := range tmpBat.Vecs {
-		var vec containers.Vector
-		if tmpBat.Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], common.DebugAllocator)
-		} else {
-			vec = containers.ToTNVector(tmpBat.Vecs[i], common.DebugAllocator)
-		}
-		bat.AddVector(colNames[i], vec)
-	}
-	defer tmpBat.Clean(common.DebugAllocator)
-	// in version 1, checkpoint metadata doesn't contain 'version'.
-	vecLen := len(bat.Vecs)
-	var checkpointVersion int
-	if vecLen < CheckpointSchemaColumnCountV1 {
-		checkpointVersion = 1
-	} else if vecLen < CheckpointSchemaColumnCountV2 {
-		checkpointVersion = 2
-	} else if vecLen < CheckpointSchemaColumnCountV3 {
-		checkpointVersion = 3
-	} else {
-		checkpointVersion = 4
-	}
-	return ListSnapshotCheckpointWithMeta(bat, checkpointVersion)
+	// Apply the same logic as ListSnapshotCheckpointWithMeta
+	return filterSnapshotEntries(allEntries), nil
 }
 
-func ListSnapshotCheckpointWithMeta(
-	bat *containers.Batch,
-	version int,
-) ([]*CheckpointEntry, error) {
-	defer bat.Close()
-	entries, maxGlobalEnd := ReplayCheckpointEntries(bat, version)
+// filterSnapshotEntries implements the same logic as ListSnapshotCheckpointWithMeta
+func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+
+	// Find the maximum global end timestamp
+	var maxGlobalEnd types.TS
+	for _, entry := range entries {
+		if entry.entryType == ET_Global {
+			if entry.end.GT(&maxGlobalEnd) {
+				maxGlobalEnd = entry.end
+			}
+		}
+	}
+
+	// Sort by end timestamp
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.LT(&entries[j].end)
 	})
+
+	// Find the appropriate truncation point
 	for i := range entries {
 		p := maxGlobalEnd.Prev()
 		if entries[i].end.Equal(&p) || (entries[i].end.Equal(&maxGlobalEnd) &&
 			entries[i].entryType == ET_Global) {
-			return entries[i:], nil
+			return entries[i:]
 		}
-
 	}
-	return entries, nil
-}
 
-func appendCheckpointToBatch(dst, src *batch.Batch, start, end *types.TS, mp *mpool.MPool) {
-	tSrc := containers.ToTNBatch(src, mp)
-	tDst := containers.ToTNBatch(dst, mp)
-	length := tSrc.Vecs[0].Length() - 1
-	startTs := vector.MustFixedColWithTypeCheck[types.TS](tSrc.Vecs[0].GetDownstreamVector())
-	endTs := vector.MustFixedColWithTypeCheck[types.TS](tSrc.Vecs[1].GetDownstreamVector())
-	for i := length; i >= 0; i-- {
-		if !startTs[i].EQ(start) || !endTs[i].EQ(end) {
-			continue
-		}
-		for v, vec := range tSrc.Vecs {
-			val := vec.Get(i)
-			if val == nil {
-				tDst.Vecs[v].Append(val, true)
-			} else {
-				tDst.Vecs[v].Append(val, false)
-			}
-		}
-		return
-	}
-	panic("don't find the value in the batch")
+	return entries
 }
