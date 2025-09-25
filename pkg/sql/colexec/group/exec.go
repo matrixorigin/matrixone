@@ -217,7 +217,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 			group.ctr.state = vm.Eval
 
 			if group.ctr.isDataSourceEmpty() && len(group.Exprs) == 0 {
-				if err = group.generateInitialResult1WithoutGroupBy(proc); err != nil {
+				if err := group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 					return nil, err
 				}
 				group.ctr.result1.ToPopped[0].SetRowCount(1)
@@ -339,14 +339,14 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 	// Update memory usage after processing the batch
 	group.updateMemoryUsage(proc)
-	
+
 	// Check if we need to spill after processing this batch
 	if group.shouldSpill() {
 		if err := group.spillPartialResults(proc); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
