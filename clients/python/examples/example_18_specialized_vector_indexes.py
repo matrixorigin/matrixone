@@ -74,15 +74,14 @@ def main():
         print("✅ Created table")
         
         # Enable IVF indexing and create specialized index separately
-        with engine.begin() as conn:
-            conn.execute(text("SET experimental_ivf_index = 1"))
-            conn.execute(text("SET probe_limit = 1"))
-            
-            # Create specialized IVFVectorIndex
-            ivf_index = IVFVectorIndex('idx_ivf_specialized', 'embedding', 
-                                     lists=50, op_type=VectorOpType.VECTOR_L2_OPS)
-            sql = ivf_index.create_sql('vector_docs_ivf_specialized')
-            conn.execute(text(sql))
+        # Enable IVF indexing using interface
+        client.vector_index.enable_ivf()
+        
+        # Create specialized IVFVectorIndex
+        ivf_index = IVFVectorIndex('idx_ivf_specialized', 'embedding', 
+                                 lists=50, op_type=VectorOpType.VECTOR_L2_OPS)
+        sql = ivf_index.create_sql('vector_docs_ivf_specialized')
+        client.execute(sql)
         
         print("✅ Created specialized IVFVectorIndex")
         
@@ -128,15 +127,15 @@ def main():
         print("✅ Created table")
         
         # Enable HNSW indexing and create specialized index separately
-        with engine.begin() as conn:
-            conn.execute(text("SET experimental_hnsw_index = 1"))
-            
-            # Create specialized HnswVectorIndex
-            hnsw_index = HnswVectorIndex('idx_hnsw_specialized', 'embedding',
-                                       m=32, ef_construction=64, ef_search=32,
-                                       op_type=VectorOpType.VECTOR_L2_OPS)
-            sql = hnsw_index.create_sql('vector_docs_hnsw_specialized')
-            conn.execute(text(sql))
+        # Enable HNSW indexing using interface
+        client.vector_index.enable_hnsw()
+        
+        # Create specialized HnswVectorIndex
+        hnsw_index = HnswVectorIndex('idx_hnsw_specialized', 'embedding',
+                                   m=32, ef_construction=64, ef_search=32,
+                                   op_type=VectorOpType.VECTOR_L2_OPS)
+        sql = hnsw_index.create_sql('vector_docs_hnsw_specialized')
+        client.execute(sql)
         
         print("✅ Created specialized HnswVectorIndex")
         
@@ -181,16 +180,15 @@ def main():
         print("✅ Created table")
         
         # Enable IVF indexing and create legacy index separately
-        with engine.begin() as conn:
-            conn.execute(text("SET experimental_ivf_index = 1"))
-            conn.execute(text("SET probe_limit = 1"))
-            
-            # Create legacy VectorIndex
-            legacy_index = VectorIndex('idx_legacy', 'embedding', 
-                                     index_type=VectorIndexType.IVFFLAT,
-                                     lists=25, op_type=VectorOpType.VECTOR_L2_OPS)
-            sql = legacy_index.create_sql('vector_docs_legacy')
-            conn.execute(text(sql))
+        # Enable IVF indexing using interface
+        client.vector_index.enable_ivf()
+        
+        # Create legacy VectorIndex
+        legacy_index = VectorIndex('idx_legacy', 'embedding', 
+                                 index_type=VectorIndexType.IVFFLAT,
+                                 lists=25, op_type=VectorOpType.VECTOR_L2_OPS)
+        sql = legacy_index.create_sql('vector_docs_legacy')
+        client.execute(sql)
         
         print("✅ Created legacy VectorIndex")
         

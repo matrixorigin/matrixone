@@ -1687,16 +1687,18 @@ class Client:
         # Enable appropriate indexing if needed and create table in same session
         if has_hnsw_index or enable_hnsw:
             with engine.begin() as conn:
-                from sqlalchemy import text
+                from .sqlalchemy_ext import create_hnsw_config
 
-                conn.execute(text("SET experimental_hnsw_index = 1"))
+                hnsw_config = create_hnsw_config(self._engine)
+                hnsw_config.enable_hnsw_indexing(conn)
                 # Create table and indexes in the same session
                 table.create(conn)
         elif has_ivf_index or enable_ivf:
             with engine.begin() as conn:
-                from sqlalchemy import text
+                from .sqlalchemy_ext import create_ivf_config
 
-                conn.execute(text("SET experimental_ivf_index = 1"))
+                ivf_config = create_ivf_config(self._engine)
+                ivf_config.enable_ivf_indexing()
                 # Create table and indexes in the same session
                 table.create(conn)
         else:
@@ -1746,13 +1748,15 @@ class Client:
 
         # Enable appropriate indexing if needed (within transaction)
         if has_hnsw_index or enable_hnsw:
-            from sqlalchemy import text
+            from .sqlalchemy_ext import create_hnsw_config
 
-            connection.execute(text("SET experimental_hnsw_index = 1"))
+            hnsw_config = create_hnsw_config(self._engine)
+            hnsw_config.enable_hnsw_indexing(connection)
         if has_ivf_index or enable_ivf:
-            from sqlalchemy import text
+            from .sqlalchemy_ext import create_ivf_config
 
-            connection.execute(text("SET experimental_ivf_index = 1"))
+            ivf_config = create_ivf_config(self._engine)
+            ivf_config.enable_ivf_indexing()
 
         # Create table using the provided connection
         create_sql = CreateTable(table)
@@ -2242,9 +2246,15 @@ class TransactionWrapper:
 
         # Enable appropriate indexing if needed (within transaction)
         if has_hnsw_index or enable_hnsw:
-            self.execute("SET experimental_hnsw_index = 1")
+            from .sqlalchemy_ext import create_hnsw_config
+
+            hnsw_config = create_hnsw_config(self.client._engine)
+            hnsw_config.enable_hnsw_indexing()
         if has_ivf_index or enable_ivf:
-            self.execute("SET experimental_ivf_index = 1")
+            from .sqlalchemy_ext import create_ivf_config
+
+            ivf_config = create_ivf_config(self.client._engine)
+            ivf_config.enable_ivf_indexing()
 
         # Create table using transaction wrapper's execute method
         create_sql = CreateTable(table)
@@ -2443,8 +2453,11 @@ class VectorIndexManager:
         from sqlalchemy import text
 
         # Enable IVF indexing if needed
-        connection.execute(text("SET experimental_ivf_index = 1"))
-        connection.execute(text("SET probe_limit = 1"))
+        from .sqlalchemy_ext import create_ivf_config
+
+        ivf_config = create_ivf_config(self.client._engine)
+        ivf_config.enable_ivf_indexing()
+        ivf_config.set_probe_limit(1)
 
         # Build CREATE INDEX statement
         sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
@@ -2490,7 +2503,10 @@ class VectorIndexManager:
         from sqlalchemy import text
 
         # Enable HNSW indexing if needed
-        connection.execute(text("SET experimental_hnsw_index = 1"))
+        from .sqlalchemy_ext import create_hnsw_config
+
+        hnsw_config = create_hnsw_config(self.client._engine)
+        hnsw_config.enable_hnsw_indexing(connection)
 
         # Build CREATE INDEX statement
         sql = (
@@ -2621,9 +2637,12 @@ class TransactionVectorIndexManager(VectorIndexManager):
         index = VectorIndex(name, column, index_type, lists, op_type)
 
         try:
-            # Enable IVF indexing in the same connection
-            self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
-            self.transaction_wrapper.execute("SET probe_limit = 1")
+            # Enable IVF indexing using interface
+            from .sqlalchemy_ext import create_ivf_config
+
+            ivf_config = create_ivf_config(self.client._engine)
+            ivf_config.enable_ivf_indexing()
+            ivf_config.set_probe_limit(1)
 
             sql = index.create_sql(table_name)
             self.transaction_wrapper.execute(sql)
@@ -2653,8 +2672,11 @@ class TransactionVectorIndexManager(VectorIndexManager):
         index = VectorIndex(name, column, index_type, None, op_type, m, ef_construction, ef_search)
 
         try:
-            # Enable HNSW indexing in the same connection
-            self.transaction_wrapper.execute("SET experimental_hnsw_index = 1")
+            # Enable HNSW indexing using interface
+            from .sqlalchemy_ext import create_hnsw_config
+
+            hnsw_config = create_hnsw_config(self.client._engine)
+            hnsw_config.enable_hnsw_indexing()
 
             sql = index.create_sql(table_name)
             self.transaction_wrapper.execute(sql)
@@ -3356,6 +3378,32 @@ class FulltextIndexManager:
             return ResultSet(columns, rows)
         else:
             return ResultSet([], [], affected_rows=result.rowcount)
+
+    def enable_fulltext(self) -> "FulltextIndexManager":
+        """
+        Enable fulltext indexing with chain operations.
+
+        Returns:
+            FulltextIndexManager: Self for chaining
+        """
+        try:
+            self.client.execute("SET experimental_fulltext_index = 1")
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to enable fulltext indexing: {e}")
+
+    def disable_fulltext(self) -> "FulltextIndexManager":
+        """
+        Disable fulltext indexing with chain operations.
+
+        Returns:
+            FulltextIndexManager: Self for chaining
+        """
+        try:
+            self.client.execute("SET experimental_fulltext_index = 0")
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to disable fulltext indexing: {e}")
 
 
 class TransactionFulltextIndexManager(FulltextIndexManager):

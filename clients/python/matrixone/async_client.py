@@ -1222,6 +1222,32 @@ class AsyncFulltextIndexManager:
         else:
             return AsyncResultSet([], [], affected_rows=result.rowcount)
 
+    async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
+        """
+        Enable fulltext indexing with chain operations.
+
+        Returns:
+            AsyncFulltextIndexManager: Self for chaining
+        """
+        try:
+            await self.client.execute("SET experimental_fulltext_index = 1")
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to enable fulltext indexing: {e}")
+
+    async def disable_fulltext(self) -> "AsyncFulltextIndexManager":
+        """
+        Disable fulltext indexing with chain operations.
+
+        Returns:
+            AsyncFulltextIndexManager: Self for chaining
+        """
+        try:
+            await self.client.execute("SET experimental_fulltext_index = 0")
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to disable fulltext indexing: {e}")
+
 
 class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
     """Async fulltext index manager that executes operations within a transaction"""

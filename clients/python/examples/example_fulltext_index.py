@@ -80,8 +80,8 @@ def demo_sync_fulltext_index():
         
         logger.info("✅ Connected to MatrixOne")
         
-        # Enable fulltext indexing
-        client.execute('SET experimental_fulltext_index = 1')
+        # Enable fulltext indexing using interface
+        client.fulltext_index.enable_fulltext()
         client.execute('SET ft_relevancy_algorithm = "BM25"')
         logger.info("✅ Enabled fulltext indexing with BM25 algorithm")
         
@@ -229,8 +229,8 @@ async def demo_async_fulltext_index():
         
         logger.info("✅ Connected to MatrixOne")
         
-        # Enable fulltext indexing
-        await client.execute('SET experimental_fulltext_index = 1')
+        # Enable fulltext indexing using interface
+        await client.fulltext_index.enable_fulltext()
         await client.execute('SET ft_relevancy_algorithm = "BM25"')
         logger.info("✅ Enabled fulltext indexing with BM25 algorithm")
         
@@ -332,8 +332,8 @@ def demo_transaction_fulltext_index():
         
         logger.info("✅ Connected to MatrixOne")
         
-        # Enable fulltext indexing
-        client.execute('SET experimental_fulltext_index = 1')
+        # Enable fulltext indexing using interface
+        client.fulltext_index.enable_fulltext()
         logger.info("✅ Enabled fulltext indexing")
         
         # Clean up existing table before transaction

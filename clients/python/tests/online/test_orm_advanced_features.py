@@ -55,7 +55,7 @@ class AIDataset(Base):
     """AI Dataset model for testing vector operations"""
     __tablename__ = "test_ai_dataset"
     
-    id = Column(BigInteger, primary_key=True)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     question_embedding = Column(String(100))  # VECF32(16) - using String as placeholder
     question = Column(String(255))
     type = Column(String(255))
@@ -91,53 +91,22 @@ class TestORMAdvancedFeatures:
             test_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
             test_client.execute(f"USE {test_db}")
             
-            # Create test tables
-            test_client.execute("""
-                CREATE TABLE IF NOT EXISTS test_users_advanced (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    email VARCHAR(100),
-                    age INT,
-                    department_id INT,
-                    salary DECIMAL(10,2)
-                )
-            """)
+            # Create test tables using ORM
+            test_client.create_all(Base)
             
-            test_client.execute("""
-                CREATE TABLE IF NOT EXISTS test_departments_advanced (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    budget DECIMAL(10,2)
-                )
-            """)
+            # Enable experimental IVF index feature using interface
+            test_client.vector_index.enable_ivf()
             
-            test_client.execute("""
-                CREATE TABLE IF NOT EXISTS test_products_advanced (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    price DECIMAL(10,2),
-                    category VARCHAR(50),
-                    quantity INT
+            # Create vector index for AIDataset table using interface
+            try:
+                test_client.vector_index.create_ivf(
+                    table_name="test_ai_dataset",
+                    name="q_v_idx",
+                    column="question_embedding",
+                    lists=256
                 )
-            """)
-            
-            # Enable experimental IVF index feature
-            test_client.execute("SET experimental_ivf_index = 1")
-            
-            test_client.execute("""
-                CREATE TABLE IF NOT EXISTS test_ai_dataset (
-                    id BIGINT NOT NULL AUTO_INCREMENT,
-                    question_embedding VECF32(16) DEFAULT NULL,
-                    question VARCHAR(255) DEFAULT NULL,
-                    type VARCHAR(255) DEFAULT NULL,
-                    output_result TEXT DEFAULT NULL,
-                    status INT DEFAULT NULL COMMENT '是否在启用状态：1 是，0 否',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
-                    PRIMARY KEY (id),
-                    KEY q_v_idx USING ivfflat (question_embedding) lists = 256 op_type 'vector_l2_ops'
-                )
-            """)
+            except Exception as e:
+                print(f"Warning: Failed to create vector index: {e}")
             
             # Insert test data
             test_client.execute("""
@@ -176,9 +145,9 @@ class TestORMAdvancedFeatures:
             yield test_db
             
         finally:
-            # Clean up
+            # Clean up using ORM
             try:
-                test_client.execute("DROP TABLE IF EXISTS test_ai_dataset")
+                test_client.drop_all(Base)
                 test_client.execute(f"DROP DATABASE IF EXISTS {test_db}")
             except Exception as e:
                 print(f"Cleanup failed: {e}")

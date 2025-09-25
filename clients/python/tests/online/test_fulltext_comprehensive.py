@@ -27,8 +27,8 @@ class TestFulltextComprehensive:
 
     def test_fulltext_search_basic(self, test_client):
         """Test basic fulltext search functionality"""
-        # Enable fulltext index functionality
-        test_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext index functionality using interface
+        test_client.fulltext_index.enable_fulltext()
         
         # Create test table
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_search_test")
@@ -84,8 +84,8 @@ class TestFulltextComprehensive:
 
     def test_fulltext_search_in_transaction_sync(self, test_client):
         """Test synchronous fulltext search in transaction"""
-        # Enable fulltext indexing
-        test_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        test_client.fulltext_index.enable_fulltext()
         
         # Create test database and table
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_tx_test")
@@ -144,8 +144,8 @@ class TestFulltextComprehensive:
     @pytest.mark.asyncio
     async def test_fulltext_search_async(self, test_async_client):
         """Test asynchronous fulltext search functionality"""
-        # Enable fulltext indexing
-        await test_async_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        await test_async_client.fulltext_index.enable_fulltext()
         
         # Create test table
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_fulltext_test")
@@ -202,8 +202,8 @@ class TestFulltextComprehensive:
     @pytest.mark.asyncio
     async def test_fulltext_search_in_transaction_async(self, test_async_client):
         """Test asynchronous fulltext search in transaction"""
-        # Enable fulltext indexing
-        await test_async_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        await test_async_client.fulltext_index.enable_fulltext()
         
         # Create test database and table
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_fulltext_tx_test")
@@ -266,8 +266,8 @@ class TestFulltextComprehensive:
     @pytest.fixture(scope="function")
     def test_table(self, test_client):
         """Create test table for fulltext tests"""
-        # Enable fulltext indexing
-        test_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        test_client.fulltext_index.enable_fulltext()
         
         # Create test table
         test_client.execute("""
@@ -309,8 +309,8 @@ class TestFulltextComprehensive:
     @pytest.mark.asyncio
     async def test_create_fulltext_index_async(self, test_async_client):
         """Test creating fulltext index asynchronously"""
-        # Enable fulltext indexing
-        await test_async_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        await test_async_client.fulltext_index.enable_fulltext()
         
         # Create test table
         await test_async_client.execute("""
@@ -369,8 +369,8 @@ class TestFulltextComprehensive:
     @pytest.mark.asyncio
     async def test_drop_fulltext_index_async(self, test_async_client):
         """Test dropping fulltext index asynchronously"""
-        # Enable fulltext indexing
-        await test_async_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        await test_async_client.fulltext_index.enable_fulltext()
         
         # Create test table
         await test_async_client.execute("""
@@ -411,8 +411,8 @@ class TestFulltextComprehensive:
 
     def test_fulltext_search_with_manual_transaction(self, test_client):
         """Test fulltext search in transaction using manual transaction context"""
-        # Enable fulltext indexing
-        test_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        test_client.fulltext_index.enable_fulltext()
         
         # Create test database and table
         test_client.execute("CREATE DATABASE IF NOT EXISTS manual_fulltext_tx_test")
@@ -470,8 +470,8 @@ class TestFulltextComprehensive:
     @pytest.mark.asyncio
     async def test_fulltext_search_with_manual_async_transaction(self, test_async_client):
         """Test fulltext search in transaction using manual async transaction context"""
-        # Enable fulltext indexing
-        await test_async_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        await test_async_client.fulltext_index.enable_fulltext()
         
         # Create test database and table
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS manual_async_fulltext_tx_test")
@@ -532,8 +532,8 @@ class TestFulltextComprehensive:
 
     def test_fulltext_search_with_different_modes(self, test_client):
         """Test fulltext search with different search modes"""
-        # Enable fulltext indexing
-        test_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        test_client.fulltext_index.enable_fulltext()
         
         # Create test database and table
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_modes_test")
@@ -585,8 +585,8 @@ class TestFulltextComprehensive:
 
     def test_fulltext_search_multiple_columns(self, test_client):
         """Test fulltext search across multiple columns"""
-        # Enable fulltext indexing
-        test_client.execute("SET experimental_fulltext_index = 1")
+        # Enable fulltext indexing using interface
+        test_client.fulltext_index.enable_fulltext()
         
         # Create test database and table
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_multi_col_test")

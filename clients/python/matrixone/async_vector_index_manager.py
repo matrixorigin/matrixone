@@ -43,7 +43,7 @@ class AsyncVectorIndexManager:
             sql = index.create_sql(table_name)
 
             async with self.client._engine.begin() as conn:
-                # Enable IVF indexing
+                # Enable IVF indexing in the same connection
                 await conn.execute(text("SET experimental_ivf_index = 1"))
                 await conn.execute(text("SET probe_limit = 1"))
                 await conn.execute(text(sql))
@@ -87,7 +87,7 @@ class AsyncVectorIndexManager:
             sql = index.create_sql(table_name)
 
             async with self.client._engine.begin() as conn:
-                # Enable HNSW indexing
+                # Enable HNSW indexing in the same connection
                 await conn.execute(text("SET experimental_hnsw_index = 1"))
                 await conn.execute(text(sql))
             return self

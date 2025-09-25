@@ -68,16 +68,15 @@ def main():
         print("✓ Created table")
         
         # Enable HNSW indexing and create index separately
-        engine = client.get_sqlalchemy_engine()
-        with engine.begin() as conn:
-            conn.execute(text("SET experimental_hnsw_index = 1"))
-            
-            # Create HNSW index using specialized class
-            hnsw_index = HnswVectorIndex('idx_hnsw', 'b', 
-                                       m=48, ef_construction=64, ef_search=64, 
-                                       op_type=VectorOpType.VECTOR_L2_OPS)
-            sql = hnsw_index.create_sql('vector_docs_hnsw_demo')
-            conn.execute(text(sql))
+        # Enable HNSW indexing using interface
+        client.vector_index.enable_hnsw()
+        
+        # Create HNSW index using specialized class
+        hnsw_index = HnswVectorIndex('idx_hnsw', 'b', 
+                                   m=48, ef_construction=64, ef_search=64, 
+                                   op_type=VectorOpType.VECTOR_L2_OPS)
+        sql = hnsw_index.create_sql('vector_docs_hnsw_demo')
+        client.execute(sql)
         
         print("✓ Created HNSW index using specialized HnswVectorIndex class")
         
@@ -123,10 +122,9 @@ def main():
         
         # Create HNSW index using CREATE INDEX statement in the same session
         engine = client.get_sqlalchemy_engine()
-        with engine.begin() as conn:
-            # Enable HNSW indexing in this session
-            conn.execute(text("SET experimental_hnsw_index = 1"))
-            print("✓ HNSW indexing enabled in session")
+        # Enable HNSW indexing using interface
+        client.vector_index.enable_hnsw()
+        print("✓ HNSW indexing enabled using interface")
         
         # Create HNSW index using CREATE INDEX statement
         client.vector_index.create_hnsw(
@@ -316,10 +314,9 @@ def main():
         
         for config in configs:
             try:
-                with engine.begin() as conn:
-                    # Enable HNSW indexing in this session
-                    conn.execute(text("SET experimental_hnsw_index = 1"))
-                    print("✓ HNSW indexing enabled in session")
+                # Enable HNSW indexing using interface
+                client.vector_index.enable_hnsw()
+                print("✓ HNSW indexing enabled using interface")
                     
                     # Create table for this configuration using client interface in transaction
                     client.create_table_in_transaction(config["table"], {
@@ -430,9 +427,9 @@ def main():
                 print("✓ Inserted data within transaction")
                 
                 # Create HNSW index within transaction
-                # Enable HNSW indexing using transaction wrapper (not separate connection)
-                tx.execute("SET experimental_hnsw_index = 1")
-                print("✓ Enabled HNSW indexing in transaction")
+                # Enable HNSW indexing using interface
+                client.vector_index.enable_hnsw()
+                print("✓ Enabled HNSW indexing using interface")
                 
                 # Create index using transaction wrapper
                 tx.vector_index.create_hnsw(
