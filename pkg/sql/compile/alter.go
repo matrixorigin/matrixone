@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -192,26 +191,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// 7.1 delete all index objects of the table in mo_catalog.mo_indexes
-	if qry.Database != catalog.MO_CATALOG && qry.TableDef.Name != catalog.MO_INDEXES {
-		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
-			deleteSql := fmt.Sprintf(
-				deleteMoIndexesWithTableIdFormat,
-				qry.GetTableDef().TblId,
-			)
-			err = c.runSql(deleteSql)
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "delete all index meta data of origin table in `mo_indexes` for alter table",
-					zap.String("databaseName", dbName),
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("delete all index sql", deleteSql),
-					zap.Error(err))
-
-				return err
-			}
-		}
-	}
-
 	newId := newRel.GetTableID(c.proc.Ctx)
 	//-------------------------------------------------------------------------
 	// 8. rename temporary replica table into the original table(Table Id remains unchanged)
@@ -234,50 +213,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.String("copy table name", qry.CopyTableDef.Name),
 			zap.Error(err))
 		return err
-	}
-	//--------------------------------------------------------------------------------------------------------------
-	{
-		// 9. invoke reindex for the new table, if it contains ivf index.
-		multiTableIndexes := make(map[string]*MultiTableIndex)
-		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
-		extra := newRel.GetExtraInfo()
-		id := newRel.GetTableID(c.proc.Ctx)
-
-		for _, indexDef := range newTableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
-				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
-				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
-					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
-						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
-						IndexDefs: make(map[string]*plan.IndexDef),
-					}
-				}
-				ty := catalog.ToLower(indexDef.IndexAlgoTableType)
-				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
-			}
-		}
-		for _, multiTableIndex := range multiTableIndexes {
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
-				)
-			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
-				)
-			}
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("copy table name", qry.CopyTableDef.Name),
-					zap.String("indexAlgo", multiTableIndex.IndexAlgo),
-					zap.Error(err))
-				return err
-			}
-		}
 	}
 
 	// get and update the change mapping information of table colIds
