@@ -53,13 +53,13 @@ func FilterSortedMetaFilesByTimestamp(
 		return nil
 	}
 
-	prev := files[0]
+	prevFile := files[0]
 
 	// start.IsEmpty() means the file is a global checkpoint
-	// ts.LE(&prev.end) means the ts is in the range of the checkpoint
+	// ts.LE(&prevFile.end) means the ts is in the range of the checkpoint
 	// it means the ts is in the range of the global checkpoint
 	// ts is within GCKP[0, end]
-	if prev.GetStart().IsEmpty() && ts.LE(prev.GetEnd()) {
+	if prevFile.GetStart().IsEmpty() && ts.LE(prevFile.GetEnd()) {
 		return files[:1]
 	}
 
@@ -67,7 +67,7 @@ func FilterSortedMetaFilesByTimestamp(
 		curr := files[i]
 		// curr.start.IsEmpty() means the file is a global checkpoint
 		// ts.LE(&curr.end) means the ts is in the range of the checkpoint
-		// ts.LT(&prev.end) means the ts is not in the range of the previous checkpoint
+		// ts.LT(&prevFile.end) means the ts is not in the range of the previous checkpoint
 		if curr.GetStart().IsEmpty() && ts.LE(curr.GetEnd()) {
 			return files[:i]
 		}
