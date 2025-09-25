@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """
 Example 21: Advanced ORM Features
-Demonstrates join, func, group_by, having, and other advanced SQLAlchemy-style features
+Demonstrates join, SQLAlchemy func, group_by, having, and other advanced SQLAlchemy-style features
+
+Note: This example uses SQLAlchemy's func module for aggregate functions like COUNT, SUM, AVG, etc.
+This provides better integration and type safety compared to custom implementations.
 """
 
 import asyncio
 import logging
+import sys
+import os
 from datetime import datetime
 
+# Add the matrixone module to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from matrixone import Client, AsyncClient, SnapshotLevel
-from matrixone.orm import Column, Model, func
+from matrixone.orm import Column, Model
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
+from sqlalchemy import func
 
 # Create MatrixOne logger for all logging
 logger = create_default_logger(
@@ -78,9 +87,10 @@ def demo_sync_advanced_orm():
         client.execute(f"CREATE DATABASE IF NOT EXISTS {demo_db}")
         client.execute(f"USE {demo_db}")
         
-        # Create tables
+        # Drop and recreate tables to ensure correct data types
+        client.execute("DROP TABLE IF EXISTS demo_users_advanced")
         client.execute("""
-            CREATE TABLE IF NOT EXISTS demo_users_advanced (
+            CREATE TABLE demo_users_advanced (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
                 email VARCHAR(100),
@@ -90,8 +100,9 @@ def demo_sync_advanced_orm():
             )
         """)
         
+        client.execute("DROP TABLE IF EXISTS demo_departments_advanced")
         client.execute("""
-            CREATE TABLE IF NOT EXISTS demo_departments_advanced (
+            CREATE TABLE demo_departments_advanced (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
                 budget DECIMAL(10,2),
@@ -99,8 +110,9 @@ def demo_sync_advanced_orm():
             )
         """)
         
+        client.execute("DROP TABLE IF EXISTS demo_products_advanced")
         client.execute("""
-            CREATE TABLE IF NOT EXISTS demo_products_advanced (
+            CREATE TABLE demo_products_advanced (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
                 price DECIMAL(10,2),
@@ -153,14 +165,14 @@ def demo_sync_advanced_orm():
         # Count total users
         count_query = client.query(User).select(func.count("id"))
         count_result = count_query.all()
-        total_users = count_result[0].COUNT_id if count_result else 0
+        total_users = count_result[0].count if count_result else 0
         logger.info(f"Total users: {total_users}")
         
         # Average salary
         avg_query = client.query(User).select(func.avg("salary"))
         avg_result = avg_query.all()
-        if avg_result and avg_result[0].AVG_salary:
-            avg_salary = avg_result[0].AVG_salary
+        if avg_result and avg_result[0].avg:
+            avg_salary = avg_result[0].avg
             logger.info(f"Average salary: ${avg_salary:.2f}")
         else:
             logger.info("No salary data")
@@ -170,25 +182,25 @@ def demo_sync_advanced_orm():
         
         # Group users by department
         dept_query = (client.query(User)
-                     .select("department_id", func.count("id") + " as user_count")
+                     .select("department_id", func.count("id"))
                      .group_by("department_id"))
         dept_results = dept_query.all()
         logger.info("Users per department:")
         for result in dept_results:
-            logger.info(f"  Department {result.department_id}: {result.user_count} users")
+            logger.info(f"  Department {result.department_id}: {result.count} users")
         
         # 4. HAVING clause
         logger.info("4. HAVING clause")
         
         # Find departments with more than 1 user
         having_query = (client.query(User)
-                       .select("department_id", func.count("id") + " as user_count")
+                       .select("department_id", func.count("id"))
                        .group_by("department_id")
                        .having("COUNT(id) > ?", 1))
         having_results = having_query.all()
         logger.info("Departments with more than 1 user:")
         for result in having_results:
-            logger.info(f"  Department {result.department_id}: {result.user_count} users")
+            logger.info(f"  Department {result.department_id}: {result.count} users")
         
         # 5. Complex queries with multiple features
         logger.info("5. Complex queries with multiple features")
@@ -196,15 +208,15 @@ def demo_sync_advanced_orm():
         # Find high-earning users by department
         complex_query = (client.query(User)
                         .select("department_id", 
-                               func.avg("salary") + " as avg_salary",
-                               func.count("id") + " as user_count")
+                               func.avg("salary"),
+                               func.count("id"))
                         .group_by("department_id")
                         .having("AVG(salary) > ?", 70000)
-                        .order_by("avg_salary DESC"))
+                        .order_by("avg(salary) DESC"))
         complex_results = complex_query.all()
         logger.info("High-earning departments (avg salary > $70k):")
         for result in complex_results:
-            logger.info(f"  Department {result.department_id}: ${result.avg_salary:.2f} avg salary, {result.user_count} users")
+            logger.info(f"  Department {result.department_id}: ${result.avg:.2f} avg salary, {result.count} users")
         
         # 6. Product analysis
         logger.info("6. Product analysis")
@@ -212,15 +224,15 @@ def demo_sync_advanced_orm():
         # Products by category with statistics
         product_query = (client.query(Product)
                         .select("category",
-                               func.count("id") + " as product_count",
-                               func.avg("price") + " as avg_price",
-                               func.sum("quantity") + " as total_quantity")
+                               func.count("id"),
+                               func.avg("price"),
+                               func.sum("quantity"))
                         .group_by("category")
-                        .order_by("avg_price DESC"))
+                        .order_by("avg(price) DESC"))
         product_results = product_query.all()
         logger.info("Products by category:")
         for result in product_results:
-            logger.info(f"  {result.category}: {result.product_count} products, ${result.avg_price:.2f} avg price, {result.total_quantity} total quantity")
+            logger.info(f"  {result.category}: {result.count} products, ${result.avg:.2f} avg price, {result.sum} total quantity")
         
         # 7. Using DISTINCT
         logger.info("7. Using DISTINCT")
@@ -237,13 +249,13 @@ def demo_sync_advanced_orm():
         
         # Price range for products
         price_range_query = (client.query(Product)
-                            .select(func.min("price") + " as min_price",
-                                   func.max("price") + " as max_price",
-                                   func.avg("price") + " as avg_price"))
+                            .select(func.min("price"),
+                                   func.max("price"),
+                                   func.avg("price")))
         price_range_result = price_range_query.all()
         if price_range_result:
             result = price_range_result[0]
-            logger.info(f"Product price range: ${result.min_price:.2f} - ${result.max_price:.2f} (avg: ${result.avg_price:.2f})")
+            logger.info(f"Product price range: ${result.min:.2f} - ${result.max:.2f} (avg: ${result.avg:.2f})")
         
         logger.info("✅ Advanced ORM features demo completed successfully")
         
@@ -276,9 +288,10 @@ async def demo_async_advanced_orm():
         await client.execute(f"CREATE DATABASE IF NOT EXISTS {demo_db}")
         await client.execute(f"USE {demo_db}")
         
-        # Create tables (same as sync version)
+        # Drop and recreate tables (same as sync version)
+        await client.execute("DROP TABLE IF EXISTS demo_users_advanced")
         await client.execute("""
-            CREATE TABLE IF NOT EXISTS demo_users_advanced (
+            CREATE TABLE demo_users_advanced (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
                 email VARCHAR(100),
@@ -288,8 +301,9 @@ async def demo_async_advanced_orm():
             )
         """)
         
+        await client.execute("DROP TABLE IF EXISTS demo_products_advanced")
         await client.execute("""
-            CREATE TABLE IF NOT EXISTS demo_products_advanced (
+            CREATE TABLE demo_products_advanced (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
                 price DECIMAL(10,2),
@@ -321,26 +335,26 @@ async def demo_async_advanced_orm():
         # Count users
         count_query = client.query(User).select(func.count("id"))
         count_result = await count_query.all()
-        total_users = count_result[0].COUNT_id if count_result else 0
+        total_users = count_result[0].count if count_result else 0
         logger.info(f"Total async users: {total_users}")
         
         # Average salary
         avg_query = client.query(User).select(func.avg("salary"))
         avg_result = await avg_query.all()
-        if avg_result and avg_result[0].AVG_salary:
-            avg_salary = avg_result[0].AVG_salary
+        if avg_result and avg_result[0].avg:
+            avg_salary = avg_result[0].avg
             logger.info(f"Average async salary: ${avg_salary:.2f}")
         else:
             logger.info("No async salary data")
         
         # Group by department
         dept_query = (client.query(User)
-                     .select("department_id", func.count("id") + " as user_count")
+                     .select("department_id", func.count("id"))
                      .group_by("department_id"))
         dept_results = await dept_query.all()
         logger.info("Async users per department:")
         for result in dept_results:
-            logger.info(f"  Department {result.department_id}: {result.user_count} users")
+            logger.info(f"  Department {result.department_id}: {result.count} users")
         
         logger.info("✅ Async advanced ORM features demo completed successfully")
         

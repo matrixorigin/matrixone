@@ -11,7 +11,8 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
-from matrixone.orm import Model, Column, func
+from matrixone.orm import Model, Column
+from sqlalchemy import func
 from .test_config import online_config
 
 
@@ -170,7 +171,7 @@ class TestORMAdvancedFeatures:
         # Group products by category
         query = test_client.query(Product).select(
             "category", 
-            func.count("id").replace("COUNT(id)", "COUNT(*)") + " as product_count"
+            func.count("id")
         ).group_by("category")
         
         # This will test the SQL generation, though execution may need adjustment
@@ -183,53 +184,53 @@ class TestORMAdvancedFeatures:
         # Find categories with more than 1 product
         query = test_client.query(Product).select(
             "category",
-            func.count("id").replace("COUNT(id)", "COUNT(*)") + " as product_count"
-        ).group_by("category").having("COUNT(*) > ?", 1)
+            func.count("id")
+        ).group_by("category").having("COUNT(id) > ?", 1)
         
         sql, params = query._build_sql()
         assert "HAVING" in sql
-        assert "COUNT(*) > 1" in sql
+        assert "COUNT(id) > 1" in sql
     
     def test_aggregate_functions(self, test_client, test_database):
         """Test aggregate functions"""
         # Test COUNT
         count_query = test_client.query(User).select(func.count("id"))
         sql, params = count_query._build_sql()
-        assert "COUNT(id)" in sql
+        assert "count(id)" in sql.lower()
         
         # Test SUM
         sum_query = test_client.query(Product).select(func.sum("price"))
         sql, params = sum_query._build_sql()
-        assert "SUM(price)" in sql
+        assert "sum(price)" in sql.lower()
         
         # Test AVG
         avg_query = test_client.query(User).select(func.avg("age"))
         sql, params = avg_query._build_sql()
-        assert "AVG(age)" in sql
+        assert "avg(age)" in sql.lower()
         
         # Test MIN
         min_query = test_client.query(Product).select(func.min("price"))
         sql, params = min_query._build_sql()
-        assert "MIN(price)" in sql
+        assert "min(price)" in sql.lower()
         
         # Test MAX
         max_query = test_client.query(Product).select(func.max("price"))
         sql, params = max_query._build_sql()
-        assert "MAX(price)" in sql
+        assert "max(price)" in sql.lower()
     
     def test_complex_query_combination(self, test_client, test_database):
         """Test complex query with multiple features combined"""
         # Complex query: Find departments with average age > 30
         query = (test_client.query(User)
-                .select("department_id", func.avg("age") + " as avg_age")
+                .select("department_id", func.avg("age"))
                 .group_by("department_id")
                 .having("AVG(age) > ?", 30)
-                .order_by("avg_age DESC")
+                .order_by("avg(age) DESC")
                 .limit(5))
         
         sql, params = query._build_sql()
         assert "SELECT" in sql
-        assert "AVG(age)" in sql
+        assert "avg(age)" in sql.lower()
         assert "GROUP BY" in sql
         assert "HAVING" in sql
         assert "ORDER BY" in sql
@@ -237,13 +238,16 @@ class TestORMAdvancedFeatures:
     
     def test_func_class_methods(self):
         """Test func class methods"""
-        # Test all func methods
-        assert func.count("id") == "COUNT(id)"
-        assert func.sum("price") == "SUM(price)"
-        assert func.avg("age") == "AVG(age)"
-        assert func.min("price") == "MIN(price)"
-        assert func.max("price") == "MAX(price)"
-        assert func.distinct("category") == "DISTINCT category"
+        # Test that func methods return SQLAlchemy function objects
+        from sqlalchemy.sql import functions
+        
+        # Test all func methods return proper SQLAlchemy function objects
+        assert hasattr(func.count("id"), 'compile')
+        assert hasattr(func.sum("price"), 'compile')
+        assert hasattr(func.avg("age"), 'compile')
+        assert hasattr(func.min("price"), 'compile')
+        assert hasattr(func.max("price"), 'compile')
+        assert hasattr(func.distinct("category"), 'compile')
     
     def test_sql_generation(self, test_client, test_database):
         """Test SQL generation for various query combinations"""
@@ -255,8 +259,8 @@ class TestORMAdvancedFeatures:
         # Test select with functions
         query2 = test_client.query(User).select(func.count("id"), func.avg("age"))
         sql2, _ = query2._build_sql()
-        assert "COUNT(id)" in sql2
-        assert "AVG(age)" in sql2
+        assert "count(id)" in sql2.lower()
+        assert "avg(age)" in sql2.lower()
         
         # Test with joins
         query3 = (test_client.query(User)
@@ -273,6 +277,152 @@ class TestORMAdvancedFeatures:
         sql4, _ = query4._build_sql()
         assert "GROUP BY" in sql4
         assert "HAVING" in sql4
+
+    def test_sqlalchemy_label_support(self, test_client, test_database):
+        """Test SQLAlchemy label() method support for aliases"""
+        # Test single function with label
+        query1 = test_client.query(User).select(func.count("id").label("user_count"))
+        sql1, _ = query1._build_sql()
+        assert "count(id) as user_count" in sql1.lower()
+        
+        # Execute the query and verify the result can be accessed by label name
+        result1 = query1.all()
+        assert hasattr(result1[0], 'user_count')
+        assert result1[0].user_count == 5
+        
+        # Test multiple functions with labels
+        query2 = test_client.query(User).select(
+            func.count("id").label("total_users"),
+            func.avg("age").label("avg_age")
+        )
+        sql2, _ = query2._build_sql()
+        assert "count(id) as total_users" in sql2.lower()
+        assert "avg(age) as avg_age" in sql2.lower()
+        
+        # Execute the query and verify results
+        result2 = query2.all()
+        assert hasattr(result2[0], 'total_users')
+        assert hasattr(result2[0], 'avg_age')
+        assert result2[0].total_users == 5
+        
+        # Test with GROUP BY and labels
+        query3 = test_client.query(User).select(
+            "department_id",
+            func.count("id").label("dept_user_count")
+        ).group_by("department_id")
+        sql3, _ = query3._build_sql()
+        assert "count(id) as dept_user_count" in sql3.lower()
+        assert "GROUP BY" in sql3
+        
+        # Execute the query and verify results
+        result3 = query3.all()
+        assert len(result3) > 0
+        for row in result3:
+            assert hasattr(row, 'dept_user_count')
+            assert hasattr(row, 'department_id')
+            assert row.dept_user_count > 0
+
+    def test_string_alias_support(self, test_client, test_database):
+        """Test string alias support for aggregate functions"""
+        # Test single function with string alias
+        query1 = test_client.query(User).select("COUNT(id) AS user_count")
+        sql1, _ = query1._build_sql()
+        assert "COUNT(id) AS user_count" in sql1
+        
+        # Execute the query and verify the result can be accessed by alias name
+        result1 = query1.all()
+        assert hasattr(result1[0], 'user_count')
+        assert result1[0].user_count == 5
+        
+        # Test multiple functions with string aliases
+        query2 = test_client.query(User).select(
+            "COUNT(id) AS total_users",
+            "AVG(age) AS avg_age"
+        )
+        sql2, _ = query2._build_sql()
+        assert "COUNT(id) AS total_users" in sql2
+        assert "AVG(age) AS avg_age" in sql2
+        
+        # Execute the query and verify results
+        result2 = query2.all()
+        assert hasattr(result2[0], 'total_users')
+        assert hasattr(result2[0], 'avg_age')
+        assert result2[0].total_users == 5
+
+    def test_mixed_alias_support(self, test_client, test_database):
+        """Test mixing SQLAlchemy label() and string aliases"""
+        # Test mixing different alias methods
+        query = test_client.query(User).select(
+            func.count("id").label("sqlalchemy_count"),
+            "COUNT(age) AS string_count"
+        )
+        sql, _ = query._build_sql()
+        assert "count(id) as sqlalchemy_count" in sql.lower()
+        assert "COUNT(age) AS string_count" in sql
+        
+        # Execute the query and verify results
+        result = query.all()
+        assert hasattr(result[0], 'sqlalchemy_count')
+        assert hasattr(result[0], 'string_count')
+        assert result[0].sqlalchemy_count == 5
+        assert result[0].string_count == 5
+
+    def test_complex_alias_queries(self, test_client, test_database):
+        """Test complex queries with aliases and other features"""
+        # Test complex query with labels, GROUP BY, and HAVING
+        query = (test_client.query(User)
+                .select(
+                    "department_id",
+                    func.count("id").label("user_count"),
+                    func.avg("age").label("avg_age")
+                )
+                .group_by("department_id")
+                .having("COUNT(id) > ?", 1)
+                .order_by("user_count DESC"))
+        
+        sql, _ = query._build_sql()
+        assert "count(id) as user_count" in sql.lower()
+        assert "avg(age) as avg_age" in sql.lower()
+        assert "GROUP BY" in sql
+        assert "HAVING" in sql
+        assert "ORDER BY" in sql
+        
+        # Execute the query and verify results
+        result = query.all()
+        assert len(result) > 0
+        for row in result:
+            assert hasattr(row, 'user_count')
+            assert hasattr(row, 'avg_age')
+            assert hasattr(row, 'department_id')
+            assert row.user_count > 1  # Due to HAVING clause
+
+    def test_product_alias_queries(self, test_client, test_database):
+        """Test product-related queries with aliases"""
+        # Test product statistics with labels
+        query = test_client.query(Product).select(
+            "category",
+            func.count("id").label("product_count"),
+            func.avg("price").label("avg_price"),
+            func.sum("quantity").label("total_quantity")
+        ).group_by("category")
+        
+        sql, _ = query._build_sql()
+        assert "count(id) as product_count" in sql.lower()
+        assert "avg(price) as avg_price" in sql.lower()
+        assert "sum(quantity) as total_quantity" in sql.lower()
+        assert "GROUP BY" in sql
+        
+        # Execute the query and verify results
+        result = query.all()
+        assert len(result) > 0
+        for row in result:
+            assert hasattr(row, 'product_count')
+            assert hasattr(row, 'avg_price')
+            assert hasattr(row, 'total_quantity')
+            assert hasattr(row, 'category')
+            assert row.product_count > 0
+            assert row.avg_price > 0
+            assert row.total_quantity > 0
 
 
 if __name__ == "__main__":

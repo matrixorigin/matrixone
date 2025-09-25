@@ -1,5 +1,15 @@
 """
 MatrixOne ORM - SQLAlchemy-like interface for MatrixOne database
+
+This module provides a SQLAlchemy-compatible ORM interface for MatrixOne.
+It supports both custom MatrixOne models and full SQLAlchemy integration.
+
+For aggregate functions (COUNT, SUM, AVG, etc.), we recommend using SQLAlchemy's func module:
+    from sqlalchemy import func
+    query.select(func.count("id"))
+    query.select(func.sum("amount"))
+
+This provides better type safety and integration with SQLAlchemy.
 """
 
 import logging
@@ -11,38 +21,21 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-class func:
-    """SQL function helper class - SQLAlchemy style"""
-
-    @staticmethod
-    def count(column):
-        """COUNT function"""
-        return f"COUNT({column})"
-
-    @staticmethod
-    def sum(column):
-        """SUM function"""
-        return f"SUM({column})"
-
-    @staticmethod
-    def avg(column):
-        """AVG function"""
-        return f"AVG({column})"
-
-    @staticmethod
-    def min(column):
-        """MIN function"""
-        return f"MIN({column})"
-
-    @staticmethod
-    def max(column):
-        """MAX function"""
-        return f"MAX({column})"
-
-    @staticmethod
-    def distinct(column):
-        """DISTINCT function"""
-        return f"DISTINCT {column}"
+# For SQL functions, we recommend using SQLAlchemy's func module for better integration:
+#
+# from sqlalchemy import func
+#
+# # For SQLAlchemy models:
+# query.select(func.count(User.id))
+# query.select(func.sum(Order.amount))
+# query.select(func.avg(Product.price))
+#
+# # For MatrixOne models, you can use string column names:
+# query.select(func.count("id"))
+# query.select(func.sum("amount"))
+# query.select(func.avg("price"))
+#
+# This provides better type safety, SQL generation, and integration with SQLAlchemy.
 
 
 @dataclass
@@ -534,7 +527,28 @@ class BaseMatrixOneQuery:
 
         # Build SELECT clause
         if self._select_columns:
-            select_clause = "SELECT " + ", ".join(self._select_columns)
+            # Convert SQLAlchemy function objects to strings
+            select_parts = []
+            for col in self._select_columns:
+                if hasattr(col, "compile"):  # SQLAlchemy function object
+                    # Compile the function to SQL string
+                    compiled = col.compile(compile_kwargs={"literal_binds": True})
+                    sql_str = str(compiled)
+                    # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                    # Convert avg('column') to avg(column)
+                    import re
+
+                    sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+
+                    # Handle SQLAlchemy label() method - add AS alias if present
+                    # But avoid using SQL reserved keywords as aliases
+                    if hasattr(col, "name") and col.name and col.name.upper() not in ["DISTINCT"]:
+                        sql_str = f"{sql_str} AS {col.name}"
+
+                    select_parts.append(sql_str)
+                else:
+                    select_parts.append(str(col))
+            select_clause = "SELECT " + ", ".join(select_parts)
         else:
             select_clause = "SELECT *"
 
@@ -623,22 +637,61 @@ class BaseMatrixOneQuery:
         """Extract column names from select columns"""
         select_cols = []
         for col in self._select_columns:
-            if " as " in col.lower():
-                # Handle "column as alias" syntax
-                select_cols.append(col.split(" as ")[-1].strip())
-            else:
-                # Handle function calls like "COUNT(id)" or "DISTINCT category"
-                if "(" in col and ")" in col:
-                    # Extract the function name and column
-                    func_name = col.split("(")[0].strip()
-                    col_name = col.split("(")[1].split(")")[0].strip()
-                    # Handle special cases
-                    if func_name.upper() == "DISTINCT":
+            # Check if this is a SQLAlchemy function with label
+            if hasattr(col, "compile") and hasattr(col, "name") and col.name:
+                # Special handling for DISTINCT function to avoid reserved keyword issues
+                if hasattr(col, "name") and col.name.upper() == "DISTINCT":
+                    # For DISTINCT functions, use the original logic to extract column name
+                    col_str = str(col.compile(compile_kwargs={"literal_binds": True}))
+                    if "(" in col_str and ")" in col_str:
+                        func_name = col_str.split("(")[0].strip()
+                        col_name = col_str.split("(")[1].split(")")[0].strip()
+                        col_name = col_name.strip("'\"")
                         select_cols.append(f"DISTINCT_{col_name}")
                     else:
-                        select_cols.append(f"{func_name}_{col_name}")
+                        select_cols.append(col.name)
                 else:
-                    select_cols.append(col)
+                    # SQLAlchemy function with label - use the label name
+                    select_cols.append(col.name)
+            else:
+                # Convert SQLAlchemy function objects to strings first
+                if hasattr(col, "compile"):
+                    col_str = str(col.compile(compile_kwargs={"literal_binds": True}))
+                else:
+                    col_str = str(col)
+
+                if " as " in col_str.lower():
+                    # Handle "column as alias" syntax - use case-insensitive split
+                    parts = col_str.lower().split(" as ")
+                    if len(parts) == 2:
+                        # Find the actual alias in the original string
+                        as_index = col_str.lower().find(" as ")
+                        alias = col_str[as_index + 4 :].strip()
+                        # Remove quotes from alias if present
+                        alias = alias.strip("'\"")
+                        select_cols.append(alias)
+                    else:
+                        # Fallback to original logic
+                        alias = col_str.split(" as ")[-1].strip()
+                        alias = alias.strip("'\"")
+                        select_cols.append(alias)
+                else:
+                    # Handle function calls like "COUNT(id)" or "DISTINCT category"
+                    if "(" in col_str and ")" in col_str:
+                        # Extract the function name and column
+                        func_name = col_str.split("(")[0].strip()
+                        col_name = col_str.split("(")[1].split(")")[0].strip()
+                        # Remove quotes from column name
+                        col_name = col_name.strip("'\"")
+                        # Handle special cases
+                        if func_name.upper() == "DISTINCT":
+                            attr_name = f"DISTINCT_{col_name}"
+                        else:
+                            attr_name = f"{func_name.upper()}_{col_name}"
+                        select_cols.append(attr_name)
+                    else:
+                        # For simple column names, use as-is
+                        select_cols.append(col_str)
         return select_cols
 
 
