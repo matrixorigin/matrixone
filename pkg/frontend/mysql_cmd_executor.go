@@ -2388,7 +2388,7 @@ func canExecuteStatementInUncommittedTransaction(
 func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (_ bool, _ time.Duration, _ time.Duration, err error) {
 	var readTime, writeTime time.Duration
 	var payload []byte
-	readStart := time.Now()
+	start := time.Now()
 	defer func() {
 		if err != nil {
 			mysqlRrWr.FreeLoadLocal()
@@ -2404,7 +2404,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 		}
 		return skipWrite, readTime, writeTime, err
 	}
-	readTime = time.Since(readStart)
+	readTime = time.Since(start)
 
 	//empty packet means the file is over.
 	length := len(payload)
