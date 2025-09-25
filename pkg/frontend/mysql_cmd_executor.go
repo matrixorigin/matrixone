@@ -2473,6 +2473,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	var skipWrite bool
 	skipWrite = false
 	var readTime, writeTime time.Duration
+	var retError error
 	start := time.Now()
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
@@ -2481,6 +2482,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
+		retError = err
 	}
 	if readTime > maxReadTime {
 		maxReadTime = readTime
@@ -2505,9 +2507,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
+				if retError != nil {
+					err = retError
+					break
+				}
 				err = nil
 				break
 			}
+			retError = err
 			// Increment consecutive error counter
 			consecutiveErrors++
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
