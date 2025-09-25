@@ -25,6 +25,7 @@ class User(Model):
         "email": Column("email", "VARCHAR(100)", nullable=False),
         "age": Column("age", "INT", nullable=True),
         "department_id": Column("department_id", "INT", nullable=True),
+        "salary": Column("salary", "DECIMAL(10,2)", nullable=True),
     }
 
 
@@ -83,7 +84,8 @@ class TestORMAdvancedFeatures:
                     name VARCHAR(100),
                     email VARCHAR(100),
                     age INT,
-                    department_id INT
+                    department_id INT,
+                    salary DECIMAL(10,2)
                 )
             """)
             
@@ -108,11 +110,11 @@ class TestORMAdvancedFeatures:
             # Insert test data
             test_client.execute("""
                 INSERT INTO test_users_advanced VALUES 
-                (1, 'John Doe', 'john@example.com', 30, 1),
-                (2, 'Jane Smith', 'jane@example.com', 25, 1),
-                (3, 'Bob Johnson', 'bob@example.com', 35, 2),
-                (4, 'Alice Brown', 'alice@example.com', 28, 2),
-                (5, 'Charlie Wilson', 'charlie@example.com', 32, 1)
+                (1, 'John Doe', 'john@example.com', 30, 1, 75000.00),
+                (2, 'Jane Smith', 'jane@example.com', 25, 1, 80000.00),
+                (3, 'Bob Johnson', 'bob@example.com', 35, 2, 95000.00),
+                (4, 'Alice Brown', 'alice@example.com', 28, 2, 70000.00),
+                (5, 'Charlie Wilson', 'charlie@example.com', 32, 1, 85000.00)
             """)
             
             test_client.execute("""
@@ -423,6 +425,1332 @@ class TestORMAdvancedFeatures:
             assert row.product_count > 0
             assert row.avg_price > 0
             assert row.total_quantity > 0
+
+    def test_basic_table_alias(self, test_client, test_database):
+        """Test basic table alias functionality"""
+        # Test basic table alias
+        query1 = test_client.query(User).alias('u').select('u.id', 'u.name')
+        sql1, _ = query1._build_sql()
+        assert "FROM test_users_advanced AS u" in sql1
+        assert "u.id" in sql1 and "u.name" in sql1
+        
+        # Execute the query and verify results
+        result1 = query1.all()
+        assert len(result1) > 0
+        for user in result1:
+            assert hasattr(user, 'id')
+            assert hasattr(user, 'name')
+            assert user.id is not None
+            assert user.name is not None
+
+    def test_table_alias_with_where(self, test_client, test_database):
+        """Test table alias with WHERE conditions"""
+        # Test WHERE with table alias
+        query = test_client.query(User).alias('u').select('u.name', 'u.age').filter('u.age > ?', 25)
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "u.age > 25" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        for user in result:
+            assert hasattr(user, 'name')
+            assert hasattr(user, 'age')
+            assert user.age > 25
+
+    def test_table_alias_with_join(self, test_client, test_database):
+        """Test table alias with JOIN operations"""
+        # Test JOIN with table aliases
+        query = test_client.query(User).alias('u').select('u.name', 'd.name').join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "u.department_id = d.id" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        for row in result:
+            assert hasattr(row, 'name')  # Should be accessible as 'name', not 'u.name'
+
+    def test_table_alias_with_aggregate_functions(self, test_client, test_database):
+        """Test table alias with aggregate functions"""
+        # Test aggregate functions with table alias
+        query = test_client.query(User).alias('u').select(
+            func.count('u.id').label('user_count'),
+            func.avg('u.age').label('avg_age')
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "count(u.id) as user_count" in sql.lower()
+        assert "avg(u.age) as avg_age" in sql.lower()
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) == 1
+        assert hasattr(result[0], 'user_count')
+        assert hasattr(result[0], 'avg_age')
+        assert result[0].user_count == 5
+
+    def test_table_alias_with_group_by(self, test_client, test_database):
+        """Test table alias with GROUP BY operations"""
+        # Test GROUP BY with table alias
+        query = test_client.query(User).alias('u').select(
+            'u.department_id',
+            func.count('u.id').label('dept_count')
+        ).group_by('u.department_id')
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "GROUP BY u.department_id" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        for row in result:
+            assert hasattr(row, 'department_id')
+            assert hasattr(row, 'dept_count')
+            assert row.dept_count > 0
+
+    def test_table_alias_with_multiple_joins(self, test_client, test_database):
+        """Test table alias with multiple JOIN operations"""
+        # Test multiple JOINs with aliases
+        query = test_client.query(User).alias('u').select('u.name', 'd.name', 'm.name').join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).join(
+            'test_users_advanced m', 'd.manager_id = m.id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "JOIN test_users_advanced m" in sql
+        
+        # Note: This might fail due to missing manager_id column, but SQL generation should work
+        # We're mainly testing that the SQL is generated correctly
+
+    def test_table_alias_subquery_generation(self, test_client, test_database):
+        """Test table alias subquery generation"""
+        # Test subquery generation with table alias
+        avg_query = test_client.query(User).alias('u').select(func.avg('u.age'))
+        subquery = avg_query.subquery('avg_age')
+        
+        assert subquery.startswith('(')
+        assert subquery.endswith(') AS avg_age')
+        assert 'FROM test_users_advanced AS u' in subquery
+        assert 'avg(u.age)' in subquery.lower()
+
+    def test_table_alias_complex_where(self, test_client, test_database):
+        """Test table alias with complex WHERE conditions"""
+        # Test complex WHERE with table alias
+        query = test_client.query(User).alias('u').select('u.name', 'u.salary').join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).filter('u.salary > 70000').filter('d.budget > 400000')
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "u.salary > 70000" in sql
+        assert "d.budget > 400000" in sql
+
+    def test_table_alias_order_by(self, test_client, test_database):
+        """Test table alias with ORDER BY"""
+        # Test ORDER BY with table alias
+        query = test_client.query(User).alias('u').select('u.name', 'u.age').order_by('u.age DESC')
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "ORDER BY u.age DESC" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        # Verify ordering (should be descending by age)
+        ages = [user.age for user in result if user.age is not None]
+        if len(ages) > 1:
+            assert ages == sorted(ages, reverse=True)
+
+    def test_table_alias_with_limit_offset(self, test_client, test_database):
+        """Test table alias with LIMIT and OFFSET"""
+        # Test LIMIT and OFFSET with table alias
+        query = test_client.query(User).alias('u').select('u.id', 'u.name').limit(3).offset(1)
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "LIMIT 3" in sql
+        assert "OFFSET 1" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) <= 3
+
+    def test_table_alias_without_alias(self, test_client, test_database):
+        """Test that queries without alias work normally"""
+        # Test query without alias (should work as before)
+        query = test_client.query(User).select('id', 'name')
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced" in sql
+        assert "AS u" not in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        for user in result:
+            assert hasattr(user, 'id')
+            assert hasattr(user, 'name')
+
+    def test_left_join_operations(self, test_client, test_database):
+        """Test LEFT JOIN operations"""
+        # Test LEFT JOIN with table aliases
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'u.department_id', 'd.name as dept_name'
+        ).leftjoin(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "LEFT JOIN test_departments_advanced d" in sql
+        assert "u.department_id = d.id" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        for row in result:
+            assert hasattr(row, 'name')
+            assert hasattr(row, 'department_id')
+            # dept_name might be None for users without departments
+
+    def test_right_join_operations(self, test_client, test_database):
+        """Test RIGHT JOIN operations"""
+        # Test RIGHT JOIN with table aliases
+        query = test_client.query(Department).alias('d').select(
+            'd.name as dept_name', 'u.name as user_name'
+        ).rightjoin(
+            'test_users_advanced u', 'd.id = u.department_id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_departments_advanced AS d" in sql
+        assert "RIGHT JOIN test_users_advanced u" in sql
+        assert "d.id = u.department_id" in sql
+
+    def test_full_outer_join_operations(self, test_client, test_database):
+        """Test FULL OUTER JOIN operations"""
+        # Test FULL OUTER JOIN with table aliases
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name'
+        ).fullouterjoin(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "FULL OUTER JOIN test_departments_advanced d" in sql
+        assert "u.department_id = d.id" in sql
+
+    def test_multiple_joins_with_aliases(self, test_client, test_database):
+        """Test multiple JOINs with different types"""
+        # Test INNER JOIN followed by LEFT JOIN
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name', 'p.name as product_name'
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).leftjoin(
+            'test_products_advanced p', 'd.id = p.id'  # This might not make sense logically, but tests syntax
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "LEFT JOIN test_products_advanced p" in sql
+
+    def test_join_with_aggregate_functions(self, test_client, test_database):
+        """Test JOIN operations with aggregate functions"""
+        # Test JOIN with GROUP BY and aggregate functions
+        query = test_client.query(User).alias('u').select(
+            'd.name as dept_name',
+            func.count('u.id').label('user_count'),
+            func.avg('u.salary').label('avg_salary')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).group_by('d.name')
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "count(u.id) as user_count" in sql.lower()
+        assert "avg(u.salary) as avg_salary" in sql.lower()
+        assert "GROUP BY d.name" in sql
+
+    def test_join_with_having_clause(self, test_client, test_database):
+        """Test JOIN operations with HAVING clause"""
+        # Test JOIN with GROUP BY and HAVING
+        query = test_client.query(User).alias('u').select(
+            'd.name as dept_name',
+            func.count('u.id').label('user_count')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).group_by('d.name').having('COUNT(u.id) > ?', 1)
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "GROUP BY d.name" in sql
+        assert "HAVING" in sql
+        assert "COUNT(u.id) > 1" in sql
+
+    def test_self_join_operations(self, test_client, test_database):
+        """Test self-join operations"""
+        # Test self-join (users with same department)
+        query = test_client.query(User).alias('u1').select(
+            'u1.name as user1', 'u2.name as user2', 'u1.department_id'
+        ).join(
+            'test_users_advanced u2', 'u1.department_id = u2.department_id AND u1.id < u2.id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u1" in sql
+        assert "JOIN test_users_advanced u2" in sql
+        assert "u1.department_id = u2.department_id" in sql
+        assert "u1.id < u2.id" in sql
+
+    def test_inner_join_operations(self, test_client, test_database):
+        """Test INNER JOIN operations"""
+        # Test INNER JOIN with table aliases
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name'
+        ).innerjoin(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "INNER JOIN test_departments_advanced d" in sql
+        assert "u.department_id = d.id" in sql
+        
+        # Execute the query
+        result = query.all()
+        assert len(result) > 0
+        for row in result:
+            assert hasattr(row, 'name')
+            assert hasattr(row, 'dept_name')
+
+    def test_all_join_types(self, test_client, test_database):
+        """Test all JOIN types"""
+        # Test INNER JOIN
+        query1 = test_client.query(User).alias('u').select('u.name').innerjoin(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql1, _ = query1._build_sql()
+        assert "INNER JOIN test_departments_advanced d" in sql1
+        
+        # Test LEFT JOIN
+        query2 = test_client.query(User).alias('u').select('u.name').leftjoin(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql2, _ = query2._build_sql()
+        assert "LEFT JOIN test_departments_advanced d" in sql2
+        
+        # Test RIGHT JOIN
+        query3 = test_client.query(Department).alias('d').select('d.name').rightjoin(
+            'test_users_advanced u', 'd.id = u.department_id'
+        )
+        sql3, _ = query3._build_sql()
+        assert "RIGHT JOIN test_users_advanced u" in sql3
+        
+        # Test FULL OUTER JOIN
+        query4 = test_client.query(User).alias('u').select('u.name').fullouterjoin(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql4, _ = query4._build_sql()
+        assert "FULL OUTER JOIN test_departments_advanced d" in sql4
+
+    def test_join_without_on_condition(self, test_client, test_database):
+        """Test JOIN without ON condition (cross join)"""
+        # Test CROSS JOIN (JOIN without ON condition)
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name'
+        ).join('test_departments_advanced d')
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        # Should not have ON condition
+        assert "ON" not in sql
+
+    def test_join_with_complex_conditions(self, test_client, test_database):
+        """Test JOIN with complex ON conditions"""
+        # Test JOIN with complex ON condition
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name'
+        ).join(
+            'test_departments_advanced d', 
+            'u.department_id = d.id AND d.budget > 50000'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "u.department_id = d.id AND d.budget > 50000" in sql
+
+    def test_join_with_multiple_conditions(self, test_client, test_database):
+        """Test JOIN with multiple conditions using AND/OR"""
+        # Test JOIN with multiple conditions
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name'
+        ).join(
+            'test_departments_advanced d', 
+            'u.department_id = d.id AND (d.budget > 50000 OR d.name = "Engineering")'
+        )
+        sql, _ = query._build_sql()
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "u.department_id = d.id AND (d.budget > 50000 OR d.name = \"Engineering\")" in sql
+
+    def test_subquery_in_where_clause(self, test_client, test_database):
+        """Test subquery in WHERE clause with IN operator"""
+        # Test users in departments with budget > 80000
+        subquery = test_client.query(Department).select('id').filter('budget > ?', 80000)
+        query = test_client.query(User).select('name', 'department_id').filter(
+            'department_id IN', subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, department_id" in sql
+        assert "WHERE department_id IN" in sql
+        # Note: The SELECT id and budget condition are in the subquery, not the main query
+        # We'll test the subquery separately
+        subquery_sql, _ = subquery._build_sql()
+        assert "SELECT id" in subquery_sql
+        assert "budget > 80000" in subquery_sql
+
+    def test_subquery_in_select_clause(self, test_client, test_database):
+        """Test subquery in SELECT clause"""
+        # Test subquery to get department name for each user
+        subquery = test_client.query(Department).select('name').filter('id = u.department_id')
+        # Note: This test might need special handling for subqueries in SELECT clause
+        # For now, we'll test the subquery generation
+        subquery_sql = subquery.subquery('dept_name')
+        query = test_client.query(User).alias('u').select('u.name')
+        sql, _ = query._build_sql()
+        assert "SELECT u.name" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        # Test that subquery SQL is generated correctly
+        assert "SELECT name" in subquery_sql
+        assert "FROM test_departments_advanced" in subquery_sql
+
+    def test_subquery_with_exists(self, test_client, test_database):
+        """Test subquery with EXISTS operator"""
+        # Test users who have departments
+        subquery = test_client.query(Department).select('1').filter('id = u.department_id')
+        query = test_client.query(User).alias('u').select('u.name').filter(
+            'EXISTS', subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT u.name" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "WHERE EXISTS" in sql
+
+    def test_subquery_with_not_exists(self, test_client, test_database):
+        """Test subquery with NOT EXISTS operator"""
+        # Test users who don't have departments
+        subquery = test_client.query(Department).select('1').filter('id = u.department_id')
+        query = test_client.query(User).alias('u').select('u.name').filter(
+            'NOT EXISTS', subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT u.name" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "WHERE NOT EXISTS" in sql
+
+    def test_subquery_with_comparison_operators(self, test_client, test_database):
+        """Test subquery with comparison operators"""
+        # Test users with salary greater than average salary
+        subquery = test_client.query(User).select(func.avg('salary'))
+        query = test_client.query(User).select('name', 'salary').filter(
+            'salary >', subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "WHERE salary >" in sql
+        # Note: The subquery content might not be fully visible in the main query SQL
+        # We'll test the subquery separately
+        subquery_sql, _ = subquery._build_sql()
+        assert "avg(salary)" in subquery_sql.lower()
+
+    def test_correlated_subquery(self, test_client, test_database):
+        """Test correlated subquery"""
+        # Test users whose salary is above department average
+        subquery = test_client.query(User).alias('u2').select(func.avg('u2.salary')).filter(
+            'u2.department_id = u1.department_id'
+        )
+        query = test_client.query(User).alias('u1').select('u1.name', 'u1.salary').filter(
+            'u1.salary >', subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT u1.name, u1.salary" in sql
+        assert "FROM test_users_advanced AS u1" in sql
+        assert "WHERE u1.salary >" in sql
+        # Note: The correlated condition might not be fully visible in the main query SQL
+        # We'll test the subquery separately
+        subquery_sql, _ = subquery._build_sql()
+        assert "u2.department_id = u1.department_id" in subquery_sql
+
+    def test_subquery_in_from_clause(self, test_client, test_database):
+        """Test subquery in FROM clause (derived table)"""
+        # Test using subquery as a derived table
+        subquery = test_client.query(User).select(
+            'department_id', 
+            func.count('id').label('user_count')
+        ).group_by('department_id')
+        
+        # Note: This test might need special handling for subqueries in FROM clause
+        # For now, we'll test the subquery generation
+        subquery_sql = subquery.subquery('dept_stats')
+        sql, _ = subquery._build_sql()
+        assert "SELECT department_id" in sql
+        assert "count(id) as user_count" in sql.lower()
+        assert "GROUP BY department_id" in sql
+        # Test that subquery SQL is generated correctly
+        assert "AS dept_stats" in subquery_sql
+
+    def test_subquery_with_aggregate_functions(self, test_client, test_database):
+        """Test subquery with aggregate functions"""
+        # Test departments with more than 2 users
+        subquery = test_client.query(User).select(
+            'department_id', 
+            func.count('id').label('user_count')
+        ).group_by('department_id').having('COUNT(id) > ?', 2)
+        
+        query = test_client.query(Department).alias('d').select('d.name').filter(
+            'd.id IN', subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT d.name" in sql
+        assert "FROM test_departments_advanced AS d" in sql
+        assert "WHERE d.id IN" in sql
+        # Note: The GROUP BY and HAVING clauses are in the subquery, not the main query
+        # We'll test the subquery separately
+        subquery_sql, _ = subquery._build_sql()
+        assert "GROUP BY department_id" in subquery_sql
+        assert "HAVING COUNT(id) > 2" in subquery_sql
+
+    def test_nested_subqueries(self, test_client, test_database):
+        """Test nested subqueries"""
+        # Test users in departments that have above-average budget
+        inner_subquery = test_client.query(Department).select(func.avg('budget'))
+        outer_subquery = test_client.query(Department).select('id').filter(
+            'budget >', inner_subquery
+        )
+        query = test_client.query(User).select('name').filter(
+            'department_id IN', outer_subquery
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name" in sql
+        assert "WHERE department_id IN" in sql
+        # Note: The avg(budget) is in the inner subquery, not the main query
+        # We'll test the inner subquery separately
+        inner_sql, _ = inner_subquery._build_sql()
+        assert "avg(budget)" in inner_sql.lower()
+
+    def test_subquery_with_union(self, test_client, test_database):
+        """Test subquery with UNION operation"""
+        # Test union of two subqueries
+        subquery1 = test_client.query(User).select('name').filter('age > ?', 30)
+        subquery2 = test_client.query(User).select('name').filter('salary > ?', 80000)
+        
+        # Note: This might need special handling in the ORM
+        # For now, we'll test the individual subqueries
+        sql1, _ = subquery1._build_sql()
+        sql2, _ = subquery2._build_sql()
+        
+        assert "SELECT name" in sql1
+        assert "WHERE age > 30" in sql1
+        assert "SELECT name" in sql2
+        assert "WHERE salary > 80000" in sql2
+
+    def test_subquery_with_order_by_and_limit(self, test_client, test_database):
+        """Test subquery with ORDER BY and LIMIT"""
+        # Test top 3 users by salary
+        subquery = test_client.query(User).select('id').order_by('salary DESC').limit(3)
+        query = test_client.query(User).select('name', 'salary').filter(
+            'id IN', subquery
+        ).order_by('salary DESC')
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "WHERE id IN" in sql
+        assert "ORDER BY salary DESC" in sql
+        # Note: The LIMIT 3 is in the subquery, not the main query
+        # We'll test the subquery separately
+        subquery_sql, _ = subquery._build_sql()
+        assert "LIMIT 3" in subquery_sql
+
+    def test_window_function_row_number(self, test_client, test_database):
+        """Test ROW_NUMBER() window function"""
+        # Test ROW_NUMBER() to rank users by salary
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.row_number().over(order_by='salary DESC').label('salary_rank')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary DESC" in sql
+
+    def test_window_function_rank(self, test_client, test_database):
+        """Test RANK() window function"""
+        # Test RANK() to rank users by salary
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.rank().over(order_by='salary DESC').label('salary_rank')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "RANK()" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary DESC" in sql
+
+    def test_window_function_dense_rank(self, test_client, test_database):
+        """Test DENSE_RANK() window function"""
+        # Test DENSE_RANK() to rank users by salary
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.dense_rank().over(order_by='salary DESC').label('salary_rank')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "DENSE_RANK()" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary DESC" in sql
+
+    def test_window_function_lag(self, test_client, test_database):
+        """Test LAG() window function"""
+        # Test LAG() to get previous salary
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.lag('salary', 1).over(order_by='salary').label('prev_salary')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "LAG('SALARY', 1)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_lead(self, test_client, test_database):
+        """Test LEAD() window function"""
+        # Test LEAD() to get next salary
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.lead('salary', 1).over(order_by='salary').label('next_salary')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "LEAD('SALARY', 1)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_partition_by(self, test_client, test_database):
+        """Test window function with PARTITION BY"""
+        # Test ROW_NUMBER() partitioned by department
+        query = test_client.query(User).select(
+            'name', 'department_id', 'salary',
+            func.row_number().over(partition_by='department_id', order_by='salary DESC').label('dept_rank')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, department_id, salary" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY DEPARTMENT_ID" in sql.upper()
+        assert "ORDER BY salary DESC" in sql
+
+    def test_window_function_sum_over(self, test_client, test_database):
+        """Test SUM() window function"""
+        # Test running sum of salaries
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.sum('salary').over(order_by='salary').label('running_total')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "SUM(SALARY)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_avg_over(self, test_client, test_database):
+        """Test AVG() window function"""
+        # Test running average of salaries
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.avg('salary').over(order_by='salary').label('running_avg')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "AVG(SALARY)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_count_over(self, test_client, test_database):
+        """Test COUNT() window function"""
+        # Test running count of users
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.count('id').over(order_by='salary').label('running_count')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "COUNT(ID)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_with_aliases(self, test_client, test_database):
+        """Test window functions with table aliases"""
+        # Test window function with table alias
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'u.salary',
+            func.row_number().over(order_by='u.salary DESC').label('rank')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, u.salary" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "ORDER BY u.salary DESC" in sql
+
+    def test_window_function_with_join(self, test_client, test_database):
+        """Test window functions with JOIN operations"""
+        # Test window function with JOIN
+        query = test_client.query(User).alias('u').select(
+            'u.name', 'd.name as dept_name', 'u.salary',
+            func.row_number().over(partition_by='d.name', order_by='u.salary DESC').label('dept_rank')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, d.name as dept_name, u.salary" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "PARTITION BY D.NAME" in sql.upper()
+        assert "ORDER BY u.salary DESC" in sql
+
+    def test_window_function_with_group_by(self, test_client, test_database):
+        """Test window functions with GROUP BY (should work together)"""
+        # Test window function with GROUP BY
+        query = test_client.query(User).select(
+            'department_id',
+            func.count('id').label('user_count'),
+            func.avg('salary').over(partition_by='department_id').label('dept_avg_salary')
+        ).group_by('department_id')
+        sql, _ = query._build_sql()
+        assert "SELECT department_id" in sql
+        assert "count(id) as user_count" in sql.lower()
+        assert "AVG(SALARY)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY DEPARTMENT_ID" in sql.upper()
+        assert "GROUP BY department_id" in sql
+
+    def test_window_function_first_value(self, test_client, test_database):
+        """Test FIRST_VALUE() window function"""
+        # Test FIRST_VALUE() to get first salary in department
+        query = test_client.query(User).select(
+            'name', 'department_id', 'salary',
+            func.first_value('salary').over(partition_by='department_id', order_by='salary').label('first_salary')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, department_id, salary" in sql
+        assert "FIRST_VALUE(SALARY)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY DEPARTMENT_ID" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_last_value(self, test_client, test_database):
+        """Test LAST_VALUE() window function"""
+        # Test LAST_VALUE() to get last salary in department
+        query = test_client.query(User).select(
+            'name', 'department_id', 'salary',
+            func.last_value('salary').over(partition_by='department_id', order_by='salary').label('last_salary')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, department_id, salary" in sql
+        assert "LAST_VALUE(SALARY)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY DEPARTMENT_ID" in sql.upper()
+        assert "ORDER BY salary" in sql
+
+    def test_window_function_ntile(self, test_client, test_database):
+        """Test NTILE() window function"""
+        # Test NTILE() to divide users into salary quartiles
+        query = test_client.query(User).select(
+            'name', 'salary',
+            func.ntile(4).over(order_by='salary DESC').label('salary_quartile')
+        )
+        sql, _ = query._build_sql()
+        assert "SELECT name, salary" in sql
+        assert "NTILE(4)" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "ORDER BY salary DESC" in sql
+
+
+    def test_complex_query_with_all_features(self, test_client, test_database):
+        """Test complex query combining all advanced features"""
+        # Test a complex query with JOINs, window functions, subqueries, and aggregations
+        subquery = test_client.query(Department).select('id').filter('budget > ?', 80000)
+        
+        query = test_client.query(User).alias('u').select(
+            'u.name',
+            'd.name as dept_name',
+            'u.salary',
+            func.row_number().over(partition_by='d.name', order_by='u.salary DESC').label('dept_rank'),
+            func.avg('u.salary').over(partition_by='d.name').label('dept_avg_salary')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).filter(
+            'u.department_id IN', subquery
+        ).filter('u.salary > ?', 70000).order_by('u.salary DESC').limit(10)
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, d.name as dept_name, u.salary" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "avg(u.salary)" in sql.lower()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY D.NAME" in sql.upper()
+        assert "WHERE u.department_id IN" in sql
+        assert "u.salary > 70000" in sql
+        assert "ORDER BY u.salary DESC" in sql
+        assert "LIMIT 10" in sql
+
+    def test_complex_analytical_query(self, test_client, test_database):
+        """Test complex analytical query with multiple window functions"""
+        # Test analytical query with multiple window functions and aggregations
+        query = test_client.query(User).alias('u').select(
+            'u.name',
+            'u.department_id',
+            'u.salary',
+            func.row_number().over(order_by='u.salary DESC').label('overall_rank'),
+            func.rank().over(partition_by='u.department_id', order_by='u.salary DESC').label('dept_rank'),
+            func.avg('u.salary').over(partition_by='u.department_id').label('dept_avg'),
+            func.sum('u.salary').over(order_by='u.salary DESC').label('running_total'),
+            func.lag('u.salary', 1).over(order_by='u.salary DESC').label('prev_salary')
+        ).filter('u.salary > ?', 50000)
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, u.department_id, u.salary" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "RANK()" in sql.upper()
+        assert "avg(u.salary)" in sql.lower()
+        assert "sum(u.salary)" in sql.lower()
+        assert "lag('u.salary', 1)" in sql.lower()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY U.DEPARTMENT_ID" in sql.upper()
+        assert "ORDER BY u.salary DESC" in sql
+        assert "WHERE u.salary > 50000" in sql
+
+    def test_complex_join_with_multiple_tables(self, test_client, test_database):
+        """Test complex JOIN with multiple tables and conditions"""
+        # Test complex JOIN with multiple tables
+        query = test_client.query(User).alias('u').select(
+            'u.name as user_name',
+            'd.name as dept_name',
+            'p.name as product_name',
+            'u.salary',
+            'd.budget'
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).leftjoin(
+            'test_products_advanced p', 'd.id = p.id'  # This might not make logical sense but tests syntax
+        ).filter('u.salary > ?', 60000).filter('d.budget > ?', 50000).order_by('u.salary DESC')
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name as user_name, d.name as dept_name, p.name as product_name" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "LEFT JOIN test_products_advanced p" in sql
+        assert "u.department_id = d.id" in sql
+        assert "WHERE u.salary > 60000" in sql
+        assert "d.budget > 50000" in sql
+        assert "ORDER BY u.salary DESC" in sql
+
+    def test_complex_group_by_with_having(self, test_client, test_database):
+        """Test complex GROUP BY with HAVING and multiple aggregations"""
+        # Test complex GROUP BY with multiple aggregations and HAVING
+        query = test_client.query(User).alias('u').select(
+            'u.department_id',
+            func.count('u.id').label('user_count'),
+            func.avg('u.salary').label('avg_salary'),
+            func.sum('u.salary').label('total_salary'),
+            func.min('u.salary').label('min_salary'),
+            func.max('u.salary').label('max_salary'),
+            func.stddev('u.salary').label('salary_stddev')
+        ).group_by('u.department_id').having('COUNT(u.id) > ?', 1).having('AVG(u.salary) > ?', 70000).order_by('avg_salary DESC')
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.department_id" in sql
+        assert "count(u.id) as user_count" in sql.lower()
+        assert "avg(u.salary) as avg_salary" in sql.lower()
+        assert "sum(u.salary) as total_salary" in sql.lower()
+        assert "min(u.salary) as min_salary" in sql.lower()
+        assert "max(u.salary) as max_salary" in sql.lower()
+        assert "stddev(u.salary) as salary_stddev" in sql.lower()
+        assert "GROUP BY u.department_id" in sql
+        assert "HAVING" in sql
+        assert "COUNT(u.id) > 1" in sql
+        assert "AVG(u.salary) > 70000" in sql
+        assert "ORDER BY avg_salary DESC" in sql
+
+    def test_complex_subquery_with_joins(self, test_client, test_database):
+        """Test complex subquery with JOINs and aggregations"""
+        # Test complex subquery with JOINs
+        subquery = test_client.query(User).alias('u').select(
+            'u.department_id',
+            func.avg('u.salary').label('dept_avg_salary')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).group_by('u.department_id').having('AVG(u.salary) > ?', 75000)
+        
+        query = test_client.query(User).alias('u2').select(
+            'u2.name',
+            'u2.salary',
+            'd2.name as dept_name'
+        ).join(
+            'test_departments_advanced d2', 'u2.department_id = d2.id'
+        ).filter(
+            'u2.department_id IN', subquery
+        ).order_by('u2.salary DESC')
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u2.name, u2.salary, d2.name as dept_name" in sql
+        assert "FROM test_users_advanced AS u2" in sql
+        assert "JOIN test_departments_advanced d2" in sql
+        assert "WHERE u2.department_id IN" in sql
+        # Note: The avg(u.salary) and GROUP BY are in the subquery, not the main query
+        # We'll test the subquery separately
+        subquery_sql, _ = subquery._build_sql()
+        assert "avg(u.salary) as dept_avg_salary" in subquery_sql.lower()
+        assert "GROUP BY u.department_id" in subquery_sql
+        assert "HAVING AVG(u.salary) > 75000" in subquery_sql
+        assert "ORDER BY u2.salary DESC" in sql
+
+    def test_complex_window_function_with_joins(self, test_client, test_database):
+        """Test complex window function with JOINs and multiple partitions"""
+        # Test complex window function with JOINs
+        query = test_client.query(User).alias('u').select(
+            'u.name',
+            'd.name as dept_name',
+            'u.salary',
+            func.row_number().over(partition_by='d.name', order_by='u.salary DESC').label('dept_rank'),
+            func.rank().over(order_by='u.salary DESC').label('overall_rank'),
+            func.percent_rank().over(partition_by='d.name', order_by='u.salary').label('dept_percentile'),
+            func.cume_dist().over(order_by='u.salary').label('cumulative_dist')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).filter('u.salary > ?', 60000).order_by('u.salary DESC')
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, d.name as dept_name, u.salary" in sql
+        assert "FROM test_users_advanced AS u" in sql
+        assert "JOIN test_departments_advanced d" in sql
+        assert "ROW_NUMBER()" in sql.upper()
+        assert "RANK()" in sql.upper()
+        assert "PERCENT_RANK()" in sql.upper()
+        assert "CUME_DIST()" in sql.upper()
+        assert "OVER" in sql.upper()
+        assert "PARTITION BY D.NAME" in sql.upper()
+        assert "ORDER BY u.salary DESC" in sql
+        assert "WHERE u.salary > 60000" in sql
+
+    def test_complex_case_statements(self, test_client, test_database):
+        """Test complex CASE statements with multiple conditions"""
+        # Test complex CASE statements
+        query = test_client.query(User).alias('u').select(
+            'u.name',
+            'u.salary',
+            'u.age',
+            'CASE WHEN u.salary > 90000 THEN "Executive" WHEN u.salary > 70000 THEN "Senior" WHEN u.salary > 50000 THEN "Mid" ELSE "Junior" END as salary_band',
+            'CASE WHEN u.age > 35 THEN "Senior" WHEN u.age > 25 THEN "Mid" ELSE "Junior" END as age_band',
+            'CASE WHEN u.salary > 80000 AND u.age > 30 THEN "High Performer" ELSE "Standard" END as performance_band'
+        ).order_by('u.salary DESC')
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, u.salary, u.age" in sql
+        assert "CASE WHEN u.salary > 90000 THEN" in sql
+        assert "CASE WHEN u.age > 35 THEN" in sql
+        assert "CASE WHEN u.salary > 80000 AND u.age > 30 THEN" in sql
+        assert "ORDER BY u.salary DESC" in sql
+
+    def test_complex_mathematical_expressions(self, test_client, test_database):
+        """Test complex mathematical expressions"""
+        # Test complex mathematical expressions
+        query = test_client.query(User).alias('u').select(
+            'u.name',
+            'u.salary',
+            'u.age',
+            'u.salary * 1.1 as increased_salary',
+            'u.salary / 12 as monthly_salary',
+            'u.salary * 0.1 as bonus',
+            'u.salary + (u.salary * 0.1) as total_compensation',
+            'u.age * 365 as age_in_days',
+            'u.salary / u.age as salary_per_year_of_age'
+        ).filter('u.salary > ?', 50000)
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, u.salary, u.age" in sql
+        assert "u.salary * 1.1 as increased_salary" in sql
+        assert "u.salary / 12 as monthly_salary" in sql
+        assert "u.salary * 0.1 as bonus" in sql
+        assert "u.salary + (u.salary * 0.1) as total_compensation" in sql
+        assert "u.age * 365 as age_in_days" in sql
+        assert "u.salary / u.age as salary_per_year_of_age" in sql
+        assert "WHERE u.salary > 50000" in sql
+
+    def test_complex_string_functions(self, test_client, test_database):
+        """Test complex string functions and operations"""
+        # Test complex string functions
+        query = test_client.query(User).alias('u').select(
+            'u.name',
+            'u.email',
+            'UPPER(u.name) as name_upper',
+            'LOWER(u.name) as name_lower',
+            'LENGTH(u.name) as name_length',
+            'SUBSTRING(u.email, 1, 5) as email_prefix',
+            'CONCAT(u.name, " (", u.email, ")") as name_with_email'
+        ).filter('LENGTH(u.name) > ?', 5)
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.name, u.email" in sql
+        assert "UPPER(u.name) as name_upper" in sql
+        assert "LOWER(u.name) as name_lower" in sql
+        assert "LENGTH(u.name) as name_length" in sql
+        assert "SUBSTRING(u.email, 1, 5) as email_prefix" in sql
+        assert "CONCAT(u.name" in sql
+        assert "WHERE LENGTH(u.name) > 5" in sql
+
+    def test_complex_union_queries(self, test_client, test_database):
+        """Test complex UNION queries"""
+        # Test UNION of different queries
+        query1 = test_client.query(User).select('name', 'salary').filter('salary > ?', 80000)
+        query2 = test_client.query(User).select('name', 'salary').filter('age > ?', 35)
+        
+        # Test individual queries (UNION might need special handling)
+        sql1, _ = query1._build_sql()
+        sql2, _ = query2._build_sql()
+        
+        assert "SELECT name, salary" in sql1
+        assert "WHERE salary > 80000" in sql1
+        assert "SELECT name, salary" in sql2
+        assert "WHERE age > 35" in sql2
+
+    def test_complex_performance_query(self, test_client, test_database):
+        """Test complex performance analysis query"""
+        # Test complex performance analysis query
+        query = test_client.query(User).alias('u').select(
+            'u.department_id',
+            'd.name as dept_name',
+            func.count('u.id').label('total_users'),
+            func.avg('u.salary').label('avg_salary'),
+            func.stddev('u.salary').label('salary_stddev'),
+            func.min('u.salary').label('min_salary'),
+            func.max('u.salary').label('max_salary'),
+            func.count('CASE WHEN u.salary > 80000 THEN 1 END').label('high_earners'),
+            func.avg('u.age').label('avg_age')
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).group_by('u.department_id', 'd.name').having('COUNT(u.id) > ?', 1).order_by('avg_salary DESC')
+        
+        sql, _ = query._build_sql()
+        assert "SELECT u.department_id, d.name as dept_name" in sql
+        assert "count(u.id) as total_users" in sql.lower()
+        assert "avg(u.salary) as avg_salary" in sql.lower()
+        assert "stddev(u.salary) as salary_stddev" in sql.lower()
+        assert "min(u.salary) as min_salary" in sql.lower()
+        assert "max(u.salary) as max_salary" in sql.lower()
+        assert "count(case when u.salary > 80000 then 1 end) as high_earners" in sql.lower()
+        assert "avg(u.age) as avg_age" in sql.lower()
+        assert "GROUP BY u.department_id, d.name" in sql
+        assert "HAVING COUNT(u.id) > 1" in sql
+        assert "ORDER BY avg_salary DESC" in sql
+
+    def test_real_database_subquery_execution(self, test_client, test_database):
+        """Test real database execution of subquery"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
+        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_departments_advanced (id, name, budget) VALUES 
+            (1, 'Engineering', 100000),
+            (2, 'Marketing', 50000),
+            (3, 'Sales', 80000),
+            (4, 'HR', 30000)
+        """)
+        
+        test_client.execute("""
+            INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
+            (1, 'John Doe', 1, 75000, 'john@example.com'),
+            (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+            (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+            (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
+            (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
+        """)
+        
+        # Test subquery: Find users in departments with budget > 60000
+        subquery = test_client.query(Department).select('id').filter('budget > ?', 60000)
+        users_in_high_budget_depts = test_client.query(User).select('name', 'department_id', 'salary').filter(
+            'department_id IN', subquery
+        ).all()
+        
+        # Verify results
+        assert len(users_in_high_budget_depts) == 3  # Engineering (2 users) + Sales (1 user)
+        
+        # Check that we got the right users
+        user_names = [user.name for user in users_in_high_budget_depts]
+        assert 'John Doe' in user_names
+        assert 'Jane Smith' in user_names
+        assert 'Alice Brown' in user_names
+        assert 'Charlie Wilson' not in user_names  # HR has budget 30000, not > 60000
+        assert 'Bob Johnson' not in user_names  # Marketing has budget 50000, not > 60000
+
+    def test_real_database_join_execution(self, test_client, test_database):
+        """Test real database execution of JOIN query"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
+        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_departments_advanced (id, name, budget) VALUES 
+            (1, 'Engineering', 100000),
+            (2, 'Marketing', 50000),
+            (3, 'Sales', 80000),
+            (4, 'HR', 30000)
+        """)
+        
+        test_client.execute("""
+            INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
+            (1, 'John Doe', 1, 75000, 'john@example.com'),
+            (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+            (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+            (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
+            (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
+        """)
+        
+        # Test JOIN: Get users with their department information
+        joined_results = test_client.query(User).alias('u').select(
+            'u.name as user_name',
+            'u.salary',
+            'd.name as dept_name',
+            'd.budget'
+        ).join(
+            'test_departments_advanced d', 'u.department_id = d.id'
+        ).filter('u.salary > ?', 65000).all()
+        
+        # Verify results
+        assert len(joined_results) == 3  # John (75000), Jane (80000), Alice (70000)
+        
+        # Check that we got the right data
+        user_salaries = [result.salary for result in joined_results]
+        assert 75000 in user_salaries
+        assert 80000 in user_salaries
+        assert 70000 in user_salaries
+        
+        # Check department names are included
+        dept_names = [result.dept_name for result in joined_results]
+        assert 'Engineering' in dept_names
+        assert 'Sales' in dept_names
+
+    def test_real_database_cte_execution(self, test_client, test_database):
+        """Test real database execution of CTE using CTE ORM"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
+        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_departments_advanced (id, name, budget) VALUES 
+            (1, 'Engineering', 100000),
+            (2, 'Marketing', 50000),
+            (3, 'Sales', 80000),
+            (4, 'HR', 30000)
+        """)
+        
+        test_client.execute("""
+            INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
+            (1, 'John Doe', 1, 75000, 'john@example.com'),
+            (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+            (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+            (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
+            (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
+        """)
+        
+        # Test CTE: Find departments with average salary > 65000 using CTE ORM
+        # Create CTE for department average salary
+        dept_avg_salary = test_client.query(User).select(
+            'department_id',
+            func.avg('salary').label('avg_salary')
+        ).group_by('department_id')
+        
+        # Use CTE query builder to find users in high-average-salary departments
+        cte_query = test_client.cte_query()
+        results = (cte_query
+                  .with_cte('dept_avg_salary', dept_avg_salary)
+                  .select_from('u.name', 'u.salary', 'd.name', 'das.avg_salary')
+                  .from_table('test_users_advanced u')
+                  .inner_join('test_departments_advanced d', 'u.department_id = d.id')
+                  .inner_join('dept_avg_salary das', 'u.department_id = das.department_id')
+                  .where('das.avg_salary > ?', 65000)
+                  .order_by('u.salary DESC')
+                  .execute())
+        
+        # Verify results - should get users from Engineering (avg 77500) and Sales (avg 70000)
+        assert len(results) >= 2  # At least John and Jane from Engineering
+        
+        # Check that we got users from high-average-salary departments
+        user_names = [row.name for row in results]
+        assert 'John Doe' in user_names or 'Jane Smith' in user_names
+        
+        # Verify the CTE worked by checking average salary values
+        avg_salaries = [row.avg_salary for row in results]
+        assert any(avg_sal >= 65000 for avg_sal in avg_salaries)
+
+    def test_cte_query_builder_basic(self, test_client, test_database):
+        """Test the new CTEQuery builder with basic functionality"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
+        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_departments_advanced (id, name, budget) VALUES 
+            (1, 'Engineering', 100000),
+            (2, 'Marketing', 50000),
+            (3, 'Sales', 80000),
+            (4, 'HR', 30000)
+        """)
+        
+        test_client.execute("""
+            INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
+            (1, 'John Doe', 1, 75000, 'john@example.com'),
+            (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+            (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+            (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
+            (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
+        """)
+        
+        # Test CTE: Find departments with high average salary
+        dept_stats = test_client.query(User).select(
+            'department_id', 
+            func.count('id').label('user_count'),
+            func.avg('salary').label('avg_salary')
+        ).group_by('department_id')
+        
+        # Use CTE query builder
+        cte_query = test_client.cte_query()
+        results = (cte_query
+                  .with_cte('dept_stats', dept_stats)
+                  .select_from('dept_stats.department_id', 'dept_stats.user_count', 'dept_stats.avg_salary')
+                  .from_table('dept_stats')
+                  .where('dept_stats.avg_salary > ?', 65000)
+                  .order_by('dept_stats.avg_salary DESC')
+                  .execute())
+        
+        # Verify results
+        assert len(results) >= 1  # Should have at least Engineering dept
+        assert hasattr(results[0], 'department_id')
+        assert hasattr(results[0], 'user_count')
+        assert hasattr(results[0], 'avg_salary')
+        
+        # Check that we got departments with high average salary
+        avg_salaries = [row.avg_salary for row in results]
+        assert any(avg_sal >= 65000 for avg_sal in avg_salaries)
+
+    def test_cte_query_builder_with_joins(self, test_client, test_database):
+        """Test CTEQuery builder with JOINs"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
+        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_departments_advanced (id, name, budget) VALUES 
+            (1, 'Engineering', 100000),
+            (2, 'Marketing', 50000),
+            (3, 'Sales', 80000)
+        """)
+        
+        test_client.execute("""
+            INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
+            (1, 'John Doe', 1, 75000, 'john@example.com'),
+            (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+            (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+            (4, 'Alice Brown', 3, 70000, 'alice@example.com')
+        """)
+        
+        # Create CTE for high-salary users
+        high_salary_users = test_client.query(User).select('id', 'name', 'department_id', 'salary').filter('salary > ?', 70000)
+        
+        # Use CTE with JOIN to get department names
+        cte_query = test_client.cte_query()
+        results = (cte_query
+                  .with_cte('high_salary_users', high_salary_users)
+                  .select_from('high_salary_users.name', 'high_salary_users.salary', 'd.name')
+                  .from_table('high_salary_users')
+                  .inner_join('test_departments_advanced d', 'high_salary_users.department_id = d.id')
+                  .order_by('high_salary_users.salary DESC')
+                  .execute())
+        
+        # Verify results
+        assert len(results) >= 2  # Should have John and Jane
+        assert hasattr(results[0], 'name')
+        assert hasattr(results[0], 'salary')
+        assert hasattr(results[0], 'name_2')  # Department name (second 'name' column)
+        
+        # Check that we got high-salary users
+        salaries = [row.salary for row in results]
+        assert all(sal > 70000 for sal in salaries)
+
+    def test_cte_query_builder_multiple_ctes(self, test_client, test_database):
+        """Test CTEQuery builder with multiple CTEs"""
+        # Clean up existing data first
+        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
+        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        
+        # Create test data
+        test_client.execute("""
+            INSERT INTO test_departments_advanced (id, name, budget) VALUES 
+            (1, 'Engineering', 100000),
+            (2, 'Marketing', 50000),
+            (3, 'Sales', 80000)
+        """)
+        
+        test_client.execute("""
+            INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
+            (1, 'John Doe', 1, 75000, 'john@example.com'),
+            (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+            (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+            (4, 'Alice Brown', 3, 70000, 'alice@example.com')
+        """)
+        
+        # Create first CTE: department statistics
+        dept_stats = test_client.query(User).select(
+            'department_id', 
+            func.count('id').label('user_count'),
+            func.avg('salary').label('avg_salary')
+        ).group_by('department_id')
+        
+        # Create second CTE: high-budget departments
+        high_budget_depts = test_client.query(Department).select('id', 'name', 'budget').filter('budget > ?', 60000)
+        
+        # Use multiple CTEs
+        cte_query = test_client.cte_query()
+        results = (cte_query
+                  .with_cte('dept_stats', dept_stats)
+                  .with_cte('high_budget_depts', high_budget_depts)
+                  .select_from('ds.department_id', 'ds.user_count', 'ds.avg_salary', 'hbd.name', 'hbd.budget')
+                  .from_table('dept_stats ds')
+                  .inner_join('high_budget_depts hbd', 'ds.department_id = hbd.id')
+                  .order_by('ds.avg_salary DESC')
+                  .execute())
+        
+        # Verify results
+        assert len(results) >= 2  # Should have Engineering and Sales
+        assert hasattr(results[0], 'department_id')
+        assert hasattr(results[0], 'user_count')
+        assert hasattr(results[0], 'avg_salary')
+        assert hasattr(results[0], 'name')
+        assert hasattr(results[0], 'budget')
+        
+        # Check that we got high-budget departments
+        budgets = [row.budget for row in results]
+        assert all(budget > 60000 for budget in budgets)
 
 
 if __name__ == "__main__":

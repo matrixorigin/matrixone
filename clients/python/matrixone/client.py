@@ -648,6 +648,12 @@ class Client:
 
         return MatrixOneQuery(model_class, self)
 
+    def cte_query(self):
+        """Get CTE (Common Table Expression) query builder"""
+        from .orm import CTEQuery
+
+        return CTEQuery(self)
+
     @contextmanager
     def snapshot(self, snapshot_name: str):
         """

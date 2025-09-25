@@ -404,6 +404,7 @@ class BaseMatrixOneQuery:
         self.model_class = model_class
         self.client = client
         self._snapshot_name = None
+        self._table_alias = None  # Add table alias support
         self._select_columns = []
         self._joins = []
         self._where_conditions = []
@@ -450,9 +451,45 @@ class BaseMatrixOneQuery:
         self._joins.append(join_clause)
         return self
 
+    def innerjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+        """Add INNER JOIN clause - SQLAlchemy style"""
+        if on:
+            join_clause = f"INNER JOIN {table} ON {on}"
+        else:
+            join_clause = f"INNER JOIN {table}"
+        self._joins.append(join_clause)
+        return self
+
+    def leftjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+        """Add LEFT JOIN clause - SQLAlchemy style"""
+        if on:
+            join_clause = f"LEFT JOIN {table} ON {on}"
+        else:
+            join_clause = f"LEFT JOIN {table}"
+        self._joins.append(join_clause)
+        return self
+
+    def rightjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+        """Add RIGHT JOIN clause - SQLAlchemy style"""
+        if on:
+            join_clause = f"RIGHT JOIN {table} ON {on}"
+        else:
+            join_clause = f"RIGHT JOIN {table}"
+        self._joins.append(join_clause)
+        return self
+
+    def fullouterjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+        """Add FULL OUTER JOIN clause - SQLAlchemy style"""
+        if on:
+            join_clause = f"FULL OUTER JOIN {table} ON {on}"
+        else:
+            join_clause = f"FULL OUTER JOIN {table}"
+        self._joins.append(join_clause)
+        return self
+
     def outerjoin(self, table, on=None) -> "BaseMatrixOneQuery":
-        """Add LEFT OUTER JOIN clause - SQLAlchemy style"""
-        return self.join(table, on, isouter=True)
+        """Add LEFT OUTER JOIN clause - SQLAlchemy style (alias for leftjoin)"""
+        return self.leftjoin(table, on)
 
     def group_by(self, *columns) -> "BaseMatrixOneQuery":
         """Add GROUP BY clause - SQLAlchemy style"""
@@ -480,6 +517,19 @@ class BaseMatrixOneQuery:
         self._snapshot_name = snapshot_name
         return self
 
+    def alias(self, alias_name: str) -> "BaseMatrixOneQuery":
+        """Set table alias for this query - SQLAlchemy style chaining"""
+        self._table_alias = alias_name
+        return self
+
+    def subquery(self, alias_name: str = None) -> str:
+        """Convert this query to a subquery with optional alias"""
+        sql, params = self._build_sql()
+        if alias_name:
+            return f"({sql}) AS {alias_name}"
+        else:
+            return f"({sql})"
+
     def filter_by(self, **kwargs) -> "BaseMatrixOneQuery":
         """Add WHERE conditions from keyword arguments - SQLAlchemy style"""
         for key, value in kwargs.items():
@@ -495,7 +545,15 @@ class BaseMatrixOneQuery:
         # Replace ? placeholders with actual values
         formatted_condition = condition
         for param in params:
-            if isinstance(param, str):
+            if hasattr(param, "_build_sql"):  # This is a subquery object
+                # Convert subquery to SQL
+                subquery_sql, _ = param._build_sql()
+                if "?" in formatted_condition:
+                    formatted_condition = formatted_condition.replace("?", f"({subquery_sql})", 1)
+                else:
+                    # If no ? placeholder, assume this is an IN clause with subquery
+                    formatted_condition = f"{formatted_condition} ({subquery_sql})"
+            elif isinstance(param, str):
                 formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
             else:
                 formatted_condition = formatted_condition.replace("?", str(param), 1)
@@ -552,8 +610,11 @@ class BaseMatrixOneQuery:
         else:
             select_clause = "SELECT *"
 
-        # Build FROM clause
-        from_clause = f"FROM {table_name}"
+        # Build FROM clause with optional table alias
+        if self._table_alias:
+            from_clause = f"FROM {table_name} AS {self._table_alias}"
+        else:
+            from_clause = f"FROM {table_name}"
 
         # Build snapshot hint (must come before WHERE clause)
         snapshot_hint = ""
@@ -690,8 +751,14 @@ class BaseMatrixOneQuery:
                             attr_name = f"{func_name.upper()}_{col_name}"
                         select_cols.append(attr_name)
                     else:
-                        # For simple column names, use as-is
-                        select_cols.append(col_str)
+                        # Handle table aliases in column names (e.g., "u.name" -> "name")
+                        if "." in col_str and not col_str.startswith("("):
+                            # Extract column name after the dot for attribute access
+                            col_name = col_str.split(".")[-1]
+                            select_cols.append(col_name)
+                        else:
+                            # For simple column names, use as-is
+                            select_cols.append(col_str)
         return select_cols
 
 
@@ -765,3 +832,281 @@ def desc(column: str) -> str:
 def asc(column: str) -> str:
     """Create ascending order clause"""
     return f"{column} ASC"
+
+
+class CTEQuery:
+    """CTE (Common Table Expression) Query builder for MatrixOne"""
+
+    def __init__(self, client):
+        self.client = client
+        self._ctes = []  # List of CTE definitions
+        self._main_query = None  # The main query that uses CTEs
+
+    def with_cte(self, name: str, query) -> "CTEQuery":
+        """Add a CTE definition"""
+        if hasattr(query, "_build_sql"):
+            # This is a BaseMatrixOneQuery object
+            sql, params = query._build_sql()
+            self._ctes.append({"name": name, "sql": sql, "params": params})
+        elif isinstance(query, str):
+            # This is a raw SQL string
+            self._ctes.append({"name": name, "sql": query, "params": []})
+        else:
+            raise ValueError("CTE query must be a BaseMatrixOneQuery object or SQL string")
+        return self
+
+    def select_from(self, *columns) -> "CTEQuery":
+        """Start the main SELECT query that uses the CTEs"""
+        self._main_query = {
+            "type": "SELECT",
+            "columns": list(columns) if columns else ["*"],
+            "from_table": None,
+            "joins": [],
+            "where_conditions": [],
+            "where_params": [],
+            "group_by_columns": [],
+            "having_conditions": [],
+            "having_params": [],
+            "order_by_columns": [],
+            "limit_count": None,
+            "offset_count": None,
+        }
+        return self
+
+    def from_table(self, table_name: str, alias: str = None) -> "CTEQuery":
+        """Set the FROM table for the main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        if alias:
+            self._main_query["from_table"] = f"{table_name} AS {alias}"
+        else:
+            self._main_query["from_table"] = table_name
+        return self
+
+    def join(self, table: str, on: str = None, join_type: str = "JOIN") -> "CTEQuery":
+        """Add JOIN clause to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        if on:
+            join_clause = f"{join_type} {table} ON {on}"
+        else:
+            join_clause = f"{join_type} {table}"
+        self._main_query["joins"].append(join_clause)
+        return self
+
+    def inner_join(self, table: str, on: str = None) -> "CTEQuery":
+        """Add INNER JOIN clause"""
+        return self.join(table, on, "INNER JOIN")
+
+    def left_join(self, table: str, on: str = None) -> "CTEQuery":
+        """Add LEFT JOIN clause"""
+        return self.join(table, on, "LEFT JOIN")
+
+    def right_join(self, table: str, on: str = None) -> "CTEQuery":
+        """Add RIGHT JOIN clause"""
+        return self.join(table, on, "RIGHT JOIN")
+
+    def full_outer_join(self, table: str, on: str = None) -> "CTEQuery":
+        """Add FULL OUTER JOIN clause"""
+        return self.join(table, on, "FULL OUTER JOIN")
+
+    def where(self, condition: str, *params) -> "CTEQuery":
+        """Add WHERE condition to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        self._main_query["where_conditions"].append(condition)
+        self._main_query["where_params"].extend(params)
+        return self
+
+    def group_by(self, *columns) -> "CTEQuery":
+        """Add GROUP BY clause to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        self._main_query["group_by_columns"].extend(columns)
+        return self
+
+    def having(self, condition: str, *params) -> "CTEQuery":
+        """Add HAVING clause to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        self._main_query["having_conditions"].append(condition)
+        self._main_query["having_params"].extend(params)
+        return self
+
+    def order_by(self, *columns) -> "CTEQuery":
+        """Add ORDER BY clause to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        self._main_query["order_by_columns"].extend(columns)
+        return self
+
+    def limit(self, count: int) -> "CTEQuery":
+        """Add LIMIT clause to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        self._main_query["limit_count"] = count
+        return self
+
+    def offset(self, count: int) -> "CTEQuery":
+        """Add OFFSET clause to main query"""
+        if not self._main_query:
+            raise ValueError("Must call select_from() first")
+        self._main_query["offset_count"] = count
+        return self
+
+    def _build_sql(self) -> tuple[str, List[Any]]:
+        """Build the complete CTE SQL query"""
+        if not self._ctes:
+            raise ValueError("At least one CTE must be defined")
+        if not self._main_query:
+            raise ValueError("Main query must be defined with select_from()")
+
+        sql_parts = []
+        all_params = []
+
+        # Build WITH clause
+        with_clause = "WITH "
+        cte_parts = []
+        for cte in self._ctes:
+            cte_parts.append(f"{cte['name']} AS ({cte['sql']})")
+            all_params.extend(cte["params"])
+        with_clause += ", ".join(cte_parts)
+        sql_parts.append(with_clause)
+
+        # Build main SELECT query
+        select_clause = "SELECT " + ", ".join(self._main_query["columns"])
+        sql_parts.append(select_clause)
+
+        # Build FROM clause
+        if self._main_query["from_table"]:
+            sql_parts.append(f"FROM {self._main_query['from_table']}")
+
+        # Build JOIN clauses
+        if self._main_query["joins"]:
+            sql_parts.append(" ".join(self._main_query["joins"]))
+
+        # Build WHERE clause
+        if self._main_query["where_conditions"]:
+            where_clause = "WHERE " + " AND ".join(self._main_query["where_conditions"])
+            sql_parts.append(where_clause)
+            all_params.extend(self._main_query["where_params"])
+
+        # Build GROUP BY clause
+        if self._main_query["group_by_columns"]:
+            group_clause = "GROUP BY " + ", ".join(self._main_query["group_by_columns"])
+            sql_parts.append(group_clause)
+
+        # Build HAVING clause
+        if self._main_query["having_conditions"]:
+            having_clause = "HAVING " + " AND ".join(self._main_query["having_conditions"])
+            sql_parts.append(having_clause)
+            all_params.extend(self._main_query["having_params"])
+
+        # Build ORDER BY clause
+        if self._main_query["order_by_columns"]:
+            order_clause = "ORDER BY " + ", ".join(self._main_query["order_by_columns"])
+            sql_parts.append(order_clause)
+
+        # Build LIMIT clause
+        if self._main_query["limit_count"] is not None:
+            sql_parts.append(f"LIMIT {self._main_query['limit_count']}")
+
+        # Build OFFSET clause
+        if self._main_query["offset_count"] is not None:
+            sql_parts.append(f"OFFSET {self._main_query['offset_count']}")
+
+        sql = " ".join(sql_parts)
+        return sql, all_params
+
+    def execute(self) -> List:
+        """Execute the CTE query and return results"""
+        sql, params = self._build_sql()
+        result = self.client.execute(sql, params)
+
+        # Return raw row data as simple objects
+        rows = []
+        for row in result.rows:
+            # Create a simple object with attributes for each column
+            row_obj = type("RowData", (), {})()
+            used_attr_names = set()  # Track used attribute names to handle duplicates
+
+            for i, col_name in enumerate(self._main_query["columns"]):
+                if i < len(row):
+                    # Handle column names with table prefixes (e.g., "dept_stats.department_id" -> "department_id")
+                    if "." in col_name:
+                        attr_name = col_name.split(".")[-1]  # Take the part after the dot
+                    else:
+                        attr_name = col_name
+
+                    # Replace spaces and special characters with underscores
+                    attr_name = attr_name.replace(" ", "_").replace("(", "").replace(")", "")
+
+                    # Handle duplicate attribute names by adding a suffix
+                    original_attr_name = attr_name
+                    counter = 2
+                    while attr_name in used_attr_names:
+                        attr_name = f"{original_attr_name}_{counter}"
+                        counter += 1
+
+                    used_attr_names.add(attr_name)
+                    setattr(row_obj, attr_name, row[i])
+            rows.append(row_obj)
+
+        return rows
+
+    def all(self) -> List:
+        """Alias for execute() - SQLAlchemy style"""
+        return self.execute()
+
+    def first(self) -> Optional:
+        """Execute query and return first result"""
+        self.limit(1)
+        results = self.execute()
+        return results[0] if results else None
+
+    def count(self) -> int:
+        """Execute query and return count of results"""
+        # Create a count query
+        count_sql_parts = []
+        all_params = []
+
+        # Build WITH clause (same as original)
+        with_clause = "WITH "
+        cte_parts = []
+        for cte in self._ctes:
+            cte_parts.append(f"{cte['name']} AS ({cte['sql']})")
+            all_params.extend(cte["params"])
+        with_clause += ", ".join(cte_parts)
+        count_sql_parts.append(with_clause)
+
+        # Build main SELECT COUNT(*) query
+        count_sql_parts.append("SELECT COUNT(*)")
+
+        # Build FROM clause
+        if self._main_query["from_table"]:
+            count_sql_parts.append(f"FROM {self._main_query['from_table']}")
+
+        # Build JOIN clauses
+        if self._main_query["joins"]:
+            count_sql_parts.append(" ".join(self._main_query["joins"]))
+
+        # Build WHERE clause
+        if self._main_query["where_conditions"]:
+            where_clause = "WHERE " + " AND ".join(self._main_query["where_conditions"])
+            count_sql_parts.append(where_clause)
+            all_params.extend(self._main_query["where_params"])
+
+        # Build GROUP BY clause
+        if self._main_query["group_by_columns"]:
+            group_clause = "GROUP BY " + ", ".join(self._main_query["group_by_columns"])
+            count_sql_parts.append(group_clause)
+
+        # Build HAVING clause
+        if self._main_query["having_conditions"]:
+            having_clause = "HAVING " + " AND ".join(self._main_query["having_conditions"])
+            count_sql_parts.append(having_clause)
+            all_params.extend(self._main_query["having_params"])
+
+        count_sql = " ".join(count_sql_parts)
+        result = self.client.execute(count_sql, all_params)
+        return result.rows[0][0] if result.rows else 0
