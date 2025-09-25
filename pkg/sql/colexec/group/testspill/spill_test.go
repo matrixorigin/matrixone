@@ -69,8 +69,8 @@ func TestSpill(t *testing.T) {
 		use test;
 		insert into sales (id, product_id, customer_id, sale_date, amount)
 		select g.result as id,
-		floor(1 + (rand() * 10000)) as product_id,
-		floor(1 + (rand() * 10000)) as customer_id,
+		floor(1 + (rand() * 100000)) as product_id,
+		floor(1 + (rand() * 100000)) as customer_id,
 		current_date - interval floor(rand() * 365) day as sale_date,
 		floor(rand() * 1000) as amount
 		from generate_series(2000 * 10000) g
@@ -82,9 +82,7 @@ func TestSpill(t *testing.T) {
 	var a, b, c int
 	err = db.QueryRow(`
 		select 
-			count(sha2(product_id, 256)),
-			count(sha2(customer_id, 256)),
-			count(sha2(sale_date, 256))
+			count(sha2(product_id * customer_id, 256)),
 		from sales
 		`,
 	).Scan(&a, &b, &c)
