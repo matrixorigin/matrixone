@@ -202,6 +202,16 @@ func (s *memStorage) DropPartitions(
 	return nil
 }
 
+func (s *memStorage) TruncatePartitions(
+	ctx context.Context,
+	def *plan.TableDef,
+	metadata partition.PartitionMetadata,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	return nil
+}
+
 type partitionTable struct {
 	metadata   partition.PartitionMetadata
 	def        *plan.TableDef

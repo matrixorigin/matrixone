@@ -390,7 +390,7 @@ func (s *Storage) DropPartitions(
 			}
 		}
 		if !found {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("partition %s not found", p))
+			return moerr.NewInvalidInput(ctx, fmt.Sprintf("partition %s not found", p))
 		}
 	}
 
@@ -435,6 +435,98 @@ func (s *Storage) DropPartitions(
 				}
 				res.Close()
 			}
+			return nil
+		},
+		opts,
+	)
+}
+
+func (s *Storage) TruncatePartitions(
+	ctx context.Context,
+	def *plan.TableDef,
+	metadata partition.PartitionMetadata,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	opts := executor.Options{}.
+		WithTxn(txnOp).
+		WithAccountID(accountID).
+		WithAdjustTableExtraFunc(
+			func(extra *api.SchemaExtra) error {
+				extra.ParentTableID = def.TblId
+				extra.FeatureFlag |= features.Partition
+				return nil
+			},
+		)
+
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
+	tables := make([]string, 0, len(partitions))
+	for _, p := range partitions {
+		found := false
+		for _, mp := range metadata.Partitions {
+			if p == mp.Name {
+				tables = append(tables, mp.PartitionTableName)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return moerr.NewInvalidInput(ctx, fmt.Sprintf("partition %s not found", p))
+		}
+	}
+
+	return s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			for _, name := range tables {
+				txn.Use(metadata.DatabaseName)
+				res, err := txn.Exec(
+					fmt.Sprintf(
+						"truncate table `%s`",
+						name,
+					),
+					executor.StatementOption{}.
+						WithIgnoreForeignKey().
+						WithIgnorePublish(),
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+
+				id, err := s.getTableIDByTableNameAndDatabaseName(
+					name,
+					metadata.DatabaseName,
+					txn,
+				)
+				if err != nil {
+					return err
+				}
+
+				txn.Use(catalog.MO_CATALOG)
+				res, err = txn.Exec(
+					fmt.Sprintf("update %s set partition_id = %d where partition_table_name = '%s' and primary_table_id = %d",
+						catalog.MOPartitionTables,
+						id,
+						name,
+						metadata.TableID,
+					),
+					executor.StatementOption{},
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+
 			return nil
 		},
 		opts,

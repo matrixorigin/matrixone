@@ -4190,11 +4190,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	if stmt.PartitionOption != nil {
+		alterTable.AlterPartition = &plan.AlterPartitionOption{}
+
 		switch stmt.PartitionOption.(type) {
 		case *tree.AlterPartitionAddPartitionClause:
-			alterTable.AlgorithmType = plan.AlterTable_AddPartitionTables
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_AddPartitionTables
 		case *tree.AlterPartitionDropPartitionClause:
-			alterTable.AlgorithmType = plan.AlterTable_DropPartitionTables
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_DropPartitionTables
+		case *tree.AlterPartitionTruncatePartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_TruncatePartitionTables
 		default:
 			return nil, moerr.NewNotSupportedf(
 				ctx.GetContext(),

@@ -363,10 +363,57 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 		return s.doAlterTable(c)
 	}
 
-	switch qry.AlgorithmType {
-	case plan.AlterTable_COPY:
-		return s.doAlterTable(c)
-	case plan.AlterTable_AddPartitionTables:
+	if qry.AlterPartition == nil {
+		switch qry.AlgorithmType {
+		case plan.AlterTable_COPY:
+			return s.doAlterTable(c)
+		default:
+			// alter primary table
+			if err := s.doAlterTable(c); err != nil {
+				return err
+			}
+
+			// alter all partition tables
+			metadata, err := ps.GetPartitionMetadata(
+				c.proc.Ctx,
+				qry.TableDef.TblId,
+				c.proc.Base.TxnOperator,
+			)
+			if err != nil {
+				return err
+			}
+
+			st, _ := parsers.ParseOne(
+				c.proc.Ctx,
+				dialect.MYSQL,
+				qry.RawSQL,
+				c.getLower(),
+			)
+			stmt := st.(*tree.AlterTable)
+			table := stmt.Table
+			stmt.PartitionOption = nil
+			for _, p := range metadata.Partitions {
+				stmt.Table = tree.NewTableName(
+					tree.Identifier(p.PartitionTableName),
+					table.ObjectNamePrefix,
+					table.AtTsExpr,
+				)
+				sql := tree.StringWithOpts(
+					stmt,
+					dialect.MYSQL,
+					tree.WithQuoteIdentifier(),
+					tree.WithSingleQuoteString(),
+				)
+				if err := c.runSql(sql); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+
+	switch qry.AlterPartition.AlterType {
+	case plan.AlterPartitionType_AddPartitionTables:
 		stmt, _ := parsers.ParseOne(
 			c.proc.Ctx,
 			dialect.MYSQL,
@@ -380,7 +427,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			stmt.(*tree.AlterTable).PartitionOption.(*tree.AlterPartitionAddPartitionClause).Partitions,
 			c.proc.GetTxnOperator(),
 		)
-	case plan.AlterTable_DropPartitionTables:
+	case plan.AlterPartitionType_DropPartitionTables:
 		stmt, _ := parsers.ParseOne(
 			c.proc.Ctx,
 			dialect.MYSQL,
@@ -400,49 +447,27 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			partitions,
 			c.proc.GetTxnOperator(),
 		)
-	default:
-		// alter primary table
-		if err := s.doAlterTable(c); err != nil {
-			return err
-		}
-
-		// alter all partition tables
-		metadata, err := ps.GetPartitionMetadata(
-			c.proc.Ctx,
-			qry.TableDef.TblId,
-			c.proc.Base.TxnOperator,
-		)
-		if err != nil {
-			return err
-		}
-
-		st, _ := parsers.ParseOne(
+	case plan.AlterPartitionType_TruncatePartitionTables:
+		stmt, _ := parsers.ParseOne(
 			c.proc.Ctx,
 			dialect.MYSQL,
 			qry.RawSQL,
 			c.getLower(),
 		)
-		stmt := st.(*tree.AlterTable)
-		table := stmt.Table
-		stmt.PartitionOption = nil
-		for _, p := range metadata.Partitions {
-			stmt.Table = tree.NewTableName(
-				tree.Identifier(p.PartitionTableName),
-				table.ObjectNamePrefix,
-				table.AtTsExpr,
-			)
-			sql := tree.StringWithOpts(
-				stmt,
-				dialect.MYSQL,
-				tree.WithQuoteIdentifier(),
-				tree.WithSingleQuoteString(),
-			)
-			if err := c.runSql(sql); err != nil {
-				return err
-			}
+		var partitions []string
+		names := stmt.(*tree.AlterTable).PartitionOption.(*tree.AlterPartitionTruncatePartitionClause).PartitionNames
+		for _, p := range names {
+			partitions = append(partitions, p.String())
 		}
-		return nil
+
+		return ps.TruncatePartitions(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			partitions,
+			c.proc.GetTxnOperator(),
+		)
 	}
+	return moerr.NewInternalError(c.proc.Ctx, "unsupported alter partition type")
 }
 
 func (s *Scope) doAlterTable(c *Compile) error {

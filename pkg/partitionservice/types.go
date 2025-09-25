@@ -83,6 +83,13 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
+	TruncatePartitions(
+		ctx context.Context,
+		tableID uint64,
+		partitions []string,
+		txnOp client.TxnOperator,
+	) error
+
 	GetPartitionMetadata(
 		ctx context.Context,
 		tableID uint64,
@@ -118,6 +125,14 @@ type PartitionStorage interface {
 	) error
 
 	DropPartitions(
+		ctx context.Context,
+		def *plan.TableDef,
+		metadata partition.PartitionMetadata,
+		partitions []string,
+		txnOp client.TxnOperator,
+	) error
+
+	TruncatePartitions(
 		ctx context.Context,
 		def *plan.TableDef,
 		metadata partition.PartitionMetadata,

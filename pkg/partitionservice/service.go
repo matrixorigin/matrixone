@@ -213,6 +213,52 @@ func (s *Service) DropPartitions(
 	)
 }
 
+func (s *Service) TruncatePartitions(
+	ctx context.Context,
+	tableID uint64,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	if s.cfg.Disable {
+		return nil
+	}
+
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	if len(partitions) == 0 {
+		for _, p := range metadata.Partitions {
+			partitions = append(partitions, p.Name)
+		}
+	}
+
+	return s.store.TruncatePartitions(
+		ctx,
+		def,
+		metadata,
+		partitions,
+		txnOp,
+	)
+}
+
 func (s *Service) Delete(
 	ctx context.Context,
 	tableID uint64,
