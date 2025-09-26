@@ -76,14 +76,22 @@ func (group *Group) updateMemoryUsage(proc *process.Process) {
 
 func (group *Group) spillPartialResults(proc *process.Process) error {
 	if len(group.ctr.result1.AggList) == 0 || len(group.ctr.result1.ToPopped) == 0 {
+		logutil.Debug("Group operator spill called but no data to spill")
 		return nil
 	}
+
+	logutil.Info("Group operator starting spill operation",
+		zap.Int64("memory_usage", group.ctr.currentMemUsage),
+		zap.Int64("spill_threshold", group.SpillThreshold),
+		zap.Int("agg_count", len(group.ctr.result1.AggList)))
 
 	marshaledAggStates := make([][]byte, len(group.ctr.result1.AggList))
 	for i, agg := range group.ctr.result1.AggList {
 		if agg != nil {
 			marshaledData, err := aggexec.MarshalAggFuncExec(agg)
 			if err != nil {
+				logutil.Error("Group operator failed to marshal aggregator",
+					zap.Int("agg_index", i), zap.Error(err))
 				return err
 			}
 			marshaledAggStates[i] = marshaledData
@@ -98,6 +106,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	}
 
 	if totalGroups == 0 {
+		logutil.Debug("Group operator spill found no groups to spill")
 		for _, agg := range group.ctr.result1.AggList {
 			if agg != nil {
 				agg.Free()
@@ -128,6 +137,8 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 				for i, vec := range bat.Vecs {
 					if i < len(groupVecs) && groupVecs[i] != nil && vec != nil {
 						if err := groupVecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+							logutil.Error("Group operator failed to union batch during spill",
+								zap.Int("vec_index", i), zap.Error(err))
 							for j := range groupVecs {
 								if groupVecs[j] != nil {
 									groupVecs[j].Free(proc.Mp())
@@ -150,9 +161,15 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 
 	spillID, err := group.SpillManager.Spill(spillData)
 	if err != nil {
+		logutil.Error("Group operator failed to spill data", zap.Error(err))
 		spillData.Free(proc.Mp())
 		return err
 	}
+
+	logutil.Info("Group operator successfully spilled data",
+		zap.String("spill_id", string(spillID)),
+		zap.Int("total_groups", totalGroups),
+		zap.Int64("estimated_size", spillData.EstimateSize()))
 
 	group.ctr.spilledStates = append(group.ctr.spilledStates, spillID)
 
@@ -176,6 +193,8 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	}
 
 	group.ctr.currentMemUsage = 0
+	logutil.Debug("Group operator completed spill cleanup",
+		zap.Int("spilled_states_count", len(group.ctr.spilledStates)))
 	return nil
 }
 
@@ -184,28 +203,54 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 		return nil
 	}
 
-	for _, spillID := range group.ctr.spilledStates {
+	logutil.Info("Group operator starting merge of spilled results",
+		zap.Int("spilled_states_count", len(group.ctr.spilledStates)))
+
+	for i, spillID := range group.ctr.spilledStates {
+		logutil.Debug("Group operator merging spilled state",
+			zap.Int("state_index", i),
+			zap.String("spill_id", string(spillID)))
+
 		spillData, err := group.SpillManager.Retrieve(spillID, proc.Mp())
 		if err != nil {
+			logutil.Error("Group operator failed to retrieve spilled data",
+				zap.String("spill_id", string(spillID)), zap.Error(err))
 			return err
 		}
 
 		spillState, ok := spillData.(*SpillableAggState)
 		if !ok {
+			logutil.Error("Group operator retrieved invalid spilled data type",
+				zap.String("spill_id", string(spillID)))
 			spillData.Free(proc.Mp())
 			panic(fmt.Sprintf("invalid spilled data type"))
 		}
 
+		logutil.Debug("Group operator retrieved spilled state",
+			zap.String("spill_id", string(spillID)),
+			zap.Int("group_count", spillState.GroupCount),
+			zap.Int64("estimated_size", spillState.EstimateSize()))
+
 		if err = group.restoreAndMergeSpilledAggregators(proc, spillState); err != nil {
+			logutil.Error("Group operator failed to restore and merge spilled aggregators",
+				zap.String("spill_id", string(spillID)), zap.Error(err))
 			spillState.Free(proc.Mp())
 			return err
 		}
 
 		spillState.Free(proc.Mp())
 		if err = group.SpillManager.Delete(spillID); err != nil {
+			logutil.Error("Group operator failed to delete spilled data",
+				zap.String("spill_id", string(spillID)), zap.Error(err))
 			return err
 		}
+
+		logutil.Debug("Group operator completed merge of spilled state",
+			zap.String("spill_id", string(spillID)))
 	}
+
+	logutil.Info("Group operator completed merge of all spilled results",
+		zap.Int("merged_states_count", len(group.ctr.spilledStates)))
 
 	group.ctr.spilledStates = nil
 	return nil
