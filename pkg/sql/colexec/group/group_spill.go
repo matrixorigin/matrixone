@@ -20,16 +20,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (group *Group) shouldSpill() bool {
-	return group.SpillThreshold > 0 &&
+	shouldSpill := group.SpillThreshold > 0 &&
 		group.SpillManager != nil &&
 		group.ctr.currentMemUsage > group.SpillThreshold &&
 		len(group.ctr.result1.AggList) > 0 &&
 		len(group.ctr.result1.ToPopped) > 0
+
+	if shouldSpill {
+		logutil.Debug("Group operator triggering spill",
+			zap.Int64("current_memory_usage", group.ctr.currentMemUsage),
+			zap.Int64("spill_threshold", group.SpillThreshold),
+			zap.Int("agg_count", len(group.ctr.result1.AggList)),
+			zap.Int("batch_count", len(group.ctr.result1.ToPopped)))
+	}
+
+	return shouldSpill
 }
 
 func (group *Group) updateMemoryUsage(proc *process.Process) {
@@ -51,7 +63,15 @@ func (group *Group) updateMemoryUsage(proc *process.Process) {
 		}
 	}
 
+	previousUsage := group.ctr.currentMemUsage
 	group.ctr.currentMemUsage = usage
+
+	if usage > previousUsage && usage > group.SpillThreshold/2 {
+		logutil.Debug("Group operator memory usage update",
+			zap.Int64("previous_usage", previousUsage),
+			zap.Int64("current_usage", usage),
+			zap.Int64("spill_threshold", group.SpillThreshold))
+	}
 }
 
 func (group *Group) spillPartialResults(proc *process.Process) error {
