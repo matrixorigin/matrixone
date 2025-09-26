@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 type SpillableAggState struct {
@@ -95,18 +93,10 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 		}
 	}
 
-	retBytes := buf.Bytes()
-	logutil.Debug("serialized spillable agg state",
-		zap.String("component", "group-spill"),
-		zap.Int("size", len(retBytes)),
-		zap.Int("group-count", s.GroupCount))
-	return retBytes, nil
+	return buf.Bytes(), nil
 }
 
 func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
-	logutil.Debug("deserializing spillable agg state",
-		zap.String("component", "group-spill"),
-		zap.Int("size", len(data)))
 	buf := bytes.NewReader(data)
 
 	var groupCount int32
