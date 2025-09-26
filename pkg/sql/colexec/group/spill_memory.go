@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 type MemorySpillManager struct {
@@ -30,6 +32,7 @@ type MemorySpillManager struct {
 }
 
 func NewMemorySpillManager() *MemorySpillManager {
+	logutil.Info("new memory spill manager", zap.String("component", "group-spill"))
 	return &MemorySpillManager{
 		data: make(map[SpillID][]byte),
 	}
@@ -46,6 +49,11 @@ func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	defer m.mu.Unlock()
 	m.data[id] = serialized
 	atomic.AddInt64(&m.totalMem, int64(len(serialized)))
+	logutil.Debug("spilled data to memory",
+		zap.String("component", "group-spill"),
+		zap.String("spill-id", string(id)),
+		zap.Int("size", len(serialized)),
+		zap.Int64("total-mem", atomic.LoadInt64(&m.totalMem)))
 	return id, nil
 }
 
@@ -63,6 +71,10 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 		data.Free(mp)
 		return nil, err
 	}
+	logutil.Debug("retrieved data from memory",
+		zap.String("component", "group-spill"),
+		zap.String("spill-id", string(id)),
+		zap.Int("size", len(serialized)))
 	return data, nil
 }
 
@@ -71,8 +83,14 @@ func (m *MemorySpillManager) Delete(id SpillID) error {
 	defer m.mu.Unlock()
 
 	if serialized, exists := m.data[id]; exists {
-		atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
+		size := len(serialized)
+		atomic.AddInt64(&m.totalMem, -int64(size))
 		delete(m.data, id)
+		logutil.Debug("deleted spilled data from memory",
+			zap.String("component", "group-spill"),
+			zap.String("spill-id", string(id)),
+			zap.Int("size", size),
+			zap.Int64("total-mem", atomic.LoadInt64(&m.totalMem)))
 	}
 	return nil
 }
@@ -81,8 +99,16 @@ func (m *MemorySpillManager) Free() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	logutil.Info("freeing memory spill manager",
+		zap.String("component", "group-spill"),
+		zap.Int("spilled-items", len(m.data)),
+		zap.Int64("total-mem", atomic.LoadInt64(&m.totalMem)))
+
 	for id := range m.data {
-		m.Delete(id)
+		if serialized, exists := m.data[id]; exists {
+			atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
+			delete(m.data, id)
+		}
 	}
 	m.data = nil
 }
