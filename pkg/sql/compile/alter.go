@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
@@ -214,6 +215,81 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.String("copy table name", qry.CopyTableDef.Name),
 			zap.Error(err))
 		return err
+	}
+
+	//--------------------------------------------------------------------------------------------------------------
+	{
+		// 9. invoke reindex for the new table, if it contains ivf index.
+		multiTableIndexes := make(map[string]*MultiTableIndex)
+		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
+		extra := newRel.GetExtraInfo()
+		id := newRel.GetTableID(c.proc.Ctx)
+
+		for _, indexDef := range newTableDef.Indexes {
+
+			if !qry.Options.SkipIndexsCopy[indexDef.IndexName] {
+				continue
+			}
+
+			affected := false
+			for _, part := range indexDef.Parts {
+				if slices.Index(qry.AffectedCols, part) != -1 {
+					affected = true
+					break
+
+				}
+			}
+
+			if !affected {
+				// column not affected means index already cloned in cloneUnaffectedIndexes()
+				continue
+			}
+
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
+				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
+				}
+				ty := catalog.ToLower(indexDef.IndexAlgoTableType)
+				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
+			}
+			if catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
+				err = s.handleFullTextIndexTable(c, id, extra, dbSource, indexDef, qry.Database, newTableDef, nil)
+				if err != nil {
+					c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
+						zap.String("origin tableName", qry.GetTableDef().Name),
+						zap.String("copy table name", qry.CopyTableDef.Name),
+						zap.String("indexAlgo", indexDef.IndexAlgo),
+						zap.Error(err))
+					return err
+				}
+			}
+		}
+		for _, multiTableIndex := range multiTableIndexes {
+			switch multiTableIndex.IndexAlgo {
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				err = s.handleVectorIvfFlatIndex(
+					c, id, extra, dbSource, multiTableIndex.IndexDefs,
+					qry.Database, newTableDef, nil,
+				)
+			case catalog.MoIndexHnswAlgo.ToString():
+				err = s.handleVectorHnswIndex(
+					c, id, extra, dbSource, multiTableIndex.IndexDefs,
+					qry.Database, newTableDef, nil,
+				)
+			}
+			if err != nil {
+				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("copy table name", qry.CopyTableDef.Name),
+					zap.String("indexAlgo", multiTableIndex.IndexAlgo),
+					zap.Error(err))
+				return err
+			}
+		}
 	}
 
 	// get and update the change mapping information of table colIds
