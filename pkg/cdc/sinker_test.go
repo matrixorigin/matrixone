@@ -55,7 +55,7 @@ func mockTableDef() *plan.TableDef {
 
 func mockClusterTableDef() *plan.TableDef {
 	return &plan.TableDef{
-		TableType: catalog.SystemClusterRel,
+		TableType: catalog.SystemExternalRel,
 		Cols: []*plan.ColDef{
 			{
 				Name: "pk",
