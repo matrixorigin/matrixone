@@ -818,9 +818,13 @@ class AsyncMoCtlManager:
         table_ref = f"{database}.{table}"
         return await self._execute_moctl("dn", "flush", table_ref)
 
-    async def checkpoint(self) -> Dict[str, Any]:
-        """Force checkpoint asynchronously"""
+    async def increment_checkpoint(self) -> Dict[str, Any]:
+        """Force incremental checkpoint asynchronously"""
         return await self._execute_moctl("dn", "checkpoint", "")
+
+    async def global_checkpoint(self) -> Dict[str, Any]:
+        """Force global checkpoint asynchronously"""
+        return await self._execute_moctl("dn", "globalcheckpoint", "")
 
 
 class AsyncAccountManager:

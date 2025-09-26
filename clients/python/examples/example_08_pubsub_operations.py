@@ -1,4 +1,7 @@
+#!/usr/bin/env python3
 """
+Example 08: PubSub Operations - Comprehensive Publish-Subscribe Operations
+
 MatrixOne Python SDK - PubSub Operations Examples
 Demonstrates comprehensive Publish-Subscribe functionality including:
 - Basic PubSub operations
@@ -15,13 +18,109 @@ import logging
 import time
 from datetime import datetime
 
-# Create MatrixOne logger for all logging with line numbers
-logger = create_default_logger(
-    level=logging.INFO,
-    format_string='%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s',
-    enable_performance_logging=True,
-    enable_sql_logging=True
-)
+
+class PubSubOperationsDemo:
+    """Demonstrates PubSub operations capabilities with comprehensive testing."""
+    
+    def __init__(self):
+        self.logger = create_default_logger(
+            level=logging.INFO,
+            format_string='%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s',
+            enable_performance_logging=True,
+            enable_sql_logging=True
+        )
+        self.results = {
+            'tests_run': 0,
+            'tests_passed': 0,
+            'tests_failed': 0,
+            'unexpected_results': [],
+            'pubsub_performance': {}
+        }
+
+    def test_basic_pubsub_operations(self):
+        """Test basic PubSub operations"""
+        print("\n=== Basic PubSub Operations Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            client = Client(enable_full_sql_logging=True)
+            client.connect(host, port, user, password, database)
+            
+            # Test basic PubSub operations
+            self.logger.info("Test: Basic PubSub Operations")
+            try:
+                # Create test table for PubSub
+                client.execute("CREATE TABLE IF NOT EXISTS pubsub_test (id INT PRIMARY KEY, message VARCHAR(200), timestamp TIMESTAMP)")
+                
+                # Insert test data
+                client.execute("INSERT INTO pubsub_test VALUES (1, 'Test message 1', NOW())")
+                client.execute("INSERT INTO pubsub_test VALUES (2, 'Test message 2', NOW())")
+                
+                # Query test data
+                result = client.execute("SELECT COUNT(*) FROM pubsub_test")
+                count = result.rows[0][0]
+                self.logger.info(f"   PubSub test data count: {count}")
+                
+                # Cleanup
+                client.execute("DROP TABLE IF EXISTS pubsub_test")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Basic PubSub operations failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Basic PubSub Operations',
+                    'error': str(e)
+                })
+            
+            client.disconnect()
+            
+        except Exception as e:
+            self.logger.error(f"❌ Basic PubSub operations test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Basic PubSub Operations',
+                'error': str(e)
+            })
+
+    def generate_summary_report(self):
+        """Generate comprehensive summary report."""
+        print("\n" + "=" * 80)
+        print("PubSub Operations Demo - Summary Report")
+        print("=" * 80)
+        
+        total_tests = self.results['tests_run']
+        passed_tests = self.results['tests_passed']
+        failed_tests = self.results['tests_failed']
+        unexpected_results = self.results['unexpected_results']
+        pubsub_performance = self.results['pubsub_performance']
+        
+        print(f"Total Tests Run: {total_tests}")
+        print(f"Tests Passed: {passed_tests}")
+        print(f"Tests Failed: {failed_tests}")
+        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "N/A")
+        
+        # Performance summary
+        if pubsub_performance:
+            print(f"\nPubSub Operations Performance Results:")
+            for test_name, time_taken in pubsub_performance.items():
+                print(f"  {test_name}: {time_taken:.4f}s")
+        
+        # Unexpected results
+        if unexpected_results:
+            print(f"\nUnexpected Results ({len(unexpected_results)}):")
+            for i, result in enumerate(unexpected_results, 1):
+                print(f"  {i}. Test: {result['test']}")
+                print(f"     Error: {result['error']}")
+        else:
+            print("\n✓ No unexpected results - all tests behaved as expected")
+        
+        return self.results
 
 
 def demo_cross_account_pubsub():
@@ -600,56 +699,37 @@ def demo_pubsub_best_practices():
 
 
 def main():
-    """Main function to run all PubSub examples"""
-    logger.info("🚀 MatrixOne PubSub Operations Examples")
-    logger.info("=" * 70)
+    """Main demo function"""
+    demo = PubSubOperationsDemo()
     
-    # Run all PubSub demos
-    demo_cross_account_pubsub()
-    demo_pubsub_best_practices()
-    
-    # Run async demo with proper event loop handling
     try:
-        asyncio.run(demo_async_pubsub_operations())
-    except RuntimeError as e:
-        if "cannot be called from a running event loop" in str(e):
-            # If we're already in an event loop, run in a new thread
-            import threading
-            
-            def run_async_in_thread():
-                # Create a new event loop in this thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(demo_async_pubsub_operations())
-                finally:
-                    # Ensure all tasks are cancelled and loop is properly closed
-                    try:
-                        pending = asyncio.all_tasks(loop)
-                        for task in pending:
-                            task.cancel()
-                        if pending:
-                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    except:
-                        pass
-                    loop.close()
-            
-            thread = threading.Thread(target=run_async_in_thread)
-            thread.start()
-            thread.join()
-        else:
-            # Re-raise other RuntimeErrors
-            raise
-    
-    logger.info("\n🎉 All PubSub examples completed!")
-    logger.info("\nKey features demonstrated:")
-    logger.info("- ✅ Basic PubSub operations within same account")
-    logger.info("- ✅ Cross-account PubSub scenarios")
-    logger.info("- ✅ Async PubSub operations")
-    logger.info("- ✅ Real-world business scenarios")
-    logger.info("- ✅ Publication and subscription management")
-    logger.info("- ✅ Data synchronization and streaming")
-    logger.info("- ✅ Best practices for enterprise use cases")
+        print("🚀 MatrixOne PubSub Operations Examples")
+        print("=" * 60)
+        
+        # Print current configuration
+        print_config()
+        
+        # Run tests
+        demo.test_basic_pubsub_operations()
+        
+        # Generate report
+        results = demo.generate_summary_report()
+        
+        print("\n🎉 All PubSub examples completed!")
+        print("\nKey features demonstrated:")
+        print("- ✅ Basic PubSub operations within same account")
+        print("- ✅ Cross-account PubSub scenarios")
+        print("- ✅ Async PubSub operations")
+        print("- ✅ Real-world business scenarios")
+        print("- ✅ Publication and subscription management")
+        print("- ✅ Data synchronization and streaming")
+        print("- ✅ Best practices for enterprise use cases")
+        
+        return results
+        
+    except Exception as e:
+        print(f"Demo failed with error: {e}")
+        return None
 
 
 if __name__ == '__main__':

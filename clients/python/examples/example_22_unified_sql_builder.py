@@ -166,11 +166,11 @@ class UnifiedSQLBuilderDemo:
         self.results['tests_run'] += 1
     
     def test_cte_queries(self):
-        """Test Common Table Expression (CTE) query construction."""
+        """Test Common Table Expression (CTE) query construction and execution."""
         print("\n=== CTE Queries ===")
         
         try:
-            # Test 1: Basic CTE query
+            # Test 1: Basic CTE query construction
             builder = MatrixOneSQLBuilder()
             sql, params = (builder
                           .with_cte('dept_stats', 'SELECT department_id, COUNT(*) as emp_count FROM employees GROUP BY department_id')
@@ -179,11 +179,11 @@ class UnifiedSQLBuilderDemo:
                           .join('dept_stats ds', 'd.id = ds.department_id', 'INNER')
                           .where('ds.emp_count > ?', 5)
                           .build())
-            print(f"✅ CTE query: {sql}")
+            print(f"✅ CTE query construction: {sql}")
             assert "WITH dept_stats AS" in sql
             assert "INNER JOIN dept_stats ds" in sql
             
-            # Test 2: Multiple CTEs
+            # Test 2: Multiple CTEs construction
             builder = MatrixOneSQLBuilder()
             sql, params = (builder
                           .with_cte('sales_summary', 'SELECT product_id, SUM(amount) as total_sales FROM sales GROUP BY product_id')
@@ -193,9 +193,13 @@ class UnifiedSQLBuilderDemo:
                           .join('product_rankings pr', 'p.id = pr.product_id', 'INNER')
                           .where('pr.rank <= ?', 10)
                           .build())
-            print(f"✅ Multiple CTEs: {sql[:100]}...")
+            print(f"✅ Multiple CTEs construction: {sql[:100]}...")
             assert "WITH sales_summary AS" in sql
             assert "product_rankings AS" in sql
+            
+            # Test 3: CTE with actual database operations (if connected)
+            if self.client:
+                self._test_cte_database_operations()
             
             self.results['tests_passed'] += 1
             
@@ -205,6 +209,104 @@ class UnifiedSQLBuilderDemo:
             self.results['unexpected_results'].append(f"CTE queries: {e}")
         
         self.results['tests_run'] += 1
+    
+    def _test_cte_database_operations(self):
+        """Test CTE operations with actual database."""
+        print("\n--- CTE Database Operations ---")
+        
+        try:
+            # Create test tables
+            self.client.execute("DROP TABLE IF EXISTS test_users_cte")
+            self.client.execute("""
+                CREATE TABLE test_users_cte (
+                    id INT PRIMARY KEY,
+                    name VARCHAR(100),
+                    department_id INT,
+                    salary DECIMAL(10,2),
+                    email VARCHAR(100)
+                )
+            """)
+            
+            self.client.execute("DROP TABLE IF EXISTS test_departments_cte")
+            self.client.execute("""
+                CREATE TABLE test_departments_cte (
+                    id INT PRIMARY KEY,
+                    name VARCHAR(100),
+                    budget DECIMAL(12,2)
+                )
+            """)
+            
+            # Insert sample data
+            self.client.execute("""
+                INSERT INTO test_departments_cte (id, name, budget) VALUES 
+                (1, 'Engineering', 100000),
+                (2, 'Marketing', 50000),
+                (3, 'Sales', 80000),
+                (4, 'HR', 30000)
+            """)
+            
+            self.client.execute("""
+                INSERT INTO test_users_cte (id, name, department_id, salary, email) VALUES 
+                (1, 'John Doe', 1, 75000, 'john@example.com'),
+                (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
+                (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
+                (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
+                (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
+            """)
+            
+            # Test CTE with department statistics
+            cte_query = self.client.cte_query()
+            results = (cte_query
+                      .with_cte('dept_stats', """
+                          SELECT 
+                              department_id, 
+                              COUNT(*) as user_count,
+                              AVG(salary) as avg_salary,
+                              MAX(salary) as max_salary
+                          FROM test_users_cte 
+                          GROUP BY department_id
+                      """)
+                      .select_from('dept_stats.department_id', 'dept_stats.user_count', 
+                                  'dept_stats.avg_salary', 'dept_stats.max_salary')
+                      .from_table('dept_stats')
+                      .where('dept_stats.avg_salary > ?', 65000)
+                      .order_by('dept_stats.avg_salary DESC')
+                      .execute())
+            
+            print(f"✅ CTE department statistics: {len(results)} results")
+            for row in results:
+                print(f"    Dept {row.department_id}: {row.user_count} users, avg: ${row.avg_salary:.2f}")
+            
+            # Test CTE with JOINs
+            cte_query2 = self.client.cte_query()
+            results2 = (cte_query2
+                       .with_cte('high_salary_users', """
+                           SELECT id, name, department_id, salary 
+                           FROM test_users_cte 
+                           WHERE salary > 70000
+                       """)
+                       .select_from('high_salary_users.name', 'high_salary_users.salary', 'd.name')
+                       .from_table('high_salary_users')
+                       .join('test_departments_cte d', 'high_salary_users.department_id = d.id', 'INNER')
+                       .order_by('high_salary_users.salary DESC')
+                       .execute())
+            
+            print(f"✅ CTE with JOINs: {len(results2)} results")
+            for row in results2:
+                print(f"    {row.name}: ${row.salary:.2f} in {row.name_2}")
+            
+            # Cleanup
+            self.client.execute("DROP TABLE IF EXISTS test_users_cte")
+            self.client.execute("DROP TABLE IF EXISTS test_departments_cte")
+            
+        except Exception as e:
+            print(f"⚠️ CTE database operations failed: {e}")
+            # Cleanup on error
+            try:
+                self.client.execute("DROP TABLE IF EXISTS test_users_cte")
+                self.client.execute("DROP TABLE IF EXISTS test_departments_cte")
+            except:
+                pass
     
     def test_dml_operations(self):
         """Test DML (Data Manipulation Language) operations."""

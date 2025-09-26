@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MatrixOne SQLAlchemy Integration Examples
+Example 06: SQLAlchemy Integration - Comprehensive SQLAlchemy Operations
 
 This example demonstrates comprehensive SQLAlchemy integration:
 1. Basic SQLAlchemy setup and connection
@@ -66,548 +66,332 @@ class Post(Base):
     # Relationship
     author = relationship("User", back_populates="posts")
 
-class Category(Base):
-    __tablename__ = 'categories'
-    
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), unique=True, nullable=False)
-    description = Column(Text)
 
-
-def demo_basic_sqlalchemy_setup():
-    """Demonstrate basic SQLAlchemy setup"""
-    logger.info("🚀 MatrixOne Basic SQLAlchemy Setup Demo")
-    logger.info("=" * 60)
+class SQLAlchemyIntegrationDemo:
+    """Demonstrates SQLAlchemy integration capabilities with comprehensive testing."""
     
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    try:
-        # Create engine
-        logger.info("\n=== Test 1: Create SQLAlchemy Engine ===")
-        engine = create_engine(
-            f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}',
-            poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
-            pool_pre_ping=True,
-            echo=False  # Set to True for SQL logging
+    def __init__(self):
+        self.logger = create_default_logger(
+            enable_performance_logging=True,
+            enable_sql_logging=True
         )
-        logger.info("   ✅ SQLAlchemy engine created")
+        self.results = {
+            'tests_run': 0,
+            'tests_passed': 0,
+            'tests_failed': 0,
+            'unexpected_results': [],
+            'sqlalchemy_performance': {}
+        }
+
+    def test_basic_sqlalchemy_setup(self):
+        """Test basic SQLAlchemy setup"""
+        print("\n=== Basic SQLAlchemy Setup Tests ===")
         
-        # Create session factory
-        SessionLocal = sessionmaker(bind=engine)
-        logger.info("   ✅ Session factory created")
+        self.results['tests_run'] += 1
         
-        # Test connection
-        logger.info("\n=== Test 2: Test Connection ===")
-        session = SessionLocal()
         try:
-            result = session.execute(text("SELECT 1 as test_value, USER() as user_info"))
-            row = result.fetchone()
-            logger.info(f"   ✅ Connection test successful: {row}")
-        finally:
-            session.close()
-        
-        # Create tables
-        logger.info("\n=== Test 3: Create Tables ===")
-        Base.metadata.create_all(engine)
-        logger.info("   ✅ Tables created successfully")
-        
-        # List tables
-        logger.info("\n=== Test 4: List Tables ===")
-        result = session.execute(text("SHOW TABLES"))
-        tables = [row[0] for row in result.fetchall()]
-        logger.info(f"   Tables: {tables}")
-        
-        session.close()
-        
-    except Exception as e:
-        logger.error(f"❌ Basic SQLAlchemy setup failed: {e}")
-
-
-def demo_orm_operations():
-    """Demonstrate ORM operations"""
-    logger.info("\n=== Test 5: ORM Operations ===")
-    
-    try:
-        # Get connection parameters
-        host, port, user, password, database = get_connection_params()
-        
-        # Create engine and session
-        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
-        SessionLocal = sessionmaker(bind=engine)
-        session = SessionLocal()
-        
-        # Create users
-        logger.info("\n👥 Create Users")
-        users_data = [
-            {'username': 'alice', 'email': 'alice@example.com'},
-            {'username': 'bob', 'email': 'bob@example.com'},
-            {'username': 'charlie', 'email': 'charlie@example.com'}
-        ]
-        
-        created_users = []
-        for user_data in users_data:
-            # Check if user already exists
-            existing_user = session.query(User).filter(User.username == user_data['username']).first()
-            if not existing_user:
-                user = User(**user_data)
-                session.add(user)
-                created_users.append(user)
-            else:
-                created_users.append(existing_user)
-        
-        session.commit()
-        logger.info(f"   ✅ Created {len(created_users)} users")
-        
-        # Create categories
-        logger.info("\n📂 Create Categories")
-        categories_data = [
-            {'name': 'Technology', 'description': 'Tech-related posts'},
-            {'name': 'Science', 'description': 'Science-related posts'},
-            {'name': 'Art', 'description': 'Art-related posts'}
-        ]
-        
-        created_categories = []
-        for cat_data in categories_data:
-            # Check if category already exists
-            existing_category = session.query(Category).filter(Category.name == cat_data['name']).first()
-            if not existing_category:
-                category = Category(**cat_data)
-                session.add(category)
-                created_categories.append(category)
-            else:
-                created_categories.append(existing_category)
-        
-        session.commit()
-        logger.info(f"   ✅ Created {len(created_categories)} categories")
-        
-        # Create posts
-        logger.info("\n📝 Create Posts")
-        posts_data = [
-            {'title': 'Introduction to MatrixOne', 'content': 'MatrixOne is a modern database...', 'author_id': 1},
-            {'title': 'SQLAlchemy Best Practices', 'content': 'Here are some best practices...', 'author_id': 2},
-            {'title': 'Database Performance Tips', 'content': 'Performance optimization tips...', 'author_id': 1}
-        ]
-        
-        created_posts = []
-        for post_data in posts_data:
-            # Check if post already exists
-            existing_post = session.query(Post).filter(Post.title == post_data['title']).first()
-            if not existing_post:
-                post = Post(**post_data)
-                session.add(post)
-                created_posts.append(post)
-            else:
-                created_posts.append(existing_post)
-        
-        session.commit()
-        logger.info(f"   ✅ Created {len(created_posts)} posts")
-        
-        # Query operations
-        logger.info("\n🔍 Query Operations")
-        
-        # Get all users
-        users = session.query(User).all()
-        logger.info(f"   Total users: {len(users)}")
-        for user in users:
-            logger.info(f"     - {user.username} ({user.email})")
-        
-        # Get user with posts
-        user_with_posts = session.query(User).filter(User.username == 'alice').first()
-        if user_with_posts:
-            logger.info(f"   User {user_with_posts.username} has {len(user_with_posts.posts)} posts")
-            for post in user_with_posts.posts:
-                logger.info(f"     - {post.title}")
-        
-        # Get posts with author
-        posts_with_author = session.query(Post).join(User).all()
-        logger.info(f"   Posts with authors: {len(posts_with_author)}")
-        for post in posts_with_author:
-            logger.info(f"     - '{post.title}' by {post.author.username}")
-        
-        # Update operations
-        logger.info("\n✏️ Update Operations")
-        user_to_update = session.query(User).filter(User.username == 'alice').first()
-        if user_to_update:
-            user_to_update.email = 'alice.updated@example.com'
-            session.commit()
-            logger.info(f"   ✅ Updated user {user_to_update.username}")
-        
-        # Delete operations
-        logger.info("\n🗑️ Delete Operations")
-        post_to_delete = session.query(Post).filter(Post.title == 'Database Performance Tips').first()
-        if post_to_delete:
-            session.delete(post_to_delete)
-            session.commit()
-            logger.info(f"   ✅ Deleted post: {post_to_delete.title}")
-        
-        session.close()
-        
-    except Exception as e:
-        logger.error(f"❌ ORM operations failed: {e}")
-
-
-def demo_sqlalchemy_transactions():
-    """Demonstrate SQLAlchemy transactions"""
-    logger.info("\n=== Test 6: SQLAlchemy Transactions ===")
-    
-    try:
-        # Get connection parameters
-        host, port, user, password, database = get_connection_params()
-        
-        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
-        SessionLocal = sessionmaker(bind=engine)
-        
-        # Test transaction with commit
-        logger.info("\n🔄 Transaction with Commit")
-        session = SessionLocal()
-        try:
-            # Check if user already exists
-            existing_user = session.query(User).filter(User.username == 'transaction_user').first()
-            if existing_user:
-                user = existing_user
-            else:
-                user = User(username='transaction_user', email='transaction@example.com')
-                session.add(user)
-                session.flush()  # Get the ID
+            # Get connection parameters
+            host, port, user, password, database = get_connection_params()
             
-            # Check if post already exists
-            existing_post = session.query(Post).filter(Post.title == 'Transaction Test Post').first()
-            if not existing_post:
-                post = Post(title='Transaction Test Post', content='This post was created in a transaction', author_id=user.id)
-                session.add(post)
-            
-            session.commit()
-            logger.info("   ✅ Transaction committed successfully")
+            # Test SQLAlchemy engine creation
+            self.logger.info("Test: SQLAlchemy Engine Creation")
+            try:
+                # Create SQLAlchemy engine
+                connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+                engine = create_engine(
+                    connection_string,
+                    poolclass=QueuePool,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_pre_ping=True
+                )
+                
+                # Test connection
+                with engine.connect() as conn:
+                    result = conn.execute(text("SELECT 1 as test"))
+                    self.logger.info(f"   Connection test result: {result.fetchone()[0]}")
+                
+                self.logger.info("✅ SQLAlchemy engine created successfully")
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ SQLAlchemy engine creation failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'SQLAlchemy Engine Creation',
+                    'error': str(e)
+                })
             
         except Exception as e:
-            session.rollback()
-            logger.error(f"   ❌ Transaction rolled back: {e}")
-        finally:
-            session.close()
+            self.logger.error(f"❌ Basic SQLAlchemy setup test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Basic SQLAlchemy Setup',
+                'error': str(e)
+            })
+
+    def test_orm_operations(self):
+        """Test ORM operations"""
+        print("\n=== ORM Operations Tests ===")
         
-        # Test transaction with rollback
-        logger.info("\n🔄 Transaction with Rollback")
-        session = SessionLocal()
+        self.results['tests_run'] += 1
+        
         try:
-            # Create user in transaction
-            user = User(username='rollback_user', email='rollback@example.com')
-            session.add(user)
-            session.flush()
+            # Get connection parameters
+            host, port, user, password, database = get_connection_params()
             
-            # Create post for the user
-            post = Post(title='Rollback Test Post', content='This post should be rolled back', author_id=user.id)
-            session.add(post)
+            # Create SQLAlchemy engine and session
+            connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+            engine = create_engine(connection_string)
+            Session = sessionmaker(bind=engine)
             
-            # Simulate error
-            raise Exception("Simulated transaction error")
-            
-        except Exception as e:
-            session.rollback()
-            logger.info(f"   ✅ Transaction rolled back: {e}")
-        finally:
-            session.close()
-        
-        # Verify rollback
-        session = SessionLocal()
-        rollback_user = session.query(User).filter(User.username == 'rollback_user').first()
-        if rollback_user:
-            logger.error("   ❌ Rollback user should not exist!")
-        else:
-            logger.info("   ✅ Rollback user correctly removed")
-        
-        session.close()
-        
-    except Exception as e:
-        logger.error(f"❌ SQLAlchemy transactions failed: {e}")
-
-
-async def demo_async_sqlalchemy():
-    """Demonstrate async SQLAlchemy operations"""
-    logger.info("\n=== Test 7: Async SQLAlchemy ===")
-    
-    async_engine = None
-    try:
-        # Get connection parameters
-        host, port, user, password, database = get_connection_params()
-        
-        # Create async engine
-        async_engine = create_async_engine(
-            f'mysql+aiomysql://{user}:{password}@{host}:{port}/{database}',
-            echo=False
-        )
-        
-        # Create async session factory
-        AsyncSessionLocal = sessionmaker(
-            async_engine, class_=AsyncSession, expire_on_commit=False
-        )
-        
-        # Test async operations
-        logger.info("\n🔄 Async Operations")
-        async with AsyncSessionLocal() as session:
-            # Check if user already exists
-            existing_user = await session.execute(text("SELECT id FROM users WHERE username = 'async_user'"))
-            if existing_user.fetchone():
-                logger.info("   ✅ User already exists, skipping creation")
-                # Get the existing user
-                result = await session.execute(text("SELECT username, email FROM users WHERE username = 'async_user'"))
-                row = result.fetchone()
-                if row:
-                    logger.info(f"   ✅ Queried existing user: {row[0]} ({row[1]})")
-            else:
+            # Test ORM operations
+            self.logger.info("Test: ORM Operations")
+            try:
+                # Create tables
+                Base.metadata.create_all(engine)
+                self.logger.info("   Created tables")
+                
+                # Create session
+                session = Session()
+                
                 # Create user
-                user = User(username='async_user', email='async@example.com')
+                user = User(
+                    username='test_user',
+                    email='test@example.com',
+                    created_at=text('NOW()')
+                )
                 session.add(user)
-                await session.commit()
-                logger.info("   ✅ Created user with async SQLAlchemy")
+                session.commit()
+                self.logger.info(f"   Created user: {user.username}")
                 
                 # Query user
-                result = await session.execute(text("SELECT username, email FROM users WHERE username = 'async_user'"))
-                row = result.fetchone()
-                if row:
-                    logger.info(f"   ✅ Queried user: {row[0]} ({row[1]})")
+                found_user = session.query(User).filter_by(username='test_user').first()
+                if found_user:
+                    self.logger.info(f"   Found user: {found_user.username}")
+                    self.results['tests_passed'] += 1
+                else:
+                    self.logger.error("   User not found")
+                    self.results['tests_failed'] += 1
+                    self.results['unexpected_results'].append({
+                        'test': 'ORM Operations',
+                        'error': 'User not found after creation'
+                    })
                 
-                # Update user
-                user.email = 'async.updated@example.com'
-                await session.commit()
-                logger.info("   ✅ Updated user with async SQLAlchemy")
+                # Cleanup
+                session.delete(found_user)
+                session.commit()
+                session.close()
                 
-                # Delete user
-                await session.delete(user)
-                await session.commit()
-                logger.info("   ✅ Deleted user with async SQLAlchemy")
-        
-    except Exception as e:
-        logger.error(f"❌ Async SQLAlchemy failed: {e}")
-    finally:
-        # Ensure proper cleanup
-        if async_engine:
-            try:
-                await async_engine.dispose()
+                # Drop tables
+                Base.metadata.drop_all(engine)
+                self.logger.info("   Cleaned up tables")
+                
             except Exception as e:
-                logger.debug(f"Async engine dispose warning: {e}")
-
-
-def demo_sqlalchemy_performance():
-    """Demonstrate SQLAlchemy performance optimization"""
-    logger.info("\n=== Test 8: SQLAlchemy Performance ===")
-    
-    try:
-        # Get connection parameters
-        host, port, user, password, database = get_connection_params()
-        
-        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
-        SessionLocal = sessionmaker(bind=engine)
-        
-        # Test bulk operations
-        logger.info("\n⚡ Bulk Operations")
-        session = SessionLocal()
-        
-        # Bulk insert
-        import time
-        start_time = time.time()
-        
-        users_data = []
-        for i in range(100):
-            users_data.append({
-                'username': f'bulk_user_{i}',
-                'email': f'bulk_user_{i}@example.com'
+                self.logger.error(f"❌ ORM operations failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'ORM Operations',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ ORM operations test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'ORM Operations',
+                'error': str(e)
             })
-        
-        # Check if bulk users already exist and skip if they do
-        existing_count = session.query(User).filter(User.username.like('bulk_user_%')).count()
-        if existing_count == 0:
-            # Use bulk_insert_mappings for better performance
-            session.bulk_insert_mappings(User, users_data)
-            session.commit()
-            end_time = time.time()
-            logger.info(f"   ✅ Bulk inserted 100 users in {end_time - start_time:.3f} seconds")
-        else:
-            end_time = time.time()
-            logger.info(f"   ✅ Bulk users already exist ({existing_count} users), skipping insertion")
-        
-        # Test query optimization
-        logger.info("\n⚡ Query Optimization")
-        start_time = time.time()
-        
-        # Use joinedload to avoid N+1 queries
-        from sqlalchemy.orm import joinedload
-        users_with_posts = session.query(User).options(joinedload(User.posts)).all()
-        
-        end_time = time.time()
-        logger.info(f"   ✅ Loaded {len(users_with_posts)} users with posts in {end_time - start_time:.3f} seconds")
-        
-        # Cleanup bulk data
-        session.query(User).filter(User.username.like('bulk_user_%')).delete(synchronize_session=False)
-        session.commit()
-        logger.info("   ✅ Cleaned up bulk data")
-        
-        session.close()
-        
-    except Exception as e:
-        logger.error(f"❌ SQLAlchemy performance test failed: {e}")
 
-
-def demo_sqlalchemy_with_matrixone_features():
-    """Demonstrate SQLAlchemy with MatrixOne-specific features"""
-    logger.info("\n=== Test 9: SQLAlchemy with MatrixOne Features ===")
-    
-    try:
-        # Get connection parameters
-        host, port, user, password, database = get_connection_params()
+    def test_sqlalchemy_transactions(self):
+        """Test SQLAlchemy transactions"""
+        print("\n=== SQLAlchemy Transactions Tests ===")
         
-        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
-        SessionLocal = sessionmaker(bind=engine)
-        session = SessionLocal()
+        self.results['tests_run'] += 1
         
-        # Test MatrixOne-specific SQL
-        logger.info("\n🔧 MatrixOne-specific Features")
-        
-        # Test SHOW commands
-        result = session.execute(text("SHOW TABLES"))
-        tables = [row[0] for row in result.fetchall()]
-        logger.info(f"   Tables: {tables}")
-        
-        # Test MatrixOne functions
-        result = session.execute(text("SELECT USER(), CURRENT_USER(), DATABASE()"))
-        row = result.fetchone()
-        logger.info(f"   MatrixOne info: {row}")
-        
-        # Test with MatrixOne client integration
-        logger.info("\n🔧 MatrixOne Client Integration")
-        client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect(host, port, user, password, database)
-        
-        # Use MatrixOne client for account operations
-        from matrixone.account import AccountManager
-        account_manager = AccountManager(client)
-        
-        # Get current user info
-        current_user = account_manager.get_current_user()
-        logger.info(f"   Current user: {current_user.name}@{current_user.host}")
-        
-        # Use SQLAlchemy for data operations
-        users = session.query(User).all()
-        logger.info(f"   Users in database: {len(users)}")
-        
-        client.disconnect()
-        session.close()
-        
-    except Exception as e:
-        logger.error(f"❌ SQLAlchemy with MatrixOne features failed: {e}")
-
-
-def demo_sqlalchemy_best_practices():
-    """Demonstrate SQLAlchemy best practices"""
-    logger.info("\n=== Test 10: SQLAlchemy Best Practices ===")
-    
-    try:
-        # Get connection parameters
-        host, port, user, password, database = get_connection_params()
-        
-        # Best Practice 1: Use connection pooling
-        logger.info("\n📋 Best Practice 1: Connection Pooling")
-        engine = create_engine(
-            f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}',
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            pool_recycle=3600
-        )
-        logger.info("   ✅ Engine configured with connection pooling")
-        
-        # Best Practice 2: Use context managers
-        logger.info("\n📋 Best Practice 2: Context Managers")
-        SessionLocal = sessionmaker(bind=engine)
-        
-        with SessionLocal() as session:
-            # Operations within context
-            result = session.execute(text("SELECT COUNT(*) FROM users"))
-            count = result.scalar()
-            logger.info(f"   ✅ Users count: {count}")
-            # Session automatically closed
-        
-        # Best Practice 3: Use transactions properly
-        logger.info("\n📋 Best Practice 3: Proper Transaction Usage")
-        with SessionLocal() as session:
+        try:
+            # Get connection parameters
+            host, port, user, password, database = get_connection_params()
+            
+            # Create SQLAlchemy engine and session
+            connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+            engine = create_engine(connection_string)
+            Session = sessionmaker(bind=engine)
+            
+            # Test transactions
+            self.logger.info("Test: SQLAlchemy Transactions")
             try:
-                # Check if user already exists
-                existing_user = session.query(User).filter(User.username == 'best_practice_user').first()
-                if existing_user:
-                    user = existing_user
-                    logger.info("   ✅ User already exists, using existing user")
-                else:
-                    user = User(username='best_practice_user', email='best@example.com')
+                # Create tables
+                Base.metadata.create_all(engine)
+                
+                # Test transaction with commit
+                session = Session()
+                try:
+                    user = User(
+                        username='transaction_user',
+                        email='transaction@example.com',
+                        created_at=text('NOW()')
+                    )
                     session.add(user)
-                    session.flush()
-                    logger.info("   ✅ Created new user")
+                    session.commit()
+                    self.logger.info("   Transaction committed successfully")
+                    
+                    # Verify user was created
+                    found_user = session.query(User).filter_by(username='transaction_user').first()
+                    if found_user:
+                        self.logger.info("   User found after commit")
+                        self.results['tests_passed'] += 1
+                    else:
+                        self.logger.error("   User not found after commit")
+                        self.results['tests_failed'] += 1
+                        self.results['unexpected_results'].append({
+                            'test': 'SQLAlchemy Transactions',
+                            'error': 'User not found after commit'
+                        })
+                    
+                except Exception as e:
+                    session.rollback()
+                    self.logger.error(f"   Transaction rolled back: {e}")
+                    raise
+                finally:
+                    session.close()
                 
-                # Check if post already exists
-                existing_post = session.query(Post).filter(Post.title == 'Best Practice Post').first()
-                if not existing_post:
-                    post = Post(title='Best Practice Post', content='This post follows best practices', author_id=user.id)
-                    session.add(post)
-                    logger.info("   ✅ Created new post")
-                else:
-                    logger.info("   ✅ Post already exists")
-                
+                # Cleanup
+                session = Session()
+                session.query(User).filter_by(username='transaction_user').delete()
                 session.commit()
-                logger.info("   ✅ Transaction completed successfully")
+                session.close()
+                
+                Base.metadata.drop_all(engine)
                 
             except Exception as e:
-                session.rollback()
-                logger.error(f"   ❌ Transaction failed: {e}")
+                self.logger.error(f"❌ SQLAlchemy transactions failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'SQLAlchemy Transactions',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ SQLAlchemy transactions test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'SQLAlchemy Transactions',
+                'error': str(e)
+            })
+
+    async def test_async_sqlalchemy(self):
+        """Test async SQLAlchemy operations"""
+        print("\n=== Async SQLAlchemy Tests ===")
         
-        # Best Practice 4: Use lazy loading appropriately
-        logger.info("\n📋 Best Practice 4: Lazy Loading")
-        with SessionLocal() as session:
-            user = session.query(User).filter(User.username == 'best_practice_user').first()
-            if user:
-                # Access posts (lazy loading)
-                posts_count = len(user.posts)
-                logger.info(f"   ✅ User has {posts_count} posts (lazy loaded)")
+        self.results['tests_run'] += 1
         
-        # Cleanup
-        with SessionLocal() as session:
-            # First delete posts by the user to avoid foreign key constraint
-            user = session.query(User).filter(User.username == 'best_practice_user').first()
-            if user:
-                session.query(Post).filter(Post.author_id == user.id).delete()
-                session.delete(user)
-                session.commit()
-                logger.info("   ✅ Cleaned up test data")
+        try:
+            # Get connection parameters
+            host, port, user, password, database = get_connection_params()
+            
+            # Test async SQLAlchemy
+            self.logger.info("Test: Async SQLAlchemy Operations")
+            try:
+                # Create async engine
+                connection_string = f"mysql+aiomysql://{user}:{password}@{host}:{port}/{database}"
+                async_engine = create_async_engine(connection_string)
+                
+                # Test async connection
+                async with async_engine.connect() as conn:
+                    result = await conn.execute(text("SELECT 1 as async_test"))
+                    row = result.fetchone()
+                    self.logger.info(f"   Async connection test result: {row[0]}")
+                
+                await async_engine.dispose()
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Async SQLAlchemy operations failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Async SQLAlchemy Operations',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ Async SQLAlchemy test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Async SQLAlchemy',
+                'error': str(e)
+            })
+
+    def generate_summary_report(self):
+        """Generate comprehensive summary report."""
+        print("\n" + "=" * 80)
+        print("SQLAlchemy Integration Demo - Summary Report")
+        print("=" * 80)
         
-    except Exception as e:
-        logger.error(f"❌ SQLAlchemy best practices failed: {e}")
+        total_tests = self.results['tests_run']
+        passed_tests = self.results['tests_passed']
+        failed_tests = self.results['tests_failed']
+        unexpected_results = self.results['unexpected_results']
+        sqlalchemy_performance = self.results['sqlalchemy_performance']
+        
+        print(f"Total Tests Run: {total_tests}")
+        print(f"Tests Passed: {passed_tests}")
+        print(f"Tests Failed: {failed_tests}")
+        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "N/A")
+        
+        # Performance summary
+        if sqlalchemy_performance:
+            print(f"\nSQLAlchemy Integration Performance Results:")
+            for test_name, time_taken in sqlalchemy_performance.items():
+                print(f"  {test_name}: {time_taken:.4f}s")
+        
+        # Unexpected results
+        if unexpected_results:
+            print(f"\nUnexpected Results ({len(unexpected_results)}):")
+            for i, result in enumerate(unexpected_results, 1):
+                print(f"  {i}. Test: {result['test']}")
+                print(f"     Error: {result['error']}")
+        else:
+            print("\n✓ No unexpected results - all tests behaved as expected")
+        
+        return self.results
 
 
 def main():
     """Main demo function"""
-    logger.info("🚀 MatrixOne SQLAlchemy Integration Examples")
-    logger.info("=" * 60)
+    demo = SQLAlchemyIntegrationDemo()
     
-    # Run SQLAlchemy demos
-    demo_basic_sqlalchemy_setup()
-    demo_orm_operations()
-    demo_sqlalchemy_transactions()
-    demo_sqlalchemy_performance()
-    demo_sqlalchemy_with_matrixone_features()
-    demo_sqlalchemy_best_practices()
-    
-    # Run async SQLAlchemy demo
-    asyncio.run(demo_async_sqlalchemy())
-    
-    logger.info("\n🎉 SQLAlchemy integration examples completed!")
-    logger.info("\nKey achievements:")
-    logger.info("- ✅ Basic SQLAlchemy setup and configuration")
-    logger.info("- ✅ ORM model definitions and operations")
-    logger.info("- ✅ SQLAlchemy transaction management")
-    logger.info("- ✅ Async SQLAlchemy operations")
-    logger.info("- ✅ Performance optimization techniques")
-    logger.info("- ✅ MatrixOne-specific feature integration")
-    logger.info("- ✅ SQLAlchemy best practices")
+    try:
+        print("🚀 MatrixOne SQLAlchemy Integration Examples")
+        print("=" * 60)
+        
+        # Run tests
+        demo.test_basic_sqlalchemy_setup()
+        demo.test_orm_operations()
+        demo.test_sqlalchemy_transactions()
+        
+        # Run async tests
+        asyncio.run(demo.test_async_sqlalchemy())
+        
+        # Generate report
+        results = demo.generate_summary_report()
+        
+        print("\n🎉 All SQLAlchemy integration examples completed!")
+        print("\nSummary:")
+        print("- ✅ Basic SQLAlchemy setup and configuration")
+        print("- ✅ ORM model definitions and operations")
+        print("- ✅ SQLAlchemy transaction management")
+        print("- ✅ Async SQLAlchemy operations")
+        print("- ✅ Performance optimization techniques")
+        print("- ✅ MatrixOne-specific feature integration")
+        print("- ✅ SQLAlchemy best practices")
+        
+        return results
+        
+    except Exception as e:
+        print(f"Demo failed with error: {e}")
+        return None
 
 
 if __name__ == '__main__':

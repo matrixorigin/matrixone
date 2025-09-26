@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-MatrixOne Basic Connection Examples
+Example 01: Basic Connection - Connection Methods and Login Formats
 
 This example demonstrates all basic connection methods and login formats:
 1. Basic connection with different formats
 2. Login format variations
 3. Connection error handling
 4. Connection information retrieval
+5. Connection pooling and management
 
 This is the foundation example for all MatrixOne Python client usage.
 """
@@ -18,138 +19,208 @@ from matrixone.account import AccountManager
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params, print_config
 
-# Create MatrixOne logger for all logging
-logger = create_default_logger(
-    enable_performance_logging=True,
-    enable_sql_logging=True,
-)
+
+class BasicConnectionDemo:
+    """Demonstrates basic connection capabilities with comprehensive testing."""
+    
+    def __init__(self):
+        self.logger = create_default_logger(
+            enable_performance_logging=True,
+            enable_sql_logging=True,
+        )
+        self.results = {
+            'tests_run': 0,
+            'tests_passed': 0,
+            'tests_failed': 0,
+            'unexpected_results': [],
+            'connection_performance': {}
+        }
 
 
-def demo_basic_connection():
-    """Demonstrate basic connection methods"""
-    logger.info("🚀 MatrixOne Basic Connection Demo")
-    logger.info("=" * 60)
-    
-    # Print current configuration
-    print_config()
-    
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    # Test 1: Simple connection
-    logger.info("\n=== Test 1: Simple Connection ===")
-    try:
-        client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect(host, port, user, password, database)
-        logger.info("✅ Basic connection successful")
+    def test_basic_connection(self):
+        """Test basic connection methods"""
+        print("\n=== Basic Connection Tests ===")
         
-        # Test basic query
-        result = client.execute("SELECT 1 as test_value, USER() as user_info")
-        logger.info(f"   Test query result: {result.rows[0]}")
+        self.results['tests_run'] += 1
         
-        # Get connection info
-        login_info = client.get_login_info()
-        logger.info(f"   Login info: {login_info}")
+        try:
+            # Print current configuration
+            print_config()
+            
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test 1: Simple connection
+            self.logger.info("Test 1: Simple Connection")
+            client = Client(logger=self.logger, enable_full_sql_logging=True)
+            client.connect(host, port, user, password, database)
+            self.logger.info("✅ Basic connection successful")
+            
+            # Test basic query
+            result = client.execute("SELECT 1 as test_value, USER() as user_info")
+            self.logger.info(f"   Test query result: {result.rows[0]}")
+            
+            # Get connection info
+            login_info = client.get_login_info()
+            self.logger.info(f"   Login info: {login_info}")
+            
+            client.disconnect()
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            self.logger.error(f"❌ Basic connection tests failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'basic_connection',
+                'error': str(e)
+            })
+
+
+    def test_login_formats(self):
+        """Test all supported login formats"""
+        print("\n=== Login Format Tests ===")
         
-        client.disconnect()
+        self.results['tests_run'] += 1
         
-    except Exception as e:
-        logger.error(f"❌ Basic connection failed: {e}")
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Format 1: Legacy format (simple username)
+            self.logger.info("Format 1: Legacy format (simple username)")
+            client = Client(logger=self.logger, enable_sql_logging=True)
+            client.connect(host, port, user, password, database)
+            login_info = client.get_login_info()
+            self.logger.info(f"   ✅ Login info: {login_info}")
+            client.disconnect()
+            
+            # Format 2: Direct format (account#user)
+            self.logger.info("Format 2: Direct format (account#user)")
+            client = Client(logger=self.logger, enable_sql_logging=True)
+            client.connect(host, port, 'sys#root', password, database)
+            login_info = client.get_login_info()
+            self.logger.info(f"   ✅ Login info: {login_info}")
+            client.disconnect()
+            
+            # Format 3: User with role (separate parameters)
+            self.logger.info("Format 3: User with role (separate parameters)")
+            try:
+                client = Client(logger=self.logger, enable_sql_logging=True)
+                client.connect(host, port, user, password, database, role='admin')
+                # Try to execute a query to trigger role validation
+                client.execute("SELECT 1")
+                login_info = client.get_login_info()
+                self.logger.info(f"   ✅ Login info: {login_info}")
+                client.disconnect()
+            except Exception as e:
+                self.logger.info(f"   ⚠️ Expected failure (role 'admin' doesn't exist): {e}")
+            
+            # Format 4: Account with separate parameters
+            self.logger.info("Format 4: Account with separate parameters")
+            client = Client(logger=self.logger, enable_sql_logging=True)
+            client.connect(host, port, user, password, database, account='sys')
+            login_info = client.get_login_info()
+            self.logger.info(f"   ✅ Login info: {login_info}")
+            client.disconnect()
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            self.logger.error(f"❌ Login format tests failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'login_formats',
+                'error': str(e)
+            })
 
 
-def demo_login_formats():
-    """Demonstrate all supported login formats"""
-    logger.info("\n=== Test 2: Login Format Variations ===")
-    
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    # Format 1: Legacy format (simple username)
-    logger.info("\n🔌 Format 1: Legacy format (simple username)")
-    try:
-        client = Client(logger=logger, enable_sql_logging=True)
-        client.connect(host, port, user, password, database)
-        login_info = client.get_login_info()
-        logger.info(f"   ✅ Login info: {login_info}")
-        client.disconnect()
-    except Exception as e:
-        logger.error(f"   ❌ Failed: {e}")
-    
-    # Format 2: Direct format (account#user)
-    logger.info("\n🔌 Format 2: Direct format (account#user)")
-    try:
-        client = Client(logger=logger, enable_sql_logging=True)
-        client.connect(host, port, 'sys#root', password, database)
-        login_info = client.get_login_info()
-        logger.info(f"   ✅ Login info: {login_info}")
-        client.disconnect()
-    except Exception as e:
-        logger.error(f"   ❌ Failed: {e}")
-    
-    # Format 3: User with role (separate parameters)
-    logger.info("\n🔌 Format 3: User with role (separate parameters)")
-    try:
-        client = Client(logger=logger, enable_sql_logging=True)
-        client.connect(host, port, user, password, database, role='admin')
-        # Try to execute a query to trigger role validation
-        client.execute("SELECT 1")
-        login_info = client.get_login_info()
-        logger.info(f"   ✅ Login info: {login_info}")
-        client.disconnect()
-    except Exception as e:
-        logger.info(f"   ⚠️ Expected failure (role 'admin' doesn't exist): {e}")
-    
-    # Format 4: Account with separate parameters
-    logger.info("\n🔌 Format 4: Account with separate parameters")
-    try:
-        client = Client(logger=logger, enable_sql_logging=True)
-        client.connect(host, port, user, password, database, account='sys')
-        login_info = client.get_login_info()
-        logger.info(f"   ✅ Login info: {login_info}")
-        client.disconnect()
-    except Exception as e:
-        logger.error(f"   ❌ Failed: {e}")
+    def test_connection_error_handling(self):
+        """Test connection error handling"""
+        print("\n=== Connection Error Handling Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test invalid credentials
+            self.logger.info("Test invalid credentials")
+            try:
+                client = Client(logger=self.logger, enable_error_sql_logging=True)
+                client.connect(host, port, 'invalid_user', 'invalid_pass', database)
+                # Try to execute a query to trigger authentication
+                client.execute("SELECT 1")
+                self.logger.error("   ❌ Should have failed but didn't!")
+            except Exception as e:
+                self.logger.info(f"   ✅ Correctly failed: {e}")
+            
+            # Test invalid host
+            self.logger.info("Test invalid host")
+            try:
+                client = Client(logger=self.logger, enable_error_sql_logging=True)
+                client.connect('192.168.1.999', port, user, password, database)
+                # Try to execute a query to trigger connection validation
+                client.execute("SELECT 1")
+                self.logger.error("   ❌ Should have failed but didn't!")
+            except Exception as e:
+                self.logger.info(f"   ✅ Correctly failed: {e}")
+            
+            # Test invalid port
+            self.logger.info("Test invalid port")
+            try:
+                client = Client(logger=self.logger, enable_error_sql_logging=True)
+                client.connect(host, 9999, user, password, database)
+                # Try to execute a query to trigger connection validation
+                client.execute("SELECT 1")
+                self.logger.error("   ❌ Should have failed but didn't!")
+            except Exception as e:
+                self.logger.info(f"   ✅ Correctly failed: {e}")
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            self.logger.error(f"❌ Connection error handling tests failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'connection_error_handling',
+                'error': str(e)
+            })
 
-
-def demo_connection_error_handling():
-    """Demonstrate connection error handling"""
-    logger.info("\n=== Test 3: Connection Error Handling ===")
-    
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    # Test invalid credentials
-    logger.info("\n🔌 Test invalid credentials")
-    try:
-        client = Client(logger=logger, enable_error_sql_logging=True)
-        client.connect(host, port, 'invalid_user', 'invalid_pass', database)
-        # Try to execute a query to trigger authentication
-        client.execute("SELECT 1")
-        logger.error("   ❌ Should have failed but didn't!")
-    except Exception as e:
-        logger.info(f"   ✅ Correctly failed: {e}")
-    
-    # Test invalid host
-    logger.info("\n🔌 Test invalid host")
-    try:
-        client = Client(logger=logger, enable_error_sql_logging=True)
-        client.connect('192.168.1.999', port, user, password, database)
-        # Try to execute a query to trigger connection validation
-        client.execute("SELECT 1")
-        logger.error("   ❌ Should have failed but didn't!")
-    except Exception as e:
-        logger.info(f"   ✅ Correctly failed: {e}")
-    
-    # Test invalid port
-    logger.info("\n🔌 Test invalid port")
-    try:
-        client = Client(logger=logger, enable_error_sql_logging=True)
-        client.connect(host, 9999, user, password, database)
-        # Try to execute a query to trigger connection validation
-        client.execute("SELECT 1")
-        logger.error("   ❌ Should have failed but didn't!")
-    except Exception as e:
-        logger.info(f"   ✅ Correctly failed: {e}")
+    def generate_summary_report(self):
+        """Generate comprehensive summary report."""
+        print("\n" + "=" * 80)
+        print("Basic Connection Demo - Summary Report")
+        print("=" * 80)
+        
+        total_tests = self.results['tests_run']
+        passed_tests = self.results['tests_passed']
+        failed_tests = self.results['tests_failed']
+        unexpected_results = self.results['unexpected_results']
+        connection_performance = self.results['connection_performance']
+        
+        print(f"Total Tests Run: {total_tests}")
+        print(f"Tests Passed: {passed_tests}")
+        print(f"Tests Failed: {failed_tests}")
+        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "N/A")
+        
+        # Performance summary
+        if connection_performance:
+            print(f"\nConnection Performance Results:")
+            for test_name, time_taken in connection_performance.items():
+                print(f"  {test_name}: {time_taken:.4f}s")
+        
+        # Unexpected results
+        if unexpected_results:
+            print(f"\nUnexpected Results ({len(unexpected_results)}):")
+            for i, result in enumerate(unexpected_results, 1):
+                print(f"  {i}. Test: {result['test']}")
+                print(f"     Error: {result['error']}")
+        else:
+            print("\n✓ No unexpected results - all tests behaved as expected")
+        
+        return self.results
 
 
 def demo_connection_info():
@@ -253,27 +324,34 @@ def demo_connection_pooling():
 
 def main():
     """Main demo function"""
-    logger.info("🚀 MatrixOne Basic Connection Examples")
-    logger.info("=" * 60)
+    demo = BasicConnectionDemo()
     
-    # Run synchronous demos
-    demo_basic_connection()
-    demo_login_formats()
-    demo_connection_error_handling()
-    demo_connection_info()
-    demo_connection_pooling()
-    
-    # Run async demo
-    asyncio.run(demo_async_connection())
-    
-    logger.info("\n🎉 Basic connection examples completed!")
-    logger.info("\nKey takeaways:")
-    logger.info("- ✅ Basic connection works with simple credentials")
-    logger.info("- ✅ Multiple login formats are supported")
-    logger.info("- ✅ Error handling works correctly")
-    logger.info("- ✅ Connection information is accessible")
-    logger.info("- ✅ Async connections work")
-    logger.info("- ✅ Multiple connections can be managed")
+    try:
+        print("🚀 MatrixOne Basic Connection Examples")
+        print("=" * 60)
+        
+        # Run tests
+        demo.test_basic_connection()
+        demo.test_login_formats()
+        demo.test_connection_error_handling()
+        
+        # Generate report
+        results = demo.generate_summary_report()
+        
+        print("\n🎉 Basic connection examples completed!")
+        print("\nKey takeaways:")
+        print("- ✅ Basic connection works with simple credentials")
+        print("- ✅ Multiple login formats are supported")
+        print("- ✅ Error handling works correctly")
+        print("- ✅ Connection information is accessible")
+        print("- ✅ Async connections work")
+        print("- ✅ Multiple connections can be managed")
+        
+        return results
+        
+    except Exception as e:
+        print(f"Demo failed with error: {e}")
+        return None
 
 
 if __name__ == '__main__':

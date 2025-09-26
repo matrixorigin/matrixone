@@ -43,6 +43,36 @@ class VersionInfo:
     def __repr__(self) -> str:
         return f"VersionInfo({self.major}, {self.minor}, {self.patch})"
 
+    def __eq__(self, other) -> bool:
+        """Check if two versions are equal"""
+        if not isinstance(other, VersionInfo):
+            return False
+        return (self.major, self.minor, self.patch) == (other.major, other.minor, other.patch)
+
+    def __lt__(self, other) -> bool:
+        """Check if this version is less than other version"""
+        if not isinstance(other, VersionInfo):
+            return NotImplemented
+        return (self.major, self.minor, self.patch) < (other.major, other.minor, other.patch)
+
+    def __le__(self, other) -> bool:
+        """Check if this version is less than or equal to other version"""
+        if not isinstance(other, VersionInfo):
+            return NotImplemented
+        return (self.major, self.minor, self.patch) <= (other.major, other.minor, other.patch)
+
+    def __gt__(self, other) -> bool:
+        """Check if this version is greater than other version"""
+        if not isinstance(other, VersionInfo):
+            return NotImplemented
+        return (self.major, self.minor, self.patch) > (other.major, other.minor, other.patch)
+
+    def __ge__(self, other) -> bool:
+        """Check if this version is greater than or equal to other version"""
+        if not isinstance(other, VersionInfo):
+            return NotImplemented
+        return (self.major, self.minor, self.patch) >= (other.major, other.minor, other.patch)
+
 
 @dataclass
 class FeatureRequirement:

@@ -389,6 +389,217 @@ class VectorIndexDemo:
                 'error': str(e)
             })
     
+    def test_fulltext_index_operations(self):
+        """Test fulltext index creation and search operations."""
+        print("\n" + "-" * 60)
+        print("Fulltext Index Operations")
+        print("-" * 60)
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            # Define fulltext test model
+            class FulltextDocument(self.Base):
+                __tablename__ = 'fulltext_test_docs'
+                
+                id = Column(Integer, primary_key=True, autoincrement=True)
+                title = Column(String(200), nullable=False)
+                content = Column(Text, nullable=False)
+                author = Column(String(100))
+            
+            # Clean up first
+            with self.engine.begin() as conn:
+                conn.execute(text("DROP TABLE IF EXISTS fulltext_test_docs"))
+            
+            # Create table
+            FulltextDocument.__table__.create(self.engine)
+            print("✓ Created fulltext test table")
+            
+            # Enable fulltext indexing
+            self.client.fulltext_index.enable_fulltext()
+            self.client.execute('SET ft_relevancy_algorithm = "BM25"')
+            print("✓ Enabled fulltext indexing with BM25 algorithm")
+            
+            # Create fulltext index
+            self.client.fulltext_index.create(
+                table_name="fulltext_test_docs",
+                name="ftidx_docs",
+                columns=["title", "content"],
+                algorithm="BM25"
+            )
+            print("✓ Created fulltext index on title and content columns")
+            
+            # Insert test data
+            documents = [
+                (1, "Introduction to Python", "Python is a powerful programming language used for web development, data science, and automation.", "John Doe"),
+                (2, "Machine Learning Basics", "Machine learning is a subset of artificial intelligence that focuses on algorithms and statistical models.", "Jane Smith"),
+                (3, "Database Design Principles", "Good database design is crucial for application performance and data integrity.", "Mike Johnson"),
+                (4, "Python Web Development", "Learn how to build web applications using Python frameworks like Django and Flask.", "Sarah Wilson"),
+                (5, "Data Science with Python", "Python provides excellent libraries for data analysis, visualization, and machine learning.", "David Brown"),
+            ]
+            
+            for doc_id, title, content, author in documents:
+                self.client.execute(
+                    f"INSERT INTO fulltext_test_docs (id, title, content, author) VALUES ({doc_id}, '{title}', '{content}', '{author}')"
+                )
+            print(f"✓ Inserted {len(documents)} test documents")
+            
+            # Test fulltext search - Natural Language Mode
+            print("\n--- Testing Natural Language Mode ---")
+            result = self.client.fulltext_index.fulltext_search(
+                table_name="fulltext_test_docs",
+                columns=["title", "content"],
+                search_term="Python",
+                mode="NATURAL_LANGUAGE"
+            )
+            
+            print(f"✓ Natural language search for 'Python': {len(result.rows)} results")
+            for row in result.rows:
+                try:
+                    score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                    print(f"    ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
+                except (ValueError, TypeError, IndexError):
+                    print(f"    ID: {row[0]}, Title: {row[1]}, Score: N/A")
+            
+            # Test fulltext search - Boolean Mode
+            print("\n--- Testing Boolean Mode ---")
+            result = self.client.fulltext_index.fulltext_search(
+                table_name="fulltext_test_docs",
+                columns=["title", "content"],
+                search_term="+Python +web",
+                mode="BOOLEAN"
+            )
+            
+            print(f"✓ Boolean search for '+Python +web': {len(result.rows)} results")
+            for row in result.rows:
+                print(f"    ID: {row[0]}, Title: {row[1]}")
+            
+            # Test different algorithms using API
+            print("\n--- Testing TF-IDF Algorithm ---")
+            self.client.execute('SET ft_relevancy_algorithm = "TF-IDF"')
+            result = self.client.fulltext_index.fulltext_search(
+                table_name="fulltext_test_docs",
+                columns=["title", "content"],
+                search_term="Python"
+            )
+            
+            print(f"✓ TF-IDF search for 'Python': {len(result.rows)} results")
+            for row in result.rows:
+                try:
+                    score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                    print(f"    ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
+                except (ValueError, TypeError, IndexError):
+                    print(f"    ID: {row[0]}, Title: {row[1]}, Score: N/A")
+            
+            # Drop the index
+            self.client.fulltext_index.drop("fulltext_test_docs", "ftidx_docs")
+            print("✓ Dropped fulltext index")
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            print(f"✗ Fulltext index operations failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'fulltext_index_operations',
+                'error': str(e)
+            })
+    
+    def test_async_fulltext_operations(self):
+        """Test async fulltext index operations."""
+        print("\n" + "-" * 60)
+        print("Async Fulltext Index Operations")
+        print("-" * 60)
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            import asyncio
+            from matrixone import AsyncClient, FulltextAlgorithmType, FulltextModeType
+            
+            async def run_async_test():
+                # Create async client
+                host, port, user, password, database = get_connection_params()
+                async_client = AsyncClient()
+                await async_client.connect(host, port, user, password, database)
+                
+                try:
+                    # Enable fulltext indexing
+                    await async_client.fulltext_index.enable_fulltext()
+                    await async_client.execute('SET ft_relevancy_algorithm = "BM25"')
+                    print("✓ Enabled async fulltext indexing")
+                    
+                    # Create test table
+                    await async_client.execute("DROP TABLE IF EXISTS async_fulltext_docs")
+                    await async_client.execute("""
+                        CREATE TABLE async_fulltext_docs (
+                            id INT PRIMARY KEY,
+                            headline VARCHAR(200),
+                            body TEXT,
+                            category VARCHAR(50)
+                        )
+                    """)
+                    print("✓ Created async fulltext test table")
+                    
+                    # Create fulltext index
+                    await async_client.fulltext_index.create(
+                        table_name="async_fulltext_docs",
+                        name="ftidx_async_docs",
+                        columns=["headline", "body"],
+                        algorithm=FulltextAlgorithmType.BM25
+                    )
+                    print("✓ Created async fulltext index")
+                    
+                    # Insert test data
+                    articles = [
+                        (1, "Tech News: AI Breakthrough", "Artificial intelligence researchers have made significant progress in natural language processing.", "Technology"),
+                        (2, "Sports Update: Championship Results", "The annual championship concluded with exciting matches and surprising outcomes.", "Sports"),
+                        (3, "Health Research: New Study Findings", "Medical researchers published findings that could lead to new treatment options.", "Health"),
+                    ]
+                    
+                    for article_id, headline, body, category in articles:
+                        await async_client.execute(
+                            f"INSERT INTO async_fulltext_docs (id, headline, body, category) VALUES ({article_id}, '{headline}', '{body}', '{category}')"
+                        )
+                    print(f"✓ Inserted {len(articles)} async test articles")
+                    
+                    # Test async fulltext search
+                    result = await async_client.fulltext_index.fulltext_search(
+                        table_name="async_fulltext_docs",
+                        columns=["headline", "body"],
+                        search_term="technology",
+                        mode=FulltextModeType.NATURAL_LANGUAGE
+                    )
+                    
+                    print(f"✓ Async fulltext search for 'technology': {len(result.rows)} results")
+                    for row in result.rows:
+                        try:
+                            score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
+                            print(f"    ID: {row[0]}, Headline: {row[1]}, Score: {score:.4f}")
+                        except (ValueError, TypeError, IndexError):
+                            print(f"    ID: {row[0]}, Headline: {row[1]}, Score: N/A")
+                    
+                    # Cleanup
+                    await async_client.fulltext_index.drop("async_fulltext_docs", "ftidx_async_docs")
+                    await async_client.execute("DROP TABLE IF EXISTS async_fulltext_docs")
+                    print("✓ Cleaned up async fulltext test")
+                    
+                finally:
+                    await async_client.disconnect()
+            
+            # Run async test
+            asyncio.run(run_async_test())
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            print(f"✗ Async fulltext operations failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'async_fulltext_operations',
+                'error': str(e)
+            })
+    
     def cleanup(self):
         """Clean up test resources."""
         print("\n" + "-" * 60)
@@ -466,6 +677,8 @@ def main():
         demo.test_index_performance_comparison(models)
         demo.test_index_management_operations()
         demo.test_index_limitations()
+        demo.test_fulltext_index_operations()
+        demo.test_async_fulltext_operations()
         
         # Generate report
         results = demo.generate_summary_report()

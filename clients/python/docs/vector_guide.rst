@@ -13,6 +13,9 @@ MatrixOne supports advanced vector operations for AI and machine learning applic
 * **HNSW Indexing**: Hierarchical Navigable Small Worlds for high-performance vector search
 * **Distance Metrics**: L2, cosine, and inner product distance calculations
 * **ORM Integration**: Seamless integration with SQLAlchemy models
+* **Pinecone-Compatible Interface**: Familiar API for users migrating from Pinecone
+
+For detailed information about the Pinecone-compatible index interface, see the :doc:`pinecone_guide`.
 
 Vector Data Types
 -----------------

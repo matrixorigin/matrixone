@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+Example 11: MatrixOne Version Demo - Comprehensive MatrixOne Version Operations
+
 MatrixOne Python SDK - MatrixOne Version Parsing Demo
 
 This example demonstrates MatrixOne-specific version parsing functionality
@@ -18,234 +20,322 @@ from matrixone.version import VersionManager, VersionInfo, FeatureRequirement, V
 from matrixone.config import get_connection_params, print_config
 
 
-def demonstrate_matrixone_version_parsing():
-    """Demonstrate MatrixOne-specific version parsing"""
-    print("=== MatrixOne Version Parsing Demo ===")
+class MatrixOneVersionDemo:
+    """Demonstrates MatrixOne version capabilities with comprehensive testing."""
     
-    version_manager = VersionManager()
-    
-    # Test different MatrixOne version formats
-    test_versions = [
-        "8.0.30-MatrixOne-v",           # Development version
-        "10.5.2-MatrixOne-v",           # Development version
-        "8.0.30-MatrixOne-v3.0.0",      # Release version
-        "10.5.2-MatrixOne-v2.1.5",      # Release version
-        "MatrixOne 3.0.1",              # Fallback format
-        "Version 2.5.0",                # Alternative format
-        "3.0.1",                        # Clean version
-    ]
-    
-    print("Parsing MatrixOne version strings:")
-    for version_string in test_versions:
-        parsed = version_manager._parse_matrixone_version(version_string)
-        version_type = "Development" if parsed == "999.0.0" else "Release"
-        print(f"  '{version_string}' -> '{parsed}' ({version_type})")
-    
-    print("\nTesting invalid formats:")
-    invalid_versions = [
-        "8.0.30-MatrixOne",             # Missing version part
-        "8.0.30-MatrixOne-v-",          # Invalid suffix
-        "invalid",                       # Completely invalid
-        "",                             # Empty string
-    ]
-    
-    for invalid_version in invalid_versions:
-        parsed = version_manager._parse_matrixone_version(invalid_version)
-        print(f"  '{invalid_version}' -> {parsed}")
+    def __init__(self):
+        self.results = {
+            'tests_run': 0,
+            'tests_passed': 0,
+            'tests_failed': 0,
+            'unexpected_results': [],
+            'version_performance': {}
+        }
 
-
-def demonstrate_development_version_priority():
-    """Demonstrate that development version has highest priority"""
-    print("\n=== Development Version Priority ===")
-    
-    version_manager = VersionManager()
-    
-    # Set development version
-    version_manager.set_backend_version("999.0.0")
-    dev_version = version_manager.get_backend_version()
-    
-    print(f"Current backend version: {dev_version}")
-    print(f"Is development version: {version_manager.is_development_version()}")
-    
-    # Compare with various release versions
-    release_versions = ["1.0.0", "2.5.0", "3.0.0", "10.0.0", "99.99.99"]
-    
-    print("\nDevelopment version vs release versions:")
-    for release_version in release_versions:
-        comparison = version_manager.compare_versions(dev_version, release_version)
-        comparison_text = {
-            VersionComparison.GREATER: "greater than",
-            VersionComparison.EQUAL: "equal to",
-            VersionComparison.LESS: "less than"
-        }[comparison]
-        print(f"  {dev_version} is {comparison_text} {release_version}")
-
-
-def demonstrate_feature_compatibility():
-    """Demonstrate feature compatibility with development version"""
-    print("\n=== Feature Compatibility ===")
-    
-    version_manager = VersionManager()
-    
-    # Register various features with different version requirements
-    features = [
-        FeatureRequirement(
-            feature_name="basic_feature",
-            min_version=VersionInfo(1, 0, 0),
-            description="Basic feature available since version 1.0.0"
-        ),
-        FeatureRequirement(
-            feature_name="advanced_feature",
-            min_version=VersionInfo(3, 0, 0),
-            description="Advanced feature requiring version 3.0.0+"
-        ),
-        FeatureRequirement(
-            feature_name="future_feature",
-            min_version=VersionInfo(10, 0, 0),
-            description="Future feature requiring version 10.0.0+"
-        ),
-        FeatureRequirement(
-            feature_name="legacy_feature",
-            max_version=VersionInfo(2, 9, 9),
-            description="Legacy feature only available up to version 2.9.9"
-        ),
-    ]
-    
-    for feature in features:
-        version_manager.register_feature_requirement(feature)
-    
-    # Test with development version
-    version_manager.set_backend_version("999.0.0")
-    print("Features available in development version (999.0.0):")
-    
-    for feature_name in ["basic_feature", "advanced_feature", "future_feature", "legacy_feature"]:
-        available = version_manager.is_feature_available(feature_name)
-        status = "✓ Available" if available else "✗ Not available"
-        print(f"  {feature_name}: {status}")
+    def test_matrixone_version_parsing(self):
+        """Test MatrixOne-specific version parsing"""
+        print("\n=== MatrixOne Version Parsing Tests ===")
         
-        if not available:
-            hint = version_manager.get_version_hint(feature_name)
-            print(f"    Hint: {hint}")
-    
-    # Test with a release version
-    print("\nFeatures available in release version (3.0.0):")
-    version_manager.set_backend_version("3.0.0")
-    
-    for feature_name in ["basic_feature", "advanced_feature", "future_feature", "legacy_feature"]:
-        available = version_manager.is_feature_available(feature_name)
-        status = "✓ Available" if available else "✗ Not available"
-        print(f"  {feature_name}: {status}")
+        self.results['tests_run'] += 1
         
-        if not available:
-            hint = version_manager.get_version_hint(feature_name)
-            print(f"    Hint: {hint}")
-
-
-def demonstrate_version_detection_simulation():
-    """Simulate version detection from MatrixOne backend"""
-    print("\n=== Version Detection Simulation ===")
-    
-    version_manager = VersionManager()
-    
-    # Simulate different backend responses
-    backend_responses = [
-        ("8.0.30-MatrixOne-v", "Development build"),
-        ("8.0.30-MatrixOne-v3.0.0", "Release version 3.0.0"),
-        ("10.5.2-MatrixOne-v2.1.5", "Release version 2.1.5"),
-        ("MatrixOne 1.5.0", "Legacy format"),
-    ]
-    
-    for version_string, description in backend_responses:
-        print(f"\nBackend response: '{version_string}' ({description})")
-        
-        # Parse the version
-        parsed_version = version_manager._parse_matrixone_version(version_string)
-        
-        if parsed_version:
-            version_manager.set_backend_version(parsed_version)
-            current_version = version_manager.get_backend_version()
+        try:
+            version_manager = VersionManager()
             
-            print(f"  Parsed version: {current_version}")
-            print(f"  Is development: {version_manager.is_development_version()}")
+            # Test MatrixOne version parsing
+            print("Test: MatrixOne Version Parsing")
+            try:
+                # Test different MatrixOne version formats
+                test_versions = [
+                    "8.0.30-MatrixOne-v",           # Development version
+                    "10.5.2-MatrixOne-v",           # Development version
+                    "8.0.30-MatrixOne-v3.0.0",      # Release version
+                    "10.5.2-MatrixOne-v2.1.5",      # Release version
+                    "MatrixOne 3.0.1",              # Fallback format
+                    "Version 2.5.0",                # Alternative format
+                    "3.0.1",                        # Clean version
+                ]
+                
+                print("Parsing MatrixOne version strings:")
+                for version_string in test_versions:
+                    parsed = version_manager._parse_matrixone_version(version_string)
+                    version_type = "Development" if parsed == "999.0.0" else "Release"
+                    print(f"  '{version_string}' -> '{parsed}' ({version_type})")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ MatrixOne version parsing test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'MatrixOne Version Parsing',
+                    'error': str(e)
+                })
             
-            # Test compatibility with some common requirements
-            requirements = ["2.0.0", "3.0.0", "5.0.0"]
-            print("  Compatibility checks:")
-            for req in requirements:
-                compatible = version_manager.is_version_compatible(req, operator=">=")
-                status = "✓ Compatible" if compatible else "✗ Not compatible"
-                print(f"    >= {req}: {status}")
+        except Exception as e:
+            print(f"❌ MatrixOne version parsing test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'MatrixOne Version Parsing',
+                'error': str(e)
+            })
+
+    def test_invalid_version_formats(self):
+        """Test invalid version format handling"""
+        print("\n=== Invalid Version Format Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            version_manager = VersionManager()
+            
+            # Test invalid version format handling
+            print("Test: Invalid Version Format Handling")
+            try:
+                # Test invalid formats
+                invalid_versions = [
+                    "8.0.30-MatrixOne",             # Missing version part
+                    "8.0.30-MatrixOne-v-",          # Invalid suffix
+                    "invalid",                       # Completely invalid
+                    "",                             # Empty string
+                ]
+                
+                print("Testing invalid formats:")
+                for invalid_version in invalid_versions:
+                    try:
+                        parsed = version_manager._parse_matrixone_version(invalid_version)
+                        print(f"  '{invalid_version}' -> '{parsed}' (handled gracefully)")
+                    except Exception as e:
+                        print(f"  '{invalid_version}' -> Error: {type(e).__name__}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Invalid version format test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Invalid Version Format Handling',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Invalid version format test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Invalid Version Format',
+                'error': str(e)
+            })
+
+    def test_version_comparison(self):
+        """Test version comparison functionality"""
+        print("\n=== Version Comparison Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            version_manager = VersionManager()
+            
+            # Test version comparison
+            print("Test: Version Comparison")
+            try:
+                # Test version comparisons
+                test_cases = [
+                    ("8.0.30-MatrixOne-v", "8.0.30-MatrixOne-v3.0.0"),
+                    ("8.0.30-MatrixOne-v3.0.0", "8.0.30-MatrixOne-v2.1.5"),
+                    ("8.0.30-MatrixOne-v", "8.0.30-MatrixOne-v"),
+                ]
+                
+                print("Version comparisons:")
+                for v1_str, v2_str in test_cases:
+                    v1 = version_manager._parse_matrixone_version(v1_str)
+                    v2 = version_manager._parse_matrixone_version(v2_str)
+                    
+                    v1_parsed = version_manager.parse_version(v1)
+                    v2_parsed = version_manager.parse_version(v2)
+                    
+                    comparison = ">" if v1_parsed > v2_parsed else "<" if v1_parsed < v2_parsed else "=="
+                    print(f"  {v1_str} ({v1}) {comparison} {v2_str} ({v2})")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Version comparison test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Version Comparison',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Version comparison test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Version Comparison',
+                'error': str(e)
+            })
+
+    def test_development_version_priority(self):
+        """Test development version priority"""
+        print("\n=== Development Version Priority Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            version_manager = VersionManager()
+            
+            # Test development version priority
+            print("Test: Development Version Priority")
+            try:
+                # Test that development versions have highest priority
+                dev_version = version_manager._parse_matrixone_version("8.0.30-MatrixOne-v")
+                release_version = version_manager._parse_matrixone_version("8.0.30-MatrixOne-v3.0.0")
+                
+                dev_parsed = version_manager.parse_version(dev_version)
+                release_parsed = version_manager.parse_version(release_version)
+                
+                print(f"  Development version: {dev_version} -> {dev_parsed}")
+                print(f"  Release version: {release_version} -> {release_parsed}")
+                
+                if dev_parsed > release_parsed:
+                    print("  ✅ Development version has higher priority")
+                    self.results['tests_passed'] += 1
+                else:
+                    print("  ❌ Development version should have higher priority")
+                    self.results['tests_failed'] += 1
+                    self.results['unexpected_results'].append({
+                        'test': 'Development Version Priority',
+                        'error': 'Development version should have higher priority than release version'
+                    })
+                
+            except Exception as e:
+                print(f"❌ Development version priority test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Development Version Priority',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Development version priority test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Development Version Priority',
+                'error': str(e)
+            })
+
+    def test_backend_version_detection(self):
+        """Test backend version detection with MatrixOne formats"""
+        print("\n=== Backend Version Detection Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test backend version detection
+            print("Test: Backend Version Detection")
+            try:
+                from matrixone import Client
+                client = Client()
+                client.connect(host, port, user, password, database)
+                
+                # Get version information
+                version_info = client.version()
+                print(f"   Backend version: {version_info}")
+                
+                # Test MatrixOne version parsing
+                version_manager = VersionManager()
+                parsed_version = version_manager._parse_matrixone_version(version_info)
+                print(f"   Parsed MatrixOne version: {parsed_version}")
+                
+                client.disconnect()
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Backend version detection test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Backend Version Detection',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Backend version detection test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Backend Version Detection',
+                'error': str(e)
+            })
+
+    def generate_summary_report(self):
+        """Generate comprehensive summary report."""
+        print("\n" + "=" * 80)
+        print("MatrixOne Version Demo - Summary Report")
+        print("=" * 80)
+        
+        total_tests = self.results['tests_run']
+        passed_tests = self.results['tests_passed']
+        failed_tests = self.results['tests_failed']
+        unexpected_results = self.results['unexpected_results']
+        version_performance = self.results['version_performance']
+        
+        print(f"Total Tests Run: {total_tests}")
+        print(f"Tests Passed: {passed_tests}")
+        print(f"Tests Failed: {failed_tests}")
+        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "N/A")
+        
+        # Performance summary
+        if version_performance:
+            print(f"\nMatrixOne Version Performance Results:")
+            for test_name, time_taken in version_performance.items():
+                print(f"  {test_name}: {time_taken:.4f}s")
+        
+        # Unexpected results
+        if unexpected_results:
+            print(f"\nUnexpected Results ({len(unexpected_results)}):")
+            for i, result in enumerate(unexpected_results, 1):
+                print(f"  {i}. Test: {result['test']}")
+                print(f"     Error: {result['error']}")
         else:
-            print("  Failed to parse version")
-
-
-def demonstrate_error_scenarios():
-    """Demonstrate error scenarios and helpful messages"""
-    print("\n=== Error Scenarios ===")
-    
-    version_manager = VersionManager()
-    
-    # Register a feature with version requirements
-    feature = FeatureRequirement(
-        feature_name="matrixone_v3_feature",
-        min_version=VersionInfo(3, 0, 0),
-        description="Feature available in MatrixOne 3.0.0+",
-        alternative="Use legacy methods or upgrade MatrixOne"
-    )
-    version_manager.register_feature_requirement(feature)
-    
-    # Test with an older version
-    version_manager.set_backend_version("2.5.0")
-    
-    print("Testing with MatrixOne 2.5.0:")
-    if not version_manager.is_feature_available("matrixone_v3_feature"):
-        hint = version_manager.get_version_hint("matrixone_v3_feature", "Trying to use v3 feature")
-        print(f"Error: {hint}")
-    
-    # Test with development version
-    version_manager.set_backend_version("999.0.0")
-    
-    print("\nTesting with development version:")
-    available = version_manager.is_feature_available("matrixone_v3_feature")
-    print(f"Feature available: {available}")
-    if available:
-        print("✓ Development version has access to all features!")
+            print("\n✓ No unexpected results - all tests behaved as expected")
+        
+        return self.results
 
 
 def main():
-    """Main demonstration function"""
-    print("MatrixOne Python SDK - MatrixOne Version Parsing Demo")
-    print("=" * 60)
+    """Main demo function"""
+    demo = MatrixOneVersionDemo()
     
     try:
-        # Run all demonstrations
-        demonstrate_matrixone_version_parsing()
-        demonstrate_development_version_priority()
-        demonstrate_feature_compatibility()
-        demonstrate_version_detection_simulation()
-        demonstrate_error_scenarios()
+        print("🚀 MatrixOne Version Demo")
+        print("=" * 60)
         
-        print("\n" + "=" * 60)
-        print("MatrixOne Version Parsing Demo Completed Successfully!")
+        # Print current configuration
+        print_config()
+        
+        # Run tests
+        demo.test_matrixone_version_parsing()
+        demo.test_invalid_version_formats()
+        demo.test_version_comparison()
+        demo.test_development_version_priority()
+        demo.test_backend_version_detection()
+        
+        # Generate report
+        results = demo.generate_summary_report()
+        
+        print("\n🎉 All MatrixOne version examples completed!")
         print("\nKey Features:")
-        print("✓ Development version parsing (8.0.30-MatrixOne-v -> 999.0.0)")
-        print("✓ Release version parsing (8.0.30-MatrixOne-v3.0.0 -> 3.0.0)")
-        print("✓ Fallback format support (MatrixOne 3.0.1, Version 2.5.0)")
-        print("✓ Development version has highest priority (999.0.0)")
-        print("✓ Proper error handling for invalid formats")
-        print("✓ Feature compatibility checking")
-        print("✓ Integration with MatrixOne Python SDK")
-        
-        print("\nVersion Format Support:")
         print("• Development: '8.0.30-MatrixOne-v' → '999.0.0' (highest)")
         print("• Release: '8.0.30-MatrixOne-v3.0.0' → '3.0.0'")
         print("• Legacy: 'MatrixOne 3.0.1' → '3.0.1'")
         print("• Clean: '3.0.1' → '3.0.1'")
         
+        return results
+        
     except Exception as e:
-        print(f"\nDemo failed with error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Demo failed with error: {e}")
+        return None
 
 
 if __name__ == "__main__":

@@ -133,43 +133,43 @@ class Query:
     def _build_select_sql(self) -> tuple[str, List[Any]]:
         """Build SELECT SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
-        
+
         builder = MatrixOneSQLBuilder()
-        
+
         # Build SELECT clause
         if self._select_columns:
             builder.select(*self._select_columns)
         else:
             builder.select_all()
-        
+
         # Build FROM clause with snapshot
         builder.from_table(self.model_class._table_name, self.snapshot_name)
-        
+
         # Add JOIN clauses
         builder._joins = self._joins.copy()
-        
+
         # Add WHERE conditions and parameters
         builder._where_conditions = self._where_conditions.copy()
         builder._where_params = self._where_params.copy()
-        
+
         # Add GROUP BY columns
         if self._group_by_columns:
             builder.group_by(*self._group_by_columns)
-        
+
         # Add HAVING conditions and parameters
         builder._having_conditions = self._having_conditions.copy()
         builder._having_params = self._having_params.copy()
-        
+
         # Add ORDER BY columns
         if self._order_by_columns:
             builder.order_by(*self._order_by_columns)
-        
+
         # Add LIMIT and OFFSET
         if self._limit_count is not None:
             builder.limit(self._limit_count)
         if self._offset_count is not None:
             builder.offset(self._offset_count)
-        
+
         return builder.build()
 
     def all(self) -> List:
@@ -236,14 +236,11 @@ class Query:
     def _build_insert_sql(self) -> tuple[str, List[Any]]:
         """Build INSERT SQL query using unified SQL builder"""
         from .sql_builder import build_insert_query
-        
+
         if not self._insert_values:
             raise ValueError("No values provided for INSERT")
-        
-        return build_insert_query(
-            table_name=self.model_class._table_name,
-            values=self._insert_values
-        )
+
+        return build_insert_query(table_name=self.model_class._table_name, values=self._insert_values)
 
     def update(self, **kwargs) -> "Query":
         """Start UPDATE operation"""
@@ -256,22 +253,22 @@ class Query:
     def _build_update_sql(self) -> tuple[str, List[Any]]:
         """Build UPDATE SQL query using unified SQL builder"""
         from .sql_builder import build_update_query
-        
+
         if not self._update_set_columns:
             raise ValueError("No SET clauses provided for UPDATE")
-        
+
         # Convert set columns and values to dict
         set_values = {}
         for i, col in enumerate(self._update_set_columns):
             # Extract column name from "column = ?" format
             col_name = col.split(" = ")[0]
             set_values[col_name] = self._update_set_values[i]
-        
+
         return build_update_query(
             table_name=self.model_class._table_name,
             set_values=set_values,
             where_conditions=self._where_conditions,
-            where_params=self._where_params
+            where_params=self._where_params,
         )
 
     def delete(self) -> "Query":
@@ -282,11 +279,11 @@ class Query:
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
         from .sql_builder import build_delete_query
-        
+
         return build_delete_query(
             table_name=self.model_class._table_name,
             where_conditions=self._where_conditions,
-            where_params=self._where_params
+            where_params=self._where_params,
         )
 
     def execute(self) -> Any:
@@ -516,9 +513,9 @@ class BaseMatrixOneQuery:
     def _build_sql(self) -> tuple[str, List[Any]]:
         """Build SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
-        
+
         builder = MatrixOneSQLBuilder()
-        
+
         # Build SELECT clause with SQLAlchemy function support
         if self._select_columns:
             # Convert SQLAlchemy function objects to strings
@@ -551,7 +548,7 @@ class BaseMatrixOneQuery:
             builder._from_table = f"{self._table_name} AS {self._table_alias}"
         else:
             builder._from_table = self._table_name
-        
+
         builder._from_snapshot = self._snapshot_name
 
         # Add JOIN clauses
@@ -870,44 +867,44 @@ class CTEQuery:
             raise ValueError("Main query must be defined with select_from()")
 
         from .sql_builder import MatrixOneSQLBuilder
-        
+
         builder = MatrixOneSQLBuilder()
-        
+
         # Add CTEs
         for cte in self._ctes:
-            builder.with_cte(cte['name'], cte['sql'], cte['params'])
-        
+            builder.with_cte(cte["name"], cte["sql"], cte["params"])
+
         # Build main query
         builder.select(*self._main_query["columns"])
-        
+
         if self._main_query["from_table"]:
             builder.from_table(self._main_query["from_table"])
-        
+
         # Add JOIN clauses
         builder._joins = self._main_query["joins"].copy()
-        
+
         # Add WHERE conditions and parameters
         builder._where_conditions = self._main_query["where_conditions"].copy()
         builder._where_params = self._main_query["where_params"].copy()
-        
+
         # Add GROUP BY columns
         if self._main_query["group_by_columns"]:
             builder.group_by(*self._main_query["group_by_columns"])
-        
+
         # Add HAVING conditions and parameters
         builder._having_conditions = self._main_query["having_conditions"].copy()
         builder._having_params = self._main_query["having_params"].copy()
-        
+
         # Add ORDER BY columns
         if self._main_query["order_by_columns"]:
             builder.order_by(*self._main_query["order_by_columns"])
-        
+
         # Add LIMIT and OFFSET
         if self._main_query["limit_count"] is not None:
             builder.limit(self._main_query["limit_count"])
         if self._main_query["offset_count"] is not None:
             builder.offset(self._main_query["offset_count"])
-        
+
         return builder.build()
 
     def execute(self) -> List:

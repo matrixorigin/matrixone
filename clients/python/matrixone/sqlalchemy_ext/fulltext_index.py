@@ -30,7 +30,7 @@ class FulltextIndex(Index):
 
     Usage Examples:
 
-    1. Class Methods (Recommended for one-time operations):
+    1. Class Methods (Recommended for one-time operations)::
 
         # Create index using class method
         success = FulltextIndex.create_index(
@@ -65,7 +65,7 @@ class FulltextIndex(Index):
                 name='ftidx_content'
             )
 
-    2. Instance Methods (Useful for reusable index configurations):
+    2. Instance Methods (Useful for reusable index configurations)::
 
         # Create index object
         index = FulltextIndex('ftidx_content', ['title', 'content'], algorithm=FulltextAlgorithmType.BM25)
@@ -84,7 +84,7 @@ class FulltextIndex(Index):
         with engine.begin() as conn:
             success = index.drop_in_transaction(conn, 'my_table')
 
-    3. SQLAlchemy ORM Integration:
+    3. SQLAlchemy ORM Integration::
 
         # In table definition
         class Document(Base):
@@ -99,7 +99,7 @@ class FulltextIndex(Index):
         # Or create index separately
         FulltextIndex.create_index(engine, 'documents', 'ftidx_doc', ['title', 'content'])
 
-    4. Using client.fulltext_index.create() method:
+    4. Using client.fulltext_index.create() method::
 
         # Using client.fulltext_index.create() method
         client.fulltext_index.create(
@@ -484,40 +484,49 @@ class FulltextSearchBuilder:
             raise ValueError("Search term is required")
 
         from ..sql_builder import MatrixOneSQLBuilder
-        
+
         builder = MatrixOneSQLBuilder()
-        
+
         # Build SELECT clause
         columns_str = ", ".join(self.columns)
-        match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' IN {self.search_mode})"
-        
+        # MatrixOne doesn't support "IN NATURAL_LANGUAGE" syntax, use simple AGAINST
+        if self.search_mode == FulltextModeType.NATURAL_LANGUAGE or self.search_mode == "natural language mode":
+            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}')"
+        elif self.search_mode == FulltextModeType.BOOLEAN or self.search_mode == "boolean mode":
+            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' IN BOOLEAN MODE)"
+        elif self.search_mode == FulltextModeType.QUERY_EXPANSION or self.search_mode == "query expansion mode":
+            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' WITH QUERY EXPANSION)"
+        else:
+            # Default to simple AGAINST for unknown modes
+            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}')"
+
         if self.include_score:
             builder.select("*", f"{match_clause} AS score")
         else:
             builder.select_all()
-        
+
         # Build FROM clause
         builder.from_table(self.table_name)
-        
+
         # Build WHERE clause with MATCH AGAINST
         builder.where(match_clause)
-        
+
         # Add additional WHERE conditions
         for condition in self.where_conditions:
             builder.where(condition)
-        
+
         # Add ORDER BY clause
         if self.order_clause:
             builder.order_by(self.order_clause)
         elif self.include_score:
             builder.order_by("score DESC")
-        
+
         # Add LIMIT/OFFSET clause
         if self.limit_value:
             builder.limit(self.limit_value)
             if self.offset_value:
                 builder.offset(self.offset_value)
-        
+
         return builder.build_with_parameter_substitution()
 
     def execute(self, connection) -> Any:

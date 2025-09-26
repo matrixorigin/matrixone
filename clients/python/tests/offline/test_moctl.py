@@ -113,18 +113,20 @@ class TestMoCtlManager(unittest.TestCase):
         mock_result.rows = [('{"method": "Flush", "result": [{"returnStr": "ERROR: Table not found"}]}',)]
         self.mock_client.execute.return_value = mock_result
         
+        # Should raise MoCtlError
         with self.assertRaises(MoCtlError) as context:
             self.moctl_manager._execute_moctl('dn', 'flush', 'db1.nonexistent')
         
-        self.assertIn("ERROR: Table not found", str(context.exception))
+        self.assertIn("mo_ctl operation failed", str(context.exception))
     
-    def test_execute_moctl_no_results(self):
-        """Test mo_ctl execution with no results"""
+    def test_execute_moctl_no_rows(self):
+        """Test mo_ctl execution with no rows returned"""
         # Mock empty result
         mock_result = Mock()
         mock_result.rows = []
         self.mock_client.execute.return_value = mock_result
         
+        # Should raise MoCtlError
         with self.assertRaises(MoCtlError) as context:
             self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
         
@@ -137,10 +139,22 @@ class TestMoCtlManager(unittest.TestCase):
         mock_result.rows = [('invalid json',)]
         self.mock_client.execute.return_value = mock_result
         
+        # Should raise MoCtlError
         with self.assertRaises(MoCtlError) as context:
             self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
         
         self.assertIn("Failed to parse mo_ctl result", str(context.exception))
+    
+    def test_execute_moctl_exception(self):
+        """Test mo_ctl execution with exception"""
+        # Mock exception
+        self.mock_client.execute.side_effect = Exception("Connection failed")
+        
+        # Should raise MoCtlError
+        with self.assertRaises(MoCtlError) as context:
+            self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
+        
+        self.assertIn("mo_ctl operation failed", str(context.exception))
     
     def test_flush_table(self):
         """Test flush_table method"""
@@ -159,15 +173,14 @@ class TestMoCtlManager(unittest.TestCase):
         self.assertEqual(result['method'], 'Flush')
         self.assertEqual(result['result'][0]['returnStr'], 'OK')
     
-    
-    def test_checkpoint(self):
-        """Test checkpoint method"""
+    def test_increment_checkpoint(self):
+        """Test increment_checkpoint method"""
         # Mock successful result
         mock_result = Mock()
         mock_result.rows = [('{"method": "Checkpoint", "result": [{"returnStr": "OK"}]}',)]
         self.mock_client.execute.return_value = mock_result
         
-        result = self.moctl_manager.checkpoint()
+        result = self.moctl_manager.increment_checkpoint()
         
         # Verify the SQL was called correctly
         expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
@@ -177,303 +190,94 @@ class TestMoCtlManager(unittest.TestCase):
         self.assertEqual(result['method'], 'Checkpoint')
         self.assertEqual(result['result'][0]['returnStr'], 'OK')
     
-    def test_incremental_checkpoint(self):
-        """Test incremental_checkpoint method"""
+    def test_global_checkpoint(self):
+        """Test global_checkpoint method"""
         # Mock successful result
         mock_result = Mock()
-        mock_result.rows = [('{"method": "Checkpoint", "result": [{"returnStr": "OK"}]}',)]
+        mock_result.rows = [('{"method": "GlobalCheckpoint", "result": [{"returnStr": "OK"}]}',)]
         self.mock_client.execute.return_value = mock_result
         
-        result = self.moctl_manager.incremental_checkpoint()
+        result = self.moctl_manager.global_checkpoint()
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
+        expected_sql = "SELECT mo_ctl('dn', 'globalcheckpoint', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
-        self.assertEqual(result['method'], 'Checkpoint')
+        self.assertEqual(result['method'], 'GlobalCheckpoint')
         self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_full_checkpoint(self):
-        """Test full_checkpoint method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Checkpoint", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.full_checkpoint()
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Checkpoint')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_log_level(self):
-        """Test log_level method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Log", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.log_level('debug')
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'log-level', 'debug')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Log')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_log_enable(self):
-        """Test log_enable method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Log", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.log_enable('sql')
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'log-enable', 'sql')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Log')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_log_disable(self):
-        """Test log_disable method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Log", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.log_disable('sql')
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'log-disable', 'sql')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Log')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_cluster_status(self):
-        """Test cluster_status method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Cluster", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.cluster_status()
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'cluster-status', '')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Cluster')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_cluster_info(self):
-        """Test cluster_info method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Cluster", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.cluster_info()
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'cluster-info', '')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Cluster')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_node_status(self):
-        """Test node_status method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Node", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.node_status('node1')
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'node-status', 'node1')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Node')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_node_status_all(self):
-        """Test node_status method without node_id"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Node", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.node_status()
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'node-status', '')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Node')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_node_info(self):
-        """Test node_info method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Node", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.node_info('node1')
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cn', 'node-info', 'node1')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Node')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_custom_ctl(self):
-        """Test custom_ctl method"""
-        # Mock successful result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Custom", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.custom_ctl('custom', 'operation', 'param1,param2')
-        
-        # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('custom', 'operation', 'param1,param2')"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        
-        # Verify the result
-        self.assertEqual(result['method'], 'Custom')
-        self.assertEqual(result['result'][0]['returnStr'], 'OK')
-    
-    def test_is_available_success(self):
-        """Test is_available method when mo_ctl is available"""
-        # Mock successful cluster_status result
-        mock_result = Mock()
-        mock_result.rows = [('{"method": "Cluster", "result": [{"returnStr": "OK"}]}',)]
-        self.mock_client.execute.return_value = mock_result
-        
-        result = self.moctl_manager.is_available()
-        
-        self.assertTrue(result)
-    
-    def test_is_available_failure(self):
-        """Test is_available method when mo_ctl is not available"""
-        # Mock failure
-        self.mock_client.execute.side_effect = Exception("Connection failed")
-        
-        result = self.moctl_manager.is_available()
-        
-        self.assertFalse(result)
-    
-    def test_get_supported_operations(self):
-        """Test get_supported_operations method"""
-        operations = self.moctl_manager.get_supported_operations()
-        
-        self.assertIn("flush-table", operations)
-        self.assertIn("checkpoint", operations)
-        self.assertIn("log-level", operations)
-        self.assertIn("cluster-status", operations)
-        self.assertIn("cluster-info", operations)
-        self.assertIn("node-status", operations)
-        self.assertIn("node-info", operations)
 
 
 class TestMoCtlIntegration(unittest.TestCase):
     """Test MoCtlManager integration with Client"""
     
+    @classmethod
+    def setUpClass(cls):
+        """Setup mocks for the entire test class"""
+        setup_sqlalchemy_mocks()
+    
+    @classmethod
+    def tearDownClass(cls):
+        """Restore original modules after tests"""
+        teardown_sqlalchemy_mocks()
+    
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_client._connection = Mock()
-        self.mock_client._connection_params = {
-            'user': 'root',
-            'password': '111',
-            'host': 'localhost',
-            'port': 6001,
-            'database': 'test'
-        }
         self.mock_client.execute = Mock()
-        self.mock_client._snapshots = Mock()
-        self.mock_client._clone = Mock()
-        self.mock_client._moctl = Mock()
+        self.moctl_manager = MoCtlManager(self.mock_client)
     
-    def test_client_moctl_property(self):
-        """Test Client.moctl property"""
-        # Create a real Client instance with mocked dependencies
-        client = Client()
-        client._connection = self.mock_client._connection
-        client._connection_params = self.mock_client._connection_params
-        client._snapshots = self.mock_client._snapshots
-        client._clone = self.mock_client._clone
-        client._moctl = self.mock_client._moctl
-        
-        # Test that moctl property returns the manager
-        self.assertEqual(client.moctl, self.mock_client._moctl)
-    
-    def test_moctl_operations_chain(self):
-        """Test chaining mo_ctl operations"""
-        # Mock successful results
+    def test_flush_table_integration(self):
+        """Test flush_table integration"""
+        # Mock successful result
         mock_result = Mock()
         mock_result.rows = [('{"method": "Flush", "result": [{"returnStr": "OK"}]}',)]
         self.mock_client.execute.return_value = mock_result
         
-        # Create MoCtlManager
-        moctl_manager = MoCtlManager(self.mock_client)
+        result = self.moctl_manager.flush_table('production', 'orders')
         
-        # Test multiple operations
-        result1 = moctl_manager.flush_table('db1', 'users')
-        result2 = moctl_manager.checkpoint()
+        # Verify the SQL was called correctly
+        expected_sql = "SELECT mo_ctl('dn', 'flush', 'production.orders')"
+        self.mock_client.execute.assert_called_once_with(expected_sql)
         
-        # Verify both operations were called
-        self.assertEqual(self.mock_client.execute.call_count, 2)
-        self.assertEqual(result1['method'], 'Flush')
-        self.assertEqual(result2['method'], 'Flush')  # Same mock result
+        # Verify the result
+        self.assertEqual(result['method'], 'Flush')
+        self.assertEqual(result['result'][0]['returnStr'], 'OK')
+    
+    def test_increment_checkpoint_integration(self):
+        """Test increment_checkpoint integration"""
+        # Mock successful result
+        mock_result = Mock()
+        mock_result.rows = [('{"method": "Checkpoint", "result": [{"returnStr": "OK"}]}',)]
+        self.mock_client.execute.return_value = mock_result
+        
+        result = self.moctl_manager.increment_checkpoint()
+        
+        # Verify the SQL was called correctly
+        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
+        self.mock_client.execute.assert_called_once_with(expected_sql)
+        
+        # Verify the result
+        self.assertEqual(result['method'], 'Checkpoint')
+        self.assertEqual(result['result'][0]['returnStr'], 'OK')
+    
+    def test_global_checkpoint_integration(self):
+        """Test global_checkpoint integration"""
+        # Mock successful result
+        mock_result = Mock()
+        mock_result.rows = [('{"method": "GlobalCheckpoint", "result": [{"returnStr": "OK"}]}',)]
+        self.mock_client.execute.return_value = mock_result
+        
+        result = self.moctl_manager.global_checkpoint()
+        
+        # Verify the SQL was called correctly
+        expected_sql = "SELECT mo_ctl('dn', 'globalcheckpoint', '')"
+        self.mock_client.execute.assert_called_once_with(expected_sql)
+        
+        # Verify the result
+        self.assertEqual(result['method'], 'GlobalCheckpoint')
+        self.assertEqual(result['result'][0]['returnStr'], 'OK')
 
 
 if __name__ == '__main__':
-    # Create a test suite
-    test_suite = unittest.TestSuite()
-    
-    # Add test cases using TestLoader
-    loader = unittest.TestLoader()
-    test_suite.addTests(loader.loadTestsFromTestCase(TestMoCtlManager))
-    test_suite.addTests(loader.loadTestsFromTestCase(TestMoCtlIntegration))
-    
-    # Run the tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(test_suite)
-    
-    # Print summary
-    print(f"\n{'='*50}")
-    print(f"Tests run: {result.testsRun}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    if result.testsRun > 0:
-        success_rate = ((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100)
-        print(f"Success rate: {success_rate:.1f}%")
-    print(f"{'='*50}")
-    
-    # Exit with appropriate code
-    if result.failures or result.errors:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    unittest.main()

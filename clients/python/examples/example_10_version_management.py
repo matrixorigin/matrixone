@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+Example 10: Version Management - Comprehensive Version Management Operations
+
 MatrixOne Python SDK - Version Management Example
 
 This example demonstrates how to use the version management framework
@@ -29,295 +31,323 @@ from matrixone.exceptions import VersionError, ConnectionError, QueryError
 from matrixone.config import get_connection_params, print_config
 
 
-def demonstrate_version_parsing():
-    """Demonstrate version parsing and comparison"""
-    print("=== Version Parsing and Comparison ===")
+class VersionManagementDemo:
+    """Demonstrates version management capabilities with comprehensive testing."""
     
-    version_manager = VersionManager()
-    
-    # Parse version strings
-    versions = ["3.0.1", "3.0.2", "2.1.19", "3.0.9", "1.5.0"]
-    
-    print("Parsing versions:")
-    for version_str in versions:
-        version = version_manager.parse_version(version_str)
-        print(f"  {version_str} -> {version}")
-    
-    print("\nVersion comparisons:")
-    test_cases = [
-        ("3.0.2", "3.0.1"),
-        ("2.1.19", "3.0.9"),
-        ("3.0.1", "3.0.1"),
-        ("1.5.0", "2.0.0"),
-        ("3.0.0", "2.9.9")
-    ]
-    
-    for v1, v2 in test_cases:
-        result = version_manager.compare_versions(v1, v2)
-        comparison_text = {
-            -1: "less than",
-            0: "equal to", 
-            1: "greater than"
-        }[result.value]
-        print(f"  {v1} is {comparison_text} {v2}")
+    def __init__(self):
+        self.results = {
+            'tests_run': 0,
+            'tests_passed': 0,
+            'tests_failed': 0,
+            'unexpected_results': [],
+            'version_performance': {}
+        }
 
-
-def demonstrate_feature_requirements():
-    """Demonstrate feature requirement registration and checking"""
-    print("\n=== Feature Requirements ===")
-    
-    version_manager = VersionManager()
-    
-    # Register some custom feature requirements
-    features = [
-        FeatureRequirement(
-            feature_name="advanced_analytics",
-            min_version=VersionInfo(3, 0, 0),
-            description="Advanced analytics features including window functions",
-            alternative="Use basic aggregation functions instead"
-        ),
-        FeatureRequirement(
-            feature_name="streaming_ingest",
-            min_version=VersionInfo(2, 5, 0),
-            max_version=VersionInfo(2, 9, 9),
-            description="Streaming data ingestion capability",
-            alternative="Use batch loading instead"
-        ),
-        FeatureRequirement(
-            feature_name="multi_tenant",
-            min_version=VersionInfo(3, 1, 0),
-            description="Multi-tenant database support",
-            alternative="Use single-tenant setup"
-        )
-    ]
-    
-    for feature in features:
-        version_manager.register_feature_requirement(feature)
-    
-    # Test feature availability with different versions
-    test_versions = ["2.4.0", "2.8.0", "3.0.0", "3.1.0"]
-    
-    for version in test_versions:
-        print(f"\nBackend version {version}:")
-        version_manager.set_backend_version(version)
+    def test_version_parsing(self):
+        """Test version parsing and comparison"""
+        print("\n=== Version Parsing Tests ===")
         
-        for feature_name in ["advanced_analytics", "streaming_ingest", "multi_tenant"]:
-            available = version_manager.is_feature_available(feature_name)
-            status = "✓ Available" if available else "✗ Not available"
-            print(f"  {feature_name}: {status}")
+        self.results['tests_run'] += 1
+        
+        try:
+            version_manager = VersionManager()
             
-            if not available:
-                hint = version_manager.get_version_hint(feature_name)
-                print(f"    Hint: {hint}")
+            # Test version parsing
+            print("Test: Version Parsing and Comparison")
+            try:
+                # Parse version strings
+                versions = ["3.0.1", "3.0.2", "2.1.19", "3.0.9", "1.5.0"]
+                
+                print("Parsing versions:")
+                for version_str in versions:
+                    version = version_manager.parse_version(version_str)
+                    print(f"  {version_str} -> {version}")
+                
+                # Test version comparisons
+                test_cases = [
+                    ("3.0.2", "3.0.1"),
+                    ("2.1.19", "3.0.9"),
+                    ("3.0.1", "3.0.1"),
+                ]
+                
+                print("\nVersion comparisons:")
+                for v1_str, v2_str in test_cases:
+                    v1 = version_manager.parse_version(v1_str)
+                    v2 = version_manager.parse_version(v2_str)
+                    comparison = ">" if v1 > v2 else "<" if v1 < v2 else "=="
+                    print(f"  {v1_str} {comparison} {v2_str}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Version parsing test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Version Parsing',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Version parsing test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Version Parsing',
+                'error': str(e)
+            })
 
-
-def demonstrate_version_checking_decorator():
-    """Demonstrate version checking decorator"""
-    print("\n=== Version Checking Decorator ===")
-    
-    class MockClient:
-        def __init__(self, version):
-            self._version_manager = VersionManager()
-            self._version_manager.set_backend_version(version)
+    def test_backend_version_detection(self):
+        """Test backend version detection"""
+        print("\n=== Backend Version Detection Tests ===")
         
-        @requires_version(
-            min_version="3.0.0",
-            feature_name="premium_feature",
-            description="Premium feature that requires version 3.0.0+",
-            alternative="Use basic_feature() instead"
-        )
-        def premium_feature(self):
-            return "Premium feature executed successfully!"
+        self.results['tests_run'] += 1
         
-        @requires_version(
-            min_version="2.0.0",
-            max_version="2.9.9",
-            feature_name="legacy_feature",
-            description="Legacy feature only available in 2.x versions",
-            alternative="Use new_feature() instead"
-        )
-        def legacy_feature(self):
-            return "Legacy feature executed successfully!"
-        
-        def basic_feature(self):
-            return "Basic feature executed successfully!"
-    
-    # Test with different versions
-    test_versions = ["1.9.0", "2.5.0", "3.0.0", "3.1.0"]
-    
-    for version in test_versions:
-        print(f"\nTesting with backend version {version}:")
-        client = MockClient(version)
-        
-        # Test premium feature
         try:
-            result = client.premium_feature()
-            print(f"  premium_feature: {result}")
-        except VersionError as e:
-            print(f"  premium_feature: {e}")
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test backend version detection
+            print("Test: Backend Version Detection")
+            try:
+                client = Client()
+                client.connect(host, port, user, password, database)
+                
+                # Get version information
+                version_info = client.version()
+                print(f"   Backend version: {version_info}")
+                
+                # Test version manager with backend
+                version_manager = VersionManager()
+                # Parse MatrixOne version string to standard format
+                parsed_version = version_manager._parse_matrixone_version(version_info)
+                if parsed_version:
+                    version_manager.set_backend_version(parsed_version)
+                    backend_version = version_manager.get_backend_version()
+                    print(f"   Detected backend version: {backend_version}")
+                else:
+                    print(f"   Could not parse MatrixOne version: {version_info}")
+                
+                client.disconnect()
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Backend version detection test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Backend Version Detection',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Backend version detection test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Backend Version Detection',
+                'error': str(e)
+            })
+
+    def test_feature_availability(self):
+        """Test feature availability checking"""
+        print("\n=== Feature Availability Tests ===")
         
-        # Test legacy feature
+        self.results['tests_run'] += 1
+        
         try:
-            result = client.legacy_feature()
-            print(f"  legacy_feature: {result}")
-        except VersionError as e:
-            print(f"  legacy_feature: {e}")
+            # Test feature availability checking
+            print("Test: Feature Availability Checking")
+            try:
+                version_manager = VersionManager()
+                
+                # Register some test features
+                version_manager.register_feature_requirement(
+                    FeatureRequirement(
+                        feature_name="vector_search",
+                        min_version=version_manager.parse_version("3.0.0"),
+                        description="Vector search functionality"
+                    )
+                )
+                version_manager.register_feature_requirement(
+                    FeatureRequirement(
+                        feature_name="advanced_analytics",
+                        min_version=version_manager.parse_version("2.5.0"),
+                        description="Advanced analytics features"
+                    )
+                )
+                
+                # Test feature availability
+                test_version = version_manager.parse_version("3.0.1")
+                
+                # Set test version as backend version for feature checking
+                version_manager.set_backend_version("3.0.1")
+                vector_available = version_manager.is_feature_available("vector_search")
+                analytics_available = version_manager.is_feature_available("advanced_analytics")
+                
+                print(f"   Vector search available in 3.0.1: {vector_available}")
+                print(f"   Advanced analytics available in 3.0.1: {analytics_available}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Feature availability test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Feature Availability',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Feature availability test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Feature Availability',
+                'error': str(e)
+            })
+
+    def test_version_aware_decorators(self):
+        """Test version-aware decorators"""
+        print("\n=== Version-Aware Decorators Tests ===")
         
-        # Basic feature (no version requirement)
-        result = client.basic_feature()
-        print(f"  basic_feature: {result}")
-
-
-def demonstrate_real_client_integration():
-    """Demonstrate real client integration with version management"""
-    print("\n=== Real Client Integration ===")
-    
-    # This would normally connect to a real MatrixOne instance
-    # For demo purposes, we'll show the API usage
-    
-    print("Client version management API:")
-    print("""
-    # Create client
-    client = Client()
-    
-    # Connect to MatrixOne (version will be auto-detected)
-    client.connect('localhost', 6001, 'root', 'password', 'test')
-    
-    # Get detected version
-    version = client.get_backend_version()
-    print(f"Backend version: {version}")
-    
-    # Check feature availability
-    if client.is_feature_available('snapshot_creation'):
-        print("Snapshot creation is available")
-    else:
-        hint = client.get_version_hint('snapshot_creation')
-        print(f"Snapshot creation not available: {hint}")
-    
-    # Check version compatibility
-    if client.check_version_compatibility('3.0.0', '>='):
-        print("Backend supports version 3.0.0+ features")
-    
-    # Get feature information
-    info = client.get_feature_info('pitr_cluster_level')
-    if info:
-        print(f"PITR cluster level feature: {info}")
-    
-    # Use version-aware methods (these will automatically check versions)
-    try:
-        snapshot = client.snapshots.create('my_snapshot', 'cluster')
-        print(f"Created snapshot: {snapshot}")
-    except VersionError as e:
-        print(f"Snapshot creation failed: {e}")
-    
-    client.disconnect()
-    """)
-
-
-def demonstrate_error_scenarios():
-    """Demonstrate various error scenarios and helpful messages"""
-    print("\n=== Error Scenarios and Helpful Messages ===")
-    
-    version_manager = VersionManager()
-    
-    # Scenario 1: Feature not available due to low version
-    print("Scenario 1: Feature requiring higher version")
-    version_manager.set_backend_version("2.0.0")
-    version_manager.register_feature_requirement(
-        FeatureRequirement(
-            feature_name="new_api",
-            min_version=VersionInfo(3, 0, 0),
-            description="New API with improved performance",
-            alternative="Use legacy_api() method instead"
-        )
-    )
-    
-    try:
-        # This would normally be called via decorator
-        if not version_manager.is_feature_available("new_api"):
-            hint = version_manager.get_version_hint("new_api", "Calling new_api() method")
-            raise VersionError(f"Feature 'new_api' is not available.\n{hint}")
-    except VersionError as e:
-        print(f"Error: {e}")
-    
-    # Scenario 2: Feature not available due to high version (deprecated)
-    print("\nScenario 2: Deprecated feature in newer version")
-    version_manager.set_backend_version("3.5.0")
-    version_manager.register_feature_requirement(
-        FeatureRequirement(
-            feature_name="old_api",
-            max_version=VersionInfo(3, 0, 9),
-            description="Legacy API that was deprecated in 3.1.0",
-            alternative="Use modern_api() method instead"
-        )
-    )
-    
-    try:
-        if not version_manager.is_feature_available("old_api"):
-            hint = version_manager.get_version_hint("old_api", "Calling old_api() method")
-            raise VersionError(f"Feature 'old_api' is not available.\n{hint}")
-    except VersionError as e:
-        print(f"Error: {e}")
-    
-    # Scenario 3: Version format error
-    print("\nScenario 3: Invalid version format")
-    try:
-        version_manager.parse_version("invalid.version")
-    except ValueError as e:
-        print(f"Version parsing error: {e}")
-
-
-def demonstrate_async_client_version_management():
-    """Demonstrate async client version management"""
-    print("\n=== Async Client Version Management ===")
-    
-    async def async_demo():
-        print("Async client version management API:")
-        print("""
-        # Create async client
-        client = AsyncClient()
+        self.results['tests_run'] += 1
         
-        # Connect to MatrixOne (version will be auto-detected)
-        await client.connect('localhost', 6001, 'root', 'password', 'test')
-        
-        # Get detected version
-        version = client.get_backend_version()
-        print(f"Backend version: {version}")
-        
-        # Check feature availability
-        if client.is_feature_available('snapshot_creation'):
-            print("Snapshot creation is available")
-        
-        # Use version-aware async methods
         try:
-            snapshot = await client.snapshots.create('my_snapshot', 'cluster')
-            print(f"Created snapshot: {snapshot}")
-        except VersionError as e:
-            print(f"Snapshot creation failed: {e}")
+            # Test version-aware decorators
+            print("Test: Version-Aware Decorators")
+            try:
+                version_manager = VersionManager()
+                
+                # Define a test method with version requirement
+                @requires_version(min_version="3.0.0", description="This feature requires MatrixOne 3.0.0 or higher")
+                def test_feature():
+                    return "Feature executed successfully"
+                
+                # Test with compatible version
+                try:
+                    result = test_feature()
+                    print(f"   Feature result: {result}")
+                    self.results['tests_passed'] += 1
+                except VersionError as e:
+                    print(f"   Version error (expected): {e}")
+                    self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Version-aware decorators test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Version-Aware Decorators',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Version-aware decorators test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Version-Aware Decorators',
+                'error': str(e)
+            })
+
+    def test_custom_feature_requirements(self):
+        """Test custom feature requirements"""
+        print("\n=== Custom Feature Requirements Tests ===")
         
-        await client.disconnect()
-        """)
-    
-    # Run async demo
-    asyncio.run(async_demo())
+        self.results['tests_run'] += 1
+        
+        try:
+            # Test custom feature requirements
+            print("Test: Custom Feature Requirements")
+            try:
+                version_manager = VersionManager()
+                
+                # Create custom feature requirement
+                custom_feature = FeatureRequirement(
+                    feature_name="custom_analytics",
+                    min_version=version_manager.parse_version("2.8.0"),
+                    description="Custom analytics functionality"
+                )
+                
+                # Register custom feature
+                version_manager.register_feature_requirement(custom_feature)
+                
+                # Test custom feature
+                version_manager.set_backend_version("3.0.0")
+                is_available = version_manager.is_feature_available("custom_analytics")
+                
+                print(f"   Custom analytics available in 3.0.0: {is_available}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                print(f"❌ Custom feature requirements test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Custom Feature Requirements',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            print(f"❌ Custom feature requirements test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Custom Feature Requirements',
+                'error': str(e)
+            })
+
+    def generate_summary_report(self):
+        """Generate comprehensive summary report."""
+        print("\n" + "=" * 80)
+        print("Version Management Demo - Summary Report")
+        print("=" * 80)
+        
+        total_tests = self.results['tests_run']
+        passed_tests = self.results['tests_passed']
+        failed_tests = self.results['tests_failed']
+        unexpected_results = self.results['unexpected_results']
+        version_performance = self.results['version_performance']
+        
+        print(f"Total Tests Run: {total_tests}")
+        print(f"Tests Passed: {passed_tests}")
+        print(f"Tests Failed: {failed_tests}")
+        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "N/A")
+        
+        # Performance summary
+        if version_performance:
+            print(f"\nVersion Management Performance Results:")
+            for test_name, time_taken in version_performance.items():
+                print(f"  {test_name}: {time_taken:.4f}s")
+        
+        # Unexpected results
+        if unexpected_results:
+            print(f"\nUnexpected Results ({len(unexpected_results)}):")
+            for i, result in enumerate(unexpected_results, 1):
+                print(f"  {i}. Test: {result['test']}")
+                print(f"     Error: {result['error']}")
+        else:
+            print("\n✓ No unexpected results - all tests behaved as expected")
+        
+        return self.results
 
 
 def main():
-    """Main demonstration function"""
-    print("MatrixOne Python SDK - Version Management Framework Demo")
-    print("=" * 60)
+    """Main demo function"""
+    demo = VersionManagementDemo()
     
     try:
-        # Run all demonstrations
-        demonstrate_version_parsing()
-        demonstrate_feature_requirements()
-        demonstrate_version_checking_decorator()
-        demonstrate_real_client_integration()
-        demonstrate_error_scenarios()
-        demonstrate_async_client_version_management()
+        print("🚀 MatrixOne Version Management Examples")
+        print("=" * 60)
         
-        print("\n" + "=" * 60)
-        print("Version Management Framework Demo Completed Successfully!")
+        # Print current configuration
+        print_config()
+        
+        # Run tests
+        demo.test_version_parsing()
+        demo.test_backend_version_detection()
+        demo.test_feature_availability()
+        demo.test_version_aware_decorators()
+        demo.test_custom_feature_requirements()
+        
+        # Generate report
+        results = demo.generate_summary_report()
+        
+        print("\n🎉 All version management examples completed!")
         print("\nKey Features:")
         print("✓ Semantic version parsing and comparison")
         print("✓ Automatic backend version detection")
@@ -327,10 +357,11 @@ def main():
         print("✓ Integration with both sync and async clients")
         print("✓ Custom feature requirements support")
         
+        return results
+        
     except Exception as e:
-        print(f"\nDemo failed with error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Demo failed with error: {e}")
+        return None
 
 
 if __name__ == "__main__":

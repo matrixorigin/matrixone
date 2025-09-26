@@ -9,7 +9,7 @@ Getting Started
 1. Fork the repository on GitHub
 2. Clone your fork locally::
 
-   git clone https://github.com/matrixorigin/matrixone.git
+   git clone https://github.com/matrixorigin/matrixone
    cd matrixone/clients/python-wrapper
 
 3. Set up development environment::
@@ -57,10 +57,10 @@ Write tests for new features and bug fixes::
    make test
 
    # Run specific test file
-   python -m pytest test_client.py -v
+    python -m pytest test_client.py -v
 
    # Run with coverage
-   python -m pytest --cov=matrixone test_*.py
+    python -m pytest --cov=matrixone test_*.py
 
 Documentation
 ~~~~~~~~~~~~~

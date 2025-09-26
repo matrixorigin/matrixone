@@ -321,7 +321,7 @@ class PineconeCompatibleIndex:
                 # Direct value comparison (equivalent to $eq)
                 where_params.append(value)
                 return f"{key} = ?"
-        
+
         def parse_nested_condition(condition_dict: dict) -> str:
             """Parse a nested condition that might contain $and or $or"""
             if "$and" in condition_dict:
@@ -358,7 +358,7 @@ class PineconeCompatibleIndex:
             else:
                 condition = parse_condition(key, value)
                 where_conditions.append(condition)
-        
+
         return where_conditions, where_params
 
     def query(
@@ -488,7 +488,8 @@ class PineconeCompatibleIndex:
             select_columns.append(self.vector_column)
 
         # Use unified SQL builder for async queries
-        from .sql_builder import build_vector_similarity_query, DistanceFunction
+        from .sql_builder import (DistanceFunction,
+                                  build_vector_similarity_query)
 
         # Convert metric to distance function enum
         metric = index_info.get("metric", "l2")
@@ -510,7 +511,7 @@ class PineconeCompatibleIndex:
             limit=top_k,
             select_columns=select_columns,
             where_conditions=where_conditions,
-            where_params=where_params
+            where_params=where_params,
         )
 
         # Execute query
@@ -568,15 +569,13 @@ class PineconeCompatibleIndex:
         if ids:
             # Use unified SQL builder for DELETE
             from .sql_builder import build_delete_query
-            
+
             id_column = self._get_id_column()
             placeholders = ",".join(["?" for _ in ids])
             where_condition = f"{id_column} IN ({placeholders})"
-            
+
             sql, params = build_delete_query(
-                table_name=self.table_name,
-                where_conditions=[where_condition],
-                where_params=ids
+                table_name=self.table_name, where_conditions=[where_condition], where_params=ids
             )
             self.client.execute(sql, params)
 
@@ -603,15 +602,13 @@ class PineconeCompatibleIndex:
         if ids:
             # Use unified SQL builder for DELETE
             from .sql_builder import build_delete_query
-            
+
             id_column = await self._get_id_column_async()
             placeholders = ",".join(["?" for _ in ids])
             where_condition = f"{id_column} IN ({placeholders})"
-            
+
             sql, params = build_delete_query(
-                table_name=self.table_name,
-                where_conditions=[where_condition],
-                where_params=ids
+                table_name=self.table_name, where_conditions=[where_condition], where_params=ids
             )
             await self.client.execute(sql, params)
 
@@ -624,11 +621,8 @@ class PineconeCompatibleIndex:
         """
         # Get table row count using unified SQL builder
         from .sql_builder import build_select_query
-        
-        sql = build_select_query(
-            table_name=self.table_name,
-            select_columns=["COUNT(*)"]
-        )
+
+        sql = build_select_query(table_name=self.table_name, select_columns=["COUNT(*)"])
         count_result = self.client.execute(sql)
         total_vector_count = count_result.rows[0][0] if count_result.rows else 0
 
@@ -650,11 +644,8 @@ class PineconeCompatibleIndex:
         """
         # Get table row count using unified SQL builder
         from .sql_builder import build_select_query
-        
-        sql = build_select_query(
-            table_name=self.table_name,
-            select_columns=["COUNT(*)"]
-        )
+
+        sql = build_select_query(table_name=self.table_name, select_columns=["COUNT(*)"])
         count_result = await self.client.execute(sql)
         total_vector_count = count_result.rows[0][0] if count_result.rows else 0
 

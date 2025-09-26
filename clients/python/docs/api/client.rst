@@ -2,6 +2,7 @@ Client
 ======
 
 .. automodule:: matrixone.client
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

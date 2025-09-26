@@ -555,19 +555,34 @@ class TestAsyncMoCtlManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['method'], 'Flush')
         self.assertEqual(result['result'][0]['returnStr'], 'OK')
     
-    async def test_checkpoint(self):
-        """Test async checkpoint"""
+    async def test_increment_checkpoint(self):
+        """Test async increment checkpoint"""
         mock_result = AsyncResultSet(
             ['result'],
             [('{"method": "Checkpoint", "result": [{"returnStr": "OK"}]}',)]
         )
         self.mock_client.execute.return_value = mock_result
         
-        result = await self.moctl_manager.checkpoint()
+        result = await self.moctl_manager.increment_checkpoint()
         
         expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         self.assertEqual(result['method'], 'Checkpoint')
+        self.assertEqual(result['result'][0]['returnStr'], 'OK')
+    
+    async def test_global_checkpoint(self):
+        """Test async global checkpoint"""
+        mock_result = AsyncResultSet(
+            ['result'],
+            [('{"method": "GlobalCheckpoint", "result": [{"returnStr": "OK"}]}',)]
+        )
+        self.mock_client.execute.return_value = mock_result
+        
+        result = await self.moctl_manager.global_checkpoint()
+        
+        expected_sql = "SELECT mo_ctl('dn', 'globalcheckpoint', '')"
+        self.mock_client.execute.assert_called_once_with(expected_sql)
+        self.assertEqual(result['method'], 'GlobalCheckpoint')
         self.assertEqual(result['result'][0]['returnStr'], 'OK')
     
     async def test_moctl_error_handling(self):

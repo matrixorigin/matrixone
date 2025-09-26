@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+Example 20: SQLAlchemy Engine Integration - Comprehensive SQLAlchemy Engine Operations
+
 MatrixOne SQLAlchemy Engine Integration Example
 
 This example demonstrates how to use MatrixOne Client and AsyncClient 
@@ -22,336 +24,384 @@ logger = create_default_logger(
 )
 
 
-def demo_sync_engine_integration():
-    """Demonstrate sync SQLAlchemy engine integration"""
-    logger.info("🚀 Starting sync SQLAlchemy engine integration demo")
+class SQLAlchemyEngineIntegrationDemo:
+    """Demonstrates SQLAlchemy engine integration capabilities with comprehensive testing."""
     
-    # Print current configuration
-    print_config()
-    
-    # Get connection parameters from config (supports environment variables)
-    host, port, user, password, database = get_connection_params()
-    
-    # Create SQLAlchemy engine
-    connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
-    engine = create_engine(connection_string)
-    
-    try:
-        # Create MatrixOne Client from existing SQLAlchemy engine
-        client = Client.from_engine(engine)
-        logger.info("✅ Created MatrixOne Client from SQLAlchemy engine")
-        
-        # Test basic functionality
-        result = client.execute("SELECT 1 as test_value")
-        rows = result.fetchall()
-        logger.info(f"📊 Test query result: {rows[0][0]}")
-        
-        # Test database operations
-        test_db = "demo_engine_db"
-        client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
-        client.execute(f"USE {test_db}")
-        
-        # Create table
-        client.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                id INT PRIMARY KEY,
-                name VARCHAR(100),
-                price DECIMAL(10,2),
-                category VARCHAR(50)
-            )
-        """)
-        
-        # Insert sample data
-        client.execute("""
-            INSERT INTO products VALUES 
-            (1, 'Laptop', 999.99, 'Electronics'),
-            (2, 'Mouse', 29.99, 'Electronics'),
-            (3, 'Book', 19.99, 'Education')
-        """)
-        
-        logger.info("📊 Sample data inserted")
-        
-        # Test MatrixOne-specific features
-        logger.info("🔍 Testing MatrixOne-specific features:")
-        
-        # Clean up any existing snapshot first
-        try:
-            client.execute("DROP SNAPSHOT demo_snapshot")
-        except:
-            pass  # Snapshot might not exist
-        
-        # Test snapshot functionality
-        snapshot_manager = client.snapshots
-        snapshot = snapshot_manager.create(
-            name="demo_snapshot",
-            level="table",
-            database=test_db,
-            table="products"
-        )
-        logger.info(f"📸 Snapshot '{snapshot.name}' created at {snapshot.created_at}")
-        
-        # Test account management
-        account_manager = client.account
-        accounts = account_manager.list_accounts()
-        logger.info(f"👥 Found {len(accounts)} accounts")
-        
-        # Test query with snapshot
-        from matrixone.snapshot import SnapshotQueryBuilder
-        builder = SnapshotQueryBuilder("demo_snapshot", client)
-        result = (builder
-                 .select("id", "name", "price")
-                 .from_table(f"{test_db}.products")
-                 .where("price > ?", 50)
-                 .execute())
-        
-        rows = result.fetchall()
-        logger.info(f"🔍 Products with price > 50 from snapshot: {len(rows)} items")
-        for row in rows:
-            logger.info(f"   - {row[1]}: ${row[2]}")
-        
-        # Clean up
-        try:
-            client.execute("DROP SNAPSHOT demo_snapshot")
-        except:
-            pass
-        client.execute(f"DROP DATABASE IF EXISTS {test_db}")
-        
-        logger.info("✅ Sync SQLAlchemy engine integration demo completed successfully")
-        
-    except Exception as e:
-        logger.error(f"❌ Sync demo failed: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-    finally:
-        if client.connected:
-            client.disconnect()
-        engine.dispose()
-
-
-async def demo_async_engine_integration():
-    """Demonstrate async SQLAlchemy engine integration"""
-    logger.info("🚀 Starting async SQLAlchemy engine integration demo")
-    
-    # Get connection parameters from config (supports environment variables)
-    host, port, user, password, database = get_connection_params()
-    
-    # Create SQLAlchemy async engine
-    connection_string = f"mysql+aiomysql://{user}:{password}@{host}:{port}/{database}"
-    engine = create_async_engine(connection_string)
-    
-    try:
-        # Create MatrixOne AsyncClient from existing SQLAlchemy async engine
-        client = AsyncClient.from_engine(engine)
-        logger.info("✅ Created MatrixOne AsyncClient from SQLAlchemy async engine")
-        
-        # Test basic functionality
-        result = await client.execute("SELECT 2 as test_value")
-        rows = result.fetchall()
-        logger.info(f"📊 Test query result: {rows[0][0]}")
-        
-        # Test database operations
-        test_db = "demo_async_engine_db"
-        await client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
-        await client.execute(f"USE {test_db}")
-        
-        # Create table
-        await client.execute("""
-            CREATE TABLE IF NOT EXISTS async_products (
-                id INT PRIMARY KEY,
-                name VARCHAR(100),
-                price DECIMAL(10,2),
-                category VARCHAR(50)
-            )
-        """)
-        
-        # Clear existing data and insert sample data
-        await client.execute("DELETE FROM async_products")
-        await client.execute("""
-            INSERT INTO async_products VALUES 
-            (1, 'Async Laptop', 999.99, 'Electronics'),
-            (2, 'Async Mouse', 29.99, 'Electronics'),
-            (3, 'Async Book', 19.99, 'Education')
-        """)
-        
-        logger.info("📊 Sample data inserted (async)")
-        
-        # Test MatrixOne-specific features
-        logger.info("🔍 Testing MatrixOne-specific async features:")
-        
-        # Test async snapshot functionality
-        from matrixone.async_client import AsyncSnapshotManager
-        from matrixone.snapshot import SnapshotLevel
-        
-        # Clean up any existing snapshot first
-        try:
-            await client.execute("DROP SNAPSHOT demo_async_snapshot")
-        except:
-            pass  # Snapshot might not exist
-        
-        async_snapshot_manager = AsyncSnapshotManager(client)
-        async_snapshot = await async_snapshot_manager.create(
-            name="demo_async_snapshot",
-            level=SnapshotLevel.TABLE,
-            database=test_db,
-            table="async_products"
-        )
-        logger.info(f"📸 Async Snapshot '{async_snapshot.name}' created at {async_snapshot.created_at}")
-        
-        # Test async query with snapshot
-        from matrixone.snapshot import SnapshotQueryBuilder
-        builder = SnapshotQueryBuilder("demo_async_snapshot", client)
-        result = await (builder
-                       .select("id", "name", "price")
-                       .from_table(f"{test_db}.async_products")
-                       .where("price > ?", 50)
-                       .execute())
-        
-        rows = result.fetchall()
-        logger.info(f"🔍 Async products with price > 50 from snapshot: {len(rows)} items")
-        for row in rows:
-            logger.info(f"   - {row[1]}: ${row[2]}")
-        
-        # Clean up
-        try:
-            await client.execute("DROP SNAPSHOT demo_async_snapshot")
-        except:
-            pass
-        await client.execute(f"DROP DATABASE IF EXISTS {test_db}")
-        
-        logger.info("✅ Async SQLAlchemy engine integration demo completed successfully")
-        
-    except Exception as e:
-        logger.error(f"❌ Async demo failed: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-    finally:
-        if client.connected():
-            await client.disconnect()
-        await engine.dispose()
-
-
-def demo_engine_reuse():
-    """Demonstrate reusing the same engine for multiple clients"""
-    logger.info("🚀 Starting engine reuse demo")
-    
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    # Create SQLAlchemy engine
-    connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
-    engine = create_engine(connection_string)
-    
-    try:
-        # Create multiple clients from the same engine
-        client1 = Client.from_engine(engine, enable_sql_logging=True)
-        client2 = Client.from_engine(engine, slow_sql_threshold=0.1)
-        
-        logger.info("✅ Created multiple clients from the same engine")
-        
-        # Test that both clients work independently
-        result1 = client1.execute("SELECT 'Client 1' as client_name")
-        result2 = client2.execute("SELECT 'Client 2' as client_name")
-        
-        rows1 = result1.fetchall()
-        rows2 = result2.fetchall()
-        
-        logger.info(f"📊 Client 1 result: {rows1[0][0]}")
-        logger.info(f"📊 Client 2 result: {rows2[0][0]}")
-        
-        # Test that both clients can access MatrixOne features
-        accounts1 = client1.account.list_accounts()
-        accounts2 = client2.account.list_accounts()
-        
-        logger.info(f"👥 Client 1 found {len(accounts1)} accounts")
-        logger.info(f"👥 Client 2 found {len(accounts2)} accounts")
-        
-        logger.info("✅ Engine reuse demo completed successfully")
-        
-    except Exception as e:
-        logger.error(f"❌ Engine reuse demo failed: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-    finally:
-        if client1.connected:
-            client1.disconnect()
-        if client2.connected:
-            client2.disconnect()
-        engine.dispose()
-
-
-def demo_custom_engine_configuration():
-    """Demonstrate using custom engine configuration with MatrixOne"""
-    logger.info("🚀 Starting custom engine configuration demo")
-    
-    # Get connection parameters from config
-    host, port, user, password, database = get_connection_params()
-    
-    # Create SQLAlchemy engine with custom configuration
-    connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
-    engine = create_engine(
-        connection_string,
-        pool_size=20,  # Custom pool size
-        max_overflow=30,  # Custom max overflow
-        pool_timeout=60,  # Custom pool timeout
-        pool_recycle=7200,  # Custom pool recycle time
-        echo=True,  # Enable SQL logging
-    )
-    
-    try:
-        # Create MatrixOne Client with custom configuration
-        client = Client.from_engine(
-            engine,
-            enable_sql_logging=True,
+    def __init__(self):
+        self.logger = create_default_logger(
             enable_performance_logging=True,
-            slow_sql_threshold=0.5
+            enable_sql_logging=True
         )
+        self.results = {
+            'tests_run': 0,
+            'tests_passed': 0,
+            'tests_failed': 0,
+            'unexpected_results': [],
+            'engine_integration_performance': {}
+        }
+
+    def test_sync_engine_integration(self):
+        """Test sync SQLAlchemy engine integration"""
+        print("\n=== Sync SQLAlchemy Engine Integration Tests ===")
         
-        logger.info("✅ Created MatrixOne Client with custom engine configuration")
+        self.results['tests_run'] += 1
         
-        # Test functionality
-        result = client.execute("SELECT 'Custom Engine Config' as test_value")
-        rows = result.fetchall()
-        logger.info(f"📊 Test query result: {rows[0][0]}")
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test sync engine integration
+            self.logger.info("Test: Sync SQLAlchemy Engine Integration")
+            try:
+                # Create SQLAlchemy engine
+                connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+                engine = create_engine(connection_string)
+                
+                # Create MatrixOne Client from existing SQLAlchemy engine
+                client = Client.from_engine(engine)
+                self.logger.info("✅ Created MatrixOne Client from SQLAlchemy engine")
+                
+                # Test basic functionality
+                result = client.execute("SELECT 1 as test_value")
+                rows = result.fetchall()
+                self.logger.info(f"📊 Test query result: {rows[0][0]}")
+                
+                # Test database operations
+                test_db = "demo_engine_db"
+                client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
+                client.execute(f"USE {test_db}")
+                
+                # Create test table
+                client.execute("DROP TABLE IF EXISTS engine_test")
+                client.execute("CREATE TABLE engine_test (id INT PRIMARY KEY, name VARCHAR(100))")
+                
+                # Insert test data
+                client.execute("INSERT INTO engine_test VALUES (1, 'Test Data 1')")
+                client.execute("INSERT INTO engine_test VALUES (2, 'Test Data 2')")
+                
+                # Query test data
+                result = client.execute("SELECT COUNT(*) FROM engine_test")
+                count = result.fetchone()[0]
+                self.logger.info(f"📊 Test table has {count} records")
+                
+                # Cleanup
+                client.execute(f"DROP DATABASE IF EXISTS {test_db}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Sync engine integration test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Sync SQLAlchemy Engine Integration',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ Sync engine integration test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Sync Engine Integration',
+                'error': str(e)
+            })
+
+    async def test_async_engine_integration(self):
+        """Test async SQLAlchemy engine integration"""
+        print("\n=== Async SQLAlchemy Engine Integration Tests ===")
         
-        # Test that custom configuration is working
-        logger.info("🔧 Custom engine configuration is active")
+        self.results['tests_run'] += 1
         
-        logger.info("✅ Custom engine configuration demo completed successfully")
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test async engine integration
+            self.logger.info("Test: Async SQLAlchemy Engine Integration")
+            try:
+                # Create async SQLAlchemy engine
+                connection_string = f"mysql+aiomysql://{user}:{password}@{host}:{port}/{database}"
+                async_engine = create_async_engine(connection_string)
+                
+                # Create MatrixOne AsyncClient from existing SQLAlchemy engine
+                client = AsyncClient.from_engine(async_engine)
+                self.logger.info("✅ Created MatrixOne AsyncClient from SQLAlchemy engine")
+                
+                # Test basic functionality
+                result = await client.execute("SELECT 1 as async_test_value")
+                rows = result.fetchall()
+                self.logger.info(f"📊 Async test query result: {rows[0][0]}")
+                
+                # Test database operations
+                test_db = "demo_async_engine_db"
+                await client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
+                await client.execute(f"USE {test_db}")
+                
+                # Create test table
+                await client.execute("DROP TABLE IF EXISTS async_engine_test")
+                await client.execute("CREATE TABLE async_engine_test (id INT PRIMARY KEY, name VARCHAR(100))")
+                
+                # Insert test data
+                await client.execute("INSERT INTO async_engine_test VALUES (1, 'Async Test Data 1')")
+                await client.execute("INSERT INTO async_engine_test VALUES (2, 'Async Test Data 2')")
+                
+                # Query test data
+                result = await client.execute("SELECT COUNT(*) FROM async_engine_test")
+                count = result.fetchone()[0]
+                self.logger.info(f"📊 Async test table has {count} records")
+                
+                # Cleanup
+                await client.execute(f"DROP DATABASE IF EXISTS {test_db}")
+                await client.disconnect()
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Async engine integration test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Async SQLAlchemy Engine Integration',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ Async engine integration test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Async Engine Integration',
+                'error': str(e)
+            })
+
+    def test_engine_reuse(self):
+        """Test engine reuse functionality"""
+        print("\n=== Engine Reuse Tests ===")
         
-    except Exception as e:
-        logger.error(f"❌ Custom engine configuration demo failed: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-    finally:
-        if client.connected:
-            client.disconnect()
-        engine.dispose()
+        self.results['tests_run'] += 1
+        
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test engine reuse
+            self.logger.info("Test: Engine Reuse")
+            try:
+                # Create SQLAlchemy engine
+                connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+                engine = create_engine(connection_string)
+                
+                # Create multiple clients from the same engine
+                client1 = Client.from_engine(engine)
+                client2 = Client.from_engine(engine)
+                
+                self.logger.info("✅ Created multiple clients from same engine")
+                
+                # Test both clients work
+                result1 = client1.execute("SELECT 1 as client1_test")
+                result2 = client2.execute("SELECT 2 as client2_test")
+                
+                self.logger.info(f"📊 Client 1 result: {result1.fetchone()[0]}")
+                self.logger.info(f"📊 Client 2 result: {result2.fetchone()[0]}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Engine reuse test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Engine Reuse',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ Engine reuse test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Engine Reuse',
+                'error': str(e)
+            })
+
+    def test_custom_engine_configuration(self):
+        """Test custom engine configuration"""
+        print("\n=== Custom Engine Configuration Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test custom engine configuration
+            self.logger.info("Test: Custom Engine Configuration")
+            try:
+                # Create SQLAlchemy engine with custom configuration
+                connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+                engine = create_engine(
+                    connection_string,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_pre_ping=True,
+                    echo=False
+                )
+                
+                # Create MatrixOne Client from custom engine
+                client = Client.from_engine(engine)
+                self.logger.info("✅ Created MatrixOne Client from custom engine")
+                
+                # Test functionality with custom engine
+                result = client.execute("SELECT 1 as custom_engine_test")
+                test_value = result.fetchone()[0]
+                self.logger.info(f"📊 Custom engine test result: {test_value}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Custom engine configuration test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Custom Engine Configuration',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ Custom engine configuration test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Custom Engine Configuration',
+                'error': str(e)
+            })
+
+    def test_engine_with_transactions(self):
+        """Test engine integration with transactions"""
+        print("\n=== Engine with Transactions Tests ===")
+        
+        self.results['tests_run'] += 1
+        
+        try:
+            # Get connection parameters from config
+            host, port, user, password, database = get_connection_params()
+            
+            # Test engine with transactions
+            self.logger.info("Test: Engine with Transactions")
+            try:
+                # Create SQLAlchemy engine
+                connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+                engine = create_engine(connection_string)
+                
+                # Create MatrixOne Client from engine
+                client = Client.from_engine(engine)
+                
+                # Test transaction functionality
+                test_db = "demo_transaction_engine_db"
+                client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
+                client.execute(f"USE {test_db}")
+                
+                # Create test table
+                client.execute("DROP TABLE IF EXISTS transaction_test")
+                client.execute("CREATE TABLE transaction_test (id INT PRIMARY KEY, value VARCHAR(100))")
+                
+                # Test transaction
+                with client.transaction() as tx:
+                    tx.execute("INSERT INTO transaction_test VALUES (1, 'Transaction Test')")
+                    tx.execute("INSERT INTO transaction_test VALUES (2, 'Another Test')")
+                
+                # Verify transaction committed
+                result = client.execute("SELECT COUNT(*) FROM transaction_test")
+                count = result.fetchone()[0]
+                self.logger.info(f"📊 Transaction test table has {count} records")
+                
+                # Cleanup
+                client.execute(f"DROP DATABASE IF EXISTS {test_db}")
+                
+                self.results['tests_passed'] += 1
+                
+            except Exception as e:
+                self.logger.error(f"❌ Engine with transactions test failed: {e}")
+                self.results['tests_failed'] += 1
+                self.results['unexpected_results'].append({
+                    'test': 'Engine with Transactions',
+                    'error': str(e)
+                })
+            
+        except Exception as e:
+            self.logger.error(f"❌ Engine with transactions test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({
+                'test': 'Engine with Transactions',
+                'error': str(e)
+            })
+
+    def generate_summary_report(self):
+        """Generate comprehensive summary report."""
+        print("\n" + "=" * 80)
+        print("SQLAlchemy Engine Integration Demo - Summary Report")
+        print("=" * 80)
+        
+        total_tests = self.results['tests_run']
+        passed_tests = self.results['tests_passed']
+        failed_tests = self.results['tests_failed']
+        unexpected_results = self.results['unexpected_results']
+        engine_integration_performance = self.results['engine_integration_performance']
+        
+        print(f"Total Tests Run: {total_tests}")
+        print(f"Tests Passed: {passed_tests}")
+        print(f"Tests Failed: {failed_tests}")
+        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "N/A")
+        
+        # Performance summary
+        if engine_integration_performance:
+            print(f"\nSQLAlchemy Engine Integration Performance Results:")
+            for test_name, time_taken in engine_integration_performance.items():
+                print(f"  {test_name}: {time_taken:.4f}s")
+        
+        # Unexpected results
+        if unexpected_results:
+            print(f"\nUnexpected Results ({len(unexpected_results)}):")
+            for i, result in enumerate(unexpected_results, 1):
+                print(f"  {i}. Test: {result['test']}")
+                print(f"     Error: {result['error']}")
+        else:
+            print("\n✓ No unexpected results - all tests behaved as expected")
+        
+        return self.results
 
 
 def main():
-    """Main function"""
-    logger.info("🎯 MatrixOne SQLAlchemy Engine Integration Demo")
-    logger.info("=" * 60)
+    """Main demo function"""
+    demo = SQLAlchemyEngineIntegrationDemo()
     
-    # Run sync engine integration demo
-    demo_sync_engine_integration()
-    
-    logger.info("\n" + "=" * 60)
-    
-    # Run async engine integration demo
-    asyncio.run(demo_async_engine_integration())
-    
-    logger.info("\n" + "=" * 60)
-    
-    # Run engine reuse demo
-    demo_engine_reuse()
-    
-    logger.info("\n" + "=" * 60)
-    
-    # Run custom engine configuration demo
-    demo_custom_engine_configuration()
-    
-    logger.info("\n🎉 All demos completed!")
+    try:
+        print("🎯 MatrixOne SQLAlchemy Engine Integration Demo")
+        print("=" * 60)
+        
+        # Print current configuration
+        print_config()
+        
+        # Run tests
+        demo.test_sync_engine_integration()
+        demo.test_engine_reuse()
+        demo.test_custom_engine_configuration()
+        demo.test_engine_with_transactions()
+        
+        # Run async tests
+        asyncio.run(demo.test_async_engine_integration())
+        
+        # Generate report
+        results = demo.generate_summary_report()
+        
+        print("\n🎉 All SQLAlchemy engine integration demos completed!")
+        print("\nKey features demonstrated:")
+        print("- ✅ Integration with existing SQLAlchemy engines")
+        print("- ✅ Client.from_engine() and AsyncClient.from_engine() methods")
+        print("- ✅ Engine reuse across multiple clients")
+        print("- ✅ Custom engine configuration support")
+        print("- ✅ Transaction support with engine integration")
+        print("- ✅ Both sync and async implementations")
+        print("- ✅ Seamless integration with existing SQLAlchemy projects")
+        
+        return results
+        
+    except Exception as e:
+        print(f"Demo failed with error: {e}")
+        return None
 
 
 if __name__ == "__main__":

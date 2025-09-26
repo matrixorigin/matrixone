@@ -15,8 +15,14 @@ table cloning, and mo-ctl integration.
    quickstart
    orm_guide
    vector_guide
+   pinecone_guide
    fulltext_guide
    orm_vector_search_guide
+   account_guide
+   pubsub_guide
+   snapshot_restore_guide
+   clone_guide
+   moctl_guide
    best_practices
    api/index
    examples

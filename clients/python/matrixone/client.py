@@ -1054,7 +1054,8 @@ class Client:
         Returns:
             Client: Self for chaining
 
-        Example:
+        Example::
+
             client.create_table("users", {
                 'id': 'bigint',
                 'name': 'varchar(100)',
@@ -1347,7 +1348,8 @@ class Client:
         Returns:
             Client: Self for chaining
 
-        Example:
+        Example::
+
             client.create_table_with_index("vector_docs", {
                 'id': 'bigint',
                 'title': 'varchar(200)',
@@ -1648,7 +1650,8 @@ class Client:
         Returns:
             Client: Self for chaining
 
-        Example:
+        Example::
+
             from sqlalchemy import Column, BigInteger, Integer
             from matrixone.sqlalchemy_ext import Vectorf32, VectorIndex, VectorIndexType, VectorOpType
 
@@ -2729,7 +2732,9 @@ class VectorQueryManager:
             List of search results
         """
         from sqlalchemy import text
-        from .sql_builder import build_vector_similarity_query, DistanceFunction
+
+        from .sql_builder import (DistanceFunction,
+                                  build_vector_similarity_query)
 
         # Convert distance type to enum
         if distance_type == "l2":
@@ -2750,7 +2755,7 @@ class VectorQueryManager:
             limit=limit,
             select_columns=select_columns,
             where_conditions=where_conditions,
-            where_params=where_params
+            where_params=where_params,
         )
 
         if connection is not None:

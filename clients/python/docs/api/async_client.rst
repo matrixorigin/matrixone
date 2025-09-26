@@ -2,6 +2,7 @@ AsyncClient
 ===========
 
 .. automodule:: matrixone.async_client
+   :no-index:
    :members:
    :undoc-members:
    :show-inheritance:

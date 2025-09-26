@@ -212,9 +212,9 @@ class TestFulltextSearchBuilder:
         sql = builder.build_sql()
         
         expected_sql = (
-            "SELECT *, MATCH(title, content) AGAINST('machine learning' IN natural language mode) AS score "
+            "SELECT *, MATCH(title, content) AGAINST('machine learning') AS score "
             "FROM documents "
-            "WHERE MATCH(title, content) AGAINST('machine learning' IN natural language mode) "
+            "WHERE MATCH(title, content) AGAINST('machine learning') "
             "ORDER BY score DESC"
         )
         assert sql == expected_sql
@@ -231,7 +231,7 @@ class TestFulltextSearchBuilder:
         
         expected_sql = (
             "SELECT * FROM documents "
-            "WHERE MATCH(title, content) AGAINST('+Python +web' IN boolean mode) "
+            "WHERE MATCH(title, content) AGAINST('+Python +web' IN BOOLEAN MODE) "
             "AND author = 'Alice' LIMIT 5"
         )
         assert sql == expected_sql
@@ -248,7 +248,7 @@ class TestFulltextSearchBuilder:
         
         expected_sql = (
             "SELECT * FROM documents "
-            "WHERE MATCH(title, content) AGAINST('database' IN natural language mode) "
+            "WHERE MATCH(title, content) AGAINST('database') "
             "ORDER BY id ASC LIMIT 10 OFFSET 20"
         )
         assert sql == expected_sql

@@ -4,7 +4,7 @@ Provides access to MatrixOne control operations that require sys tenant privileg
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from .exceptions import MatrixOneError
 
@@ -92,80 +92,32 @@ class MoCtlManager:
         table_ref = f"{database}.{table}"
         return self._execute_moctl("dn", "flush", table_ref)
 
-    def checkpoint(self) -> Dict[str, Any]:
+    def increment_checkpoint(self) -> Dict[str, Any]:
         """
-        Force checkpoint
+        Force incremental checkpoint
 
         Flush all blks in DN, generate an Incremental Checkpoint and truncate WAL.
 
         Returns:
-            Result of the checkpoint operation
+            Result of the incremental checkpoint operation
 
         Example:
-            >>> client.moctl.checkpoint()
+            >>> client.moctl.increment_checkpoint()
             {'method': 'Checkpoint', 'result': [{'returnStr': 'OK'}]}
         """
         return self._execute_moctl("dn", "checkpoint", "")
 
-    def incremental_checkpoint(self) -> Dict[str, Any]:
-        """Force incremental checkpoint"""
-        return self._execute_moctl("dn", "checkpoint", "")
+    def global_checkpoint(self) -> Dict[str, Any]:
+        """
+        Force global checkpoint
 
-    def full_checkpoint(self) -> Dict[str, Any]:
-        """Force full checkpoint"""
-        return self._execute_moctl("dn", "checkpoint", "")
+        Generate a global checkpoint across all nodes.
 
-    def log_level(self, level: str) -> Dict[str, Any]:
-        """Set log level"""
-        return self._execute_moctl("cn", "log-level", level)
+        Returns:
+            Result of the global checkpoint operation
 
-    def log_enable(self, module: str) -> Dict[str, Any]:
-        """Enable log module"""
-        return self._execute_moctl("cn", "log-enable", module)
-
-    def log_disable(self, module: str) -> Dict[str, Any]:
-        """Disable log module"""
-        return self._execute_moctl("cn", "log-disable", module)
-
-    def cluster_status(self) -> Dict[str, Any]:
-        """Get cluster status"""
-        return self._execute_moctl("cn", "cluster-status", "")
-
-    def cluster_info(self) -> Dict[str, Any]:
-        """Get cluster information"""
-        return self._execute_moctl("cn", "cluster-info", "")
-
-    def node_status(self, node_id: str = None) -> Dict[str, Any]:
-        """Get node status"""
-        params = node_id if node_id else ""
-        return self._execute_moctl("cn", "node-status", params)
-
-    def node_info(self, node_id: str) -> Dict[str, Any]:
-        """Get node information"""
-        return self._execute_moctl("cn", "node-info", node_id)
-
-    def custom_ctl(self, target: str, operation: str, params: str = "") -> Dict[str, Any]:
-        """Execute custom moctl operation"""
-        return self._execute_moctl(target, operation, params)
-
-    def is_available(self) -> bool:
-        """Check if moctl is available"""
-        try:
-            self._execute_moctl("cn", "cluster-status", "")
-            return True
-        except Exception:
-            return False
-
-    def get_supported_operations(self) -> List[str]:
-        """Get list of supported operations"""
-        return [
-            "flush-table",
-            "checkpoint",
-            "log-level",
-            "log-enable",
-            "log-disable",
-            "cluster-status",
-            "cluster-info",
-            "node-status",
-            "node-info",
-        ]
+        Example:
+            >>> client.moctl.global_checkpoint()
+            {'method': 'GlobalCheckpoint', 'result': [{'returnStr': 'OK'}]}
+        """
+        return self._execute_moctl("dn", "globalcheckpoint", "")
