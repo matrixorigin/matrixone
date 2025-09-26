@@ -227,7 +227,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 		for _, indexDef := range newTableDef.Indexes {
 
-			if !qry.Options.SkipIndexsCopy[indexDef.IndexName] {
+			if !qry.Options.SkipIndexesCopy[indexDef.IndexName] {
 				continue
 			}
 
