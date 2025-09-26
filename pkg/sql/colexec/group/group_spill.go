@@ -258,10 +258,16 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 
 func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spillState *SpillableAggState) error {
 	if len(spillState.MarshaledAggStates) == 0 {
+		logutil.Debug("Group operator restore found no marshaled aggregator states")
 		return nil
 	}
 
+	logutil.Debug("Group operator restoring spilled aggregators",
+		zap.Int("agg_states_count", len(spillState.MarshaledAggStates)),
+		zap.Int("group_count", spillState.GroupCount))
+
 	if len(group.ctr.result1.AggList) == 0 {
+		logutil.Debug("Group operator initializing aggregators from spilled state")
 		aggs := make([]aggexec.AggFuncExec, len(spillState.MarshaledAggStates))
 		defer func() {
 			if group.ctr.result1.AggList == nil {
@@ -280,6 +286,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 
 			agg, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
 			if err != nil {
+				logutil.Error("Group operator failed to unmarshal aggregator",
+					zap.Int("agg_index", i), zap.Error(err))
 				return err
 			}
 
@@ -287,6 +295,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				aggExpr := group.Aggs[i]
 				if config := aggExpr.GetExtraConfig(); config != nil {
 					if err = agg.SetExtraInformation(config, 0); err != nil {
+						logutil.Error("Group operator failed to set extra information for aggregator",
+							zap.Int("agg_index", i), zap.Error(err))
 						agg.Free()
 						return err
 					}
@@ -301,6 +311,10 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		group.ctr.result1.ChunkSize = chunkSize
 		group.ctr.result1.AggList = aggs
 
+		logutil.Debug("Group operator initialized aggregators from spilled state",
+			zap.Int("chunk_size", chunkSize),
+			zap.Int("agg_count", len(aggs)))
+
 		if len(spillState.GroupVectors) > 0 && spillState.GroupCount > 0 {
 			batchesToAdd := make([]*batch.Batch, 0)
 
@@ -314,6 +328,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				for i, vec := range spillState.GroupVectors {
 					if vec != nil && i < len(bat.Vecs) {
 						if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
+							logutil.Error("Group operator failed to union batch during restore",
+								zap.Int("vec_index", i), zap.Int("offset", offset), zap.Error(err))
 							bat.Clean(proc.Mp())
 							for _, b := range batchesToAdd {
 								b.Clean(proc.Mp())
@@ -331,9 +347,14 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		return nil
 	}
 
+	logutil.Debug("Group operator merging spilled aggregators with existing ones",
+		zap.Int("existing_agg_count", len(group.ctr.result1.AggList)),
+		zap.Int("spilled_group_count", spillState.GroupCount))
+
 	for _, currentAgg := range group.ctr.result1.AggList {
 		if currentAgg != nil {
 			if err := currentAgg.GroupGrow(spillState.GroupCount); err != nil {
+				logutil.Error("Group operator failed to grow aggregator groups", zap.Error(err))
 				return err
 			}
 		}
@@ -355,6 +376,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 
 		agg, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
 		if err != nil {
+			logutil.Error("Group operator failed to unmarshal aggregator for merge",
+				zap.Int("agg_index", i), zap.Error(err))
 			return err
 		}
 
@@ -362,6 +385,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			aggExpr := group.Aggs[i]
 			if config := aggExpr.GetExtraConfig(); config != nil {
 				if err = agg.SetExtraInformation(config, 0); err != nil {
+					logutil.Error("Group operator failed to set extra information for temp aggregator",
+						zap.Int("agg_index", i), zap.Error(err))
 					agg.Free()
 					return err
 				}
@@ -391,6 +416,11 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		for spilledGroupIdx := 0; spilledGroupIdx < spillState.GroupCount; spilledGroupIdx++ {
 			currentGroupIdx := currentGroupCount + spilledGroupIdx
 			if err := currentAgg.Merge(tempAgg, currentGroupIdx, spilledGroupIdx); err != nil {
+				logutil.Error("Group operator failed to merge aggregator groups",
+					zap.Int("agg_index", i),
+					zap.Int("current_group_idx", currentGroupIdx),
+					zap.Int("spilled_group_idx", spilledGroupIdx),
+					zap.Error(err))
 				return err
 			}
 		}
@@ -413,6 +443,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			for i, vec := range spillState.GroupVectors {
 				if vec != nil && i < len(bat.Vecs) {
 					if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
+						logutil.Error("Group operator failed to union batch during merge",
+							zap.Int("vec_index", i), zap.Int("offset", offset), zap.Error(err))
 						bat.Clean(proc.Mp())
 						for _, b := range batchesToAdd {
 							b.Clean(proc.Mp())
@@ -426,6 +458,9 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		}
 		group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, batchesToAdd...)
 	}
+
+	logutil.Debug("Group operator completed restore and merge of spilled aggregators",
+		zap.Int("final_batch_count", len(group.ctr.result1.ToPopped)))
 
 	return nil
 }
