@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 type SpillableAggState struct {
@@ -31,28 +33,39 @@ type SpillableAggState struct {
 }
 
 func (s *SpillableAggState) Serialize() ([]byte, error) {
+	logutil.Debug("SpillableAggState starting serialization",
+		zap.Int("group_count", s.GroupCount),
+		zap.Int("group_vectors_count", len(s.GroupVectors)),
+		zap.Int("agg_states_count", len(s.MarshaledAggStates)))
+
 	buf := bytes.NewBuffer(nil)
 
 	if err := binary.Write(buf, binary.LittleEndian, int32(s.GroupCount)); err != nil {
+		logutil.Error("SpillableAggState failed to write group count", zap.Error(err))
 		return nil, err
 	}
 
 	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.GroupVectors))); err != nil {
+		logutil.Error("SpillableAggState failed to write group vectors count", zap.Error(err))
 		return nil, err
 	}
 
 	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.GroupVectorTypes))); err != nil {
+		logutil.Error("SpillableAggState failed to write group vector types count", zap.Error(err))
 		return nil, err
 	}
 	for _, typ := range s.GroupVectorTypes {
 		typBytes, err := typ.MarshalBinary()
 		if err != nil {
+			logutil.Error("SpillableAggState failed to marshal vector type", zap.Error(err))
 			return nil, err
 		}
 		if err := binary.Write(buf, binary.LittleEndian, int32(len(typBytes))); err != nil {
+			logutil.Error("SpillableAggState failed to write type bytes length", zap.Error(err))
 			return nil, err
 		}
 		if _, err := buf.Write(typBytes); err != nil {
+			logutil.Error("SpillableAggState failed to write type bytes", zap.Error(err))
 			return nil, err
 		}
 	}
@@ -60,6 +73,8 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 	for i, vec := range s.GroupVectors {
 		if vec == nil {
 			if err := binary.Write(buf, binary.LittleEndian, int32(0)); err != nil {
+				logutil.Error("SpillableAggState failed to write zero length for nil vector",
+					zap.Int("vec_index", i), zap.Error(err))
 				return nil, err
 			}
 			continue
@@ -67,12 +82,18 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 
 		vecBytes, err := vec.MarshalBinary()
 		if err != nil {
+			logutil.Error("SpillableAggState failed to marshal vector",
+				zap.Int("vec_index", i), zap.Error(err))
 			return nil, err
 		}
 		if err := binary.Write(buf, binary.LittleEndian, int32(len(vecBytes))); err != nil {
+			logutil.Error("SpillableAggState failed to write vector bytes length",
+				zap.Int("vec_index", i), zap.Error(err))
 			return nil, err
 		}
 		if _, err := buf.Write(vecBytes); err != nil {
+			logutil.Error("SpillableAggState failed to write vector bytes",
+				zap.Int("vec_index", i), zap.Error(err))
 			return nil, err
 		}
 
@@ -82,49 +103,70 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 	}
 
 	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.MarshaledAggStates))); err != nil {
+		logutil.Error("SpillableAggState failed to write agg states count", zap.Error(err))
 		return nil, err
 	}
-	for _, aggState := range s.MarshaledAggStates {
+	for i, aggState := range s.MarshaledAggStates {
 		if err := binary.Write(buf, binary.LittleEndian, int32(len(aggState))); err != nil {
+			logutil.Error("SpillableAggState failed to write agg state length",
+				zap.Int("agg_index", i), zap.Error(err))
 			return nil, err
 		}
 		if _, err := buf.Write(aggState); err != nil {
+			logutil.Error("SpillableAggState failed to write agg state bytes",
+				zap.Int("agg_index", i), zap.Error(err))
 			return nil, err
 		}
 	}
 
-	return buf.Bytes(), nil
+	result := buf.Bytes()
+	logutil.Debug("SpillableAggState completed serialization",
+		zap.Int("serialized_size", len(result)))
+
+	return result, nil
 }
 
 func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
+	logutil.Debug("SpillableAggState starting deserialization",
+		zap.Int("data_size", len(data)))
+
 	buf := bytes.NewReader(data)
 
 	var groupCount int32
 	if err := binary.Read(buf, binary.LittleEndian, &groupCount); err != nil {
+		logutil.Error("SpillableAggState failed to read group count", zap.Error(err))
 		return err
 	}
 	s.GroupCount = int(groupCount)
 
 	var groupVecCount int32
 	if err := binary.Read(buf, binary.LittleEndian, &groupVecCount); err != nil {
+		logutil.Error("SpillableAggState failed to read group vector count", zap.Error(err))
 		return err
 	}
 
 	var groupVecTypeCount int32
 	if err := binary.Read(buf, binary.LittleEndian, &groupVecTypeCount); err != nil {
+		logutil.Error("SpillableAggState failed to read group vector type count", zap.Error(err))
 		return err
 	}
 	s.GroupVectorTypes = make([]types.Type, groupVecTypeCount)
 	for i := 0; i < int(groupVecTypeCount); i++ {
 		var size int32
 		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
+			logutil.Error("SpillableAggState failed to read vector type size",
+				zap.Int("type_index", i), zap.Error(err))
 			return err
 		}
 		typBytes := make([]byte, size)
 		if _, err := buf.Read(typBytes); err != nil {
+			logutil.Error("SpillableAggState failed to read vector type bytes",
+				zap.Int("type_index", i), zap.Error(err))
 			return err
 		}
 		if err := s.GroupVectorTypes[i].UnmarshalBinary(typBytes); err != nil {
+			logutil.Error("SpillableAggState failed to unmarshal vector type",
+				zap.Int("type_index", i), zap.Error(err))
 			return err
 		}
 	}
@@ -133,6 +175,8 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 	for i := 0; i < int(groupVecCount); i++ {
 		var size int32
 		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
+			logutil.Error("SpillableAggState failed to read vector size",
+				zap.Int("vec_index", i), zap.Error(err))
 			return err
 		}
 		if size == 0 {
@@ -142,6 +186,8 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 
 		vecBytes := make([]byte, size)
 		if _, err := buf.Read(vecBytes); err != nil {
+			logutil.Error("SpillableAggState failed to read vector bytes",
+				zap.Int("vec_index", i), zap.Error(err))
 			return err
 		}
 
@@ -154,6 +200,8 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 
 		vec := vector.NewOffHeapVecWithType(vecType)
 		if err := vec.UnmarshalBinaryWithCopy(vecBytes, mp); err != nil {
+			logutil.Error("SpillableAggState failed to unmarshal vector",
+				zap.Int("vec_index", i), zap.Error(err))
 			vec.Free(mp)
 			return err
 		}
@@ -162,19 +210,29 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 
 	var aggStateCount int32
 	if err := binary.Read(buf, binary.LittleEndian, &aggStateCount); err != nil {
+		logutil.Error("SpillableAggState failed to read agg state count", zap.Error(err))
 		return err
 	}
 	s.MarshaledAggStates = make([][]byte, aggStateCount)
 	for i := 0; i < int(aggStateCount); i++ {
 		var size int32
 		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
+			logutil.Error("SpillableAggState failed to read agg state size",
+				zap.Int("agg_index", i), zap.Error(err))
 			return err
 		}
 		s.MarshaledAggStates[i] = make([]byte, size)
 		if _, err := buf.Read(s.MarshaledAggStates[i]); err != nil {
+			logutil.Error("SpillableAggState failed to read agg state bytes",
+				zap.Int("agg_index", i), zap.Error(err))
 			return err
 		}
 	}
+
+	logutil.Debug("SpillableAggState completed deserialization",
+		zap.Int("group_count", s.GroupCount),
+		zap.Int("group_vectors_count", len(s.GroupVectors)),
+		zap.Int("agg_states_count", len(s.MarshaledAggStates)))
 
 	return nil
 }
