@@ -193,6 +193,26 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	// 7.1 delete all index objects of the table in mo_catalog.mo_indexes
+	if qry.Database != catalog.MO_CATALOG && qry.TableDef.Name != catalog.MO_INDEXES {
+		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
+			deleteSql := fmt.Sprintf(
+				deleteMoIndexesWithTableIdFormat,
+				qry.GetTableDef().TblId,
+			)
+			err = c.runSql(deleteSql)
+			if err != nil {
+				c.proc.Error(c.proc.Ctx, "delete all index meta data of origin table in `mo_indexes` for alter table",
+					zap.String("databaseName", dbName),
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("delete all index sql", deleteSql),
+					zap.Error(err))
+
+				return err
+			}
+		}
+	}
+
 	newId := newRel.GetTableID(c.proc.Ctx)
 	//-------------------------------------------------------------------------
 	// 8. rename temporary replica table into the original table(Table Id remains unchanged)
