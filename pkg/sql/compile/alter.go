@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -615,6 +616,8 @@ func cloneUnaffectedIndexes(
 
 	logutil.Infof("affected cols %v\n", affectedCols)
 	logutil.Infof("skipIndexesCopy %v\n", skipIndexesCopy)
+	os.Stderr.WriteString(fmt.Sprintf("affected cols %v\n", affectedCols))
+	os.Stderr.WriteString(fmt.Sprintf("skipIndexesCopy %v\n", skipIndexesCopy))
 
 	releaseClone := func() {
 		if clone != nil {
@@ -636,17 +639,26 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
-			continue
-		}
+		/*
+			if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
+				continue
+			}
+		*/
 
-		logutil.Infof("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 		affected := false
-		for _, part := range idxTbl.Parts {
-			if slices.Index(affectedCols, part) != -1 {
-				affected = true
-				break
+		if !idxTbl.Unique && (catalog.IsFullTextIndexAlgo(idxTbl.IndexAlgo) ||
+			catalog.IsHnswIndexAlgo(idxTbl.IndexAlgo) ||
+			catalog.IsIvfIndexAlgo(idxTbl.IndexAlgo)) {
+			// only check parts when fulltext/hnsw/ivfflat index
 
+			logutil.Infof("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
+			os.Stderr.WriteString(fmt.Sprintf("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts))
+			for _, part := range idxTbl.Parts {
+				if slices.Index(affectedCols, part) != -1 {
+					affected = true
+					break
+
+				}
 			}
 		}
 
@@ -707,6 +719,7 @@ func cloneUnaffectedIndexes(
 			}
 
 			logutil.Infof("clone %v -> %v\n", oriIdxTblName, newIdxTblName)
+			os.Stderr.WriteString(fmt.Sprintf("clone %v -> %v\n", oriIdxTblName, newIdxTblName))
 			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
 
 			clonePlan := plan.CloneTable{
