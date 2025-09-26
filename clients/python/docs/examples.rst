@@ -198,11 +198,23 @@ Vector Index with ORM and Client Interface
        }
    ]
 
-   for doc in documents_data:
-       client.execute(
-           "INSERT INTO documents (title, content, embedding) VALUES (%s, %s, %s)",
-           (doc['title'], doc['content'], doc['embedding'])
-       )
+   # Insert documents using ORM
+   from sqlalchemy.orm import sessionmaker
+   
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
+   
+   documents = [
+       Document(
+           title=doc['title'],
+           content=doc['content'],
+           embedding=doc['embedding']
+       ) for doc in documents_data
+   ]
+   
+   session.add_all(documents)
+   session.commit()
+   session.close()
 
    # Vector similarity search using client interface
    query_vector = [0.1, 0.2, 0.3] + [0.0] * 381
@@ -266,11 +278,20 @@ HNSW Vector Index
        for i in range(1, 6)
    ]
 
-   for doc in hnsw_docs:
-       client.execute(
-           "INSERT INTO hnsw_documents (title, embedding) VALUES (%s, %s)",
-           (doc['title'], doc['embedding'])
-       )
+   # Insert HNSW documents using ORM
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
+   
+   hnsw_documents = [
+       HNSWDocument(
+           title=doc['title'],
+           embedding=doc['embedding']
+       ) for doc in hnsw_docs
+   ]
+   
+   session.add_all(hnsw_documents)
+   session.commit()
+   session.close()
 
    # Search using HNSW index
    query_vector = [0.2] * 128

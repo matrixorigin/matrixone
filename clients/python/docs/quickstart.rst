@@ -167,16 +167,28 @@ Vector Search Quick Start
    )
 
    # Insert sample documents
+   # Insert documents using ORM
+   from sqlalchemy.orm import sessionmaker
+   
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
+   
    docs = [
-       ('AI Research', 'Artificial intelligence research paper', [0.1] * 128),
-       ('ML Guide', 'Machine learning tutorial', [0.2] * 128)
+       QuickDocument(
+           title='AI Research',
+           content='Artificial intelligence research paper',
+           embedding=[0.1] * 128
+       ),
+       QuickDocument(
+           title='ML Guide',
+           content='Machine learning tutorial',
+           embedding=[0.2] * 128
+       )
    ]
    
-   for title, content, embedding in docs:
-       client.execute(
-           "INSERT INTO quick_documents (title, content, embedding) VALUES (%s, %s, %s)",
-           (title, content, embedding)
-       )
+   session.add_all(docs)
+   session.commit()
+   session.close()
 
    # Vector similarity search
    query_vector = [0.15] * 128

@@ -1,5 +1,5 @@
 Fulltext Search Guide
-====================
+=====================
 
 This guide covers fulltext search capabilities in the MatrixOne Python SDK, including fulltext indexing, search modes, and advanced features.
 

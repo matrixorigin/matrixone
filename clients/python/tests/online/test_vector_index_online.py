@@ -32,17 +32,22 @@ class TestVectorIndexOnline:
     @pytest.fixture(scope="class")
     def client(self):
         """Create and connect MatrixOne client."""
-        client = Client()
-        host, port, user, password, database = online_config.get_connection_params()
-        client.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            database=database
-        )
+        from matrixone.config import get_connection_params
+        from matrixone.logger import create_default_logger
+        
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
+        # Create logger
+        logger = create_default_logger()
+        
+        # Create client and connect
+        client = Client(logger=logger, enable_full_sql_logging=True)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
+        
         yield client
-        # Client doesn't have a close method, just disconnect
+        
+        # Cleanup
         if hasattr(client, 'disconnect'):
             client.disconnect()
     
@@ -111,8 +116,8 @@ class TestVectorIndexOnline:
         result_zero = ivf_config.set_probe_limit(0)
         assert isinstance(result_zero, bool)
     
-    def test_vector_index_creation_with_table(self, engine, Base, Session):
-        """Test creating vector index with table creation."""
+    def test_vector_index_creation_with_table(self, client, Base, Session):
+        """Test creating vector index with table creation using client interface."""
         class DocumentWithIndex(Base):
             __tablename__ = 'test_vector_index_online_01'
             id = Column(Integer, primary_key=True)
@@ -120,35 +125,30 @@ class TestVectorIndexOnline:
             title = Column(String(200))
             content = Column(String(1000))
         
-        # Clean up first
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_01"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        # Create table
-        Base.metadata.create_all(engine, tables=[DocumentWithIndex.__table__])
+        # Enable IVF indexing
+        client.vector_index.enable_ivf()
         
-        # Create vector index
-        vector_index = create_vector_index(
-            "idx_embedding_l2_online01",
-            "embedding",
-            index_type=VectorIndexType.IVFFLAT,
-            lists=128,
-            op_type=VectorOpType.VECTOR_L2_OPS
-        )
-        
+        # Create vector index using client interface
         try:
-            with engine.begin() as conn:
-                sql = vector_index.create_sql("test_vector_index_online_01")
-                conn.execute(text(sql))
+            client.vector_index.create_ivf(
+                name="idx_embedding_l2_online01",
+                table_name="test_vector_index_online_01",
+                column="embedding",
+                lists=128,
+                op_type="vector_l2_ops"
+            )
             # If we get here, index creation succeeded
             assert True
         except Exception as e:
-            # If IVF is not enabled, this is expected
-            assert "IVF index is not enabled" in str(e) or "not supported" in str(e)
+            # If IVF is not supported, this is expected
+            assert "not supported" in str(e) or "IVF" in str(e)
         
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_01"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
     def test_vector_index_on_existing_table(self, engine, Base, Session):
         """Test creating vector index on existing table."""

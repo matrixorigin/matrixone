@@ -1,5 +1,5 @@
 Vector Search Guide
-==================
+===================
 
 This guide covers vector search and indexing capabilities in the MatrixOne Python SDK, including IVF and HNSW vector indexes.
 
@@ -66,35 +66,38 @@ Working with Vector Data
    # Create tables
    client.create_all(Base)
 
-   # Insert documents with vector embeddings
+   # Insert documents with vector embeddings using ORM
+   from sqlalchemy.orm import sessionmaker
+   
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
+   
    documents_data = [
-       {
-           'title': 'AI Research Paper',
-           'content': 'This paper discusses artificial intelligence and machine learning',
-           'embedding': np.random.rand(384).tolist(),  # Convert numpy array to list
-           'features': np.random.rand(512).tolist()
-       },
-       {
-           'title': 'Database Optimization',
-           'content': 'Techniques for optimizing database performance',
-           'embedding': np.random.rand(384).tolist(),
-           'features': np.random.rand(512).tolist()
-       },
-       {
-           'title': 'Web Development Guide',
-           'content': 'Best practices for modern web development',
-           'embedding': np.random.rand(384).tolist(),
-           'features': np.random.rand(512).tolist()
-       }
+       Document(
+           title='AI Research Paper',
+           content='This paper discusses artificial intelligence and machine learning',
+           embedding=np.random.rand(384).tolist(),  # Convert numpy array to list
+           features=np.random.rand(512).tolist()
+       ),
+       Document(
+           title='Database Optimization',
+           content='Techniques for optimizing database performance',
+           embedding=np.random.rand(384).tolist(),
+           features=np.random.rand(512).tolist()
+       ),
+       Document(
+           title='Web Development Guide',
+           content='Best practices for modern web development',
+           embedding=np.random.rand(384).tolist(),
+           features=np.random.rand(512).tolist()
+       )
    ]
 
-   for doc in documents_data:
-       client.execute(
-           "INSERT INTO documents (title, content, embedding, features) VALUES (%s, %s, %s, %s)",
-           (doc['title'], doc['content'], doc['embedding'], doc['features'])
-       )
+   session.add_all(documents_data)
+   session.commit()
+   session.close()
 
-   print("✓ Inserted documents with vector embeddings")
+   print("✓ Inserted documents with vector embeddings using ORM")
    client.disconnect()
 
 IVF Vector Indexing
@@ -234,24 +237,46 @@ Creating HNSW Indexes
    )
    print("✓ HNSW index created")
 
-   # Insert sample data
+   # Insert sample data using ORM
    import numpy as np
+   from sqlalchemy.orm import sessionmaker
+   
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
    
    hnsw_docs = [
-       ('HNSW Research Paper', 'Research on HNSW algorithm', np.random.rand(128).tolist()),
-       ('Vector Database Guide', 'Guide to vector databases', np.random.rand(128).tolist()),
-       ('Machine Learning Basics', 'Introduction to ML', np.random.rand(128).tolist()),
-       ('Deep Learning Tutorial', 'Deep learning concepts', np.random.rand(128).tolist()),
-       ('AI Applications', 'Real-world AI applications', np.random.rand(128).tolist())
+       HNSWDocument(
+           title='HNSW Research Paper',
+           content='Research on HNSW algorithm',
+           embedding=np.random.rand(128).tolist()
+       ),
+       HNSWDocument(
+           title='Vector Database Guide',
+           content='Guide to vector databases',
+           embedding=np.random.rand(128).tolist()
+       ),
+       HNSWDocument(
+           title='Machine Learning Basics',
+           content='Introduction to ML',
+           embedding=np.random.rand(128).tolist()
+       ),
+       HNSWDocument(
+           title='Deep Learning Tutorial',
+           content='Deep learning concepts',
+           embedding=np.random.rand(128).tolist()
+       ),
+       HNSWDocument(
+           title='AI Applications',
+           content='Real-world AI applications',
+           embedding=np.random.rand(128).tolist()
+       )
    ]
 
-   for title, content, embedding in hnsw_docs:
-       client.execute(
-           "INSERT INTO hnsw_documents (title, content, embedding) VALUES (%s, %s, %s)",
-           (title, content, embedding)
-       )
+   session.add_all(hnsw_docs)
+   session.commit()
+   session.close()
 
-   print(f"✓ Inserted {len(hnsw_docs)} documents")
+   print(f"✓ Inserted {len(hnsw_docs)} documents using ORM")
    client.disconnect()
 
 HNSW Configuration Options
@@ -331,14 +356,15 @@ The `query_vector` parameter in vector search functions supports multiple format
    
    # Use in vector search
    results = client.vector_query.similarity_search(
-       table_name='documents',
-       vector_column='embedding',
-       query_vector=query_vector_list,  # List format
-       limit=5,
-       distance_type='l2'
+   table_name='documents',
+   vector_column='embedding',
+   query_vector=query_vector_list,  # List format
+   limit=5,
+   distance_type='l2'
    )
 
 **2. String Format:**
+
 .. code-block:: python
 
    # Convert list to string format
@@ -356,24 +382,32 @@ The `query_vector` parameter in vector search functions supports multiple format
 **3. In ORM Queries:**
 .. code-block:: python
 
-   from sqlalchemy import text
+   from sqlalchemy.orm import sessionmaker
+   from matrixone.sqlalchemy_ext import create_vector_column
    
-   # Both formats work in raw SQL queries
-   session.execute(text("""
-       SELECT id, title, l2_distance(embedding, :query_vector) as distance
-       FROM documents
-       WHERE l2_distance(embedding, :query_vector) < 1.0
-       ORDER BY distance ASC
-   """), {'query_vector': query_vector_list})  # List format
+   # Both formats work in ORM queries
+   results_list = session.query(
+   Document.id,
+   Document.title,
+   Document.embedding.l2_distance(query_vector_list).label('distance')
+   ).filter(
+   Document.embedding.within_distance(query_vector_list, 1.0)
+   ).order_by(
+   Document.embedding.l2_distance(query_vector_list)
+   ).all()  # List format
    
-   session.execute(text("""
-       SELECT id, title, l2_distance(embedding, :query_vector) as distance
-       FROM documents
-       WHERE l2_distance(embedding, :query_vector) < 1.0
-       ORDER BY distance ASC
-   """), {'query_vector': query_vector_str})   # String format
+   results_str = session.query(
+       Document.id,
+       Document.title,
+       Document.embedding.l2_distance(query_vector_str).label('distance')
+   ).filter(
+       Document.embedding.within_distance(query_vector_str, 1.0)
+   ).order_by(
+       Document.embedding.l2_distance(query_vector_str)
+   ).all()  # String format
 
 **4. With VectorColumn Methods:**
+
 .. code-block:: python
 
    from matrixone.sqlalchemy_ext import VectorColumn
@@ -723,21 +757,37 @@ Async Vector Search
            op_type='vector_l2_ops'
        )
 
-       # Insert sample data with transaction
+       # Insert sample data using ORM with transaction
+       from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+       
+       AsyncSessionLocal = async_sessionmaker(
+           bind=client.get_sqlalchemy_engine(),
+           class_=AsyncSession
+       )
+       
        documents = [
-           ('Async AI Research', 'Research on async AI systems', np.random.rand(256).tolist()),
-           ('Async Database Guide', 'Guide to async database operations', np.random.rand(256).tolist()),
-           ('Async Web Development', 'Building async web applications', np.random.rand(256).tolist())
+           AsyncDocument(
+               title='Async AI Research',
+               content='Research on async AI systems',
+               embedding=np.random.rand(256).tolist()
+           ),
+           AsyncDocument(
+               title='Async Database Guide',
+               content='Guide to async database operations',
+               embedding=np.random.rand(256).tolist()
+           ),
+           AsyncDocument(
+               title='Async Web Development',
+               content='Building async web applications',
+               embedding=np.random.rand(256).tolist()
+           )
        ]
 
-       async with client.transaction() as tx:
-           for title, content, embedding in documents:
-               await tx.execute(
-                   "INSERT INTO async_documents (title, content, embedding) VALUES (%s, %s, %s)",
-                   (title, content, embedding)
-               )
+       async with AsyncSessionLocal() as session:
+           session.add_all(documents)
+           await session.commit()
 
-       print("✓ Inserted async documents with vector embeddings")
+       print("✓ Inserted async documents with vector embeddings using ORM")
 
        # Perform async vector search
        query_vector = np.random.rand(256).tolist()

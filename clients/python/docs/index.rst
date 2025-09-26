@@ -16,6 +16,7 @@ table cloning, and mo-ctl integration.
    orm_guide
    vector_guide
    fulltext_guide
+   orm_vector_search_guide
    best_practices
    api/index
    examples

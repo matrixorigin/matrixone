@@ -29,17 +29,22 @@ class TestVectorIndexORMMethods:
     @pytest.fixture(scope="class")
     def client(self):
         """Create and connect MatrixOne client."""
-        client = Client()
-        host, port, user, password, database = online_config.get_connection_params()
-        client.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            database=database
-        )
+        from matrixone.config import get_connection_params
+        from matrixone.logger import create_default_logger
+        
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
+        # Create logger
+        logger = create_default_logger()
+        
+        # Create client and connect
+        client = Client(logger=logger, enable_full_sql_logging=True)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
+        
         yield client
-        # Client doesn't have a close method, just disconnect
+        
+        # Cleanup
         if hasattr(client, 'disconnect'):
             client.disconnect()
     

@@ -28,17 +28,22 @@ class TestVectorOperationsOnline:
     @pytest.fixture(scope="class")
     def client(self):
         """Create and connect MatrixOne client."""
-        client = Client()
-        host, port, user, password, database = online_config.get_connection_params()
-        client.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            database=database
-        )
+        from matrixone.config import get_connection_params
+        from matrixone.logger import create_default_logger
+        
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
+        # Create logger
+        logger = create_default_logger()
+        
+        # Create client and connect
+        client = Client(logger=logger, enable_full_sql_logging=True)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
+        
         yield client
-        # Client doesn't have a close method, just disconnect
+        
+        # Cleanup
         if hasattr(client, 'disconnect'):
             client.disconnect()
     
@@ -65,8 +70,8 @@ class TestVectorOperationsOnline:
         """Clean up after each test."""
         pass
     
-    def test_vector_table_creation_and_drop(self, engine, Base, Session):
-        """Test creating and dropping vector tables."""
+    def test_vector_table_creation_and_drop(self, client, Base, Session):
+        """Test creating and dropping vector tables using client interface."""
         class VectorTestTable(Base):
             __tablename__ = 'test_vector_ops_table'
             id = Column(Integer, primary_key=True)
@@ -75,42 +80,35 @@ class TestVectorOperationsOnline:
             category = Column(String(50))
         
         # Drop table if exists
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_ops_table"))
+        client.drop_all(Base)
         
-        # Create table
-        Base.metadata.create_all(engine, tables=[VectorTestTable.__table__])
+        # Create table using client interface
+        client.create_all(Base)
         
         # Verify table exists
-        with engine.begin() as conn:
-            result = conn.execute(text("SHOW TABLES LIKE 'test_vector_ops_table'"))
-            assert result.fetchone() is not None
+        result = client.execute("SHOW TABLES LIKE 'test_vector_ops_table'")
+        assert result.fetchone() is not None
         
-        # Drop table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_ops_table"))
+        # Drop table using client interface
+        client.drop_all(Base)
         
         # Verify table is dropped
-        with engine.begin() as conn:
-            result = conn.execute(text("SHOW TABLES LIKE 'test_vector_ops_table'"))
-            assert result.fetchone() is None
+        result = client.execute("SHOW TABLES LIKE 'test_vector_ops_table'")
+        assert result.fetchone() is None
     
-    def test_vector_data_insertion_and_retrieval(self, engine, Base, Session):
-        """Test inserting and retrieving vector data."""
+    def test_vector_data_insertion_and_retrieval(self, client, Base, Session):
+        """Test inserting and retrieving vector data using ORM."""
         class VectorDataTable(Base):
             __tablename__ = 'test_vector_data_table'
             id = Column(Integer, primary_key=True)
             embedding = create_vector_column(5, "f32")
             description = Column(String(200))
         
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_data_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        # Create table
-        Base.metadata.create_all(engine, tables=[VectorDataTable.__table__])
-        
-        # Insert test data
+        # Insert test data using ORM
         session = Session()
         try:
             test_docs = [
@@ -119,8 +117,7 @@ class TestVectorOperationsOnline:
                 VectorDataTable(embedding=[11.0, 12.0, 13.0, 14.0, 15.0], description="Document C")
             ]
             
-            for doc in test_docs:
-                session.add(doc)
+            session.add_all(test_docs)
             session.commit()
             
             # Retrieve and verify data
@@ -135,25 +132,22 @@ class TestVectorOperationsOnline:
         finally:
             session.close()
             
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_data_table"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
-    def test_vector_search_l2_distance(self, engine, Base, Session):
-        """Test vector search using L2 distance."""
+    def test_vector_search_l2_distance(self, client, Base, Session):
+        """Test vector search using L2 distance with ORM and client interface."""
         class VectorSearchTable(Base):
             __tablename__ = 'test_vector_search_table'
             id = Column(Integer, primary_key=True)
             embedding = create_vector_column(3, "f32")
             description = Column(String(200))
         
-        # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_search_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        Base.metadata.create_all(engine, tables=[VectorSearchTable.__table__])
-        
-        # Insert test data
+        # Insert test data using ORM
         session = Session()
         try:
             test_docs = [
@@ -164,14 +158,13 @@ class TestVectorOperationsOnline:
                 VectorSearchTable(embedding=[0.0, 1.0, 1.0], description="Diagonal vector YZ")
             ]
             
-            for doc in test_docs:
-                session.add(doc)
+            session.add_all(test_docs)
             session.commit()
             
-            # Search using L2 distance
+            # Search using L2 distance with ORM
             query_vector = [1.0, 1.0, 0.0]  # Should match diagonal vector XY
             
-            # Find most similar document
+            # Find most similar document using ORM
             results = session.query(VectorSearchTable).order_by(
                 VectorSearchTable.embedding.l2_distance(query_vector)
             ).limit(1).all()
@@ -179,21 +172,33 @@ class TestVectorOperationsOnline:
             assert len(results) == 1
             assert results[0].description == "Diagonal vector XY"
             
-            # Search with distance threshold
+            # Search with distance threshold using ORM
             results = session.query(VectorSearchTable).filter(
                 VectorSearchTable.embedding.l2_distance(query_vector) < 1.0
             ).all()
             
             assert len(results) >= 1
             
+            # Also test using ORM with different query patterns
+            # Test with explicit column selection
+            orm_results = session.query(
+                VectorSearchTable.id,
+                VectorSearchTable.description,
+                VectorSearchTable.embedding.l2_distance(query_vector).label('distance')
+            ).order_by(
+                VectorSearchTable.embedding.l2_distance(query_vector)
+            ).limit(3).all()
+            
+            assert len(orm_results) >= 1
+            assert orm_results[0][1] == "Diagonal vector XY"  # description column
+            
         finally:
             session.close()
             
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_search_table"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
-    def test_vector_search_cosine_distance(self, engine, Base, Session):
+    def test_vector_search_cosine_distance(self, client, Base, Session):
         """Test vector search using cosine distance."""
         class VectorCosineTable(Base):
             __tablename__ = 'test_vector_cosine_table'
@@ -201,11 +206,9 @@ class TestVectorOperationsOnline:
             embedding = create_vector_column(3, "f32")
             description = Column(String(200))
         
-        # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_cosine_table"))
-        
-        Base.metadata.create_all(engine, tables=[VectorCosineTable.__table__])
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
         # Insert test data
         session = Session()
@@ -236,13 +239,12 @@ class TestVectorOperationsOnline:
         finally:
             session.close()
             
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_cosine_table"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
     
     
-    def test_vector_search_l2_distance_squared(self, engine, Base, Session):
+    def test_vector_search_l2_distance_squared(self, client, Base, Session):
         """Test vector search using L2 distance squared."""
         class VectorL2SqTable(Base):
             __tablename__ = 'test_vector_l2sq_table'
@@ -250,11 +252,9 @@ class TestVectorOperationsOnline:
             embedding = create_vector_column(3, "f32")
             description = Column(String(200))
         
-        # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_l2sq_table"))
-        
-        Base.metadata.create_all(engine, tables=[VectorL2SqTable.__table__])
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
         # Insert test data
         session = Session()
@@ -284,11 +284,10 @@ class TestVectorOperationsOnline:
         finally:
             session.close()
             
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_l2sq_table"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
-    def test_vector_search_complex_query(self, engine, Base, Session):
+    def test_vector_search_complex_query(self, client, Base, Session):
         """Test complex vector search with multiple criteria."""
         class VectorComplexTable(Base):
             __tablename__ = 'test_vector_complex_table'
@@ -299,10 +298,10 @@ class TestVectorOperationsOnline:
             score = Column(Float)
         
         # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_complex_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        Base.metadata.create_all(engine, tables=[VectorComplexTable.__table__])
         
         # Insert test data
         session = Session()
@@ -340,10 +339,12 @@ class TestVectorOperationsOnline:
             session.close()
             
         # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_complex_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
+        
     
-    def test_vector_batch_insertion_and_search(self, engine, Base, Session):
+    def test_vector_batch_insertion_and_search(self, client, Base, Session):
         """Test batch insertion and search operations."""
         class VectorBatchTable(Base):
             __tablename__ = 'test_vector_batch_table'
@@ -352,10 +353,10 @@ class TestVectorOperationsOnline:
             description = Column(String(200))
         
         # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_batch_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        Base.metadata.create_all(engine, tables=[VectorBatchTable.__table__])
         
         # Batch insert test data
         session = Session()
@@ -386,10 +387,12 @@ class TestVectorOperationsOnline:
             session.close()
             
         # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_batch_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
+        
     
-    def test_vector_search_with_limit_and_offset(self, engine, Base, Session):
+    def test_vector_search_with_limit_and_offset(self, client, Base, Session):
         """Test vector search with limit and offset for pagination."""
         class VectorPaginationTable(Base):
             __tablename__ = 'test_vector_pagination_table'
@@ -398,10 +401,10 @@ class TestVectorOperationsOnline:
             description = Column(String(200))
         
         # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_pagination_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        Base.metadata.create_all(engine, tables=[VectorPaginationTable.__table__])
         
         # Insert test data
         session = Session()
@@ -440,10 +443,12 @@ class TestVectorOperationsOnline:
             session.close()
             
         # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_pagination_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
+        
     
-    def test_vector_search_performance(self, engine, Base, Session):
+    def test_vector_search_performance(self, client, Base, Session):
         """Test vector search performance with larger dataset."""
         class VectorPerfTable(Base):
             __tablename__ = 'test_vector_perf_table'
@@ -452,10 +457,10 @@ class TestVectorOperationsOnline:
             description = Column(String(200))
         
         # Clean up and create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_perf_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        Base.metadata.create_all(engine, tables=[VectorPerfTable.__table__])
         
         # Insert larger dataset
         session = Session()
@@ -494,5 +499,7 @@ class TestVectorOperationsOnline:
             session.close()
             
         # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE test_vector_perf_table"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
+        

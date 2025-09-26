@@ -549,14 +549,15 @@ The `query_vector` parameter in vector search functions supports multiple format
    
    # Use in vector search
    results = client.vector_query.similarity_search(
-       table_name='documents',
-       vector_column='embedding',
-       query_vector=query_vector_list,  # List format
-       limit=5,
-       distance_type='l2'
+   table_name='documents',
+   vector_column='embedding',
+   query_vector=query_vector_list,  # List format
+   limit=5,
+   distance_type='l2'
    )
 
 **String Format:**
+
 .. code-block:: python
 
    # Convert list to string format
@@ -578,10 +579,10 @@ The `query_vector` parameter in vector search functions supports multiple format
    
    # Both formats work in raw SQL queries
    session.execute(text("""
-       SELECT id, title, l2_distance(embedding, :query_vector) as distance
-       FROM documents
-       WHERE l2_distance(embedding, :query_vector) < 1.0
-       ORDER BY distance ASC
+   SELECT id, title, l2_distance(embedding, :query_vector) as distance
+   FROM documents
+   WHERE l2_distance(embedding, :query_vector) < 1.0
+   ORDER BY distance ASC
    """), {'query_vector': query_vector_list})  # List format
    
    session.execute(text("""
@@ -592,6 +593,7 @@ The `query_vector` parameter in vector search functions supports multiple format
    """), {'query_vector': query_vector_str})   # String format
 
 **With VectorColumn Methods:**
+
 .. code-block:: python
 
    from matrixone.sqlalchemy_ext import VectorColumn
@@ -1196,13 +1198,22 @@ Test Database Setup
 
    def test_vector_search(test_client, clean_database):
        """Test vector search functionality"""
-       # Insert test document
-       test_client.execute(
-           "INSERT INTO documents (title, content, embedding) VALUES (%s, %s, %s)",
-           ('Test Document', 'This is a test document', [0.1, 0.2, 0.3] + [0.0] * 381)
-       )
+       from sqlalchemy.orm import sessionmaker
        
-       # Test vector search
+       # Insert test document using ORM
+       Session = sessionmaker(bind=test_client.get_sqlalchemy_engine())
+       session = Session()
+       
+       test_doc = Document(
+           title='Test Document',
+           content='This is a test document',
+           embedding=[0.1, 0.2, 0.3] + [0.0] * 381
+       )
+       session.add(test_doc)
+       session.commit()
+       session.close()
+       
+       # Test vector search using client interface
        results = test_client.vector_query.similarity_search(
            table_name='documents',
            vector_column='embedding',

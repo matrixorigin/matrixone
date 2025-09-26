@@ -57,7 +57,7 @@ html_theme = 'sphinx_rtd_theme'
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+# html_static_path = ['_static']  # Commented out since we don't have custom static files
 
 # -- Extension configuration -------------------------------------------------
 
@@ -93,7 +93,7 @@ napoleon_attr_annotations = True
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),
     'sqlalchemy': ('https://docs.sqlalchemy.org/', None),
-    'pymysql': ('https://pymysql.readthedocs.io/', None),
+    # 'pymysql': ('https://pymysql.readthedocs.io/', None),  # Commented out - link not available
 }
 
 # -- Options for todo extension ----------------------------------------------
