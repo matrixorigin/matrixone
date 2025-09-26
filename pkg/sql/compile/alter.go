@@ -247,16 +247,13 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 		for _, indexDef := range newTableDef.Indexes {
 
-			if !qry.Options.SkipIndexesCopy[indexDef.IndexName] {
-				continue
-			}
-
+			// DO NOT check SkipIndexesCopy here.  If affectedPk == true, SkipIndexesCopy[indexname] always false
+			// only check affectedCols.  If affected == true, run re-index
 			affected := false
 			for _, part := range indexDef.Parts {
 				if slices.Index(qry.AffectedCols, part) != -1 {
 					affected = true
 					break
-
 				}
 			}
 
@@ -633,6 +630,7 @@ func cloneUnaffectedIndexes(
 
 	for _, idxTbl := range oriTblDef.Indexes {
 
+		// If affectedPk == true, SkipIndexesCopy[indexname] always false and nothing being cloned.
 		if !skipIndexesCopy[idxTbl.IndexName] {
 			//  index does NOT skip in bind_insert so index already processed by bind_insert
 			continue
