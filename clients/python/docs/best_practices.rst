@@ -534,6 +534,77 @@ Connection Pooling and Caching
 Vector Search Best Practices
 ----------------------------
 
+Query Vector Parameter Formats
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The `query_vector` parameter in vector search functions supports multiple formats:
+
+**List Format (Recommended):**
+.. code-block:: python
+
+   import numpy as np
+   
+   # Generate query vector as list
+   query_vector_list = np.random.rand(384).tolist()  # [0.1, 0.2, 0.3, ...]
+   
+   # Use in vector search
+   results = client.vector_query.similarity_search(
+       table_name='documents',
+       vector_column='embedding',
+       query_vector=query_vector_list,  # List format
+       limit=5,
+       distance_type='l2'
+   )
+
+**String Format:**
+.. code-block:: python
+
+   # Convert list to string format
+   query_vector_str = str(query_vector_list)  # '[0.1, 0.2, 0.3, ...]'
+   
+   # Use in vector search
+   results = client.vector_query.similarity_search(
+       table_name='documents',
+       vector_column='embedding',
+       query_vector=query_vector_str,  # String format
+       limit=5,
+       distance_type='l2'
+   )
+
+**In ORM Queries:**
+.. code-block:: python
+
+   from sqlalchemy import text
+   
+   # Both formats work in raw SQL queries
+   session.execute(text("""
+       SELECT id, title, l2_distance(embedding, :query_vector) as distance
+       FROM documents
+       WHERE l2_distance(embedding, :query_vector) < 1.0
+       ORDER BY distance ASC
+   """), {'query_vector': query_vector_list})  # List format
+   
+   session.execute(text("""
+       SELECT id, title, l2_distance(embedding, :query_vector) as distance
+       FROM documents
+       WHERE l2_distance(embedding, :query_vector) < 1.0
+       ORDER BY distance ASC
+   """), {'query_vector': query_vector_str})   # String format
+
+**With VectorColumn Methods:**
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import VectorColumn
+   
+   # Both formats work with VectorColumn methods
+   session.query(Document).filter(
+       Document.embedding.within_distance(query_vector_list, 1.0)  # List format
+   ).all()
+   
+   session.query(Document).filter(
+       Document.embedding.within_distance(query_vector_str, 1.0)   # String format
+   ).all()
+
 Index Configuration
 ~~~~~~~~~~~~~~~~~~~
 

@@ -24,8 +24,11 @@ from .vector_index import (CreateVectorIndex, HnswVectorIndex, IVFVectorIndex,
                            vector_index_builder)
 # Import SQLAlchemy extensions
 from .vector_type import (VectorColumn, Vectorf32, Vectorf64, VectorType,
-                          VectorTypeDecorator, create_vector_column,
-                          vector_distance_functions)
+                          VectorTypeDecorator, cosine_distance,
+                          create_vector_column, inner_product, l2_distance,
+                          l2_distance_sq, most_similar, negative_inner_product,
+                          vector_distance_functions, vector_similarity_search,
+                          within_distance)
 
 __all__ = [
     "VectorType",
@@ -35,6 +38,14 @@ __all__ = [
     "VectorColumn",
     "create_vector_column",
     "vector_distance_functions",
+    "l2_distance",
+    "l2_distance_sq",
+    "cosine_distance",
+    "inner_product",
+    "negative_inner_product",
+    "within_distance",
+    "most_similar",
+    "vector_similarity_search",
     "MatrixOneDialect",
     "VectorTableBuilder",
     "create_vector_table",

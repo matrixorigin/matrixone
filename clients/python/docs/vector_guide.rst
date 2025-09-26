@@ -316,6 +316,77 @@ HNSW Configuration Options
 Vector Search Operations
 ------------------------
 
+Query Vector Parameter Formats
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The `query_vector` parameter in vector search functions supports multiple formats:
+
+**1. List Format (Recommended):**
+.. code-block:: python
+
+   import numpy as np
+   
+   # Generate query vector as list
+   query_vector_list = np.random.rand(384).tolist()  # [0.1, 0.2, 0.3, ...]
+   
+   # Use in vector search
+   results = client.vector_query.similarity_search(
+       table_name='documents',
+       vector_column='embedding',
+       query_vector=query_vector_list,  # List format
+       limit=5,
+       distance_type='l2'
+   )
+
+**2. String Format:**
+.. code-block:: python
+
+   # Convert list to string format
+   query_vector_str = str(query_vector_list)  # '[0.1, 0.2, 0.3, ...]'
+   
+   # Use in vector search
+   results = client.vector_query.similarity_search(
+       table_name='documents',
+       vector_column='embedding',
+       query_vector=query_vector_str,  # String format
+       limit=5,
+       distance_type='l2'
+   )
+
+**3. In ORM Queries:**
+.. code-block:: python
+
+   from sqlalchemy import text
+   
+   # Both formats work in raw SQL queries
+   session.execute(text("""
+       SELECT id, title, l2_distance(embedding, :query_vector) as distance
+       FROM documents
+       WHERE l2_distance(embedding, :query_vector) < 1.0
+       ORDER BY distance ASC
+   """), {'query_vector': query_vector_list})  # List format
+   
+   session.execute(text("""
+       SELECT id, title, l2_distance(embedding, :query_vector) as distance
+       FROM documents
+       WHERE l2_distance(embedding, :query_vector) < 1.0
+       ORDER BY distance ASC
+   """), {'query_vector': query_vector_str})   # String format
+
+**4. With VectorColumn Methods:**
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import VectorColumn
+   
+   # Both formats work with VectorColumn methods
+   session.query(Document).filter(
+       Document.embedding.within_distance(query_vector_list, 1.0)  # List format
+   ).all()
+   
+   session.query(Document).filter(
+       Document.embedding.within_distance(query_vector_str, 1.0)   # String format
+   ).all()
+
 Similarity Search with Client Interface
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -328,13 +399,15 @@ Similarity Search with Client Interface
    client.connect(host='localhost', port=6001, user='root', password='111', database='test')
 
    # Query vector (in practice, this would be an embedding from your ML model)
-   query_vector = np.random.rand(384).tolist()
+   # Can be either a list of floats or a string representation
+   query_vector_list = np.random.rand(384).tolist()  # List format: [0.1, 0.2, 0.3, ...]
+   query_vector_str = str(query_vector_list)         # String format: '[0.1, 0.2, 0.3, ...]'
 
-   # Perform similarity search using L2 distance
+   # Perform similarity search using L2 distance with list format
    l2_results = client.vector_query.similarity_search(
        table_name='documents',
        vector_column='embedding',
-       query_vector=query_vector,
+       query_vector=query_vector_list,  # Using list format
        limit=5,
        distance_type='l2',
        select_columns=['id', 'title', 'content']
@@ -347,11 +420,11 @@ Similarity Search with Client Interface
        print(f"    Content: {content[:50]}...")
        print(f"    L2 Distance: {distance:.4f}")
 
-   # Perform similarity search using cosine distance
+   # Perform similarity search using cosine distance with string format
    cosine_results = client.vector_query.similarity_search(
        table_name='documents',
        vector_column='embedding',
-       query_vector=query_vector,
+       query_vector=query_vector_str,  # Using string format
        limit=5,
        distance_type='cosine',
        select_columns=['id', 'title']
@@ -398,10 +471,12 @@ Advanced Vector Queries with ORM
    Session = sessionmaker(bind=engine)
    session = Session()
 
-   query_vector = np.random.rand(384).tolist()
+   # Query vector in both formats
+   query_vector_list = np.random.rand(384).tolist()  # List format
+   query_vector_str = str(query_vector_list)         # String format
 
    try:
-       # Complex vector query with filters using ORM
+       # Complex vector query with filters using ORM (list format)
        result = session.execute(text("""
            SELECT id, title, content,
                   l2_distance(embedding, :query_vector) as distance
@@ -411,7 +486,7 @@ Advanced Vector Queries with ORM
            ORDER BY distance ASC
            LIMIT :limit_count
        """), {
-           'query_vector': query_vector,
+           'query_vector': query_vector_list,  # Using list format
            'max_distance': 1.0,
            'title_pattern': '%AI%',
            'limit_count': 10
@@ -423,7 +498,7 @@ Advanced Vector Queries with ORM
            print(f"    Distance: {row.distance:.4f}")
            print(f"    Content: {row.content[:50]}...")
 
-       # Vector search with aggregation
+       # Vector search with aggregation (string format)
        aggregation_result = session.execute(text("""
            SELECT 
                CASE 
@@ -441,7 +516,7 @@ Advanced Vector Queries with ORM
                    ELSE 'Different'
                END
            ORDER BY avg_distance ASC
-       """), {'query_vector': query_vector})
+       """), {'query_vector': query_vector_str})  # Using string format
 
        print("\nSimilarity Distribution:")
        for row in aggregation_result:
