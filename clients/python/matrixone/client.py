@@ -567,7 +567,10 @@ class Client:
         # Handle positional parameters (tuple/list)
         elif isinstance(params, (tuple, list)):
             for param in params:
-                if isinstance(param, str):
+                # Skip empty lists that might come from CTE queries
+                if isinstance(param, list) and len(param) == 0:
+                    continue
+                elif isinstance(param, str):
                     # Escape single quotes in string values
                     escaped_param = param.replace("'", "''")
                     final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
@@ -2704,6 +2707,8 @@ class VectorQueryManager:
         limit: int = 10,
         distance_type: str = "l2",
         select_columns: list = None,
+        where_conditions: list = None,
+        where_params: list = None,
         connection=None,
     ) -> list:
         """
@@ -2716,43 +2721,37 @@ class VectorQueryManager:
             limit: Number of results to return
             distance_type: Type of distance calculation (l2, cosine, inner_product)
             select_columns: List of columns to select (None means all columns)
+            where_conditions: List of WHERE conditions
+            where_params: List of parameters for WHERE conditions
             connection: Optional existing database connection (for transaction support)
 
         Returns:
             List of search results
         """
         from sqlalchemy import text
+        from .sql_builder import build_vector_similarity_query, DistanceFunction
 
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
-
-        # Build distance function based on type
+        # Convert distance type to enum
         if distance_type == "l2":
-            distance_func = "l2_distance_sq"
+            distance_func = DistanceFunction.L2_SQ
         elif distance_type == "cosine":
-            distance_func = "cosine_distance"
+            distance_func = DistanceFunction.COSINE
         elif distance_type == "inner_product":
-            distance_func = "inner_product"
+            distance_func = DistanceFunction.INNER_PRODUCT
         else:
             raise ValueError(f"Unsupported distance type: {distance_type}")
 
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if vector_column not in columns_to_select:
-                columns_to_select.append(vector_column)
-            select_clause = ", ".join(columns_to_select)
-
-        # Build query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
-        FROM {table_name}
-        ORDER BY distance
-        LIMIT {limit}
-        """
+        # Build query using unified SQL builder
+        sql = build_vector_similarity_query(
+            table_name=table_name,
+            vector_column=vector_column,
+            query_vector=query_vector,
+            distance_func=distance_func,
+            limit=limit,
+            select_columns=select_columns,
+            where_conditions=where_conditions,
+            where_params=where_params
+        )
 
         if connection is not None:
             # Use existing connection (for transaction support)
@@ -2772,6 +2771,8 @@ class VectorQueryManager:
         limit: int = 10,
         distance_type: str = "l2",
         select_columns: list = None,
+        where_conditions: list = None,
+        where_params: list = None,
         connection=None,
     ) -> list:
         """
@@ -2784,6 +2785,8 @@ class VectorQueryManager:
             limit: Number of results to return
             distance_type: Type of distance calculation (l2, cosine, inner_product)
             select_columns: List of columns to select (None means all columns)
+            where_conditions: List of WHERE conditions
+            where_params: List of parameters for WHERE conditions
             connection: Database connection (required for transaction support)
 
         Returns:
@@ -2802,6 +2805,8 @@ class VectorQueryManager:
             limit=limit,
             distance_type=distance_type,
             select_columns=select_columns,
+            where_conditions=where_conditions,
+            where_params=where_params,
             connection=connection,
         )
 

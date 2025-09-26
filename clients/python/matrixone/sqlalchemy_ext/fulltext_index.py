@@ -475,7 +475,7 @@ class FulltextSearchBuilder:
 
     def build_sql(self) -> str:
         """
-        Build the SQL query.
+        Build the SQL query using unified SQL builder.
 
         Returns:
             str: SQL query string
@@ -483,44 +483,42 @@ class FulltextSearchBuilder:
         if not self.search_term:
             raise ValueError("Search term is required")
 
+        from ..sql_builder import MatrixOneSQLBuilder
+        
+        builder = MatrixOneSQLBuilder()
+        
+        # Build SELECT clause
         columns_str = ", ".join(self.columns)
         match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' IN {self.search_mode})"
-
-        # Build SELECT clause
+        
         if self.include_score:
-            select_clause = f"*, {match_clause} AS score"
+            builder.select("*", f"{match_clause} AS score")
         else:
-            select_clause = "*"
-
-        # Build WHERE clause
-        where_clause = f"WHERE {match_clause}"
-
+            builder.select_all()
+        
+        # Build FROM clause
+        builder.from_table(self.table_name)
+        
+        # Build WHERE clause with MATCH AGAINST
+        builder.where(match_clause)
+        
         # Add additional WHERE conditions
         for condition in self.where_conditions:
-            where_clause += f" AND {condition}"
-
-        # Build ORDER BY clause
-        order_clause = ""
+            builder.where(condition)
+        
+        # Add ORDER BY clause
         if self.order_clause:
-            order_clause = f"ORDER BY {self.order_clause}"
+            builder.order_by(self.order_clause)
         elif self.include_score:
-            order_clause = "ORDER BY score DESC"
-
-        # Build LIMIT/OFFSET clause
-        limit_clause = ""
+            builder.order_by("score DESC")
+        
+        # Add LIMIT/OFFSET clause
         if self.limit_value:
-            limit_clause = f"LIMIT {self.limit_value}"
+            builder.limit(self.limit_value)
             if self.offset_value:
-                limit_clause += f" OFFSET {self.offset_value}"
-
-        # Combine all clauses
-        sql = f"SELECT {select_clause} FROM {self.table_name} {where_clause}"
-        if order_clause:
-            sql += f" {order_clause}"
-        if limit_clause:
-            sql += f" {limit_clause}"
-
-        return sql
+                builder.offset(self.offset_value)
+        
+        return builder.build_with_parameter_substitution()
 
     def execute(self, connection) -> Any:
         """

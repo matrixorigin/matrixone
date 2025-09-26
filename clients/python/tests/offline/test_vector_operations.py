@@ -15,6 +15,15 @@ from matrixone.sqlalchemy_ext import (
     create_vector_column, vector_distance_functions
 )
 from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
+from matrixone.sql_builder import (
+    MatrixOneSQLBuilder, 
+    DistanceFunction,
+    build_vector_similarity_query,
+    build_select_query,
+    build_insert_query,
+    build_update_query,
+    build_delete_query
+)
 
 
 class TestVectorOperationsOffline:
@@ -495,3 +504,166 @@ class TestVectorOperationsIntegrationOffline:
         # Verify error was raised
         mock_session.add.assert_called_once()
         mock_session.commit.assert_not_called()
+
+
+class TestUnifiedSQLBuilderOffline:
+    """Test unified SQL builder functionality offline."""
+    
+    def test_basic_sql_construction(self):
+        """Test basic SQL construction with MatrixOneSQLBuilder."""
+        builder = MatrixOneSQLBuilder()
+        sql, params = builder.select('id', 'name').from_table('users').build()
+        
+        assert sql == "SELECT id, name FROM users"
+        assert params == []
+    
+    def test_select_with_where(self):
+        """Test SELECT with WHERE clause."""
+        builder = MatrixOneSQLBuilder()
+        sql, params = builder.select('*').from_table('users').where('age > ?', 18).build()
+        
+        assert "SELECT * FROM users WHERE age > ?" in sql
+        assert params == [18]
+    
+    def test_vector_similarity_query(self):
+        """Test vector similarity query building."""
+        sql = build_vector_similarity_query(
+            table_name='documents',
+            vector_column='embedding',
+            query_vector=[0.1, 0.2, 0.3],
+            distance_func=DistanceFunction.L2_SQ,
+            limit=10,
+            select_columns=['id', 'title'],
+            where_conditions=['category = ?'],
+            where_params=['news']
+        )
+        
+        assert "l2_distance_sq" in sql
+        assert "WHERE category = 'news'" in sql
+        assert "ORDER BY distance" in sql
+        assert "LIMIT 10" in sql
+    
+    def test_cte_query(self):
+        """Test CTE query construction."""
+        builder = MatrixOneSQLBuilder()
+        sql, params = (builder
+                      .with_cte('dept_stats', 'SELECT department_id, COUNT(*) as emp_count FROM employees GROUP BY department_id')
+                      .select('d.name', 'ds.emp_count')
+                      .from_table('departments d')
+                      .join('dept_stats ds', 'd.id = ds.department_id', 'INNER')
+                      .where('ds.emp_count > ?', 5)
+                      .build())
+        
+        assert "WITH dept_stats AS" in sql
+        assert "INNER JOIN dept_stats ds" in sql
+        assert params == [5]
+    
+    def test_insert_query(self):
+        """Test INSERT query construction."""
+        sql, params = build_insert_query(
+            table_name="users",
+            values={
+                'name': 'John Doe',
+                'email': 'john@example.com',
+                'age': 30
+            }
+        )
+        
+        assert "INSERT INTO users" in sql
+        assert "name, email, age" in sql
+        assert params == ['John Doe', 'john@example.com', 30]
+    
+    def test_update_query(self):
+        """Test UPDATE query construction."""
+        sql, params = build_update_query(
+            table_name="users",
+            set_values={'age': 31, 'last_login': '2024-01-01'},
+            where_conditions=['id = ?'],
+            where_params=[123]
+        )
+        
+        assert "UPDATE users SET" in sql
+        assert "WHERE id = ?" in sql
+        assert params == [31, '2024-01-01', 123]
+    
+    def test_delete_query(self):
+        """Test DELETE query construction."""
+        sql, params = build_delete_query(
+            table_name="users",
+            where_conditions=['status = ?', 'last_login < ?'],
+            where_params=['inactive', '2023-01-01']
+        )
+        
+        assert "DELETE FROM users" in sql
+        assert "WHERE status = ? AND last_login < ?" in sql
+        assert params == ['inactive', '2023-01-01']
+    
+    def test_convenience_functions(self):
+        """Test convenience functions for common operations."""
+        # Test build_select_query
+        sql = build_select_query(
+            table_name="products",
+            select_columns=["id", "name", "price"],
+            where_conditions=["category = ?", "price < ?"],
+            where_params=["electronics", 1000],
+            order_by=["price"],
+            limit=5
+        )
+        
+        assert "SELECT id, name, price FROM products" in sql
+        assert "WHERE category = 'electronics' AND price < 1000" in sql
+        assert "ORDER BY price" in sql
+        assert "LIMIT 5" in sql
+    
+    def test_parameter_substitution(self):
+        """Test parameter substitution for MatrixOne compatibility."""
+        builder = MatrixOneSQLBuilder()
+        sql = (builder
+               .select('*')
+               .from_table('users')
+               .where('age > ?', 18)
+               .where('name = ?', "John")
+               .build_with_parameter_substitution())
+        
+        assert "WHERE age > 18 AND name = 'John'" in sql
+        assert "?" not in sql  # All parameters should be substituted
+    
+    def test_snapshot_syntax(self):
+        """Test snapshot query syntax."""
+        builder = MatrixOneSQLBuilder()
+        sql, params = (builder
+                      .select('*')
+                      .from_table('users', 'user_snapshot')
+                      .build())
+        
+        assert "FROM users{snapshot = 'user_snapshot'}" in sql
+        assert params == []
+    
+    def test_complex_query_construction(self):
+        """Test complex query construction with multiple clauses."""
+        builder = MatrixOneSQLBuilder()
+        sql, params = (builder
+                      .select('u.id', 'u.name', 'd.name as dept_name', 'COUNT(p.id) as project_count')
+                      .from_table('users u')
+                      .left_join('departments d', 'u.department_id = d.id')
+                      .left_join('projects p', 'u.id = p.owner_id')
+                      .where('u.status = ?', 'active')
+                      .where('u.created_at > ?', '2023-01-01')
+                      .group_by('u.id', 'u.name', 'd.name')
+                      .having('COUNT(p.id) > ?', 0)
+                      .order_by('project_count DESC', 'u.name')
+                      .limit(10)
+                      .offset(20)
+                      .build())
+        
+        assert "SELECT u.id, u.name, d.name as dept_name, COUNT(p.id) as project_count" in sql
+        assert "FROM users u" in sql
+        assert "LEFT JOIN departments d" in sql
+        assert "LEFT JOIN projects p" in sql
+        assert "WHERE u.status = ? AND u.created_at > ?" in sql
+        assert "GROUP BY u.id, u.name, d.name" in sql
+        assert "HAVING COUNT(p.id) > ?" in sql
+        assert "ORDER BY project_count DESC, u.name" in sql
+        assert "LIMIT 10" in sql
+        assert "OFFSET 20" in sql
+        assert params == ['active', '2023-01-01', 0]

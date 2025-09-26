@@ -251,6 +251,116 @@ class PineconeCompatibleIndex:
 
         return index_info
 
+    def _parse_pinecone_filter(self, filter_dict: Dict[str, Any]) -> tuple:
+        """
+        Parse Pinecone-compatible filter into SQL WHERE conditions and parameters.
+
+        Args:
+            filter_dict: Pinecone filter dictionary
+
+        Returns:
+            Tuple of (where_conditions, where_params)
+        """
+        if not filter_dict:
+            return [], []
+
+        where_conditions = []
+        where_params = []
+
+        def parse_condition(key: str, value: Any) -> str:
+            """Parse a single filter condition"""
+            if isinstance(value, dict):
+                # Handle operators like $eq, $in, $gte, etc.
+                if "$eq" in value:
+                    where_params.append(value["$eq"])
+                    return f"{key} = ?"
+                elif "$ne" in value:
+                    where_params.append(value["$ne"])
+                    return f"{key} != ?"
+                elif "$in" in value:
+                    if not value["$in"]:  # Empty list
+                        return "1=0"  # Always false condition
+                    placeholders = ",".join(["?" for _ in value["$in"]])
+                    where_params.extend(value["$in"])
+                    return f"{key} IN ({placeholders})"
+                elif "$nin" in value:
+                    if not value["$nin"]:  # Empty list
+                        return "1=1"  # Always true condition
+                    placeholders = ",".join(["?" for _ in value["$nin"]])
+                    where_params.extend(value["$nin"])
+                    return f"{key} NOT IN ({placeholders})"
+                elif "$gt" in value:
+                    where_params.append(value["$gt"])
+                    return f"{key} > ?"
+                elif "$gte" in value:
+                    where_params.append(value["$gte"])
+                    return f"{key} >= ?"
+                elif "$lt" in value:
+                    where_params.append(value["$lt"])
+                    return f"{key} < ?"
+                elif "$lte" in value:
+                    where_params.append(value["$lte"])
+                    return f"{key} <= ?"
+                elif "$and" in value:
+                    # Handle nested $and conditions
+                    and_conditions = []
+                    for condition in value["$and"]:
+                        for sub_key, sub_value in condition.items():
+                            and_conditions.append(parse_condition(sub_key, sub_value))
+                    return f"({' AND '.join(and_conditions)})"
+                elif "$or" in value:
+                    # Handle nested $or conditions
+                    or_conditions = []
+                    for condition in value["$or"]:
+                        for sub_key, sub_value in condition.items():
+                            or_conditions.append(parse_condition(sub_key, sub_value))
+                    return f"({' OR '.join(or_conditions)})"
+                else:
+                    raise ValueError(f"Unsupported operator in filter: {list(value.keys())}")
+            else:
+                # Direct value comparison (equivalent to $eq)
+                where_params.append(value)
+                return f"{key} = ?"
+        
+        def parse_nested_condition(condition_dict: dict) -> str:
+            """Parse a nested condition that might contain $and or $or"""
+            if "$and" in condition_dict:
+                and_conditions = []
+                for condition in condition_dict["$and"]:
+                    and_conditions.append(parse_nested_condition(condition))
+                return f"({' AND '.join(and_conditions)})"
+            elif "$or" in condition_dict:
+                or_conditions = []
+                for condition in condition_dict["$or"]:
+                    or_conditions.append(parse_nested_condition(condition))
+                return f"({' OR '.join(or_conditions)})"
+            else:
+                # This is a simple condition, parse it normally
+                conditions = []
+                for key, value in condition_dict.items():
+                    conditions.append(parse_condition(key, value))
+                return " AND ".join(conditions)
+
+        # Parse top-level conditions
+        for key, value in filter_dict.items():
+            if key == "$and":
+                # Handle top-level $and
+                and_conditions = []
+                for condition in value:
+                    and_conditions.append(parse_nested_condition(condition))
+                where_conditions.append(f"({' AND '.join(and_conditions)})")
+            elif key == "$or":
+                # Handle top-level $or
+                or_conditions = []
+                for condition in value:
+                    or_conditions.append(parse_nested_condition(condition))
+                where_conditions.append(f"({' OR '.join(or_conditions)})")
+            else:
+                condition = parse_condition(key, value)
+                where_conditions.append(condition)
+        
+        return where_conditions, where_params
+
     def query(
         self,
         vector: List[float],
@@ -268,13 +378,16 @@ class PineconeCompatibleIndex:
             top_k: Number of results to return
             include_metadata: Whether to include metadata in results
             include_values: Whether to include vector values in results
-            filter: Optional metadata filter (not implemented yet)
+            filter: Optional metadata filter (Pinecone-compatible)
             namespace: Namespace (not used in MatrixOne)
 
         Returns:
             QueryResponse object with matches
         """
         index_info = self._get_index_info()
+
+        # Parse filter if provided
+        where_conditions, where_params = self._parse_pinecone_filter(filter)
 
         # Build similarity search query
         id_column = self._get_id_column()
@@ -294,6 +407,8 @@ class PineconeCompatibleIndex:
                 limit=top_k,
                 distance_type=index_info.get("metric", "l2"),
                 select_columns=select_columns,
+                where_conditions=where_conditions,
+                where_params=where_params,
             )
         else:  # default to IVF
             results = self.client.vector_query.similarity_search(
@@ -303,6 +418,8 @@ class PineconeCompatibleIndex:
                 limit=top_k,
                 distance_type=index_info.get("metric", "l2"),
                 select_columns=select_columns,
+                where_conditions=where_conditions,
+                where_params=where_params,
             )
 
         # Convert results to Pinecone format
@@ -350,13 +467,16 @@ class PineconeCompatibleIndex:
             top_k: Number of results to return
             include_metadata: Whether to include metadata in results
             include_values: Whether to include vector values in results
-            filter: Optional metadata filter (not implemented yet)
+            filter: Optional metadata filter (Pinecone-compatible)
             namespace: Namespace (not used in MatrixOne)
 
         Returns:
             QueryResponse object with matches
         """
         index_info = await self._get_index_info_async()
+
+        # Parse filter if provided
+        where_conditions, where_params = self._parse_pinecone_filter(filter)
 
         # Build similarity search query
         id_column = await self._get_id_column_async()
@@ -367,39 +487,31 @@ class PineconeCompatibleIndex:
         if include_values:
             select_columns.append(self.vector_column)
 
-        # For async client, use direct SQL query since VectorQueryManager is not available
+        # Use unified SQL builder for async queries
+        from .sql_builder import build_vector_similarity_query, DistanceFunction
 
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, vector)) + "]"
-
-        # Build distance function based on metric
+        # Convert metric to distance function enum
         metric = index_info.get("metric", "l2")
         if metric == "l2":
-            distance_func = "l2_distance"
+            distance_func = DistanceFunction.L2
         elif metric == "cosine":
-            distance_func = "cosine_distance"
+            distance_func = DistanceFunction.COSINE
         elif metric == "ip":
-            distance_func = "inner_product"
+            distance_func = DistanceFunction.INNER_PRODUCT
         else:
-            distance_func = "l2_distance"
+            distance_func = DistanceFunction.L2
 
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if not any(col.lower() == self.vector_column.lower() for col in columns_to_select):
-                columns_to_select.append(self.vector_column)
-            select_clause = ", ".join(columns_to_select)
-
-        # Build query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({self.vector_column}, '{vector_str}') as distance
-        FROM {self.table_name}
-        ORDER BY distance
-        LIMIT {top_k}
-        """
+        # Build query using unified SQL builder
+        sql = build_vector_similarity_query(
+            table_name=self.table_name,
+            vector_column=self.vector_column,
+            query_vector=vector,
+            distance_func=distance_func,
+            limit=top_k,
+            select_columns=select_columns,
+            where_conditions=where_conditions,
+            where_params=where_params
+        )
 
         # Execute query
         result = await self.client.execute(sql)
@@ -454,10 +566,19 @@ class PineconeCompatibleIndex:
             )
 
         if ids:
-            # Convert all IDs to strings and create IN clause
+            # Use unified SQL builder for DELETE
+            from .sql_builder import build_delete_query
+            
             id_column = self._get_id_column()
-            id_list = "', '".join(str(id) for id in ids)
-            self.client.execute(f"DELETE FROM {self.table_name} WHERE {id_column} IN ('{id_list}')")
+            placeholders = ",".join(["?" for _ in ids])
+            where_condition = f"{id_column} IN ({placeholders})"
+            
+            sql, params = build_delete_query(
+                table_name=self.table_name,
+                where_conditions=[where_condition],
+                where_params=ids
+            )
+            self.client.execute(sql, params)
 
     async def delete_async(self, ids: List[Any], namespace: str = ""):
         """
@@ -480,10 +601,19 @@ class PineconeCompatibleIndex:
             )
 
         if ids:
-            # Convert all IDs to strings and create IN clause
+            # Use unified SQL builder for DELETE
+            from .sql_builder import build_delete_query
+            
             id_column = await self._get_id_column_async()
-            id_list = "', '".join(str(id) for id in ids)
-            await self.client.execute(f"DELETE FROM {self.table_name} WHERE {id_column} IN ('{id_list}')")
+            placeholders = ",".join(["?" for _ in ids])
+            where_condition = f"{id_column} IN ({placeholders})"
+            
+            sql, params = build_delete_query(
+                table_name=self.table_name,
+                where_conditions=[where_condition],
+                where_params=ids
+            )
+            await self.client.execute(sql, params)
 
     def describe_index_stats(self) -> Dict[str, Any]:
         """
@@ -492,8 +622,14 @@ class PineconeCompatibleIndex:
         Returns:
             Dictionary with index statistics
         """
-        # Get table row count
-        count_result = self.client.execute(f"SELECT COUNT(*) FROM {self.table_name}")
+        # Get table row count using unified SQL builder
+        from .sql_builder import build_select_query
+        
+        sql = build_select_query(
+            table_name=self.table_name,
+            select_columns=["COUNT(*)"]
+        )
+        count_result = self.client.execute(sql)
         total_vector_count = count_result.rows[0][0] if count_result.rows else 0
 
         index_info = self._get_index_info()
@@ -512,8 +648,14 @@ class PineconeCompatibleIndex:
         Returns:
             Dictionary with index statistics
         """
-        # Get table row count
-        count_result = await self.client.execute(f"SELECT COUNT(*) FROM {self.table_name}")
+        # Get table row count using unified SQL builder
+        from .sql_builder import build_select_query
+        
+        sql = build_select_query(
+            table_name=self.table_name,
+            select_columns=["COUNT(*)"]
+        )
+        count_result = await self.client.execute(sql)
         total_vector_count = count_result.rows[0][0] if count_result.rows else 0
 
         index_info = await self._get_index_info_async()

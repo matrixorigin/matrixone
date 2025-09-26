@@ -131,72 +131,46 @@ class Query:
         return self
 
     def _build_select_sql(self) -> tuple[str, List[Any]]:
-        """Build SELECT SQL query"""
-        table_name = self.model_class._table_name
-
+        """Build SELECT SQL query using unified SQL builder"""
+        from .sql_builder import MatrixOneSQLBuilder
+        
+        builder = MatrixOneSQLBuilder()
+        
         # Build SELECT clause
         if self._select_columns:
-            select_clause = ", ".join(self._select_columns)
+            builder.select(*self._select_columns)
         else:
-            select_clause = "*"
-
+            builder.select_all()
+        
         # Build FROM clause with snapshot
-        if self.snapshot_name:
-            from_clause = f"FROM {table_name} AS OF SNAPSHOT '{self.snapshot_name}'"
-        else:
-            from_clause = f"FROM {table_name}"
-
-        # Build JOIN clause
-        join_clause = " ".join(self._joins) if self._joins else ""
-
-        # Build WHERE clause
-        where_clause = ""
-        params = []
-        if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
-            params.extend(self._where_params)
-
-        # Build GROUP BY clause
-        group_by_clause = ""
+        builder.from_table(self.model_class._table_name, self.snapshot_name)
+        
+        # Add JOIN clauses
+        builder._joins = self._joins.copy()
+        
+        # Add WHERE conditions and parameters
+        builder._where_conditions = self._where_conditions.copy()
+        builder._where_params = self._where_params.copy()
+        
+        # Add GROUP BY columns
         if self._group_by_columns:
-            group_by_clause = "GROUP BY " + ", ".join(self._group_by_columns)
-
-        # Build HAVING clause
-        having_clause = ""
-        if self._having_conditions:
-            having_clause = "HAVING " + " AND ".join(self._having_conditions)
-            params.extend(self._having_params)
-
-        # Build ORDER BY clause
-        order_by_clause = ""
+            builder.group_by(*self._group_by_columns)
+        
+        # Add HAVING conditions and parameters
+        builder._having_conditions = self._having_conditions.copy()
+        builder._having_params = self._having_params.copy()
+        
+        # Add ORDER BY columns
         if self._order_by_columns:
-            order_by_clause = "ORDER BY " + ", ".join(self._order_by_columns)
-
-        # Build LIMIT clause
-        limit_clause = ""
+            builder.order_by(*self._order_by_columns)
+        
+        # Add LIMIT and OFFSET
         if self._limit_count is not None:
-            limit_clause = f"LIMIT {self._limit_count}"
-
-        # Build OFFSET clause
-        offset_clause = ""
+            builder.limit(self._limit_count)
         if self._offset_count is not None:
-            offset_clause = f"OFFSET {self._offset_count}"
-
-        # Combine all clauses
-        sql_parts = [
-            f"SELECT {select_clause}",
-            from_clause,
-            join_clause,
-            where_clause,
-            group_by_clause,
-            having_clause,
-            order_by_clause,
-            limit_clause,
-            offset_clause,
-        ]
-
-        sql = " ".join(filter(None, sql_parts))
-        return sql, params
+            builder.offset(self._offset_count)
+        
+        return builder.build()
 
     def all(self) -> List:
         """Execute query and return all results"""
@@ -260,38 +234,16 @@ class Query:
         return self
 
     def _build_insert_sql(self) -> tuple[str, List[Any]]:
-        """Build INSERT SQL query"""
+        """Build INSERT SQL query using unified SQL builder"""
+        from .sql_builder import build_insert_query
+        
         if not self._insert_values:
             raise ValueError("No values provided for INSERT")
-
-        table_name = self.model_class._table_name
-
-        # Get all column names from the first record
-        all_columns = set()
-        for values in self._insert_values:
-            all_columns.update(values.keys())
-
-        columns = list(all_columns)
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_parts = []
-        params = []
-
-        for values in self._insert_values:
-            placeholders = []
-            for col in columns:
-                if col in values:
-                    placeholders.append("?")
-                    params.append(values[col])
-                else:
-                    placeholders.append("NULL")
-            values_parts.append(f"({', '.join(placeholders)})")
-
-        values_str = ", ".join(values_parts)
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_str}"
-        return sql, params
+        
+        return build_insert_query(
+            table_name=self.model_class._table_name,
+            values=self._insert_values
+        )
 
     def update(self, **kwargs) -> "Query":
         """Start UPDATE operation"""
@@ -302,24 +254,25 @@ class Query:
         return self
 
     def _build_update_sql(self) -> tuple[str, List[Any]]:
-        """Build UPDATE SQL query"""
+        """Build UPDATE SQL query using unified SQL builder"""
+        from .sql_builder import build_update_query
+        
         if not self._update_set_columns:
             raise ValueError("No SET clauses provided for UPDATE")
-
-        table_name = self.model_class._table_name
-
-        # Build SET clause
-        set_clause = ", ".join(self._update_set_columns)
-
-        # Build WHERE clause
-        where_clause = ""
-        params = self._update_set_values.copy()
-        if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
-            params.extend(self._where_params)
-
-        sql = f"UPDATE {table_name} SET {set_clause} {where_clause}"
-        return sql, params
+        
+        # Convert set columns and values to dict
+        set_values = {}
+        for i, col in enumerate(self._update_set_columns):
+            # Extract column name from "column = ?" format
+            col_name = col.split(" = ")[0]
+            set_values[col_name] = self._update_set_values[i]
+        
+        return build_update_query(
+            table_name=self.model_class._table_name,
+            set_values=set_values,
+            where_conditions=self._where_conditions,
+            where_params=self._where_params
+        )
 
     def delete(self) -> "Query":
         """Start DELETE operation"""
@@ -327,18 +280,14 @@ class Query:
         return self
 
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
-        """Build DELETE SQL query"""
-        table_name = self.model_class._table_name
-
-        # Build WHERE clause
-        where_clause = ""
-        params = []
-        if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
-            params.extend(self._where_params)
-
-        sql = f"DELETE FROM {table_name} {where_clause}"
-        return sql, params
+        """Build DELETE SQL query using unified SQL builder"""
+        from .sql_builder import build_delete_query
+        
+        return build_delete_query(
+            table_name=self.model_class._table_name,
+            where_conditions=self._where_conditions,
+            where_params=self._where_params
+        )
 
     def execute(self) -> Any:
         """Execute the query based on its type"""
@@ -565,10 +514,12 @@ class BaseMatrixOneQuery:
         return self
 
     def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build SQL query"""
-        table_name = self._table_name
-
-        # Build SELECT clause
+        """Build SQL query using unified SQL builder"""
+        from .sql_builder import MatrixOneSQLBuilder
+        
+        builder = MatrixOneSQLBuilder()
+        
+        # Build SELECT clause with SQLAlchemy function support
         if self._select_columns:
             # Convert SQLAlchemy function objects to strings
             select_parts = []
@@ -591,76 +542,44 @@ class BaseMatrixOneQuery:
                     select_parts.append(sql_str)
                 else:
                     select_parts.append(str(col))
-            select_clause = "SELECT " + ", ".join(select_parts)
+            builder._select_columns = select_parts
         else:
-            select_clause = "SELECT *"
+            builder.select_all()
 
-        # Build FROM clause with optional table alias
+        # Build FROM clause with optional table alias and snapshot
         if self._table_alias:
-            from_clause = f"FROM {table_name} AS {self._table_alias}"
+            builder._from_table = f"{self._table_name} AS {self._table_alias}"
         else:
-            from_clause = f"FROM {table_name}"
+            builder._from_table = self._table_name
+        
+        builder._from_snapshot = self._snapshot_name
 
-        # Build snapshot hint (must come before WHERE clause)
-        snapshot_hint = ""
-        if self._snapshot_name:
-            snapshot_hint = f"{{snapshot = '{self._snapshot_name}'}}"
+        # Add JOIN clauses
+        builder._joins = self._joins.copy()
 
-        # Build JOIN clauses
-        join_clause = ""
-        if self._joins:
-            join_clause = " " + " ".join(self._joins)
+        # Add WHERE conditions and parameters
+        builder._where_conditions = self._where_conditions.copy()
+        builder._where_params = self._where_params.copy()
 
-        # Build WHERE clause
-        where_clause = ""
-        params = []
-        if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
-            # Add WHERE parameters
-            params.extend(self._where_params)
-
-        # Build GROUP BY clause
-        group_clause = ""
+        # Add GROUP BY columns
         if self._group_by_columns:
-            group_clause = "GROUP BY " + ", ".join(self._group_by_columns)
+            builder.group_by(*self._group_by_columns)
 
-        # Build HAVING clause
-        having_clause = ""
-        if self._having_conditions:
-            having_clause = "HAVING " + " AND ".join(self._having_conditions)
-            # Add HAVING parameters
-            params.extend(self._having_params)
+        # Add HAVING conditions and parameters
+        builder._having_conditions = self._having_conditions.copy()
+        builder._having_params = self._having_params.copy()
 
-        # Build ORDER BY clause
-        order_by_clause = ""
+        # Add ORDER BY columns
         if self._order_by_columns:
-            order_by_clause = "ORDER BY " + ", ".join(self._order_by_columns)
+            builder.order_by(*self._order_by_columns)
 
-        # Build LIMIT clause
-        limit_clause = ""
+        # Add LIMIT and OFFSET
         if self._limit_count is not None:
-            limit_clause = f"LIMIT {self._limit_count}"
-
-        # Build OFFSET clause
-        offset_clause = ""
+            builder.limit(self._limit_count)
         if self._offset_count is not None:
-            offset_clause = f"OFFSET {self._offset_count}"
+            builder.offset(self._offset_count)
 
-        # Combine all clauses
-        sql_parts = [
-            select_clause,
-            from_clause + snapshot_hint + join_clause,
-            where_clause,
-            group_clause,
-            having_clause,
-            order_by_clause,
-            limit_clause,
-            offset_clause,
-        ]
-
-        sql = " ".join(filter(None, sql_parts))
-
-        return sql, params
+        return builder.build()
 
     def _create_row_data(self, row, select_cols):
         """Create RowData object for aggregate queries"""
@@ -944,68 +863,52 @@ class CTEQuery:
         return self
 
     def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build the complete CTE SQL query"""
+        """Build the complete CTE SQL query using unified SQL builder"""
         if not self._ctes:
             raise ValueError("At least one CTE must be defined")
         if not self._main_query:
             raise ValueError("Main query must be defined with select_from()")
 
-        sql_parts = []
-        all_params = []
-
-        # Build WITH clause
-        with_clause = "WITH "
-        cte_parts = []
+        from .sql_builder import MatrixOneSQLBuilder
+        
+        builder = MatrixOneSQLBuilder()
+        
+        # Add CTEs
         for cte in self._ctes:
-            cte_parts.append(f"{cte['name']} AS ({cte['sql']})")
-            all_params.extend(cte["params"])
-        with_clause += ", ".join(cte_parts)
-        sql_parts.append(with_clause)
-
-        # Build main SELECT query
-        select_clause = "SELECT " + ", ".join(self._main_query["columns"])
-        sql_parts.append(select_clause)
-
-        # Build FROM clause
+            builder.with_cte(cte['name'], cte['sql'], cte['params'])
+        
+        # Build main query
+        builder.select(*self._main_query["columns"])
+        
         if self._main_query["from_table"]:
-            sql_parts.append(f"FROM {self._main_query['from_table']}")
-
-        # Build JOIN clauses
-        if self._main_query["joins"]:
-            sql_parts.append(" ".join(self._main_query["joins"]))
-
-        # Build WHERE clause
-        if self._main_query["where_conditions"]:
-            where_clause = "WHERE " + " AND ".join(self._main_query["where_conditions"])
-            sql_parts.append(where_clause)
-            all_params.extend(self._main_query["where_params"])
-
-        # Build GROUP BY clause
+            builder.from_table(self._main_query["from_table"])
+        
+        # Add JOIN clauses
+        builder._joins = self._main_query["joins"].copy()
+        
+        # Add WHERE conditions and parameters
+        builder._where_conditions = self._main_query["where_conditions"].copy()
+        builder._where_params = self._main_query["where_params"].copy()
+        
+        # Add GROUP BY columns
         if self._main_query["group_by_columns"]:
-            group_clause = "GROUP BY " + ", ".join(self._main_query["group_by_columns"])
-            sql_parts.append(group_clause)
-
-        # Build HAVING clause
-        if self._main_query["having_conditions"]:
-            having_clause = "HAVING " + " AND ".join(self._main_query["having_conditions"])
-            sql_parts.append(having_clause)
-            all_params.extend(self._main_query["having_params"])
-
-        # Build ORDER BY clause
+            builder.group_by(*self._main_query["group_by_columns"])
+        
+        # Add HAVING conditions and parameters
+        builder._having_conditions = self._main_query["having_conditions"].copy()
+        builder._having_params = self._main_query["having_params"].copy()
+        
+        # Add ORDER BY columns
         if self._main_query["order_by_columns"]:
-            order_clause = "ORDER BY " + ", ".join(self._main_query["order_by_columns"])
-            sql_parts.append(order_clause)
-
-        # Build LIMIT clause
+            builder.order_by(*self._main_query["order_by_columns"])
+        
+        # Add LIMIT and OFFSET
         if self._main_query["limit_count"] is not None:
-            sql_parts.append(f"LIMIT {self._main_query['limit_count']}")
-
-        # Build OFFSET clause
+            builder.limit(self._main_query["limit_count"])
         if self._main_query["offset_count"] is not None:
-            sql_parts.append(f"OFFSET {self._main_query['offset_count']}")
-
-        sql = " ".join(sql_parts)
-        return sql, all_params
+            builder.offset(self._main_query["offset_count"])
+        
+        return builder.build()
 
     def execute(self) -> List:
         """Execute the CTE query and return results"""
