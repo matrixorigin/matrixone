@@ -111,9 +111,9 @@ func getSnapshotMetaFiles(
 
 	// The normal checkpoint meta file records a checkpoint interval,
 	// so you only need to read the last meta file
-	ickpFiles := FilterSortedMetaFilesByTimestamp(snapshot, metaFiles)
+	iCkpFiles := FilterSortedMetaFilesByTimestamp(snapshot, metaFiles)
 
-	retFiles = append(retFiles, ickpFiles...)
+	retFiles = append(retFiles, iCkpFiles...)
 
 	return retFiles
 }
