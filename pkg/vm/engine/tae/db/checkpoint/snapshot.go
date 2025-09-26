@@ -123,14 +123,14 @@ func ListSnapshotCheckpoint(
 	sid string,
 	fs fileservice.FileService,
 	snapshot types.TS,
-	files map[string]struct{},
+	allFiles map[string]struct{},
 ) ([]*CheckpointEntry, error) {
-	if len(files) == 0 {
+	if len(allFiles) == 0 {
 		return nil, nil
 	}
 	metaFiles := make([]ioutil.TSRangeFile, 0)
 	compactedFiles := make([]ioutil.TSRangeFile, 0)
-	for name := range files {
+	for name := range allFiles {
 		meta := ioutil.DecodeTSRangeFile(name)
 		if meta.IsCompactExt() {
 			compactedFiles = append(compactedFiles, meta)
