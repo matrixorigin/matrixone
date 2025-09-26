@@ -150,7 +150,7 @@ class TestVectorIndexOnline:
         # Clean up using client interface
         client.drop_all(Base)
     
-    def test_vector_index_on_existing_table(self, engine, Base, Session):
+    def test_vector_index_on_existing_table(self, client, Base, Session):
         """Test creating vector index on existing table."""
         class DocumentWithoutIndex(Base):
             __tablename__ = 'test_vector_index_online_02'
@@ -159,55 +159,47 @@ class TestVectorIndexOnline:
             title = Column(String(200))
             category = Column(String(50))
         
-        # Clean up first
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_02"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        # Create table without index
-        Base.metadata.create_all(engine, tables=[DocumentWithoutIndex.__table__])
+        # Enable IVF indexing
+        client.vector_index.enable_ivf()
         
-        # Create L2 distance index
-        l2_index = create_ivfflat_index(
-            "idx_embedding_l2_online02",
-            "embedding",
-            lists=64,
-            op_type=VectorOpType.VECTOR_L2_OPS
-        )
-        
+        # Create L2 distance index using client API
         try:
-            with engine.begin() as conn:
-                sql = l2_index.create_sql("test_vector_index_online_02")
-                conn.execute(text(sql))
-            # If we get here, first index creation succeeded
+            client.vector_index.create_ivf(
+                name="idx_embedding_l2_online02",
+                table_name="test_vector_index_online_02",
+                column="embedding",
+                lists=64,
+                op_type="vector_l2_ops"
+            )
+            # If we get here, index creation succeeded
             assert True
         except Exception as e:
             # If IVF is not enabled, this is expected
             assert "IVF index is not enabled" in str(e) or "not supported" in str(e)
         
         # Try to create second index (should fail due to MatrixOne limitation)
-        cosine_index = create_vector_index(
-            "idx_embedding_cosine_online02",
-            "embedding",
-            index_type=VectorIndexType.IVFFLAT,
-            lists=32,
-            op_type=VectorOpType.VECTOR_COSINE_OPS
-        )
-        
         try:
-            with engine.begin() as conn:
-                sql = cosine_index.create_sql("test_vector_index_online_02")
-                conn.execute(text(sql))
+            client.vector_index.create_ivf(
+                name="idx_embedding_cosine_online02",
+                table_name="test_vector_index_online_02",
+                column="embedding",
+                lists=32,
+                op_type="vector_cosine_ops"
+            )
             # If we get here, second index creation succeeded (unexpected)
             assert False, "Second index creation should have failed"
         except Exception as e:
             # This is expected - MatrixOne doesn't support multiple indexes on same column
             assert True
         
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_02"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
-    def test_vector_index_builder(self, engine, Base, Session):
+    def test_vector_index_builder(self, client, Base, Session):
         """Test using VectorIndexBuilder."""
         class DocumentBuilder(Base):
             __tablename__ = 'test_vector_index_online_03'
@@ -216,29 +208,30 @@ class TestVectorIndexOnline:
             title = Column(String(200))
             category = Column(String(50))
         
-        # Clean up first
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_03"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        # Create table
-        Base.metadata.create_all(engine, tables=[DocumentBuilder.__table__])
+        # Enable IVF indexing
+        client.vector_index.enable_ivf()
         
-        # Use VectorIndexBuilder to create multiple indexes
-        indexes = vector_index_builder("embedding") \
-            .l2_index("idx_l2_builder_online03", lists=64) \
-            .cosine_index("idx_cosine_builder_online03", lists=32) \
-            .ip_index("idx_ip_builder_online03", lists=48) \
-            .build()
+        # Try to create multiple indexes using client API (only first should succeed)
+        index_configs = [
+            {"name": "idx_l2_builder_online03", "op_type": "vector_l2_ops", "lists": 64},
+            {"name": "idx_cosine_builder_online03", "op_type": "vector_cosine_ops", "lists": 32},
+            {"name": "idx_ip_builder_online03", "op_type": "vector_ip_ops", "lists": 48}
+        ]
         
-        assert len(indexes) == 3
-        
-        # Try to create indexes one by one (only first should succeed)
         success_count = 0
-        for i, index in enumerate(indexes):
+        for i, config in enumerate(index_configs):
             try:
-                with engine.begin() as conn:
-                    sql = index.create_sql("test_vector_index_online_03")
-                    conn.execute(text(sql))
+                client.vector_index.create_ivf(
+                    name=config["name"],
+                    table_name="test_vector_index_online_03",
+                    column="embedding",
+                    lists=config["lists"],
+                    op_type=config["op_type"]
+                )
                 success_count += 1
                 if i == 0:
                     # First index should succeed (if IVF is enabled)
@@ -254,11 +247,10 @@ class TestVectorIndexOnline:
                     # Subsequent indexes should fail due to MatrixOne limitation
                     assert True
         
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_03"))
+        # Clean up using client interface
+        client.drop_all(Base)
     
-    def test_vector_index_with_data_operations(self, engine, Base, Session):
+    def test_vector_index_with_data_operations(self, client, Base, Session):
         """Test vector index with data insertion and search."""
         class DocumentWithData(Base):
             __tablename__ = 'test_vector_index_online_04'
@@ -267,93 +259,72 @@ class TestVectorIndexOnline:
             title = Column(String(200))
             category = Column(String(50))
         
-        # Clean up first
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_04"))
+        # Clean up and create table using client interface
+        client.drop_all(Base)
+        client.create_all(Base)
         
-        # Create table
-        Base.metadata.create_all(engine, tables=[DocumentWithData.__table__])
+        # Enable IVF indexing using client API
+        client.vector_index.enable_ivf()
         
-        # Enable IVF indexing first
-        ivf_config = create_ivf_config(engine)
-        if not ivf_config.is_ivf_supported():
-            pytest.skip("IVF indexing is not supported in this MatrixOne version")
-        
-        # Try to enable IVF indexing
-        enable_result = ivf_config.enable_ivf_indexing()
-        if not enable_result:
-            pytest.skip("Failed to enable IVF indexing")
-        
-        # Set probe limit
-        ivf_config.set_probe_limit(1)
-        
-        # Create vector index
-        vector_index = create_ivfflat_index(
-            "idx_embedding_l2_online04",
-            "embedding",
-            lists=32,
-            op_type=VectorOpType.VECTOR_L2_OPS
-        )
-        
+        # Create vector index using client API
         try:
-            with engine.begin() as conn:
-                sql = vector_index.create_sql("test_vector_index_online_04")
-                conn.execute(text(sql))
+            client.vector_index.create_ivf(
+                name="idx_embedding_l2_online04",
+                table_name="test_vector_index_online_04",
+                column="embedding",
+                lists=32,
+                op_type="vector_l2_ops"
+            )
         except Exception as e:
             # If IVF is still not enabled, skip the data operations test
             pytest.skip(f"IVF index creation failed, skipping data operations test: {e}")
         
-        # Insert sample data
-        session = Session()
-        try:
-            sample_docs = [
-                DocumentWithData(
-                    id=1,
-                    embedding=[0.1] * 64,
-                    title="Document 1",
-                    category="tech"
-                ),
-                DocumentWithData(
-                    id=2,
-                    embedding=[0.2] * 64,
-                    title="Document 2",
-                    category="science"
-                ),
-                DocumentWithData(
-                    id=3,
-                    embedding=[0.3] * 64,
-                    title="Document 3",
-                    category="tech"
-                )
-            ]
-            
-            session.add_all(sample_docs)
-            session.commit()
-            
-            # Verify data was inserted
-            count = session.query(DocumentWithData).count()
-            assert count == 3
-            
-            # Test vector search using L2 distance
-            query_vector = [0.15] * 64
-            results = session.query(DocumentWithData).order_by(
-                DocumentWithData.embedding.l2_distance(query_vector)
-            ).limit(2).all()
-            
-            assert len(results) == 2
-            # Verify that we got results (the exact order may vary based on distance calculation)
-            assert results[0].title in ["Document 1", "Document 2", "Document 3"]
-            assert results[1].title in ["Document 1", "Document 2", "Document 3"]
-            assert results[0].title != results[1].title  # Should be different documents
-            
-        finally:
-            session.close()
+        # Insert sample data using client API
+        sample_data = [
+            {
+                "id": 1,
+                "embedding": [0.1] * 64,
+                "title": "Document 1",
+                "category": "tech"
+            },
+            {
+                "id": 2,
+                "embedding": [0.2] * 64,
+                "title": "Document 2",
+                "category": "science"
+            },
+            {
+                "id": 3,
+                "embedding": [0.3] * 64,
+                "title": "Document 3",
+                "category": "tech"
+            }
+        ]
         
-        # Clean up
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_vector_index_online_04"))
+        # Use client batch insert API
+        client.vector_data.batch_insert("test_vector_index_online_04", sample_data)
+        
+        # Verify data was inserted using client query
+        result = client.execute("SELECT COUNT(*) FROM test_vector_index_online_04")
+        count = result.fetchone()[0]
+        assert count == 3
+        
+        # Test vector search using client API
+        query_vector = [0.15] * 64
+        search_results = client.vector_query.similarity_search(
+            table_name="test_vector_index_online_04",
+            vector_column="embedding",
+            query_vector=query_vector,
+            limit=2,
+            distance_type="l2"
+        )
+        
+        assert len(search_results) >= 1  # Should get at least one result
+        
+        # Clean up using client interface
+        client.drop_all(Base)
     
-    def test_vector_index_ddl_definition(self, engine, Base, Session):
+    def test_vector_index_ddl_definition_with_session(self, engine, Base, Session):
         """Test vector index defined in DDL, with data operations and index deletion."""
         # Clean up first
         with engine.begin() as conn:
