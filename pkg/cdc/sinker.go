@@ -119,10 +119,14 @@ var NewSinker = func(
 		if newTableDef.TableType == catalog.SystemClusterRel {
 			return nil, moerr.NewInternalErrorNoCtx("cluster table is not supported")
 		}
+		if newTableDef.TableType == catalog.SystemExternalRel {
+			return nil, moerr.NewInternalErrorNoCtx("external table is not supported")
+		}
 		createSql, _, err = plan.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
 		if err != nil {
 			return nil, err
 		}
+		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 	}
 	err = sink.Send(ctx, ar, []byte(padding+createSql), false)
 	if err != nil {
