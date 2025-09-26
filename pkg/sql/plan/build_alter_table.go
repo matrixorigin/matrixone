@@ -232,7 +232,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	opt.SkipIndexesCopy = make(map[string]bool)
 	for _, idxCol := range tableDef.Indexes {
-		if slices.Index(affectedIndexes, idxCol.IndexName) == -1 {
+		if slices.Index(affectedIndexes, idxCol.IndexName) == -1 && slices.Index(affectedCols, idxCol.IndexName) == -1 {
 			opt.SkipIndexesCopy[idxCol.IndexName] = true
 		}
 	}

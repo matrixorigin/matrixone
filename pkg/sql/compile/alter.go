@@ -639,11 +639,9 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		/*
-			if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
-				continue
-			}
-		*/
+		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
+			continue
+		}
 
 		affected := false
 		if !idxTbl.Unique && (catalog.IsFullTextIndexAlgo(idxTbl.IndexAlgo) ||
@@ -666,6 +664,8 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
+		os.Stderr.WriteString(fmt.Sprintf("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts))
+
 		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
 			m = make([]IndexTypeInfo, 0, 3)
@@ -687,6 +687,7 @@ func cloneUnaffectedIndexes(
 
 		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
 		newIdxColNameToTblName[idxTbl.IndexName] = m
+		os.Stderr.WriteString(fmt.Sprintf("new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts))
 	}
 
 	cctx := compilerContext{
