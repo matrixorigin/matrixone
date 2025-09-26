@@ -265,6 +265,16 @@ func TestType_DescString(t *testing.T) {
 		Oid:   T_bit,
 		Width: 10,
 	}.DescString(), "BIT(10)")
+
+	require.Equal(t, Type{
+		Oid:   T_array_float32,
+		Width: 10,
+	}.DescString(), "VECF32(10)")
+
+	require.Equal(t, Type{
+		Oid:   T_array_float64,
+		Width: 10,
+	}.DescString(), "VECF64(10)")
 }
 
 func TestTypeCompare(t *testing.T) {

@@ -128,7 +128,7 @@ create index idx01 using ivfflat on vector_index_07(b) lists=5 op_type "vector_l
 select * from vector_index_07 order by  L2_DISTANCE(a, "[16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]") ASC LIMIT 2;
 invalid argument function l2_distance, bad value [INT VARCHAR]
 select * from vector_index_07 order by  L2_DISTANCE(b, "[16, 15, 3, 0, 0, 4, 3, 5, 51]") ASC LIMIT 2;
-invalid input: vector ops between different dimensions (128, 9) is not permitted.
+invalid input: expected vector dimension 128 != actual dimension 9.
 select * from vector_index_07 order by  L2_DISTANCE(b, "abc") ASC LIMIT 2;
 internal error: malformed vector input: abc
 create table vector_index_08(a int auto_increment primary key, b vecf32(128),c int,key c_k(c));

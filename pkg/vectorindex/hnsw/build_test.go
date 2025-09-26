@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func TestBuildMulti(t *testing.T) {
 		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
+	build, err := NewHnswBuild[float32](proc, uid, 1, idxcfg, tblcfg)
 
 	require.Nil(t, err)
 	defer build.Destroy()
@@ -101,7 +102,7 @@ func TestBuildMulti(t *testing.T) {
 
 	fmt.Printf("model search\n")
 	// load index file and search
-	search := NewHnswSearch(idxcfg, tblcfg)
+	search := NewHnswSearch[float32](idxcfg, tblcfg)
 	defer search.Destroy()
 
 	// test Contains with no indexes
@@ -111,9 +112,9 @@ func TestBuildMulti(t *testing.T) {
 
 	fmt.Printf("load model from files\n")
 	// load index
-	search.Indexes = make([]*HnswSearchIndex, len(indexes))
+	search.Indexes = make([]*HnswModel[float32], len(indexes))
 	for i, idx := range indexes {
-		sidx := &HnswSearchIndex{}
+		sidx := &HnswModel[float32]{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
 
@@ -175,7 +176,7 @@ func TestBuildIndex(t *testing.T) {
 	idxcfg.Usearch.Metric = 100
 	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	idx, err := NewHnswBuildIndex("abc-0", idxcfg, 1, MaxIndexCapacity)
+	idx, err := NewHnswModelForBuild[float32]("abc-0", idxcfg, 1, MaxIndexCapacity)
 	require.Nil(t, err)
 
 	empty, err := idx.Empty()
@@ -190,7 +191,15 @@ func TestBuildIndex(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func TestBuildSingleThread(t *testing.T) {
+func TestBuildSingleThreadF32(t *testing.T) {
+	runBuildSingleThread[float32](t)
+}
+
+func TestBuildSingleThreadF64(t *testing.T) {
+	runBuildSingleThread[float64](t)
+}
+
+func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 
@@ -200,7 +209,15 @@ func TestBuildSingleThread(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	//idxcfg.Usearch.Quantization = usearch.F32
+
+	var f T
+	switch any(f).(type) {
+	case float32:
+		idxcfg.Usearch.Quantization = usearch.F32
+	case float64:
+		idxcfg.Usearch.Quantization = usearch.F64
+	}
+
 	idxcfg.Usearch.Connectivity = 48    // default 16
 	idxcfg.Usearch.ExpansionAdd = 128   // default 128
 	idxcfg.Usearch.ExpansionSearch = 30 // default 64
@@ -211,7 +228,7 @@ func TestBuildSingleThread(t *testing.T) {
 		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
+	build, err := NewHnswBuild[T](proc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -219,11 +236,11 @@ func TestBuildSingleThread(t *testing.T) {
 	r := rand.New(rand.NewSource(99))
 
 	// create sample date
-	sample := make([][]float32, nitem*nthread)
+	sample := make([][]T, nitem*nthread)
 	for i := 0; i < nthread*nitem; i++ {
-		sample[i] = make([]float32, ndim)
+		sample[i] = make([]T, ndim)
 		for j := 0; j < ndim; j++ {
-			sample[i][j] = r.Float32()
+			sample[i][j] = T(r.Float32())
 		}
 	}
 
@@ -264,7 +281,7 @@ func TestBuildSingleThread(t *testing.T) {
 
 	fmt.Printf("model search\n")
 	// load index file and search
-	search := NewHnswSearch(idxcfg, tblcfg)
+	search := NewHnswSearch[T](idxcfg, tblcfg)
 	defer search.Destroy()
 
 	fmt.Printf("threads search %d\n", search.ThreadsSearch)
@@ -275,9 +292,9 @@ func TestBuildSingleThread(t *testing.T) {
 
 	fmt.Printf("load model from files\n")
 	// load index
-	search.Indexes = make([]*HnswSearchIndex, len(indexes))
+	search.Indexes = make([]*HnswModel[T], len(indexes))
 	for i, idx := range indexes {
-		sidx := &HnswSearchIndex{}
+		sidx := &HnswModel[T]{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
 
