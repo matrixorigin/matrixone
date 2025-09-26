@@ -20,16 +20,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (group *Group) shouldSpill() bool {
-	return group.SpillThreshold > 0 &&
+	should := group.SpillThreshold > 0 &&
 		group.SpillManager != nil &&
 		group.ctr.currentMemUsage > group.SpillThreshold &&
 		len(group.ctr.result1.AggList) > 0 &&
 		len(group.ctr.result1.ToPopped) > 0
+	if should {
+		logutil.Debug("group operator should spill",
+			zap.String("component", "group-spill"),
+			zap.Int64("current-mem", group.ctr.currentMemUsage),
+			zap.Int64("threshold", group.SpillThreshold))
+	}
+	return should
 }
 
 func (group *Group) updateMemoryUsage(proc *process.Process) {
@@ -58,6 +67,11 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	if len(group.ctr.result1.AggList) == 0 || len(group.ctr.result1.ToPopped) == 0 {
 		return nil
 	}
+
+	logutil.Info("spilling partial results for group operator",
+		zap.String("component", "group-spill"),
+		zap.Int("agg-count", len(group.ctr.result1.AggList)),
+		zap.Int("batch-count", len(group.ctr.result1.ToPopped)))
 
 	marshaledAggStates := make([][]byte, len(group.ctr.result1.AggList))
 	for i, agg := range group.ctr.result1.AggList {
@@ -90,14 +104,14 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 
 	var groupVecs []*vector.Vector
 	var groupVecTypes []types.Type
-	if len(group.ctr.result1.ToPopped) > 0 && group.ctr.result1.ToPopped[0] != nil {
-		numGroupByCols := len(group.ctr.result1.ToPopped[0].Vecs)
+	if len(group.ctr.result1.ToPopped) > 0 && group.ctr.result1.ToPopped != nil {
+		numGroupByCols := len(group.ctr.result1.ToPopped.Vecs)
 		groupVecs = make([]*vector.Vector, numGroupByCols)
 		groupVecTypes = make([]types.Type, numGroupByCols)
 
 		for i := 0; i < numGroupByCols; i++ {
-			if len(group.ctr.result1.ToPopped[0].Vecs) > i && group.ctr.result1.ToPopped[0].Vecs[i] != nil {
-				vecType := *group.ctr.result1.ToPopped[0].Vecs[i].GetType()
+			if len(group.ctr.result1.ToPopped.Vecs) > i && group.ctr.result1.ToPopped.Vecs[i] != nil {
+				vecType := *group.ctr.result1.ToPopped.Vecs[i].GetType()
 				groupVecs[i] = vector.NewOffHeapVecWithType(vecType)
 				groupVecTypes[i] = vecType
 			}
@@ -133,6 +147,9 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		spillData.Free(proc.Mp())
 		return err
 	}
+	logutil.Info("finished spilling partial results for group operator",
+		zap.String("component", "group-spill"),
+		zap.String("spill-id", string(spillID)))
 
 	group.ctr.spilledStates = append(group.ctr.spilledStates, spillID)
 
@@ -164,7 +181,14 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 		return nil
 	}
 
+	logutil.Info("merging spilled results for group operator",
+		zap.String("component", "group-spill"),
+		zap.Int("spill-files", len(group.ctr.spilledStates)))
+
 	for _, spillID := range group.ctr.spilledStates {
+		logutil.Debug("merging spilled file",
+			zap.String("component", "group-spill"),
+			zap.String("spill-id", string(spillID)))
 		spillData, err := group.SpillManager.Retrieve(spillID, proc.Mp())
 		if err != nil {
 			return err
@@ -188,6 +212,8 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 	}
 
 	group.ctr.spilledStates = nil
+	logutil.Info("finished merging spilled results for group operator",
+		zap.String("component", "group-spill"))
 	return nil
 }
 
