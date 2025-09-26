@@ -497,27 +497,42 @@ class BaseMatrixOneQuery:
             if key in self._columns:
                 if isinstance(value, str):
                     self._where_conditions.append(f"{key} = '{value}'")
-                else:
+                elif isinstance(value, (int, float)):
                     self._where_conditions.append(f"{key} = {value}")
+                else:
+                    # For other types, use parameterized query
+                    self._where_conditions.append(f"{key} = ?")
+                    self._where_params.append(value)
         return self
 
-    def filter(self, condition: str, *params) -> "BaseMatrixOneQuery":
+    def filter(self, condition, *params) -> "BaseMatrixOneQuery":
         """Add WHERE condition - SQLAlchemy style"""
-        # Replace ? placeholders with actual values
-        formatted_condition = condition
-        for param in params:
-            if hasattr(param, "_build_sql"):  # This is a subquery object
-                # Convert subquery to SQL
-                subquery_sql, _ = param._build_sql()
-                if "?" in formatted_condition:
-                    formatted_condition = formatted_condition.replace("?", f"({subquery_sql})", 1)
+        # Handle SQLAlchemy BinaryExpression objects
+        if hasattr(condition, "compile"):
+            # This is a SQLAlchemy expression, compile it to SQL
+            compiled = condition.compile(compile_kwargs={"literal_binds": True})
+            formatted_condition = str(compiled)
+            # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+            import re
+
+            formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
+        else:
+            # Handle string conditions with parameters
+            formatted_condition = str(condition)
+            for param in params:
+                if hasattr(param, "_build_sql"):  # This is a subquery object
+                    # Convert subquery to SQL
+                    subquery_sql, _ = param._build_sql()
+                    if "?" in formatted_condition:
+                        formatted_condition = formatted_condition.replace("?", f"({subquery_sql})", 1)
+                    else:
+                        # If no ? placeholder, assume this is an IN clause with subquery
+                        formatted_condition = f"{formatted_condition} ({subquery_sql})"
+                elif isinstance(param, str):
+                    formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
                 else:
-                    # If no ? placeholder, assume this is an IN clause with subquery
-                    formatted_condition = f"{formatted_condition} ({subquery_sql})"
-            elif isinstance(param, str):
-                formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
-            else:
-                formatted_condition = formatted_condition.replace("?", str(param), 1)
+                    formatted_condition = formatted_condition.replace("?", str(param), 1)
+
         self._where_conditions.append(formatted_condition)
         return self
 
@@ -526,6 +541,15 @@ class BaseMatrixOneQuery:
         for col in columns:
             if isinstance(col, str):
                 self._order_by_columns.append(col)
+            elif hasattr(col, "compile"):  # SQLAlchemy function object
+                # Compile the function to SQL string
+                compiled = col.compile(compile_kwargs={"literal_binds": True})
+                sql_str = str(compiled)
+                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                import re
+
+                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+                self._order_by_columns.append(sql_str)
             else:
                 self._order_by_columns.append(str(col))
         return self
@@ -592,6 +616,8 @@ class BaseMatrixOneQuery:
         params = []
         if self._where_conditions:
             where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            # Add WHERE parameters
+            params.extend(self._where_params)
 
         # Build GROUP BY clause
         group_clause = ""
@@ -602,6 +628,8 @@ class BaseMatrixOneQuery:
         having_clause = ""
         if self._having_conditions:
             having_clause = "HAVING " + " AND ".join(self._having_conditions)
+            # Add HAVING parameters
+            params.extend(self._having_params)
 
         # Build ORDER BY clause
         order_by_clause = ""

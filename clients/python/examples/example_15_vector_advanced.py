@@ -156,7 +156,7 @@ class VectorAdvancedDemo:
                 print("  ✓ Inserted 5 documents in transaction")
             
             # Verify documents were inserted
-            count = self.session.query(AdvancedDocument).filter(
+            count = self.client.query(AdvancedDocument).filter(
                 AdvancedDocument.category == 'Transaction'
             ).count()
             print(f"  ✓ Verified {count} documents in database")
@@ -164,7 +164,7 @@ class VectorAdvancedDemo:
             # Test 2: Failed transaction (rollback)
             print("\n2. Testing failed transaction (rollback):")
             
-            initial_count = self.session.query(AdvancedDocument).count()
+            initial_count = self.client.query(AdvancedDocument).count()
             
             try:
                 with self.client.transaction() as tx:
@@ -187,7 +187,7 @@ class VectorAdvancedDemo:
                 print(f"  ✓ Transaction failed as expected: {e}")
             
             # Verify rollback
-            final_count = self.session.query(AdvancedDocument).count()
+            final_count = self.client.query(AdvancedDocument).count()
             if final_count == initial_count:
                 print("  ✓ Transaction was properly rolled back")
             else:
@@ -321,7 +321,7 @@ class VectorAdvancedDemo:
             start_time = time.time()
             
             for i, query_vector in enumerate(query_vectors, 1):
-                results = self.session.query(
+                results = self.client.query(AdvancedDocument).select(
                     AdvancedDocument.id,
                     AdvancedDocument.title,
                     AdvancedDocument.embedding.l2_distance(query_vector).label('distance')
@@ -383,7 +383,7 @@ class VectorAdvancedDemo:
             # Test 2: Data validation after migration
             print("\n2. Testing data validation after migration:")
             
-            migrated_docs = self.session.query(AdvancedDocument).filter(
+            migrated_docs = self.client.query(AdvancedDocument).filter(
                 AdvancedDocument.category == 'Migration'
             ).all()
             
@@ -421,7 +421,7 @@ class VectorAdvancedDemo:
             query_patterns = [
                 {
                     'name': 'Simple Search',
-                    'query': lambda: self.session.query(
+                    'query': lambda: self.client.query(AdvancedDocument).select(
                         AdvancedDocument.id,
                         AdvancedDocument.title,
                         AdvancedDocument.embedding.l2_distance(query_vector).label('distance')
@@ -429,7 +429,7 @@ class VectorAdvancedDemo:
                 },
                 {
                     'name': 'Filtered Search',
-                    'query': lambda: self.session.query(
+                    'query': lambda: self.client.query(AdvancedDocument).select(
                         AdvancedDocument.id,
                         AdvancedDocument.title,
                         AdvancedDocument.embedding.l2_distance(query_vector).label('distance')
@@ -439,7 +439,7 @@ class VectorAdvancedDemo:
                 },
                 {
                     'name': 'Range Search',
-                    'query': lambda: self.session.query(
+                    'query': lambda: self.client.query(AdvancedDocument).select(
                         AdvancedDocument.id,
                         AdvancedDocument.title,
                         AdvancedDocument.embedding.l2_distance(query_vector).label('distance')
@@ -538,8 +538,8 @@ class VectorAdvancedDemo:
             print("\n3. Testing data consistency checks:")
             
             # Check for orphaned or corrupted data
-            total_docs = self.session.query(AdvancedDocument).count()
-            docs_with_embeddings = self.session.query(AdvancedDocument).filter(
+            total_docs = self.client.query(AdvancedDocument).count()
+            docs_with_embeddings = self.client.query(AdvancedDocument).filter(
                 AdvancedDocument.embedding.isnot(None)
             ).count()
             

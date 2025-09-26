@@ -246,5 +246,6 @@ class TestORMOnline:
         assert users[0].age <= users[1].age  # Should be ordered by age
 
 
+
 if __name__ == "__main__":
     pytest.main([__file__])
