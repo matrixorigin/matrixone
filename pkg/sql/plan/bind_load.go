@@ -156,7 +156,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	terminated := tree.DefaultFieldsTerminated
 	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
-	escapedBy := []byte(tree.DefaultFieldsEscapedBy)
+	escapedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
 		if stmt.Param.Tail.Fields.EnclosedBy != nil {
 			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
