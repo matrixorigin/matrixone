@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 type MemorySpillManager struct {
@@ -38,6 +40,7 @@ func NewMemorySpillManager() *MemorySpillManager {
 func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	serialized, err := data.Serialize()
 	if err != nil {
+		logutil.Error("MemorySpillManager failed to serialize data", zap.Error(err))
 		return "", err
 	}
 
@@ -45,7 +48,13 @@ func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data[id] = serialized
-	atomic.AddInt64(&m.totalMem, int64(len(serialized)))
+	newTotalMem := atomic.AddInt64(&m.totalMem, int64(len(serialized)))
+
+	logutil.Debug("MemorySpillManager spilled data",
+		zap.String("spill_id", string(id)),
+		zap.Int("data_size", len(serialized)),
+		zap.Int64("total_memory", newTotalMem))
+
 	return id, nil
 }
 
@@ -55,14 +64,27 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 
 	serialized, exists := m.data[id]
 	if !exists {
+		logutil.Error("MemorySpillManager failed to find spilled data",
+			zap.String("spill_id", string(id)))
 		return nil, fmt.Errorf("spill data not found: %s", id)
 	}
 
+	logutil.Debug("MemorySpillManager retrieving spilled data",
+		zap.String("spill_id", string(id)),
+		zap.Int("data_size", len(serialized)))
+
 	data := &SpillableAggState{}
 	if err := data.Deserialize(serialized, mp); err != nil {
+		logutil.Error("MemorySpillManager failed to deserialize data",
+			zap.String("spill_id", string(id)), zap.Error(err))
 		data.Free(mp)
 		return nil, err
 	}
+
+	logutil.Debug("MemorySpillManager successfully retrieved and deserialized data",
+		zap.String("spill_id", string(id)),
+		zap.Int64("estimated_size", data.EstimateSize()))
+
 	return data, nil
 }
 
@@ -71,8 +93,16 @@ func (m *MemorySpillManager) Delete(id SpillID) error {
 	defer m.mu.Unlock()
 
 	if serialized, exists := m.data[id]; exists {
-		atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
+		newTotalMem := atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
 		delete(m.data, id)
+
+		logutil.Debug("MemorySpillManager deleted spilled data",
+			zap.String("spill_id", string(id)),
+			zap.Int("data_size", len(serialized)),
+			zap.Int64("total_memory", newTotalMem))
+	} else {
+		logutil.Warn("MemorySpillManager attempted to delete non-existent spilled data",
+			zap.String("spill_id", string(id)))
 	}
 	return nil
 }
@@ -81,10 +111,19 @@ func (m *MemorySpillManager) Free() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	count := len(m.data)
+	totalSize := atomic.LoadInt64(&m.totalMem)
+
+	logutil.Debug("MemorySpillManager freeing all spilled data",
+		zap.Int("spilled_count", count),
+		zap.Int64("total_size", totalSize))
+
 	for id := range m.data {
 		m.Delete(id)
 	}
 	m.data = nil
+
+	logutil.Debug("MemorySpillManager completed cleanup")
 }
 
 func (m *MemorySpillManager) TotalMem() int64 {
