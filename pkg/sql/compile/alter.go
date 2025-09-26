@@ -20,6 +20,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -172,7 +173,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	//6. copy on writing unaffected index table
 	if err = cloneUnaffectedIndexes(
-		c, dbName, qry.AffectedCols, newRel, qry.TableDef, nil,
+		c, dbName, qry.Options.SkipIndexesCopy, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
 		return err
 	}
@@ -495,6 +496,7 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 func cloneUnaffectedIndexes(
 	c *Compile,
 	dbName string,
+	skipIndexesCopy map[string]bool,
 	affectedCols []string,
 	newRel engine.Relation,
 	oriTblDef *plan.TableDef,
@@ -518,6 +520,9 @@ func cloneUnaffectedIndexes(
 		newIdxColNameToTblName = make(map[string][]IndexTypeInfo)
 	)
 
+	logutil.Infof("affected cols %v\n", affectedCols)
+	logutil.Infof("skipIndexesCopy %v\n", skipIndexesCopy)
+
 	releaseClone := func() {
 		if clone != nil {
 			clone.Free(c.proc, false, err)
@@ -531,10 +536,17 @@ func cloneUnaffectedIndexes(
 	}()
 
 	for _, idxTbl := range oriTblDef.Indexes {
+
+		if !skipIndexesCopy[idxTbl.IndexName] {
+			//  index does NOT skip in bind_insert so index already processed by bind_insert
+			continue
+		}
+
 		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
 			continue
 		}
 
+		logutil.Infof("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 		affected := false
 		for _, part := range idxTbl.Parts {
 			if slices.Index(affectedCols, part) != -1 {
@@ -600,6 +612,7 @@ func cloneUnaffectedIndexes(
 				continue
 			}
 
+			logutil.Infof("clone %v -> %v\n", oriIdxTblName, newIdxTblName)
 			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
 
 			clonePlan := plan.CloneTable{

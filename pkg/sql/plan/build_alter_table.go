@@ -136,16 +136,23 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	var (
 		pkAffected bool
 
-		affectedCols        = make([]string, 0, len(tableDef.Indexes))
+		affectedCols        = make([]string, 0, len(tableDef.Cols))
+		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
 		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
 		hasFakePK           = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
 
 	affectedAllIdxCols := func() {
 		hasFakePK = false
+
 		affectedCols = affectedCols[:0]
+		for _, colDef := range tableDef.Cols {
+			affectedCols = append(affectedCols, colDef.Name)
+		}
+
+		affectedIndexes = affectedIndexes[:0]
 		for _, idxDef := range tableDef.Indexes {
-			affectedCols = append(affectedCols, idxDef.IndexName)
+			affectedIndexes = append(affectedIndexes, idxDef.IndexName)
 		}
 	}
 
@@ -225,7 +232,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	opt.SkipIndexesCopy = make(map[string]bool)
 	for _, idxCol := range tableDef.Indexes {
-		if slices.Index(affectedCols, idxCol.IndexName) == -1 {
+		if slices.Index(affectedIndexes, idxCol.IndexName) == -1 {
 			opt.SkipIndexesCopy[idxCol.IndexName] = true
 		}
 	}
