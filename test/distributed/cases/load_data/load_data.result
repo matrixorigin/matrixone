@@ -1047,3 +1047,20 @@ select count(*) from load_data_0303;
 count(*)
 100
 drop table load_data_0303;
+drop database if exists test;
+create database test;
+use test;
+create table t1(a bigint primary key, b vecf32(3), c varchar(10), d double);
+insert into t1 values(1, "[-1,-1,-1]", "aaaa", 1.213);
+insert into t1 values(2, "[-1, -1, 0]", "bbbb", 11.213);
+insert into t1 values(3, "[1,1,1]", "cccc", 111.213);
+select count(*) from t1;
+count(*)
+3
+select * from t1 into outfile '$resources/into_outfile/load_data/t1.csv';
+truncate table t1;
+load data infile '$resources/into_outfile/load_data/t1.csv' into table t1 ignore 1 lines;
+select count(*) from t1;
+count(*)
+3
+drop database test;
