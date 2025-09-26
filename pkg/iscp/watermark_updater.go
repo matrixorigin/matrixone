@@ -169,16 +169,22 @@ func unregisterJobsByDBName(
 		tableIDs = append(tableIDs, currentIDs...)
 		return true
 	})
-	tableIDStr := ""
-	for i, tid := range tableIDs {
-		if i != 0 {
-			tableIDStr += ","
+
+	if len(tableIDs) > 0 {
+		tableIDStr := ""
+		for i, tid := range tableIDs {
+			if i != 0 {
+				tableIDStr += ","
+			}
+			tableIDStr += fmt.Sprintf("%d", tid)
 		}
-		tableIDStr += fmt.Sprintf("%d", tid)
+		updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
+		result, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+		if err != nil {
+			return
+		}
+		result.Close()
 	}
-	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
-	result, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
-	result.Close()
 	return
 }
 
@@ -638,7 +644,7 @@ func queryIndexLog(
 		dropped = true
 		ids := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 		for i := 0; i < rows; i++ {
-			if cols[0].IsNull(0) {
+			if cols[0].IsNull(uint64(i)) {
 				dropped = false
 				prevID = ids[i]
 				return false

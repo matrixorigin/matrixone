@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -239,6 +241,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
+
+	// 5.unregister iscp jobs
+	err = iscp.UnregisterJobsByDBName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
+	if err != nil {
+		return err
+	}
+
 	return err
 }
 
@@ -589,6 +598,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
 				}
+
+				// drop index cdc task
+				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
+				if err != nil {
+					return err
+				}
+
 				// Avoid modifying slice directly during iteration
 				oTableDef.Indexes = notDroppedIndex
 				extra.IndexTables = newIndexes
@@ -746,9 +762,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if err != nil {
 							return err
 						}
-
 					case catalog.MoIndexHnswAlgo.ToString():
-						// PASS: keep option unchange for incremental update
+						// PASS
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
@@ -888,6 +903,28 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
+	}
+
+	// post alter table rename -- AlterKind_RenameTable to update iscp job
+	for _, req := range reqs {
+		if req.Kind == api.AlterKind_RenameTable {
+			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
+			if ok {
+				err = iscp.RenameSrcTable(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.DbId,
+					req.TableId,
+					op.RenameTable.OldName,
+					op.RenameTable.NewName)
+				if err != nil {
+					return err
+				}
+
+				os.Stderr.WriteString(fmt.Sprintf("Rename Table did %d tid %d, old %s, new %s\n",
+					req.DbId, req.TableId, op.RenameTable.OldName, op.RenameTable.NewName))
+			}
+		}
 	}
 
 	// remove refChildTbls for drop foreign key clause
@@ -1468,6 +1505,21 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+
+		// TODO: HNSWCDC create PITR and CDC for index async update
+		ct, err := GetConstraintDef(c.proc.Ctx, newRelation)
+		if err != nil {
+			return err
+		}
+		for _, constraint := range ct.Cts {
+			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
 	}
 
 	if c.keepAutoIncrement == 0 {
@@ -2078,6 +2130,21 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
+	async, err := catalog.IsIndexAsync(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+
+	// HNSWCDC CREATE PITR AND CDC TASK HERE
+	if async {
+		logutil.Infof("Ivfflat index Async is true")
+		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 
 }
@@ -2101,6 +2168,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// old tabledef
+	oldTableDef := r.GetTableDef(c.proc.Ctx)
 
 	//1. build and update constraint def
 	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
@@ -2130,14 +2200,20 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 
+		//3. HNSWCDC delete cdc table task for vector, fulltext index
+		err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
+		if err != nil {
+			return err
+		}
 	}
 
-	//3. delete index object from mo_catalog.mo_indexes
+	//4. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
 	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -2649,6 +2725,12 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// HNSWCDC delete cdc task of the vector and fulltext index here
+	err = DropAllIndexCdcTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
+	if err != nil {
+		return err
 	}
 
 	// delete all index objects record of the table in mo_catalog.mo_indexes
