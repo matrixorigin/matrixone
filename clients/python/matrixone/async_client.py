@@ -20,8 +20,16 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .account import Account, User
-from .exceptions import (AccountError, ConnectionError, MoCtlError, PitrError,
-                         PubSubError, QueryError, RestoreError, SnapshotError)
+from .exceptions import (
+    AccountError,
+    ConnectionError,
+    MoCtlError,
+    PitrError,
+    PubSubError,
+    QueryError,
+    RestoreError,
+    SnapshotError,
+)
 from .logger import MatrixOneLogger, create_default_logger
 from .pitr import Pitr
 from .pubsub import Publication, Subscription
@@ -2287,9 +2295,7 @@ class AsyncTransactionWrapper:
             Async SQLAlchemy Session instance bound to this transaction
         """
         if self._sqlalchemy_session is None:
-            from sqlalchemy.ext.asyncio import (AsyncSession,
-                                                async_sessionmaker,
-                                                create_async_engine)
+            from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
             # Create engine using the same connection parameters
             if not self.client._connection_params:

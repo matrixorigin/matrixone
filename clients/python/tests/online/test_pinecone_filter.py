@@ -8,8 +8,7 @@ from typing import List, Dict, Any
 from matrixone import Client, AsyncClient
 from matrixone.sqlalchemy_ext import create_vector_column
 from sqlalchemy import Column, Integer, String, Float, DateTime, create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base 
 from datetime import datetime
 
 Base = declarative_base()

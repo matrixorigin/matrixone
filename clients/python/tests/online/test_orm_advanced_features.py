@@ -11,8 +11,8 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
+from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, BigInteger, Text, TIMESTAMP
-from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 from sqlalchemy import func

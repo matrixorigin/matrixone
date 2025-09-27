@@ -2,6 +2,7 @@
 MatrixOne SQLAlchemy dialect support.
 """
 
+import sqlalchemy
 from sqlalchemy.dialects.mysql import VARCHAR
 from sqlalchemy.dialects.mysql.base import MySQLDialect
 
@@ -33,6 +34,14 @@ class MatrixOneDialect(MySQLDialect):
     def get_table_names(self, connection, schema=None, **kw):
         """Get table names from MatrixOne database."""
         return super().get_table_names(connection, schema, **kw)
+
+    def has_table(self, connection, table_name, schema=None, **kw):
+        """Check if table exists in MatrixOne database."""
+        # MatrixOne doesn't use schemas, so we can ignore schema parameter
+        if schema is None:
+            schema = connection.get_current_schema_name() if hasattr(connection, "get_current_schema_name") else None
+
+        return super().has_table(connection, table_name, schema, **kw)
 
     def get_columns(self, connection, table_name, schema=None, **kw):
         """Get column information including vector types."""
@@ -96,14 +105,32 @@ class MatrixOneCompiler(MySQLDialect.statement_compiler):
         return super().visit_user_defined_type(type_, **kw)
 
 
-class MatrixOneTypeCompiler(MySQLDialect.type_compiler):
-    """MatrixOne type compiler for handling vector types."""
+# SQLAlchemy version compatibility
+SA_VERSION = tuple(map(int, sqlalchemy.__version__.split(".")[:2]))
 
-    def visit_VECTOR(self, type_, **kw):
-        """Handle VECTOR type compilation."""
-        if hasattr(type_, "get_col_spec"):
-            return type_.get_col_spec()
-        return "VECTOR"
+if SA_VERSION >= (2, 0):
+    # SQLAlchemy 2.0+
+    from sqlalchemy.sql.compiler import TypeCompiler
+
+    class MatrixOneTypeCompiler(TypeCompiler):
+        """MatrixOne type compiler for handling vector types."""
+
+        def visit_VECTOR(self, type_, **kw):
+            """Handle VECTOR type compilation."""
+            if hasattr(type_, "get_col_spec"):
+                return type_.get_col_spec()
+            return "VECTOR"
+
+else:
+    # SQLAlchemy 1.4.x
+    class MatrixOneTypeCompiler(MySQLDialect.type_compiler):
+        """MatrixOne type compiler for handling vector types."""
+
+        def visit_VECTOR(self, type_, **kw):
+            """Handle VECTOR type compilation."""
+            if hasattr(type_, "get_col_spec"):
+                return type_.get_col_spec()
+            return "VECTOR"
 
 
 # Register the dialect

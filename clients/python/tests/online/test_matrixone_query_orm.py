@@ -16,8 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 from matrixone import Client, AsyncClient, SnapshotManager, SnapshotLevel
 from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP
-from sqlalchemy.ext.declarative import declarative_base
-from matrixone.orm import desc
+from matrixone.orm import desc, declarative_base
 
 Base = declarative_base()
 from .test_config import online_config

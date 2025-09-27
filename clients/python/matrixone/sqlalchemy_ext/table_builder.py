@@ -4,12 +4,26 @@ Table builder utilities for MatrixOne vector tables.
 
 from typing import List, Optional, Union
 
-from sqlalchemy import (TIMESTAMP, BigInteger, Boolean, Column, Date, DateTime,
-                        ForeignKeyConstraint, Index, Integer, MetaData,
-                        Numeric, PrimaryKeyConstraint, SmallInteger, String,
-                        Table, Text, Time)
-from sqlalchemy.dialects.mysql import (BLOB, JSON, LONGBLOB, MEDIUMBLOB,
-                                       TINYBLOB, TINYINT, VARBINARY)
+from sqlalchemy import (
+    TIMESTAMP,
+    BigInteger,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    PrimaryKeyConstraint,
+    SmallInteger,
+    String,
+    Table,
+    Text,
+    Time,
+)
+from sqlalchemy.dialects.mysql import BLOB, JSON, LONGBLOB, MEDIUMBLOB, TINYBLOB, TINYINT, VARBINARY
 
 from .vector_type import Vectorf32, Vectorf64, VectorType
 

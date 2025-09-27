@@ -15,8 +15,7 @@ from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
 from .restore import RestoreManager, TransactionRestoreManager
-from .snapshot import (CloneManager, Snapshot, SnapshotLevel, SnapshotManager,
-                       SnapshotQueryBuilder)
+from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager, SnapshotQueryBuilder
 from .sqlalchemy_ext import MatrixOneDialect
 from .version import get_version_manager
 
@@ -2733,8 +2732,7 @@ class VectorQueryManager:
         """
         from sqlalchemy import text
 
-        from .sql_builder import (DistanceFunction,
-                                  build_vector_similarity_query)
+        from .sql_builder import DistanceFunction, build_vector_similarity_query
 
         # Convert distance type to enum
         if distance_type == "l2":

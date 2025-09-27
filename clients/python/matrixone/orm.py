@@ -15,9 +15,18 @@ This provides better type safety and integration with SQLAlchemy.
 import logging
 from typing import Any, Dict, List, Optional, TypeVar
 
+# SQLAlchemy compatibility import
+try:
+    from sqlalchemy.orm import declarative_base
+except ImportError:
+    from sqlalchemy.ext.declarative import declarative_base
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# Export declarative_base for direct import
+__all__ = ["declarative_base", "Query", "MatrixOneQuery"]
 
 
 # For SQL functions, we recommend using SQLAlchemy's func module for better integration:

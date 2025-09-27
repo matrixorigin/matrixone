@@ -488,8 +488,7 @@ class PineconeCompatibleIndex:
             select_columns.append(self.vector_column)
 
         # Use unified SQL builder for async queries
-        from .sql_builder import (DistanceFunction,
-                                  build_vector_similarity_query)
+        from .sql_builder import DistanceFunction, build_vector_similarity_query
 
         # Convert metric to distance function enum
         metric = index_info.get("metric", "l2")

@@ -25,30 +25,52 @@ NC := \033[0m # No Color
 help: ## Show help information
 	@echo "$(BLUE)MatrixOne Python SDK - Available Commands:$(NC)"
 	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo "$(YELLOW)📦 Development:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(install|dev-setup|format|lint|type-check|check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)🧪 Testing:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|coverage)-' | grep -v 'DEPRECATED' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)📚 Documentation:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^docs' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)🏗️  Build & Publish:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(build|publish|check-build):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)📖 Examples:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^example' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)🔧 Utilities:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(clean|version|info|check-env|help):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)📋 Version Management:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^version-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)🚀 Release Workflow:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^release-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(RED)⚠️  Deprecated Commands:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep 'DEPRECATED' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(RED)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
 	@echo "$(YELLOW)Python path: $(PYTHON)$(NC)"
 
 # Development environment setup
 .PHONY: install
-install: ## Install development dependencies
-	@echo "$(BLUE)Installing development dependencies...$(NC)"
+install: ## Install development environment (dependencies + tools + docs)
+	@echo "$(BLUE)Installing development environment...$(NC)"
 	$(PIP) install -r requirements.txt
 	$(PIP) install pytest pytest-cov pytest-asyncio build twine
-	@echo "$(GREEN)Dependencies installed!$(NC)"
+	$(PIP) install black flake8 mypy isort sphinx sphinx-rtd-theme sphinx-autobuild sphinxcontrib-spelling sphinx-coverage
+	@echo "$(GREEN)Development environment installed!$(NC)"
 
 .PHONY: install-dev
-install-dev: install ## Install development environment (including testing tools)
-	@echo "$(BLUE)Installing development tools...$(NC)"
-	$(PIP) install black flake8 mypy isort sphinx sphinx-rtd-theme sphinx-autobuild sphinxcontrib-spelling sphinx-coverage
-	@echo "$(GREEN)Development tools installed!$(NC)"
+install-dev: install ## Alias for install
+	@echo "$(GREEN)Development environment ready!$(NC)"
 
 .PHONY: install-docs
-install-docs: ## Install documentation dependencies
-	@echo "$(BLUE)Installing documentation dependencies...$(NC)"
-	$(PIP) install sphinx sphinx-rtd-theme sphinx-autobuild sphinxcontrib-spelling sphinx-coverage
-	@echo "$(GREEN)Documentation dependencies installed!$(NC)"
+install-docs: install ## Alias for install
+	@echo "$(GREEN)Documentation dependencies ready!$(NC)"
 
 # Code quality checks
 .PHONY: lint
@@ -95,7 +117,7 @@ test-online: ## Run online tests (requires database connection)
 	@echo "$(GREEN)Online tests completed!$(NC)"
 
 .PHONY: test-all
-test-all: test ## Alias for test (run all tests)
+test-all: test ## [DEPRECATED] Use 'test' instead
 
 .PHONY: coverage
 coverage: coverage-offline ## Run all coverage tests
@@ -160,15 +182,58 @@ test-release: ## Run pre-release tests
 	$(PYTHON) -m pytest tests/ -v --tb=short --strict-markers
 	@echo "$(GREEN)Pre-release tests completed!$(NC)"
 
-# Legacy aliases for backward compatibility
+# Compatibility testing
+.PHONY: test-sqlalchemy14
+test-sqlalchemy14: ## Test with SQLAlchemy 1.4.x (offline + online)
+	@echo "$(BLUE)Testing with SQLAlchemy 1.4.x...$(NC)"
+	$(PIP) install -r requirements-sqlalchemy14.txt
+	@echo "$(YELLOW)Running offline tests...$(NC)"
+	$(PYTHON) -m pytest tests/offline/ -v --tb=short
+	@echo "$(YELLOW)Running online tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 1.4.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 1.4.x online tests skipped (database not available)$(NC)"
+	@echo "$(GREEN)SQLAlchemy 1.4.x tests completed!$(NC)"
+
+.PHONY: test-sqlalchemy20
+test-sqlalchemy20: ## Test with SQLAlchemy 2.0.x (offline + online)
+	@echo "$(BLUE)Testing with SQLAlchemy 2.0.x...$(NC)"
+	$(PIP) install -r requirements-sqlalchemy20.txt
+	@echo "$(YELLOW)Running offline tests...$(NC)"
+	$(PYTHON) -m pytest tests/offline/ -v --tb=short
+	@echo "$(YELLOW)Running online tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 2.0.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 2.0.x online tests skipped (database not available)$(NC)"
+	@echo "$(GREEN)SQLAlchemy 2.0.x tests completed!$(NC)"
+
+.PHONY: test-tox
+test-tox: ## Run tox tests
+	@echo "$(BLUE)Running tox tests...$(NC)"
+	tox
+	@echo "$(GREEN)Tox tests completed!$(NC)"
+
+.PHONY: test-tox-sqlalchemy14
+test-tox-sqlalchemy14: ## Run tox tests for SQLAlchemy 1.4.x (offline + online)
+	@echo "$(BLUE)Running tox tests for SQLAlchemy 1.4.x...$(NC)"
+	@echo "$(YELLOW)Note: This includes both offline and online tests$(NC)"
+	tox -e py310-sqlalchemy14
+	@echo "$(GREEN)SQLAlchemy 1.4.x tox tests completed!$(NC)"
+
+.PHONY: test-tox-sqlalchemy20
+test-tox-sqlalchemy20: ## Run tox tests for SQLAlchemy 2.0.x (offline + online)
+	@echo "$(BLUE)Running tox tests for SQLAlchemy 2.0.x...$(NC)"
+	@echo "$(YELLOW)Note: This includes both offline and online tests$(NC)"
+	tox -e py310-sqlalchemy20
+	@echo "$(GREEN)SQLAlchemy 2.0.x tox tests completed!$(NC)"
+
+# Legacy aliases for backward compatibility (deprecated)
 .PHONY: test-coverage
-test-coverage: coverage-offline ## Legacy alias for coverage-offline
+test-coverage: coverage-offline ## [DEPRECATED] Use 'coverage-offline' instead
 
 .PHONY: test-coverage-offline
-test-coverage-offline: coverage-offline ## Legacy alias for coverage-offline
+test-coverage-offline: coverage-offline ## [DEPRECATED] Use 'coverage-offline' instead
 
 .PHONY: test-coverage-online
-test-coverage-online: coverage-online ## Legacy alias for coverage-online
+test-coverage-online: coverage-online ## [DEPRECATED] Use 'coverage-online' instead
 
 # Example running
 .PHONY: examples
@@ -286,17 +351,14 @@ example-hnsw: ## Run HNSW vector index example (use env vars to override connect
 
 # Build related
 .PHONY: build
-build: clean ## Build package
+build: clean ## Build package (wheel + sdist)
 	@echo "$(BLUE)Building package...$(NC)"
 	$(PYTHON) -m build --wheel --sdist --outdir $(BUILD_DIR)
 	@echo "$(GREEN)Package built! Output directory: $(BUILD_DIR)/$(NC)"
 
 .PHONY: build-release
-build-release: clean ## Build release package (using user README)
-	@echo "$(BLUE)Building release package...$(NC)"
-	@echo "$(YELLOW)Using user README: README_USER.md$(NC)"
-	$(PYTHON) -m build --wheel --sdist --outdir $(BUILD_DIR)
-	@echo "$(GREEN)Release package built! Output directory: $(BUILD_DIR)/$(NC)"
+build-release: build ## Alias for build
+	@echo "$(GREEN)Release package ready!$(NC)"
 
 .PHONY: build-wheel
 build-wheel: clean ## Build wheel package only
@@ -318,18 +380,34 @@ check-build: build ## Check built package
 
 # Publishing related
 .PHONY: publish-test
-publish-test: build-release check-build ## Publish to test PyPI
+publish-test: build-release check-build ## Publish to test PyPI (auto-increment version)
 	@echo "$(BLUE)Publishing to test PyPI...$(NC)"
+	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
+	@echo "$(YELLOW)Note: TestPyPI allows multiple versions for testing$(NC)"
 	$(PYTHON) -m twine upload --repository testpypi $(BUILD_DIR)/*
 	@echo "$(GREEN)Published to test PyPI!$(NC)"
+	@echo "$(YELLOW)Install with: pip install --index-url https://test.pypi.org/simple/ matrixone-python-sdk$(NC)"
+
+.PHONY: publish-test-auto
+publish-test-auto: ## Publish to test PyPI with auto-incremented version
+	@echo "$(BLUE)Auto-incrementing version and publishing to test PyPI...$(NC)"
+	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
+	@echo "$(YELLOW)Incrementing patch version...$(NC)"
+	$(PYTHON) scripts/update_version.py --increment patch
+	@echo "$(YELLOW)New version: $$(grep '^version' pyproject.toml | sed 's/.*"\([^"]*\)".*/\1/')$(NC)"
+	$(MAKE) publish-test
+	@echo "$(GREEN)Published to test PyPI with auto-incremented version!$(NC)"
 
 .PHONY: publish
-publish: build-release check-build ## Publish to PyPI
+publish: build-release check-build ## Publish to PyPI (official release)
 	@echo "$(BLUE)Publishing to PyPI...$(NC)"
-	@echo "$(RED)Warning: This will publish to official PyPI, please confirm version is correct!$(NC)"
+	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
+	@echo "$(RED)Warning: This will publish to official PyPI!$(NC)"
+	@echo "$(RED)Make sure this version is stable and tested on TestPyPI first!$(NC)"
 	@read -p "Confirm publish to PyPI? (y/N): " confirm && [ "$$confirm" = "y" ]
 	$(PYTHON) -m twine upload $(BUILD_DIR)/*
 	@echo "$(GREEN)Published to PyPI!$(NC)"
+	@echo "$(YELLOW)Install with: pip install matrixone-python-sdk$(NC)"
 
 # Cleanup related
 .PHONY: clean
@@ -484,32 +562,51 @@ version-increment: ## Increment version (usage: make version-increment PART=patc
 	$(PYTHON) scripts/update_version.py --increment $(PART)
 	@echo "$(GREEN)Version incremented!$(NC)"
 
+.PHONY: version-test
+version-test: ## Increment patch version for TestPyPI (usage: make version-test)
+	@echo "$(BLUE)Incrementing patch version for TestPyPI...$(NC)"
+	$(PYTHON) scripts/update_version.py --increment patch
+	@echo "$(GREEN)Version incremented for TestPyPI!$(NC)"
+	@echo "$(YELLOW)New version: $$(grep '^version' pyproject.toml | sed 's/.*"\([^"]*\)".*/\1/')$(NC)"
+
+.PHONY: version-release
+version-release: ## Set version for official PyPI release (usage: make version-release VERSION=1.2.3)
+	@if [ -z "$(VERSION)" ]; then \
+		echo "$(RED)Error: VERSION is required$(NC)"; \
+		echo "Usage: make version-release VERSION=1.2.3"; \
+		echo "$(YELLOW)Note: This should be a stable version tested on TestPyPI$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Setting version $(VERSION) for official PyPI release...$(NC)"
+	$(PYTHON) scripts/update_version.py $(VERSION)
+	@echo "$(GREEN)Version set to $(VERSION) for official release!$(NC)"
+
 .PHONY: version-current
-version-current: ## Show current version
-	@echo "$(BLUE)Current version:$(NC)"
-	$(PYTHON) scripts/update_version.py --current
+version-current: version ## [DEPRECATED] Use 'version' instead
 
 # Release management
 .PHONY: release-check
 release-check: lint test build-release check-build ## Pre-release complete checks
 	@echo "$(GREEN)Pre-release checks completed!$(NC)"
 
+.PHONY: release-test
+release-test: version-test publish-test ## Complete TestPyPI release (increment + publish)
+	@echo "$(GREEN)TestPyPI release completed!$(NC)"
+
+.PHONY: release-official
+release-official: publish ## Complete official PyPI release (requires manual version setting)
+	@echo "$(GREEN)Official PyPI release completed!$(NC)"
+
 .PHONY: release-testpypi
-release-testpypi: ## Publish to test PyPI
-	@echo "$(BLUE)Publishing to test PyPI...$(NC)"
-	$(PYTHON) scripts/release.py --testpypi
+release-testpypi: release-test ## [DEPRECATED] Use 'release-test' instead
 	@echo "$(GREEN)Published to test PyPI!$(NC)"
 
 .PHONY: release-pypi
-release-pypi: ## Publish to PyPI
-	@echo "$(BLUE)Publishing to PyPI...$(NC)"
-	$(PYTHON) scripts/release.py --pypi
+release-pypi: release-official ## [DEPRECATED] Use 'release-official' instead
 	@echo "$(GREEN)Published to PyPI!$(NC)"
 
 .PHONY: release-full
-release-full: ## Full release process (check + build + publish to test PyPI)
-	@echo "$(BLUE)Running full release process...$(NC)"
-	$(PYTHON) scripts/release.py --testpypi
+release-full: release-test ## [DEPRECATED] Use 'release-test' instead
 	@echo "$(GREEN)Full release process completed!$(NC)"
 
 # Information display
@@ -558,7 +655,7 @@ version: ## Show current version
 
 # Quick commands
 .PHONY: check
-check: lint test ## Check alias (lint + test)
+check: lint test ## Quick check (lint + test)
 
 # Default target
 .DEFAULT_GOAL := help

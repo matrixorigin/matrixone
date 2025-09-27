@@ -12,7 +12,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
 from sqlalchemy import Column, Integer, String, DECIMAL
-from sqlalchemy.ext.declarative import declarative_base
+
+# SQLAlchemy compatibility import
+try:
+    from sqlalchemy.orm import declarative_base
+except ImportError:
+    from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 from matrixone.exceptions import QueryError
