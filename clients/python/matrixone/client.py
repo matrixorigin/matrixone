@@ -925,6 +925,11 @@ class Client:
         return self._fulltext_index
 
     @property
+    def fulltext_search(self) -> "FulltextIndexManager":
+        """Get fulltext search manager for advanced fulltext search operations"""
+        return self._fulltext_index
+
+    @property
     def vector_query(self) -> Optional["VectorQueryManager"]:
         """Get vector query manager for vector query operations"""
         return self._vector_query
@@ -3347,6 +3352,17 @@ class FulltextIndexManager:
             return self
         except Exception as e:
             raise Exception(f"Failed to disable fulltext indexing: {e}")
+
+    def search(self):
+        """
+        Create a new fulltext search builder.
+
+        Returns:
+            FulltextSearchBuilder: New search builder instance
+        """
+        from .sqlalchemy_ext.fulltext_search import FulltextSearchBuilder
+
+        return FulltextSearchBuilder(self.client)
 
 
 class TransactionFulltextIndexManager(FulltextIndexManager):

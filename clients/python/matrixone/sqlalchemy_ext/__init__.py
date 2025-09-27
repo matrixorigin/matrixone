@@ -14,6 +14,14 @@ from .fulltext_index import (
     create_fulltext_index,
     fulltext_search_builder,
 )
+from .fulltext_search import FulltextIndexManager as FulltextSearchManager
+from .fulltext_search import (
+    FulltextSearchAlgorithm,
+)
+from .fulltext_search import FulltextSearchBuilder as AdvancedFulltextSearchBuilder
+from .fulltext_search import (
+    FulltextSearchMode,
+)
 from .hnsw_config import HNSWConfig, create_hnsw_config, disable_hnsw_indexing, enable_hnsw_indexing, get_hnsw_status
 from .ivf_config import (
     IVFConfig,
@@ -115,4 +123,8 @@ __all__ = [
     "FulltextSearchBuilder",
     "create_fulltext_index",
     "fulltext_search_builder",
+    "FulltextSearchMode",
+    "FulltextSearchAlgorithm",
+    "AdvancedFulltextSearchBuilder",
+    "FulltextSearchManager",
 ]
