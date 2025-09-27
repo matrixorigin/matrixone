@@ -25,7 +25,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mysql import BLOB, JSON, LONGBLOB, MEDIUMBLOB, TINYBLOB, TINYINT, VARBINARY
 
-from .vector_type import Vectorf32, Vectorf64, VectorType
+from .vector_type import Vectorf32, Vectorf64, VectorPrecision, VectorType
 
 
 class VectorTableBuilder:
@@ -77,11 +77,11 @@ class VectorTableBuilder:
         """Add a JSON column."""
         return self.add_column(name, JSON, **kwargs)
 
-    def add_vector_column(self, name: str, dimension: int, precision: str = "f32", **kwargs):
+    def add_vector_column(self, name: str, dimension: int, precision: str = VectorPrecision.F32, **kwargs):
         """Add a vector column."""
-        if precision == "f32":
+        if precision == VectorPrecision.F32:
             vector_type = Vectorf32(dimension=dimension)
-        elif precision == "f64":
+        elif precision == VectorPrecision.F64:
             vector_type = Vectorf64(dimension=dimension)
         else:
             vector_type = VectorType(dimension=dimension, precision=precision)
@@ -90,11 +90,11 @@ class VectorTableBuilder:
 
     def add_vecf32_column(self, name: str, dimension: int, **kwargs):
         """Add a vecf32 column."""
-        return self.add_vector_column(name, dimension, "f32", **kwargs)
+        return self.add_vector_column(name, dimension, VectorPrecision.F32, **kwargs)
 
     def add_vecf64_column(self, name: str, dimension: int, **kwargs):
         """Add a vecf64 column."""
-        return self.add_vector_column(name, dimension, "f64", **kwargs)
+        return self.add_vector_column(name, dimension, VectorPrecision.F64, **kwargs)
 
     def add_smallint_column(self, name: str, primary_key: bool = False, **kwargs):
         """Add a smallint column."""

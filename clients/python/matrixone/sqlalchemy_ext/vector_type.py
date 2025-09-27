@@ -9,6 +9,13 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.types import UserDefinedType
 
 
+class VectorPrecision:
+    """Enum-like class for vector precision types."""
+
+    F32 = "f32"
+    F64 = "f64"
+
+
 class VectorType(UserDefinedType):
     """
     SQLAlchemy type for MatrixOne vector columns.
@@ -19,13 +26,13 @@ class VectorType(UserDefinedType):
 
     __visit_name__ = "VECTOR"
 
-    def __init__(self, dimension: Optional[int] = None, precision: str = "f32"):
+    def __init__(self, dimension: Optional[int] = None, precision: str = VectorPrecision.F32):
         """
         Initialize VectorType.
 
         Args:
             dimension: Vector dimension (optional)
-            precision: Vector precision - "f32" for vecf32, "f64" for vecf64
+            precision: Vector precision - VectorPrecision.F32 for vecf32, VectorPrecision.F64 for vecf64
         """
         self.dimension = dimension
         self.precision = precision
@@ -103,7 +110,7 @@ class Vectorf32(TypeDecorator):
 
     def __init__(self, dimension: Optional[int] = None):
         self.dimension = dimension
-        self.precision = "f32"
+        self.precision = VectorPrecision.F32
         super().__init__()
 
     def get_col_spec(self, **kw):
@@ -117,7 +124,7 @@ class Vectorf32(TypeDecorator):
         """Return the appropriate type for the given dialect."""
         # For SQL generation, return our custom type
         if hasattr(dialect, "name") and dialect.name == "matrixone":
-            return VectorType(dimension=self.dimension, precision="f32")
+            return VectorType(dimension=self.dimension, precision=VectorPrecision.F32)
         return self.impl
 
     def process_bind_param(self, value, dialect):
@@ -181,7 +188,7 @@ class Vectorf64(TypeDecorator):
 
     def __init__(self, dimension: Optional[int] = None):
         self.dimension = dimension
-        self.precision = "f64"
+        self.precision = VectorPrecision.F64
         super().__init__()
 
     def get_col_spec(self, **kw):
@@ -195,7 +202,7 @@ class Vectorf64(TypeDecorator):
         """Return the appropriate type for the given dialect."""
         # For SQL generation, return our custom type
         if hasattr(dialect, "name") and dialect.name == "matrixone":
-            return VectorType(dimension=self.dimension, precision="f64")
+            return VectorType(dimension=self.dimension, precision=VectorPrecision.F64)
         return self.impl
 
     def process_bind_param(self, value, dialect):
@@ -262,7 +269,7 @@ class VectorTypeDecorator(TypeDecorator):
     impl = Text  # Use TEXT type for large vector storage
     cache_ok = True
 
-    def __init__(self, dimension: Optional[int] = None, precision: str = "f32", **kwargs):
+    def __init__(self, dimension: Optional[int] = None, precision: str = VectorPrecision.F32, **kwargs):
         """
         Initialize VectorTypeDecorator.
 
@@ -688,13 +695,13 @@ def negative_inner_product(column: Column, other: Union[List[float], str, Column
 
 
 # Convenience functions for vector operations
-def create_vector_column(dimension: int, precision: str = "f32", **kwargs) -> VectorColumn:
+def create_vector_column(dimension: int, precision: str = VectorPrecision.F32, **kwargs) -> VectorColumn:
     """
     Create a vector column with distance function support.
 
     Args:
         dimension: Vector dimension
-        precision: Vector precision ("f32" or "f64")
+        precision: Vector precision (VectorPrecision.F32 or VectorPrecision.F64)
         **kwargs: Additional column arguments
 
     Returns:
@@ -703,15 +710,15 @@ def create_vector_column(dimension: int, precision: str = "f32", **kwargs) -> Ve
     Example:
         class Document(Base):
             id = Column(Integer, primary_key=True)
-            embedding = create_vector_column(128, precision="f32")
+            embedding = create_vector_column(128, precision=VectorPrecision.F32)
             description = Column(String(500))
     """
-    if precision == "f32":
+    if precision == VectorPrecision.F32:
         return VectorColumn(Vectorf32(dimension=dimension), **kwargs)
-    elif precision == "f64":
+    elif precision == VectorPrecision.F64:
         return VectorColumn(Vectorf64(dimension=dimension), **kwargs)
     else:
-        raise ValueError("Precision must be 'f32' or 'f64'")
+        raise ValueError(f"Precision must be '{VectorPrecision.F32}' or '{VectorPrecision.F64}'")
 
 
 def vector_similarity_search(
