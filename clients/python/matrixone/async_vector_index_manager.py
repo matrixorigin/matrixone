@@ -2,7 +2,14 @@
 Async vector index manager for MatrixOne async client.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from sqlalchemy import text
+
+if TYPE_CHECKING:
+    from .sqlalchemy_ext import VectorOpType
 
 
 class AsyncVectorManager:
@@ -17,7 +24,7 @@ class AsyncVectorManager:
         name: str,
         column: str,
         lists: int = 100,
-        op_type: str = "vector_l2_ops",
+        op_type: VectorOpType = None,
     ) -> "AsyncVectorManager":
         """
         Create an IVFFLAT vector index using chain operations.
@@ -27,15 +34,15 @@ class AsyncVectorManager:
             name: Name of the index
             column: Vector column to index
             lists: Number of lists for IVFFLAT (default: 100)
-            op_type: Vector operation type (default: vector_l2_ops)
+            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
             AsyncVectorManager: Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
-        # Convert string parameters to enum values
-        if op_type == "vector_l2_ops":
+        # Use default if not provided
+        if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         try:
@@ -59,7 +66,7 @@ class AsyncVectorManager:
         m: int = 16,
         ef_construction: int = 200,
         ef_search: int = 50,
-        op_type: str = "vector_l2_ops",
+        op_type: VectorOpType = None,
     ) -> "AsyncVectorManager":
         """
         Create an HNSW vector index using chain operations.
@@ -71,15 +78,15 @@ class AsyncVectorManager:
             m: Number of bi-directional links for HNSW (default: 16)
             ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
             ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (default: vector_l2_ops)
+            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
             AsyncVectorManager: Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
-        # Convert string parameters to enum values
-        if op_type == "vector_l2_ops":
+        # Use default if not provided
+        if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         try:

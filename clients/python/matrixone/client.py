@@ -2,8 +2,13 @@
 MatrixOne Client - Basic implementation
 """
 
+from __future__ import annotations
+
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    from .sqlalchemy_ext import VectorOpType
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -2466,7 +2471,7 @@ class VectorManager:
         name: str,
         column: str,
         lists: int = 100,
-        op_type: str = "vector_l2_ops",
+        op_type: VectorOpType = None,
     ) -> "VectorManager":
         """
         Create an IVFFLAT vector index using chain operations.
@@ -2476,15 +2481,15 @@ class VectorManager:
             name: Name of the index
             column: Vector column to index
             lists: Number of lists for IVFFLAT (default: 100)
-            op_type: Vector operation type (default: vector_l2_ops)
+            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
-        # Convert string parameters to enum values
-        if op_type == "vector_l2_ops":
+        # Use default if not provided
+        if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         success = IVFVectorIndex.create_index(
@@ -2509,7 +2514,7 @@ class VectorManager:
         m: int = 16,
         ef_construction: int = 200,
         ef_search: int = 50,
-        op_type: str = "vector_l2_ops",
+        op_type: VectorOpType = None,
     ) -> "VectorManager":
         """
         Create an HNSW vector index using chain operations.
@@ -2521,15 +2526,15 @@ class VectorManager:
             m: Number of bi-directional links for HNSW (default: 16)
             ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
             ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (default: vector_l2_ops)
+            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
-        # Convert string parameters to enum values
-        if op_type == "vector_l2_ops":
+        # Use default if not provided
+        if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         success = HnswVectorIndex.create_index(
@@ -2820,14 +2825,14 @@ class TransactionVectorIndexManager(VectorManager):
         name: str,
         column: str,
         lists: int = 100,
-        op_type: str = "vector_l2_ops",
+        op_type: VectorOpType = None,
     ) -> "TransactionVectorIndexManager":
         """Create an IVFFLAT vector index within transaction"""
         from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
 
-        # Convert string parameters to enum values
+        # Use default if not provided
         index_type = VectorIndexType.IVFFLAT
-        if op_type == "vector_l2_ops":
+        if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         # Create index using transaction wrapper's execute method
@@ -2852,14 +2857,14 @@ class TransactionVectorIndexManager(VectorManager):
         m: int = 16,
         ef_construction: int = 200,
         ef_search: int = 50,
-        op_type: str = "vector_l2_ops",
+        op_type: VectorOpType = None,
     ) -> "TransactionVectorIndexManager":
         """Create an HNSW vector index within transaction"""
         from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
 
-        # Convert string parameters to enum values
+        # Use default if not provided
         index_type = VectorIndexType.HNSW
-        if op_type == "vector_l2_ops":
+        if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         # Create index using transaction wrapper's execute method
