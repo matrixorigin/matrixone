@@ -166,7 +166,7 @@ class VectorIndexDemo:
         
         try:
             # Enable IVF indexing
-            self.client.vector_index.enable_ivf()
+            self.client.vector_ops.enable_ivf()
             print("✓ Enabled IVF indexing")
             
             # Create IVF index (only one per vector column is allowed)
@@ -179,7 +179,7 @@ class VectorIndexDemo:
             }
             
             start_time = time.time()
-            self.client.vector_index.create_ivf(**ivf_config)
+            self.client.vector_ops.create_ivf(**ivf_config)
             creation_time = time.time() - start_time
             print(f"✓ Created IVF index '{ivf_config['name']}' in {creation_time:.2f}s")
             
@@ -195,7 +195,7 @@ class VectorIndexDemo:
                     'lists': 50,
                     'op_type': 'vector_cosine_ops'
                 }
-                self.client.vector_index.create_ivf(**duplicate_config)
+                self.client.vector_ops.create_ivf(**duplicate_config)
                 print("✗ Unexpected: Second index creation succeeded")
             except Exception as e:
                 print(f"✓ Expected: Second index creation failed - {e}")
@@ -220,7 +220,7 @@ class VectorIndexDemo:
         
         try:
             # Enable HNSW indexing
-            self.client.vector_index.enable_hnsw()
+            self.client.vector_ops.enable_hnsw()
             print("✓ Enabled HNSW indexing")
             
             # Create HNSW index (only one per vector column is allowed)
@@ -235,7 +235,7 @@ class VectorIndexDemo:
             }
             
             start_time = time.time()
-            self.client.vector_index.create_hnsw(**hnsw_config)
+            self.client.vector_ops.create_hnsw(**hnsw_config)
             creation_time = time.time() - start_time
             print(f"✓ Created HNSW index '{hnsw_config['name']}' in {creation_time:.2f}s")
             
@@ -253,7 +253,7 @@ class VectorIndexDemo:
                     'ef_search': 100,
                     'op_type': 'vector_cosine_ops'
                 }
-                self.client.vector_index.create_hnsw(**duplicate_config)
+                self.client.vector_ops.create_hnsw(**duplicate_config)
                 print("✗ Unexpected: Second index creation succeeded")
             except Exception as e:
                 print(f"✓ Expected: Second index creation failed - {e}")
@@ -337,7 +337,7 @@ class VectorIndexDemo:
             print(f"✓ Found {len(indexes)} indexes on hnsw_test_docs")
             
             # Test index dropping (optional - comment out if you want to keep indexes)
-            # self.client.vector_index.drop('ivf_l2_index', 'ivf_test_docs')
+            # self.client.vector_ops.drop('ivf_l2_index', 'ivf_test_docs')
             # print("✓ Dropped IVF index")
             
             self.results['tests_passed'] += 1
@@ -364,7 +364,7 @@ class VectorIndexDemo:
             
             # Try to create a second index on the same column
             try:
-                self.client.vector_index.create_ivf(
+                self.client.vector_ops.create_ivf(
                     name='duplicate_ivf_index',
                     table_name='ivf_test_docs',
                     column='embedding',

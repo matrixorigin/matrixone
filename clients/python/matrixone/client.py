@@ -387,9 +387,8 @@ class Client:
         self._pitr = PitrManager(self)
         self._pubsub = PubSubManager(self)
         self._account = AccountManager(self)
-        self._vector_index = VectorIndexManager(self)
+        self._vector = VectorManager(self)
         self._vector_query = VectorQueryManager(self)
-        self._vector_data = VectorDataManager(self)
         self._fulltext_index = FulltextIndexManager(self)
 
     def disconnect(self) -> None:
@@ -532,6 +531,135 @@ class Client:
             self.logger.log_query(sql, execution_time, success=False)
             self.logger.log_error(e, context="Query execution")
             raise QueryError(f"Query execution failed: {e}")
+
+    def insert(self, table_name: str, data: dict) -> "ResultSet":
+        """
+        Insert data into a table.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            ResultSet object
+        """
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        return self.execute(sql)
+
+    async def insert_async(self, table_name: str, data: dict) -> "ResultSet":
+        """
+        Async version of insert method.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            ResultSet object
+        """
+
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        return await self.execute_async(sql)
+
+    def batch_insert(self, table_name: str, data_list: list) -> "ResultSet":
+        """
+        Batch insert data into a table.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            ResultSet object
+        """
+        if not data_list:
+            return ResultSet([], [], affected_rows=0)
+
+        # Get columns from first record
+        columns = list(data_list[0].keys())
+        columns_str = ", ".join(columns)
+
+        # Build VALUES clause
+        values_list = []
+        for data in data_list:
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
+                else:
+                    formatted_values.append(str(value))
+            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
+            values_list.append(values_str)
+
+        values_clause = ", ".join(values_list)
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+        return self.execute(sql)
+
+    async def batch_insert_async(self, table_name: str, data_list: list) -> "ResultSet":
+        """
+        Async version of batch_insert method.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            ResultSet object
+        """
+        if not data_list:
+            return ResultSet([], [], affected_rows=0)
+
+        # Get columns from first record
+        columns = list(data_list[0].keys())
+        columns_str = ", ".join(columns)
+
+        # Build VALUES clause
+        values_list = []
+        for data in data_list:
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
+                else:
+                    formatted_values.append(str(value))
+            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
+            values_list.append(values_str)
+
+        values_clause = ", ".join(values_list)
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+        return await self.execute_async(sql)
 
     def _substitute_parameters(self, sql: str, params=None) -> str:
         """
@@ -751,9 +879,9 @@ class Client:
         return self._account
 
     @property
-    def vector_index(self) -> Optional["VectorIndexManager"]:
-        """Get vector index manager for vector index operations"""
-        return self._vector_index
+    def vector_ops(self) -> Optional["VectorManager"]:
+        """Get unified vector operations manager for vector operations (index and data)"""
+        return self._vector
 
     def get_pinecone_index(self, table_name: str, vector_column: str):
         """
@@ -795,11 +923,6 @@ class Client:
     def vector_query(self) -> Optional["VectorQueryManager"]:
         """Get vector query manager for vector query operations"""
         return self._vector_query
-
-    @property
-    def vector_data(self) -> Optional["VectorDataManager"]:
-        """Get vector data manager for vector data operations"""
-        return self._vector_data
 
     @property
     def connected(self) -> bool:
@@ -1887,9 +2010,8 @@ class TransactionWrapper:
         self.pitr = TransactionPitrManager(client, self)
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
-        self.vector_index = TransactionVectorIndexManager(client, self)
+        self.vector_ops = TransactionVectorIndexManager(client, self)
         self.vector_query = TransactionVectorQueryManager(client, self)
-        self.vector_data = TransactionVectorDataManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
@@ -2332,8 +2454,8 @@ class TransactionCloneManager(CloneManager):
         )
 
 
-class VectorIndexManager:
-    """Vector index manager for client chain operations"""
+class VectorManager:
+    """Unified vector manager for client chain operations - handles both index and data operations"""
 
     def __init__(self, client):
         self.client = client
@@ -2345,7 +2467,7 @@ class VectorIndexManager:
         column: str,
         lists: int = 100,
         op_type: str = "vector_l2_ops",
-    ) -> "VectorIndexManager":
+    ) -> "VectorManager":
         """
         Create an IVFFLAT vector index using chain operations.
 
@@ -2357,7 +2479,7 @@ class VectorIndexManager:
             op_type: Vector operation type (default: vector_l2_ops)
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
@@ -2388,7 +2510,7 @@ class VectorIndexManager:
         ef_construction: int = 200,
         ef_search: int = 50,
         op_type: str = "vector_l2_ops",
-    ) -> "VectorIndexManager":
+    ) -> "VectorManager":
         """
         Create an HNSW vector index using chain operations.
 
@@ -2402,7 +2524,7 @@ class VectorIndexManager:
             op_type: Vector operation type (default: vector_l2_ops)
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
@@ -2434,7 +2556,7 @@ class VectorIndexManager:
         connection,
         lists: int = 100,
         op_type: str = "vector_l2_ops",
-    ) -> "VectorIndexManager":
+    ) -> "VectorManager":
         """
         Create an IVFFLAT vector index within an existing SQLAlchemy transaction.
 
@@ -2447,7 +2569,7 @@ class VectorIndexManager:
             op_type: Vector operation type (default: vector_l2_ops)
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
 
         Raises:
             ValueError: If connection is not provided
@@ -2482,7 +2604,7 @@ class VectorIndexManager:
         ef_construction: int = 200,
         ef_search: int = 50,
         op_type: str = "vector_l2_ops",
-    ) -> "VectorIndexManager":
+    ) -> "VectorManager":
         """
         Create an HNSW vector index within an existing SQLAlchemy transaction.
 
@@ -2497,7 +2619,7 @@ class VectorIndexManager:
             op_type: Vector operation type (default: vector_l2_ops)
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
 
         Raises:
             ValueError: If connection is not provided
@@ -2525,7 +2647,7 @@ class VectorIndexManager:
 
         return self
 
-    def drop(self, table_name: str, name: str) -> "VectorIndexManager":
+    def drop(self, table_name: str, name: str) -> "VectorManager":
         """
         Drop a vector index using chain operations.
 
@@ -2534,7 +2656,7 @@ class VectorIndexManager:
             name: Name of the index to drop
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import VectorIndex
 
@@ -2545,7 +2667,7 @@ class VectorIndexManager:
 
         return self
 
-    def enable_ivf(self, probe_limit: int = 1) -> "VectorIndexManager":
+    def enable_ivf(self, probe_limit: int = 1) -> "VectorManager":
         """
         Enable IVF indexing with chain operations.
 
@@ -2553,7 +2675,7 @@ class VectorIndexManager:
             probe_limit: Probe limit for IVF search
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_ivf_config
 
@@ -2569,12 +2691,12 @@ class VectorIndexManager:
 
         return self
 
-    def disable_ivf(self) -> "VectorIndexManager":
+    def disable_ivf(self) -> "VectorManager":
         """
         Disable IVF indexing with chain operations.
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_ivf_config
 
@@ -2584,12 +2706,12 @@ class VectorIndexManager:
 
         return self
 
-    def enable_hnsw(self) -> "VectorIndexManager":
+    def enable_hnsw(self) -> "VectorManager":
         """
         Enable HNSW indexing with chain operations.
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_hnsw_config
 
@@ -2599,12 +2721,12 @@ class VectorIndexManager:
 
         return self
 
-    def disable_hnsw(self) -> "VectorIndexManager":
+    def disable_hnsw(self) -> "VectorManager":
         """
         Disable HNSW indexing with chain operations.
 
         Returns:
-            VectorIndexManager: Self for chaining
+            VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_hnsw_config
 
@@ -2614,8 +2736,78 @@ class VectorIndexManager:
 
         return self
 
+    # Data operations
+    def insert(self, table_name: str, data: dict) -> "VectorManager":
+        """
+        Insert vector data using chain operations.
 
-class TransactionVectorIndexManager(VectorIndexManager):
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            VectorManager: Self for chaining
+        """
+        self.client.insert(table_name, data)
+        return self
+
+    def insert_in_transaction(self, table_name: str, data: dict, connection) -> "VectorManager":
+        """
+        Insert vector data within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+            connection: SQLAlchemy connection object (required for transaction support)
+
+        Returns:
+            VectorManager: Self for chaining
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        # Use client's insert method but execute within transaction
+        from sqlalchemy import text
+
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        connection.execute(text(sql))
+
+        return self
+
+    def batch_insert(self, table_name: str, data_list: list) -> "VectorManager":
+        """
+        Batch insert vector data using chain operations.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            VectorManager: Self for chaining
+        """
+        self.client.batch_insert(table_name, data_list)
+        return self
+
+
+class TransactionVectorIndexManager(VectorManager):
     """Vector index manager that executes operations within a transaction"""
 
     def __init__(self, client, transaction_wrapper):
@@ -2923,180 +3115,6 @@ class VectorQueryManager:
         )
 
 
-class VectorDataManager:
-    """Vector data manager for client chain operations"""
-
-    def __init__(self, client):
-        self.client = client
-
-    def insert(self, table_name: str, data: dict) -> "VectorDataManager":
-        """
-        Insert vector data using chain operations.
-
-        Args:
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
-
-        Returns:
-            VectorDataManager: Self for chaining
-        """
-        from sqlalchemy import text
-
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                formatted_values.append(str(value))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-
-        with self.client.get_sqlalchemy_engine().begin() as conn:
-            conn.execute(text(sql))
-
-        return self
-
-    def insert_in_transaction(self, table_name: str, data: dict, connection) -> "VectorDataManager":
-        """
-        Insert vector data within an existing SQLAlchemy transaction.
-
-        Args:
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
-            connection: SQLAlchemy connection object (required for transaction support)
-
-        Returns:
-            VectorDataManager: Self for chaining
-
-        Raises:
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        from sqlalchemy import text
-
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                formatted_values.append(str(value))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        connection.execute(text(sql))
-
-        return self
-
-    def batch_insert(self, table_name: str, data_list: list) -> "VectorDataManager":
-        """
-        Batch insert vector data using chain operations.
-
-        Args:
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
-
-        Returns:
-            VectorDataManager: Self for chaining
-        """
-        from sqlalchemy import text
-
-        if not data_list:
-            return self
-
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
-                else:
-                    formatted_values.append(str(value))
-            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
-
-        with self.client.get_sqlalchemy_engine().begin() as conn:
-            conn.execute(text(sql))
-
-        return self
-
-    def update(self, table_name: str, data: dict, where_clause: str) -> "VectorDataManager":
-        """
-        Update vector data using chain operations.
-
-        Args:
-            table_name: Name of the table
-            data: Data to update
-            where_clause: WHERE condition
-
-        Returns:
-            VectorDataManager: Self for chaining
-        """
-        from sqlalchemy import text
-
-        # Build SET clause
-        set_clauses = []
-        for column, value in data.items():
-            if isinstance(value, list):
-                formatted_value = "[" + ",".join(map(str, value)) + "]"
-            else:
-                formatted_value = str(value)
-            set_clauses.append(f"{column} = '{formatted_value}'")
-
-        set_clause = ", ".join(set_clauses)
-        sql = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
-
-        with self.client.get_sqlalchemy_engine().begin() as conn:
-            conn.execute(text(sql))
-
-        return self
-
-    def delete(self, table_name: str, where_clause: str) -> "VectorDataManager":
-        """
-        Delete vector data using chain operations.
-
-        Args:
-            table_name: Name of the table
-            where_clause: WHERE condition
-
-        Returns:
-            VectorDataManager: Self for chaining
-        """
-        from sqlalchemy import text
-
-        sql = f"DELETE FROM {table_name} WHERE {where_clause}"
-
-        with self.client.get_sqlalchemy_engine().begin() as conn:
-            conn.execute(text(sql))
-
-        return self
-
-
 class TransactionVectorQueryManager:
     """Vector query manager for transaction chain operations"""
 
@@ -3146,88 +3164,6 @@ class TransactionVectorQueryManager:
         """
 
         return self.transaction_wrapper.execute(sql)
-
-
-class TransactionVectorDataManager:
-    """Vector data manager for transaction chain operations"""
-
-    def __init__(self, client, transaction_wrapper):
-        self.client = client
-        self.transaction_wrapper = transaction_wrapper
-
-    def insert(self, table_name: str, data: dict) -> "TransactionVectorDataManager":
-        """Insert vector data within transaction"""
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                formatted_values.append(str(value))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        self.transaction_wrapper.execute(sql)
-
-        return self
-
-    def batch_insert(self, table_name: str, data_list: list) -> "TransactionVectorDataManager":
-        """Batch insert vector data within transaction"""
-        if not data_list:
-            return self
-
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
-                else:
-                    formatted_values.append(str(value))
-            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
-        self.transaction_wrapper.execute(sql)
-
-        return self
-
-    def update(self, table_name: str, data: dict, where_clause: str) -> "TransactionVectorDataManager":
-        """Update vector data within transaction"""
-        # Build SET clause
-        set_clauses = []
-        for column, value in data.items():
-            if isinstance(value, list):
-                formatted_value = "[" + ",".join(map(str, value)) + "]"
-            else:
-                formatted_value = str(value)
-            set_clauses.append(f"{column} = '{formatted_value}'")
-
-        set_clause = ", ".join(set_clauses)
-        sql = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
-        self.transaction_wrapper.execute(sql)
-
-        return self
-
-    def delete(self, table_name: str, where_clause: str) -> "TransactionVectorDataManager":
-        """Delete vector data within transaction"""
-        sql = f"DELETE FROM {table_name} WHERE {where_clause}"
-        self.transaction_wrapper.execute(sql)
-
-        return self
 
 
 class FulltextIndexManager:

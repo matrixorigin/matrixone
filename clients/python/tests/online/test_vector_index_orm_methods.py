@@ -125,7 +125,7 @@ class TestVectorIndexORMMethods:
             assert "idx_embedding_orm_01" not in index_names
 
         # Test 3: Instance method create
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="test_vector_orm_methods",
             name="idx_embedding_orm_02",
             column="embedding",
@@ -143,7 +143,7 @@ class TestVectorIndexORMMethods:
             assert "idx_embedding_orm_02" in index_names
 
         # Test 4: Instance method drop
-        client.vector_index.drop(
+        client.vector_ops.drop(
             table_name="test_vector_orm_methods",
             name="idx_embedding_orm_02"
         )
@@ -191,7 +191,7 @@ class TestVectorIndexORMMethods:
         # Test 1: Create and drop index in transaction (MatrixOne only supports one index per vector column)
         # Create index using transaction wrapper
         with client.transaction() as tx:
-            tx.vector_index.create_ivf(
+            tx.vector_ops.create_ivf(
                 table_name="test_vector_orm_transaction_2",
                 name="idx_embedding_transaction_01",
                 column="embedding",
@@ -211,7 +211,7 @@ class TestVectorIndexORMMethods:
         # Test 2: Drop index in transaction
         # Drop index using transaction wrapper
         with client.transaction() as tx:
-            tx.vector_index.drop(
+            tx.vector_ops.drop(
                 table_name="test_vector_orm_transaction_2",
                 name="idx_embedding_transaction_01"
             )
@@ -231,7 +231,7 @@ class TestVectorIndexORMMethods:
         try:
             with engine.begin() as conn:
                 # Try to create an index with invalid table name (should fail)
-                success = client.vector_index.create_index_in_transaction(
+                success = client.vector_ops.create_index_in_transaction(
                     connection=conn,
                     table_name="non_existent_table",
                     name="idx_embedding_transaction_error",
@@ -275,7 +275,7 @@ class TestVectorIndexORMMethods:
                 ivf_config.set_probe_limit(1)
 
         # Test ORM create with IVF
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="test_vector_orm_ivf_2",
             name="idx_embedding_orm_ivf",
             column="embedding",
@@ -315,7 +315,7 @@ class TestVectorIndexORMMethods:
         # Test 1: Client chain operations
         try:
             # Enable IVF and create index in chain
-            client.vector_index.enable_ivf(probe_limit=1).create_ivf(
+            client.vector_ops.enable_ivf(probe_limit=1).create_ivf(
                 table_name="test_vector_chain_2",
                 name="idx_embedding_chain_01",
                 column="embedding",
@@ -331,7 +331,7 @@ class TestVectorIndexORMMethods:
                 assert "idx_embedding_chain_01" in index_names
 
             # Drop index using chain
-            client.vector_index.drop(
+            client.vector_ops.drop(
                 table_name="test_vector_chain_2",
                 name="idx_embedding_chain_01"
             )
@@ -354,7 +354,7 @@ class TestVectorIndexORMMethods:
         try:
             with client.transaction() as tx:
                 # Create index in transaction using chain
-                tx.vector_index.create_ivf(
+                tx.vector_ops.create_ivf(
                     table_name="test_vector_chain_2",
                     name="idx_embedding_chain_tx_01",
                     column="embedding",
@@ -371,7 +371,7 @@ class TestVectorIndexORMMethods:
 
             # Drop index in transaction using chain
             with client.transaction() as tx:
-                tx.vector_index.drop(
+                tx.vector_ops.drop(
                     table_name="test_vector_chain_2",
                     name="idx_embedding_chain_tx_01"
                 )
@@ -398,7 +398,7 @@ class TestVectorIndexORMMethods:
         """Test ORM methods error handling."""
         # Test dropping non-existent index
         try:
-            client.vector_index.drop(
+            client.vector_ops.drop(
                 table_name="non_existent_table",
                 name="non_existent_index"
             )
@@ -409,7 +409,7 @@ class TestVectorIndexORMMethods:
 
         # Test creating index on non-existent table
         try:
-            client.vector_index.create_ivf(
+            client.vector_ops.create_ivf(
                 table_name="non_existent_table",
                 name="idx_test",
                 column="embedding",

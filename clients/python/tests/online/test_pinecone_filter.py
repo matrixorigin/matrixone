@@ -68,10 +68,10 @@ class TestPineconeFilter:
         client.create_all(Base)
         
         # Enable vector index
-        client.vector_index.enable_ivf()
+        client.vector_ops.enable_ivf()
         
         # Create vector index
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="test_movies",
             name="movies_ivf_index",
             column="embedding",
@@ -127,7 +127,7 @@ class TestPineconeFilter:
             }
         ]
         
-        client.vector_data.batch_insert("test_movies", test_movies)
+        client.vector_ops.batch_insert("test_movies", test_movies)
         
         yield test_movies
         

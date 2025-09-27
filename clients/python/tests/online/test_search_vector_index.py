@@ -28,7 +28,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create vector index
-        test_client.vector_index.create_ivf(
+        test_client.vector_ops.create_ivf(
             table_name="test_vectors",
             name="idx_embedding",
             column="embedding",
@@ -70,7 +70,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create vector index
-        await test_async_client.vector_index.create_ivf(
+        await test_async_client.vector_ops.create_ivf(
             table_name="test_vectors_async",
             name="idx_embedding_async",
             column="embedding",
@@ -113,7 +113,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create vector index
-        test_client.vector_index.create_hnsw(
+        test_client.vector_ops.create_hnsw(
             table_name="test_parse",
             name="idx_hnsw",
             column="embedding",
@@ -158,7 +158,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create vector index
-        test_client.vector_index.create_ivf(
+        test_client.vector_ops.create_ivf(
             table_name="test_query",
             name="idx_query",
             column="embedding",
@@ -217,7 +217,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create vector index
-        await test_async_client.vector_index.create_ivf(
+        await test_async_client.vector_ops.create_ivf(
             table_name="test_query_async",
             name="idx_query_async",
             column="embedding",
@@ -275,7 +275,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create IVF vector index (required for upsert/delete operations)
-        test_client.vector_index.create_ivf(
+        test_client.vector_ops.create_ivf(
             table_name="test_upsert",
             name="idx_upsert",
             column="embedding",
@@ -331,7 +331,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create vector index
-        test_client.vector_index.create_ivf(
+        test_client.vector_ops.create_ivf(
             table_name="test_stats",
             name="idx_stats",
             column="embedding",
@@ -387,7 +387,7 @@ class TestPineconeCompatibleIndex:
         """)
 
         # Create HNSW vector index
-        test_client.vector_index.create_hnsw(
+        test_client.vector_ops.create_hnsw(
             table_name="test_hnsw_upsert",
             name="idx_hnsw_upsert",
             column="embedding",
@@ -438,7 +438,7 @@ class TestPineconeCompatibleIndexCaseInsensitive:
         """)
 
         # Create vector index
-        test_client.vector_index.create_ivf(
+        test_client.vector_ops.create_ivf(
             table_name="test_case_vectors",
             name="idx_case_embedding",
             column="Embedding",
@@ -509,7 +509,7 @@ class TestPineconeCompatibleIndexCaseInsensitive:
         """)
 
         # Create vector index
-        await test_async_client.vector_index.create_ivf(
+        await test_async_client.vector_ops.create_ivf(
             table_name="test_case_vectors_async",
             name="idx_case_embedding_async",
             column="Embedding",

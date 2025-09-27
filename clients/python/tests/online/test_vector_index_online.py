@@ -130,11 +130,11 @@ class TestVectorIndexOnline:
         client.create_all(Base)
         
         # Enable IVF indexing
-        client.vector_index.enable_ivf()
+        client.vector_ops.enable_ivf()
         
         # Create vector index using client interface
         try:
-            client.vector_index.create_ivf(
+            client.vector_ops.create_ivf(
                 name="idx_embedding_l2_online01",
                 table_name="test_vector_index_online_01",
                 column="embedding",
@@ -164,11 +164,11 @@ class TestVectorIndexOnline:
         client.create_all(Base)
         
         # Enable IVF indexing
-        client.vector_index.enable_ivf()
+        client.vector_ops.enable_ivf()
         
         # Create L2 distance index using client API
         try:
-            client.vector_index.create_ivf(
+            client.vector_ops.create_ivf(
                 name="idx_embedding_l2_online02",
                 table_name="test_vector_index_online_02",
                 column="embedding",
@@ -183,7 +183,7 @@ class TestVectorIndexOnline:
         
         # Try to create second index (should fail due to MatrixOne limitation)
         try:
-            client.vector_index.create_ivf(
+            client.vector_ops.create_ivf(
                 name="idx_embedding_cosine_online02",
                 table_name="test_vector_index_online_02",
                 column="embedding",
@@ -213,7 +213,7 @@ class TestVectorIndexOnline:
         client.create_all(Base)
         
         # Enable IVF indexing
-        client.vector_index.enable_ivf()
+        client.vector_ops.enable_ivf()
         
         # Try to create multiple indexes using client API (only first should succeed)
         index_configs = [
@@ -225,7 +225,7 @@ class TestVectorIndexOnline:
         success_count = 0
         for i, config in enumerate(index_configs):
             try:
-                client.vector_index.create_ivf(
+                client.vector_ops.create_ivf(
                     name=config["name"],
                     table_name="test_vector_index_online_03",
                     column="embedding",
@@ -264,11 +264,11 @@ class TestVectorIndexOnline:
         client.create_all(Base)
         
         # Enable IVF indexing using client API
-        client.vector_index.enable_ivf()
+        client.vector_ops.enable_ivf()
         
         # Create vector index using client API
         try:
-            client.vector_index.create_ivf(
+            client.vector_ops.create_ivf(
                 name="idx_embedding_l2_online04",
                 table_name="test_vector_index_online_04",
                 column="embedding",
@@ -302,7 +302,7 @@ class TestVectorIndexOnline:
         ]
         
         # Use client batch insert API
-        client.vector_data.batch_insert("test_vector_index_online_04", sample_data)
+        client.vector_ops.batch_insert("test_vector_index_online_04", sample_data)
         
         # Verify data was inserted using client query
         result = client.execute("SELECT COUNT(*) FROM test_vector_index_online_04")

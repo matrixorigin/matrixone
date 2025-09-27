@@ -95,11 +95,11 @@ class TestORMAdvancedFeatures:
             test_client.create_all(Base)
             
             # Enable experimental IVF index feature using interface
-            test_client.vector_index.enable_ivf()
+            test_client.vector_ops.enable_ivf()
             
             # Create vector index for AIDataset table using interface
             try:
-                test_client.vector_index.create_ivf(
+                test_client.vector_ops.create_ivf(
                     table_name="test_ai_dataset",
                     name="q_v_idx",
                     column="question_embedding",

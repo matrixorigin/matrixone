@@ -150,7 +150,7 @@ class TestVectorExamplesIntegration:
                 """))
         
         # Create IVFFLAT index
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="vector_index_basic_test",
             name="idx_embedding_basic",
             column="embedding",
@@ -202,7 +202,7 @@ class TestVectorExamplesIntegration:
                 """))
         
         # Create HNSW index
-        client.vector_index.create_hnsw(
+        client.vector_ops.create_hnsw(
             table_name="vector_hnsw_basic_test",
             name="idx_hnsw_basic",
             column="embedding",
@@ -348,7 +348,7 @@ class TestVectorExamplesIntegration:
                 """))
         
         # Create IVFFLAT index
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="vector_index_comprehensive_test",
             name="idx_embedding_comprehensive",
             column="embedding",
@@ -379,7 +379,7 @@ class TestVectorExamplesIntegration:
         assert len(rows) == 2
         
         # Test index drop and recreate
-        client.vector_index.drop("vector_index_comprehensive_test", "idx_embedding_comprehensive")
+        client.vector_ops.drop("vector_index_comprehensive_test", "idx_embedding_comprehensive")
         
         # Verify index is dropped
         with engine.begin() as conn:
@@ -389,7 +389,7 @@ class TestVectorExamplesIntegration:
             assert "idx_embedding_comprehensive" not in indexes
         
         # Recreate index
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="vector_index_comprehensive_test",
             name="idx_embedding_comprehensive",
             column="embedding",
@@ -493,7 +493,7 @@ class TestVectorExamplesIntegration:
                 """))
         
         # Test basic chain operation: enable_ivf().create_ivf()
-        client.vector_index.enable_ivf(probe_limit=1).create_ivf(
+        client.vector_ops.enable_ivf(probe_limit=1).create_ivf(
             table_name="vector_chain_test",
             name="idx_embedding_chain",
             column="embedding",
@@ -509,7 +509,7 @@ class TestVectorExamplesIntegration:
             assert "idx_embedding_chain" in indexes
         
         # Test chain operation: drop()
-        client.vector_index.drop("vector_chain_test", "idx_embedding_chain")
+        client.vector_ops.drop("vector_chain_test", "idx_embedding_chain")
         
         # Verify index was dropped
         with engine.begin() as conn:
@@ -558,7 +558,7 @@ class TestVectorExamplesIntegration:
                 """))
         
         # Create vector index
-        client.vector_index.create_ivf(
+        client.vector_ops.create_ivf(
             table_name="vector_comprehensive_test",
             name="idx_embedding_comprehensive",
             column="embedding",
@@ -640,7 +640,7 @@ class TestVectorExamplesIntegration:
                 """))
         
         # Create HNSW index
-        client.vector_index.create_hnsw(
+        client.vector_ops.create_hnsw(
             table_name="vector_hnsw_comprehensive_test",
             name="idx_hnsw_comprehensive",
             column="embedding",
@@ -711,7 +711,7 @@ class TestVectorExamplesIntegration:
                 """))
             
             # Create HNSW index with specific configuration
-            client.vector_index.create_hnsw(
+            client.vector_ops.create_hnsw(
                 table_name=config["table"],
                 name="idx_hnsw",
                 column="embedding",

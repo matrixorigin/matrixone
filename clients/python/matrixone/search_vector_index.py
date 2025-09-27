@@ -798,3 +798,83 @@ class PineconeCompatibleIndex:
             await self.client.execute(sql)
 
         return {"upserted_count": len(vectors)}
+
+    def batch_insert(self, vectors: List[Dict[str, Any]], namespace: str = ""):
+        """
+        Batch insert vectors (Pinecone-compatible API).
+
+        Args:
+            vectors: List of vectors to insert. Each vector should be a dict with:
+                - Primary key field: Value for the primary key column (required)
+                - Vector field: Vector values (required)
+                - Other fields: Any additional metadata fields
+            namespace: Namespace (not used in MatrixOne)
+
+        Returns:
+            Dict with insert statistics
+        """
+        if not vectors:
+            return {"inserted_count": 0}
+
+        # Get the actual primary key column name
+        id_column = self._get_id_column()
+
+        # Prepare data for batch insert
+        batch_data = []
+        for vector in vectors:
+            # Check if primary key field exists
+            if id_column not in vector:
+                raise ValueError(f"Each vector must have '{id_column}' field (primary key)")
+
+            # Check if vector field exists
+            if self.vector_column not in vector:
+                raise ValueError(f"Each vector must have '{self.vector_column}' field (vector values)")
+
+            # Prepare row data
+            row_data = dict(vector)
+            batch_data.append(row_data)
+
+        # Use client's batch_insert method
+        self.client.batch_insert(table_name=self.table_name, data_list=batch_data)
+
+        return {"inserted_count": len(vectors)}
+
+    async def batch_insert_async(self, vectors: List[Dict[str, Any]], namespace: str = ""):
+        """
+        Async version of batch_insert method.
+
+        Args:
+            vectors: List of vectors to insert. Each vector should be a dict with:
+                - Primary key field: Value for the primary key column (required)
+                - Vector field: Vector values (required)
+                - Other fields: Any additional metadata fields
+            namespace: Namespace (not used in MatrixOne)
+
+        Returns:
+            Dict with insert statistics
+        """
+        if not vectors:
+            return {"inserted_count": 0}
+
+        # Get the actual primary key column name
+        id_column = await self._get_id_column_async()
+
+        # Prepare data for batch insert
+        batch_data = []
+        for vector in vectors:
+            # Check if primary key field exists
+            if id_column not in vector:
+                raise ValueError(f"Each vector must have '{id_column}' field (primary key)")
+
+            # Check if vector field exists
+            if self.vector_column not in vector:
+                raise ValueError(f"Each vector must have '{self.vector_column}' field (vector values)")
+
+            # Prepare row data
+            row_data = dict(vector)
+            batch_data.append(row_data)
+
+        # Use client's batch_insert_async method
+        await self.client.batch_insert_async(table_name=self.table_name, data_list=batch_data)
+
+        return {"inserted_count": len(vectors)}

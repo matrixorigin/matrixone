@@ -642,11 +642,11 @@ class TestVectorOperationsOnline:
         client.create_all(Base)
         
         # Enable IVF indexing
-        client.vector_index.enable_ivf()
+        client.vector_ops.enable_ivf()
         
         # Create IVF index
         try:
-            client.vector_index.create_ivf(
+            client.vector_ops.create_ivf(
                 name="idx_upsert_embedding",
                 table_name="test_vector_upsert_with_index",
                 column="embedding",
@@ -1164,6 +1164,176 @@ class TestVectorOperationsOnline:
             
         finally:
             session.close()
+
+        # Clean up
+        client.drop_all(Base)
+
+    def test_pinecone_batch_insert(self, client, Base, Session):
+        """Test batch_insert functionality"""
+        # Define table for batch insert
+        class VectorBatchInsertTable(Base):
+            __tablename__ = 'test_vector_batch_insert'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(8, "f32")
+            description = Column(String(200))
+            category = Column(String(50))
+
+        # Create table
+        client.create_all(Base)
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_batch_insert', 'embedding')
+        
+        # Test batch insert
+        vectors_to_insert = [
+            {
+                'id': 1,
+                'embedding': [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                'description': 'Batch Vector 1',
+                'category': 'tech'
+            },
+            {
+                'id': 2,
+                'embedding': [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+                'description': 'Batch Vector 2',
+                'category': 'science'
+            },
+            {
+                'id': 3,
+                'embedding': [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+                'description': 'Batch Vector 3',
+                'category': 'tech'
+            },
+            {
+                'id': 4,
+                'embedding': [4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+                'description': 'Batch Vector 4',
+                'category': 'science'
+            },
+            {
+                'id': 5,
+                'embedding': [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                'description': 'Batch Vector 5',
+                'category': 'tech'
+            }
+        ]
+        
+        # Batch insert vectors
+        result = index.batch_insert(vectors_to_insert)
+        assert result['inserted_count'] == 5
+        
+        # Verify data insertion
+        session = Session()
+        try:
+            total_count = session.query(VectorBatchInsertTable).count()
+            assert total_count == 5
+            
+            # Verify specific data
+            doc1 = session.query(VectorBatchInsertTable).filter(VectorBatchInsertTable.id == 1).first()
+            assert doc1 is not None
+            assert doc1.description == 'Batch Vector 1'
+            assert doc1.category == 'tech'
+            assert doc1.embedding == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+            
+            doc3 = session.query(VectorBatchInsertTable).filter(VectorBatchInsertTable.id == 3).first()
+            assert doc3 is not None
+            assert doc3.description == 'Batch Vector 3'
+            assert doc3.category == 'tech'
+            assert doc3.embedding == [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+            
+        finally:
+            session.close()
+        
+        # Test query functionality
+        query_results = index.query([2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5], top_k=3)
+        assert len(query_results.matches) >= 1
+        
+        # Verify query results contain correct primary key field
+        for match in query_results.matches:
+            assert 'id' in match.metadata
+            assert match.metadata['id'] in [1, 2, 3, 4, 5]
+        
+        # Test empty batch insert
+        result = index.batch_insert([])
+        assert result['inserted_count'] == 0
+        
+        # Verify no additional data was inserted
+        session = Session()
+        try:
+            total_count = session.query(VectorBatchInsertTable).count()
+            assert total_count == 5
+        finally:
+            session.close()
+
+        # Clean up
+        client.drop_all(Base)
+
+    def test_pinecone_batch_insert_custom_pk(self, client, Base, Session):
+        """Test batch_insert with custom primary key"""
+        # Define table with custom primary key
+        class VectorCustomBatchTable(Base):
+            __tablename__ = 'test_vector_custom_batch'
+            doc_id = Column(String(50), primary_key=True)  # String primary key
+            embedding = create_vector_column(6, "f32")
+            title = Column(String(100))
+            tags = Column(String(200))
+
+        # Create table
+        client.create_all(Base)
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_custom_batch', 'embedding')
+        
+        # Test batch insert with custom primary key
+        vectors_to_insert = [
+            {
+                'doc_id': 'batch_001',
+                'embedding': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                'title': 'Batch Article 1',
+                'tags': 'machine-learning,ai'
+            },
+            {
+                'doc_id': 'batch_002',
+                'embedding': [0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+                'title': 'Batch Article 2',
+                'tags': 'deep-learning,neural-networks'
+            },
+            {
+                'doc_id': 'batch_003',
+                'embedding': [0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+                'title': 'Batch Article 3',
+                'tags': 'nlp,transformer'
+            }
+        ]
+        
+        # Batch insert vectors
+        result = index.batch_insert(vectors_to_insert)
+        assert result['inserted_count'] == 3
+        
+        # Verify data insertion
+        session = Session()
+        try:
+            total_count = session.query(VectorCustomBatchTable).count()
+            assert total_count == 3
+            
+            # Verify specific data
+            doc1 = session.query(VectorCustomBatchTable).filter(VectorCustomBatchTable.doc_id == 'batch_001').first()
+            assert doc1 is not None
+            assert doc1.title == 'Batch Article 1'
+            assert doc1.tags == 'machine-learning,ai'
+            assert doc1.embedding == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+            
+        finally:
+            session.close()
+        
+        # Test query functionality
+        query_results = index.query([0.15, 0.25, 0.35, 0.45, 0.55, 0.65], top_k=2)
+        assert len(query_results.matches) >= 1
+        
+        # Verify query results contain correct primary key field
+        for match in query_results.matches:
+            assert 'doc_id' in match.metadata
+            assert match.metadata['doc_id'] in ['batch_001', 'batch_002', 'batch_003']
 
         # Clean up
         client.drop_all(Base)

@@ -56,9 +56,8 @@ class TestAsyncClientMissingInterfaces:
     async def test_vector_managers_properties(self, client):
         """Test vector manager properties"""
         # These should be available after connection
-        assert client.vector_index is not None
+        assert client.vector_ops is not None
         assert client.vector_query is not None
-        assert client.vector_data is not None
 
     @pytest.mark.asyncio
     async def test_snapshot_query_builder(self, client):
@@ -231,10 +230,10 @@ class TestAsyncClientMissingInterfaces:
             # Test vector index creation (if supported)
             try:
                 # Enable IVF
-                await client.vector_index.enable_ivf()
+                await client.vector_ops.enable_ivf()
                 
                 # Create IVFFLAT index
-                await client.vector_index.create_ivf(
+                await client.vector_ops.create_ivf(
                     table_name=table_name,
                     name="idx_embedding_ivf",
                     column="embedding",
@@ -249,9 +248,9 @@ class TestAsyncClientMissingInterfaces:
             except Exception as e:
                 # Vector indexing might not be supported in this environment
                 # Instead of skipping, just verify the interface exists
-                assert hasattr(client.vector_index, 'create_ivf')
-                assert hasattr(client.vector_index, 'create_hnsw')
-                assert hasattr(client.vector_index, 'drop')
+                assert hasattr(client.vector_ops, 'create_ivf')
+                assert hasattr(client.vector_ops, 'create_hnsw')
+                assert hasattr(client.vector_ops, 'drop')
                 print(f"Vector indexing not supported in this environment: {e}")
                 
         finally:
@@ -331,10 +330,10 @@ class TestAsyncClientMissingInterfaces:
                     "embedding": [0.1] * 128  # 128 dimensions
                 }
                 
-                result = client.vector_data.insert(table_name, test_data)
+                result = await client.vector_ops.insert(table_name, test_data)
                 
                 # Should return self for chaining
-                assert result is client.vector_data
+                assert result is client.vector_ops
                 
                 # Verify data was inserted
                 result = await client.execute(f"SELECT COUNT(*) FROM {table_name}")
@@ -343,10 +342,8 @@ class TestAsyncClientMissingInterfaces:
             except Exception as e:
                 # Vector operations might not be supported in this environment
                 # Instead of skipping, just verify the interface exists
-                assert hasattr(client.vector_data, 'insert')
-                assert hasattr(client.vector_data, 'batch_insert')
-                assert hasattr(client.vector_data, 'update')
-                assert hasattr(client.vector_data, 'delete')
+                assert hasattr(client.vector_ops, 'insert')
+                assert hasattr(client.vector_ops, 'batch_insert')
                 print(f"Vector data operations not supported in this environment: {e}")
                 
         finally:
@@ -370,7 +367,7 @@ class TestAsyncClientMissingInterfaces:
         
         # Test that all expected properties exist
         expected_properties = [
-            'vector_index', 'vector_query', 'vector_data'
+            'vector_ops', 'vector_query'
         ]
         
         for prop_name in expected_properties:

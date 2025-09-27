@@ -1560,18 +1560,16 @@ class AsyncClient:
     def _initialize_vector_managers(self) -> None:
         """Initialize vector managers after successful connection"""
         try:
-            from .async_vector_index_manager import AsyncVectorIndexManager
-            from .client import VectorDataManager, VectorQueryManager
+            from .async_vector_index_manager import AsyncVectorManager
+            from .client import VectorQueryManager
 
-            self._vector_index = AsyncVectorIndexManager(self)
+            self._vector = AsyncVectorManager(self)
             self._vector_query = VectorQueryManager(self)
-            self._vector_data = VectorDataManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)
         except ImportError:
             # Vector managers not available
-            self._vector_index = None
+            self._vector = None
             self._vector_query = None
-            self._vector_data = None
             self._fulltext_index = None
 
     async def disconnect(self):
@@ -1930,6 +1928,70 @@ class AsyncClient:
         except Exception as e:
             raise QueryError(f"Snapshot query execution failed: {e}")
 
+    async def insert(self, table_name: str, data: dict) -> "AsyncResultSet":
+        """
+        Insert data into a table asynchronously.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            AsyncResultSet object
+        """
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        return await self.execute(sql)
+
+    async def batch_insert(self, table_name: str, data_list: list) -> "AsyncResultSet":
+        """
+        Batch insert data into a table asynchronously.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            AsyncResultSet object
+        """
+        if not data_list:
+            return AsyncResultSet([], [], affected_rows=0)
+
+        # Get columns from first record
+        columns = list(data_list[0].keys())
+        columns_str = ", ".join(columns)
+
+        # Build VALUES clause
+        values_list = []
+        for data in data_list:
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
+                else:
+                    formatted_values.append(str(value))
+            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
+            values_list.append(values_str)
+
+        values_clause = ", ".join(values_list)
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+        return await self.execute(sql)
+
     @asynccontextmanager
     async def transaction(self):
         """
@@ -2001,9 +2063,9 @@ class AsyncClient:
         return self._engine is not None
 
     @property
-    def vector_index(self):
-        """Get vector index manager for vector index operations"""
-        return self._vector_index
+    def vector_ops(self):
+        """Get unified vector operations manager for vector operations (index and data)"""
+        return self._vector
 
     def get_pinecone_index(self, table_name: str, vector_column: str):
         """
@@ -2045,11 +2107,6 @@ class AsyncClient:
     def vector_query(self):
         """Get vector query manager for vector query operations"""
         return self._vector_query
-
-    @property
-    def vector_data(self):
-        """Get vector data manager for vector data operations"""
-        return self._vector_data
 
     async def version(self) -> str:
         """

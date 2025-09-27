@@ -103,8 +103,8 @@ class VectorSearchDemo:
         
         # Create vector index for better performance
         try:
-            self.client.vector_index.enable_ivf()
-            self.client.vector_index.create_ivf(
+            self.client.vector_ops.enable_ivf()
+            self.client.vector_ops.create_ivf(
                 name='search_ivf_index',
                 table_name='vector_search_docs',
                 column='embedding',
