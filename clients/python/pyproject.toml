@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matrixone-python-sdk"
-version = "1.0.5"
+version = "0.1.0"
 description = "A comprehensive Python SDK for MatrixOne database operations with vector search, fulltext search, and advanced features"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -231,7 +231,7 @@ directory = "htmlcov"
 [tool.tox]
 legacy_tox_ini = """
 [tox]
-envlist = 
+envlist =
     py38-sqlalchemy14,
     py38-sqlalchemy20,
     py39-sqlalchemy14,

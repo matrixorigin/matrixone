@@ -37,9 +37,31 @@ class MatrixOneDialect(MySQLDialect):
 
     def has_table(self, connection, table_name, schema=None, **kw):
         """Check if table exists in MatrixOne database."""
-        # MatrixOne doesn't use schemas, so we can ignore schema parameter
+        # MatrixOne doesn't use schemas, but MySQL dialect requires schema to be not None
+        # Use current database name as schema to satisfy MySQL dialect requirements
         if schema is None:
-            schema = connection.get_current_schema_name() if hasattr(connection, "get_current_schema_name") else None
+            # Get current database name from connection URL or connection info
+            try:
+                # Try to get database name from connection URL
+                if hasattr(connection, 'connection') and hasattr(connection.connection, 'get_dsn_parameters'):
+                    dsn_params = connection.connection.get_dsn_parameters()
+                    schema = dsn_params.get('dbname') or dsn_params.get('database')
+
+                # Fallback: try to get from connection string
+                if not schema and hasattr(connection, 'connection') and hasattr(connection.connection, 'dsn'):
+                    dsn = connection.connection.dsn
+                    if 'dbname=' in dsn:
+                        schema = dsn.split('dbname=')[1].split()[0]
+                    elif 'database=' in dsn:
+                        schema = dsn.split('database=')[1].split()[0]
+
+                # Final fallback: use default database name
+                if not schema:
+                    schema = "test"
+
+            except Exception:
+                # Ultimate fallback
+                schema = "test"
 
         return super().has_table(connection, table_name, schema, **kw)
 
@@ -121,6 +143,91 @@ if SA_VERSION >= (2, 0):
                 return type_.get_col_spec()
             return "VECTOR"
 
+        # Delegate all other types to MySQL type compiler
+        def visit_integer(self, type_, **kw):
+            """Handle INTEGER type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_integer(type_, **kw)
+
+        def visit_string(self, type_, **kw):
+            """Handle STRING type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_string(type_, **kw)
+
+        def visit_text(self, type_, **kw):
+            """Handle TEXT type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_text(type_, **kw)
+
+        def visit_boolean(self, type_, **kw):
+            """Handle BOOLEAN type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_boolean(type_, **kw)
+
+        def visit_float(self, type_, **kw):
+            """Handle FLOAT type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_float(type_, **kw)
+
+        def visit_numeric(self, type_, **kw):
+            """Handle NUMERIC type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_numeric(type_, **kw)
+
+        def visit_date(self, type_, **kw):
+            """Handle DATE type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_date(type_, **kw)
+
+        def visit_datetime(self, type_, **kw):
+            """Handle DATETIME type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_datetime(type_, **kw)
+
+        def visit_time(self, type_, **kw):
+            """Handle TIME type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_time(type_, **kw)
+
+        def visit_timestamp(self, type_, **kw):
+            """Handle TIMESTAMP type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_TIMESTAMP(type_, **kw)
+
+        def visit_type_decorator(self, type_, **kw):
+            """Handle TypeDecorator type compilation."""
+            # For MatrixOne vector types, handle them directly
+            if hasattr(type_, 'type_engine'):
+                actual_type = type_.type_engine(self.dialect)
+                if hasattr(actual_type, '__visit_name__') and actual_type.__visit_name__ == 'VECTOR':
+                    return self.visit_VECTOR(actual_type, **kw)
+
+            # For other types, delegate to MySQL compiler
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_type_decorator(type_, **kw)
+
 else:
     # SQLAlchemy 1.4.x
     class MatrixOneTypeCompiler(MySQLDialect.type_compiler):
@@ -131,6 +238,11 @@ else:
             if hasattr(type_, "get_col_spec"):
                 return type_.get_col_spec()
             return "VECTOR"
+
+        def visit_timestamp(self, type_, **kw):
+            """Handle TIMESTAMP type compilation for SQLAlchemy 1.4.x."""
+            # In SQLAlchemy 1.4.x, we need to handle TIMESTAMP differently
+            return "TIMESTAMP"
 
 
 # Register the dialect

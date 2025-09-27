@@ -170,6 +170,8 @@ cython_debug/
 # VSCode
 .vscode/
 *.code-workspace
+*.flake8
+*.editorconfig
 
 # Sublime Text
 *.sublime-project
