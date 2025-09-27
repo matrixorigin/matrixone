@@ -29,7 +29,7 @@ help: ## Show help information
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(install|dev-setup|format|lint|type-check|check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🧪 Testing:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|coverage)-' | grep -v 'DEPRECATED' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|coverage)-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📚 Documentation:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^docs' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
@@ -48,9 +48,6 @@ help: ## Show help information
 	@echo ""
 	@echo "$(YELLOW)🚀 Release Workflow:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^release-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
-	@echo ""
-	@echo "$(RED)⚠️  Deprecated Commands:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep 'DEPRECATED' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(RED)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
 	@echo "$(YELLOW)Python path: $(PYTHON)$(NC)"
@@ -116,8 +113,6 @@ test-online: ## Run online tests (requires database connection)
 	$(PYTHON) -m pytest tests/online/ -v --tb=short
 	@echo "$(GREEN)Online tests completed!$(NC)"
 
-.PHONY: test-all
-test-all: test ## [DEPRECATED] Use 'test' instead
 
 .PHONY: coverage
 coverage: coverage-offline ## Run all coverage tests
@@ -226,14 +221,8 @@ test-tox-sqlalchemy20: ## Run tox tests for SQLAlchemy 2.0.x (offline + online)
 	@echo "$(GREEN)SQLAlchemy 2.0.x tox tests completed!$(NC)"
 
 # Legacy aliases for backward compatibility (deprecated)
-.PHONY: test-coverage
-test-coverage: coverage-offline ## [DEPRECATED] Use 'coverage-offline' instead
 
-.PHONY: test-coverage-offline
-test-coverage-offline: coverage-offline ## [DEPRECATED] Use 'coverage-offline' instead
 
-.PHONY: test-coverage-online
-test-coverage-online: coverage-online ## [DEPRECATED] Use 'coverage-online' instead
 
 # Example running
 .PHONY: examples
@@ -581,8 +570,6 @@ version-release: ## Set version for official PyPI release (usage: make version-r
 	$(PYTHON) scripts/update_version.py $(VERSION)
 	@echo "$(GREEN)Version set to $(VERSION) for official release!$(NC)"
 
-.PHONY: version-current
-version-current: version ## [DEPRECATED] Use 'version' instead
 
 # Release management
 .PHONY: release-check
@@ -597,17 +584,8 @@ release-test: version-test publish-test ## Complete TestPyPI release (increment 
 release-official: publish ## Complete official PyPI release (requires manual version setting)
 	@echo "$(GREEN)Official PyPI release completed!$(NC)"
 
-.PHONY: release-testpypi
-release-testpypi: release-test ## [DEPRECATED] Use 'release-test' instead
-	@echo "$(GREEN)Published to test PyPI!$(NC)"
 
-.PHONY: release-pypi
-release-pypi: release-official ## [DEPRECATED] Use 'release-official' instead
-	@echo "$(GREEN)Published to PyPI!$(NC)"
 
-.PHONY: release-full
-release-full: release-test ## [DEPRECATED] Use 'release-test' instead
-	@echo "$(GREEN)Full release process completed!$(NC)"
 
 # Information display
 .PHONY: info

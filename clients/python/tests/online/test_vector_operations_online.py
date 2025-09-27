@@ -502,4 +502,669 @@ class TestVectorOperationsOnline:
         # Clean up and create table using client interface
         client.drop_all(Base)
         client.create_all(Base)
+    
+    def test_pinecone_upsert_without_index(self, client, Base, Session):
+        """Test Pinecone-compatible upsert API without vector index."""
+        class VectorUpsertTable(Base):
+            __tablename__ = 'test_vector_upsert_no_index'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(8, "f32")
+            description = Column(String(200))
+            category = Column(String(50))
+        
+        # Clean up and create table
+        client.drop_all(Base)
+        client.create_all(Base)
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_upsert_no_index', 'embedding')
+        
+        # Test upsert new vectors (using real primary key field name)
+        vectors_to_upsert = [
+            {
+                'id': 1,  # Primary key field
+                'embedding': [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],  # Vector field
+                'description': 'Vector 1',
+                'category': 'tech'
+            },
+            {
+                'id': 2,
+                'embedding': [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+                'description': 'Vector 2',
+                'category': 'science'
+            },
+            {
+                'id': 3,
+                'embedding': [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+                'description': 'Vector 3',
+                'category': 'tech'
+            }
+        ]
+        
+        # Upsert vectors
+        result = index.upsert(vectors_to_upsert)
+        assert result['upserted_count'] == 3
+        
+        # Verify data was inserted
+        session = Session()
+        try:
+            docs = session.query(VectorUpsertTable).all()
+            assert len(docs) == 3
+            
+            # Verify specific data
+            doc1 = session.query(VectorUpsertTable).filter(VectorUpsertTable.id == 1).first()
+            assert doc1 is not None
+            assert doc1.description == 'Vector 1'
+            assert doc1.category == 'tech'
+            assert doc1.embedding == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+            
+        finally:
+            session.close()
+        
+        # Test upsert update existing vector
+        update_vectors = [
+            {
+                'id': 1,  # Update existing
+                'embedding': [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5],
+                'description': 'Updated Vector 1',
+                'category': 'updated'
+            },
+            {
+                'id': 4,  # New vector
+                'embedding': [4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+                'description': 'Vector 4',
+                'category': 'new'
+            }
+        ]
+        
+        result = index.upsert(update_vectors)
+        assert result['upserted_count'] == 2
+        
+        # Verify update and insert
+        session = Session()
+        try:
+            # Check updated vector
+            doc1 = session.query(VectorUpsertTable).filter(VectorUpsertTable.id == 1).first()
+            assert doc1.description == 'Updated Vector 1'
+            assert doc1.category == 'updated'
+            assert doc1.embedding == [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+            
+            # Check new vector
+            doc4 = session.query(VectorUpsertTable).filter(VectorUpsertTable.id == 4).first()
+            assert doc4 is not None
+            assert doc4.description == 'Vector 4'
+            assert doc4.category == 'new'
+            
+            # Total count should be 4
+            total_count = session.query(VectorUpsertTable).count()
+            assert total_count == 4
+            
+        finally:
+            session.close()
+        
+        # Test query functionality
+        query_results = index.query([1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5], top_k=3)
+        assert len(query_results.matches) >= 1
+        
+        # Test delete functionality
+        index.delete([2, 3])
+        
+        # Verify deletion
+        session = Session()
+        try:
+            remaining_count = session.query(VectorUpsertTable).count()
+            assert remaining_count == 2
+            
+            # Check specific deletions
+            doc2 = session.query(VectorUpsertTable).filter(VectorUpsertTable.id == 2).first()
+            doc3 = session.query(VectorUpsertTable).filter(VectorUpsertTable.id == 3).first()
+            assert doc2 is None
+            assert doc3 is None
+            
+        finally:
+            session.close()
+        
+        # Clean up
+        client.drop_all(Base)
+    
+    def test_pinecone_upsert_with_ivf_index(self, client, Base, Session):
+        """Test Pinecone-compatible upsert API with IVF vector index."""
+        class VectorUpsertIndexTable(Base):
+            __tablename__ = 'test_vector_upsert_with_index'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(16, "f32")
+            description = Column(String(200))
+            category = Column(String(50))
+            score = Column(Float)
+        
+        # Clean up and create table
+        client.drop_all(Base)
+        client.create_all(Base)
+        
+        # Enable IVF indexing
+        client.vector_index.enable_ivf()
+        
+        # Create IVF index
+        try:
+            client.vector_index.create_ivf(
+                name="idx_upsert_embedding",
+                table_name="test_vector_upsert_with_index",
+                column="embedding",
+                lists=32,
+                op_type="vector_l2_ops"
+            )
+        except Exception as e:
+            # If IVF is not supported, skip this test
+            pytest.skip(f"IVF index creation failed, skipping upsert with index test: {e}")
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_upsert_with_index', 'embedding')
+        
+        # Test upsert with larger vectors
+        vectors_to_upsert = [
+            {
+                'id': 1,
+                'embedding': [i * 0.1 for i in range(16)],
+                'description': 'Document 1',
+                'category': 'tech',
+                'score': 0.9
+            },
+            {
+                'id': 2,
+                'embedding': [i * 0.2 for i in range(16)],
+                'description': 'Document 2',
+                'category': 'science',
+                'score': 0.8
+            },
+            {
+                'id': 3,
+                'embedding': [i * 0.3 for i in range(16)],
+                'description': 'Document 3',
+                'category': 'tech',
+                'score': 0.7
+            }
+        ]
+        
+        # Upsert vectors
+        result = index.upsert(vectors_to_upsert)
+        assert result['upserted_count'] == 3
+        
+        # Verify data was inserted
+        session = Session()
+        try:
+            docs = session.query(VectorUpsertIndexTable).all()
+            assert len(docs) == 3
+            
+            # Verify specific data
+            doc1 = session.query(VectorUpsertIndexTable).filter(VectorUpsertIndexTable.id == 1).first()
+            assert doc1 is not None
+            assert doc1.description == 'Document 1'
+            assert doc1.category == 'tech'
+            assert doc1.score == 0.9
+            assert len(doc1.embedding) == 16
+            
+        finally:
+            session.close()
+        
+        # Test upsert update with different metadata
+        update_vectors = [
+            {
+                'id': 1,  # Update existing
+                'embedding': [i * 0.15 for i in range(16)],  # Different vector
+                'description': 'Updated Document 1',
+                'category': 'updated',
+                'score': 0.95
+            },
+            {
+                'id': 4,  # New vector
+                'embedding': [i * 0.4 for i in range(16)],
+                'description': 'Document 4',
+                'category': 'new',
+                'score': 0.6
+            }
+        ]
+        
+        result = index.upsert(update_vectors)
+        assert result['upserted_count'] == 2
+        
+        # Verify update and insert
+        session = Session()
+        try:
+            # Check updated vector
+            doc1 = session.query(VectorUpsertIndexTable).filter(VectorUpsertIndexTable.id == 1).first()
+            assert doc1.description == 'Updated Document 1'
+            assert doc1.category == 'updated'
+            assert doc1.score == 0.95
+            # Check embedding with tolerance for floating point precision
+            expected_embedding = [i * 0.15 for i in range(16)]
+            assert len(doc1.embedding) == len(expected_embedding)
+            for i, (actual, expected) in enumerate(zip(doc1.embedding, expected_embedding)):
+                assert abs(actual - expected) < 1e-6, f"Embedding mismatch at index {i}: {actual} != {expected}"
+            
+            # Check new vector
+            doc4 = session.query(VectorUpsertIndexTable).filter(VectorUpsertIndexTable.id == 4).first()
+            assert doc4 is not None
+            assert doc4.description == 'Document 4'
+            assert doc4.category == 'new'
+            
+            # Total count should be 4
+            total_count = session.query(VectorUpsertIndexTable).count()
+            assert total_count == 4
+            
+        finally:
+            session.close()
+        
+        # Test vector search with index
+        query_vector = [i * 0.15 for i in range(16)]
+        query_results = index.query(query_vector, top_k=3, include_metadata=True)
+        assert len(query_results.matches) >= 1
+        
+        # Verify search results contain expected data
+        found_ids = {match.id for match in query_results.matches}
+        assert '1' in found_ids  # Should find the updated doc1
+        
+        # Test filtered search
+        filter_dict = {
+            "category": {
+                "$in": ["tech", "updated"]
+            }
+        }
+        filtered_results = index.query(query_vector, top_k=5, filter=filter_dict, include_metadata=True)
+        assert len(filtered_results.matches) >= 1
+        
+        # All results should match the filter
+        for match in filtered_results.matches:
+            assert match.metadata['category'] in ['tech', 'updated']
+        
+        # Test delete functionality
+        index.delete([2, 3])
+        
+        # Verify deletion
+        session = Session()
+        try:
+            remaining_count = session.query(VectorUpsertIndexTable).count()
+            assert remaining_count == 2
+            
+            # Check specific deletions
+            doc2 = session.query(VectorUpsertIndexTable).filter(VectorUpsertIndexTable.id == 2).first()
+            doc3 = session.query(VectorUpsertIndexTable).filter(VectorUpsertIndexTable.id == 3).first()
+            assert doc2 is None
+            assert doc3 is None
+            
+        finally:
+            session.close()
+        
+        # Test describe_index_stats
+        stats = index.describe_index_stats()
+        assert 'total_vector_count' in stats
+        assert stats['total_vector_count'] == 2
+        
+        # Clean up
+        client.drop_all(Base)
+    
+    def test_pinecone_upsert_batch_operations(self, client, Base, Session):
+        """Test Pinecone-compatible upsert with batch operations."""
+        class VectorBatchUpsertTable(Base):
+            __tablename__ = 'test_vector_batch_upsert'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(12, "f32")
+            description = Column(String(200))
+            batch_id = Column(String(50))
+        
+        # Clean up and create table
+        client.drop_all(Base)
+        client.create_all(Base)
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_batch_upsert', 'embedding')
+        
+        # Test large batch upsert
+        batch_size = 20
+        vectors_batch = []
+        for i in range(batch_size):
+            vectors_batch.append({
+                'id': i,
+                'embedding': [j * 0.1 + i for j in range(12)],
+                'description': f'Batch Vector {i}',
+                'batch_id': 'batch_1'
+            })
+        
+        # Upsert batch
+        result = index.upsert(vectors_batch)
+        assert result['upserted_count'] == batch_size
+        
+        # Verify batch insertion
+        session = Session()
+        try:
+            count = session.query(VectorBatchUpsertTable).count()
+            assert count == batch_size
+            
+            # Verify some specific records
+            doc5 = session.query(VectorBatchUpsertTable).filter(VectorBatchUpsertTable.id == 5).first()
+            assert doc5 is not None
+            assert doc5.description == 'Batch Vector 5'
+            assert doc5.batch_id == 'batch_1'
+            
+        finally:
+            session.close()
+        
+        # Test batch update
+        update_batch = []
+        for i in range(0, batch_size, 2):  # Update every other vector
+            update_batch.append({
+                'id': i,
+                'embedding': [j * 0.2 + i for j in range(12)],  # Different values
+                'description': f'Updated Batch Vector {i}',
+                'batch_id': 'batch_2'
+            })
+        
+        result = index.upsert(update_batch)
+        assert result['upserted_count'] == len(update_batch)
+        
+        # Verify batch update
+        session = Session()
+        try:
+            # Check updated records
+            doc0 = session.query(VectorBatchUpsertTable).filter(VectorBatchUpsertTable.id == 0).first()
+            assert doc0.description == 'Updated Batch Vector 0'
+            assert doc0.batch_id == 'batch_2'
+            
+            # Check unchanged records
+            doc1 = session.query(VectorBatchUpsertTable).filter(VectorBatchUpsertTable.id == 1).first()
+            assert doc1.description == 'Batch Vector 1'
+            assert doc1.batch_id == 'batch_1'
+            
+            # Total count should still be batch_size
+            total_count = session.query(VectorBatchUpsertTable).count()
+            assert total_count == batch_size
+            
+        finally:
+            session.close()
+        
+        # Test batch delete
+        ids_to_delete = [i for i in range(0, batch_size, 3)]  # Delete every 3rd vector
+        index.delete(ids_to_delete)
+        
+        # Verify batch deletion
+        session = Session()
+        try:
+            remaining_count = session.query(VectorBatchUpsertTable).count()
+            expected_remaining = batch_size - len(ids_to_delete)
+            assert remaining_count == expected_remaining
+            
+            # Check specific deletions
+            for i in range(0, batch_size, 3):
+                doc = session.query(VectorBatchUpsertTable).filter(VectorBatchUpsertTable.id == i).first()
+                assert doc is None
+            
+        finally:
+            session.close()
+        
+        # Clean up
+        client.drop_all(Base)
+
+    def test_pinecone_upsert_custom_pk_string(self, client, Base, Session):
+        """Test upsert with custom primary key (string type)"""
+        # Define table with string primary key
+        class VectorCustomPKTable(Base):
+            __tablename__ = 'test_vector_custom_pk_string'
+            doc_id = Column(String(50), primary_key=True)  # String primary key
+            embedding = create_vector_column(8, "f32")
+            description = Column(String(200))
+            category = Column(String(50))
+
+        # Create table
+        client.create_all(Base)
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_custom_pk_string', 'embedding')
+        
+        # Test upsert with string primary keys
+        vectors_to_upsert = [
+            {
+                'doc_id': 'doc_001',  # String primary key
+                'embedding': [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                'description': 'Document 001',
+                'category': 'tech'
+            },
+            {
+                'doc_id': 'doc_002',
+                'embedding': [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+                'description': 'Document 002',
+                'category': 'science'
+            },
+            {
+                'doc_id': 'doc_003',
+                'embedding': [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+                'description': 'Document 003',
+                'category': 'tech'
+            }
+        ]
+        
+        # Upsert vectors
+        result = index.upsert(vectors_to_upsert)
+        assert result['upserted_count'] == 3
+        
+        # Verify data insertion
+        session = Session()
+        try:
+            total_count = session.query(VectorCustomPKTable).count()
+            assert total_count == 3
+            
+            # Verify specific data
+            doc1 = session.query(VectorCustomPKTable).filter(VectorCustomPKTable.doc_id == 'doc_001').first()
+            assert doc1 is not None
+            assert doc1.description == 'Document 001'
+            assert doc1.category == 'tech'
+            assert doc1.embedding == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+            
+        finally:
+            session.close()
+        
+        # Test upsert update existing vector
+        update_vectors = [
+            {
+                'doc_id': 'doc_001',  # Update existing
+                'embedding': [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5],
+                'description': 'Updated Document 001',
+                'category': 'updated'
+            },
+            {
+                'doc_id': 'doc_004',  # New vector
+                'embedding': [4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+                'description': 'Document 004',
+                'category': 'new'
+            }
+        ]
+        
+        result = index.upsert(update_vectors)
+        assert result['upserted_count'] == 2
+        
+        # Verify update and insert
+        session = Session()
+        try:
+            total_count = session.query(VectorCustomPKTable).count()
+            assert total_count == 4
+            
+            # Verify updated document
+            doc1 = session.query(VectorCustomPKTable).filter(VectorCustomPKTable.doc_id == 'doc_001').first()
+            assert doc1.description == 'Updated Document 001'
+            assert doc1.category == 'updated'
+            assert doc1.embedding == [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+            
+            # Verify new document
+            doc4 = session.query(VectorCustomPKTable).filter(VectorCustomPKTable.doc_id == 'doc_004').first()
+            assert doc4 is not None
+            assert doc4.description == 'Document 004'
+            assert doc4.category == 'new'
+            
+        finally:
+            session.close()
+        
+        # Test query functionality
+        query_results = index.query([1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5], top_k=3)
+        assert len(query_results.matches) >= 1
+        
+        # Verify query results contain correct primary key field
+        for match in query_results.matches:
+            assert 'doc_id' in match.metadata
+            assert match.metadata['doc_id'] in ['doc_001', 'doc_002', 'doc_003', 'doc_004']
+        
+        # Test delete functionality
+        index.delete(['doc_002', 'doc_003'])
+        
+        # Verify deletion
+        session = Session()
+        try:
+            remaining_count = session.query(VectorCustomPKTable).count()
+            assert remaining_count == 2
+            
+            # Verify specific deletions
+            doc2 = session.query(VectorCustomPKTable).filter(VectorCustomPKTable.doc_id == 'doc_002').first()
+            doc3 = session.query(VectorCustomPKTable).filter(VectorCustomPKTable.doc_id == 'doc_003').first()
+            assert doc2 is None
+            assert doc3 is None
+            
+        finally:
+            session.close()
+
+        # Clean up
+        client.drop_all(Base)
+
+    def test_pinecone_upsert_custom_pk_uuid(self, client, Base, Session):
+        """Test upsert with custom primary key (UUID-like string)"""
+        import uuid
+        
+        # Define table with UUID primary key
+        class VectorUUIDPKTable(Base):
+            __tablename__ = 'test_vector_uuid_pk'
+            uuid_id = Column(String(36), primary_key=True)  # UUID string primary key
+            embedding = create_vector_column(6, "f32")
+            title = Column(String(100))
+            tags = Column(String(200))
+
+        # Create table
+        client.create_all(Base)
+        
+        # Get Pinecone-compatible index
+        index = client.get_pinecone_index('test_vector_uuid_pk', 'embedding')
+        
+        # Generate UUIDs for testing
+        uuid1 = str(uuid.uuid4())
+        uuid2 = str(uuid.uuid4())
+        uuid3 = str(uuid.uuid4())
+        
+        # Test upsert with UUID primary keys
+        vectors_to_upsert = [
+            {
+                'uuid_id': uuid1,
+                'embedding': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                'title': 'Article 1',
+                'tags': 'machine-learning,ai'
+            },
+            {
+                'uuid_id': uuid2,
+                'embedding': [0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+                'title': 'Article 2',
+                'tags': 'deep-learning,neural-networks'
+            },
+            {
+                'uuid_id': uuid3,
+                'embedding': [0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+                'title': 'Article 3',
+                'tags': 'nlp,transformer'
+            }
+        ]
+        
+        # Upsert vectors
+        result = index.upsert(vectors_to_upsert)
+        assert result['upserted_count'] == 3
+        
+        # Verify data insertion
+        session = Session()
+        try:
+            total_count = session.query(VectorUUIDPKTable).count()
+            assert total_count == 3
+            
+            # Verify specific data
+            doc1 = session.query(VectorUUIDPKTable).filter(VectorUUIDPKTable.uuid_id == uuid1).first()
+            assert doc1 is not None
+            assert doc1.title == 'Article 1'
+            assert doc1.tags == 'machine-learning,ai'
+            assert doc1.embedding == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+            
+        finally:
+            session.close()
+        
+        # Test query functionality
+        query_results = index.query([0.15, 0.25, 0.35, 0.45, 0.55, 0.65], top_k=2)
+        assert len(query_results.matches) >= 1
+        
+        # Verify query results contain correct primary key field
+        for match in query_results.matches:
+            assert 'uuid_id' in match.metadata
+            assert match.metadata['uuid_id'] in [uuid1, uuid2, uuid3]
+            assert len(match.metadata['uuid_id']) == 36  # UUID length
+        
+        # Test update with new UUID
+        uuid4 = str(uuid.uuid4())
+        update_vectors = [
+            {
+                'uuid_id': uuid1,  # Update existing
+                'embedding': [0.11, 0.21, 0.31, 0.41, 0.51, 0.61],
+                'title': 'Updated Article 1',
+                'tags': 'updated,ai'
+            },
+            {
+                'uuid_id': uuid4,  # New vector
+                'embedding': [0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                'title': 'Article 4',
+                'tags': 'computer-vision,opencv'
+            }
+        ]
+        
+        result = index.upsert(update_vectors)
+        assert result['upserted_count'] == 2
+        
+        # Verify update and insert
+        session = Session()
+        try:
+            total_count = session.query(VectorUUIDPKTable).count()
+            assert total_count == 4
+            
+            # Verify updated document
+            doc1 = session.query(VectorUUIDPKTable).filter(VectorUUIDPKTable.uuid_id == uuid1).first()
+            assert doc1.title == 'Updated Article 1'
+            assert doc1.tags == 'updated,ai'
+            assert doc1.embedding == [0.11, 0.21, 0.31, 0.41, 0.51, 0.61]
+            
+            # Verify new document
+            doc4 = session.query(VectorUUIDPKTable).filter(VectorUUIDPKTable.uuid_id == uuid4).first()
+            assert doc4 is not None
+            assert doc4.title == 'Article 4'
+            assert doc4.tags == 'computer-vision,opencv'
+            
+        finally:
+            session.close()
+        
+        # Test delete functionality
+        index.delete([uuid2, uuid3])
+        
+        # Verify deletion
+        session = Session()
+        try:
+            remaining_count = session.query(VectorUUIDPKTable).count()
+            assert remaining_count == 2
+            
+            # Verify specific deletions
+            doc2 = session.query(VectorUUIDPKTable).filter(VectorUUIDPKTable.uuid_id == uuid2).first()
+            doc3 = session.query(VectorUUIDPKTable).filter(VectorUUIDPKTable.uuid_id == uuid3).first()
+            assert doc2 is None
+            assert doc3 is None
+            
+        finally:
+            session.close()
+
+        # Clean up
+        client.drop_all(Base)
         

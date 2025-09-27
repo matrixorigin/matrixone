@@ -422,19 +422,24 @@ class PineconeCompatibleIndex:
                 where_params=where_params,
             )
 
-        # Convert results to Pinecone format
+        # Convert results to MatrixOne format (using real primary key)
         matches = []
         for row in results:
-            match_id = str(row[0])  # ID column
+            # Use the actual primary key value and column name
+            pk_value = row[0]  # Primary key value (can be any type)
             score = float(row[-1]) if len(row) > 1 else 0.0  # Last column is usually score
 
-            # Extract metadata
+            # Extract metadata (including primary key as a field)
             metadata = {}
             if include_metadata:
                 metadata_columns = self._get_metadata_columns()
                 for i, col in enumerate(metadata_columns):
                     if i + 1 < len(row):
                         metadata[col] = row[i + 1]
+
+                # Add primary key to metadata with its real column name
+                id_column = self._get_id_column()
+                metadata[id_column] = pk_value
 
             # Extract vector values if requested
             values = None
@@ -446,7 +451,8 @@ class PineconeCompatibleIndex:
                 if vector_idx < len(row):
                     values = row[vector_idx]
 
-            matches.append(VectorMatch(id=match_id, score=score, metadata=metadata, values=values))
+            # Use primary key value as the match ID (convert to string for compatibility)
+            matches.append(VectorMatch(id=str(pk_value), score=score, metadata=metadata, values=values))
 
         return QueryResponse(matches=matches, namespace=namespace, usage={"read_units": len(matches)})
 
@@ -517,19 +523,24 @@ class PineconeCompatibleIndex:
         result = await self.client.execute(sql)
         results = result.rows
 
-        # Convert results to Pinecone format
+        # Convert results to MatrixOne format (using real primary key)
         matches = []
         for row in results:
-            match_id = str(row[0])  # ID column
+            # Use the actual primary key value and column name
+            pk_value = row[0]  # Primary key value (can be any type)
             score = float(row[-1]) if len(row) > 1 else 0.0  # Last column is usually score
 
-            # Extract metadata
+            # Extract metadata (including primary key as a field)
             metadata = {}
             if include_metadata:
                 metadata_columns = await self._get_metadata_columns_async()
                 for i, col in enumerate(metadata_columns):
                     if i + 1 < len(row):
                         metadata[col] = row[i + 1]
+
+                # Add primary key to metadata with its real column name
+                id_column = await self._get_id_column_async()
+                metadata[id_column] = pk_value
 
             # Extract vector values if requested
             values = None
@@ -541,7 +552,8 @@ class PineconeCompatibleIndex:
                 if vector_idx < len(row):
                     values = row[vector_idx]
 
-            matches.append(VectorMatch(id=match_id, score=score, metadata=metadata, values=values))
+            # Use primary key value as the match ID (convert to string for compatibility)
+            matches.append(VectorMatch(id=str(pk_value), score=score, metadata=metadata, values=values))
 
         return QueryResponse(matches=matches, namespace=namespace, usage={"read_units": len(matches)})
 
@@ -656,3 +668,133 @@ class PineconeCompatibleIndex:
             "total_vector_count": total_vector_count,
             "namespaces": {"": {"vector_count": total_vector_count}},
         }
+
+    def upsert(self, vectors: List[Dict[str, Any]], namespace: str = ""):
+        """
+        Upsert vectors (MatrixOne native API).
+
+        Args:
+            vectors: List of vectors to upsert. Each vector should be a dict with:
+                - Primary key field: Value for the primary key column (required)
+                - Vector field: Vector values (required)
+                - Other fields: Any additional metadata fields
+            namespace: Namespace (not used in MatrixOne)
+
+        Returns:
+            Dict with upsert statistics
+        """
+        if not vectors:
+            return {"upserted_count": 0}
+
+        # Get the actual primary key column name
+        id_column = self._get_id_column()
+
+        # Process each vector individually for proper upsert behavior
+        for vector in vectors:
+            # Check if primary key field exists
+            if id_column not in vector:
+                raise ValueError(f"Each vector must have '{id_column}' field (primary key)")
+
+            # Check if vector field exists
+            if self.vector_column not in vector:
+                raise ValueError(f"Each vector must have '{self.vector_column}' field (vector values)")
+
+            # Prepare data - use all fields from the vector dict
+            data = dict(vector)
+
+            # Build upsert SQL using INSERT ... ON DUPLICATE KEY UPDATE
+            columns = list(data.keys())
+            columns_str = ", ".join(columns)
+
+            # Format values - use proper vector format
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    # Format vector as string with proper escaping
+                    vector_str = "[" + ",".join(map(str, value)) + "]"
+                    formatted_values.append(f"'{vector_str}'")
+                else:
+                    formatted_values.append(f"'{value}'")
+            values_str = "(" + ", ".join(formatted_values) + ")"
+
+            # Build ON DUPLICATE KEY UPDATE clause
+            update_clauses = []
+            for col in columns:
+                if col != id_column:  # Don't update the primary key
+                    update_clauses.append(f"{col} = VALUES({col})")
+            update_str = ", ".join(update_clauses)
+
+            # Execute upsert SQL
+            sql = (
+                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} "
+                f"ON DUPLICATE KEY UPDATE {update_str}"
+            )
+            self.client.execute(sql)
+
+        return {"upserted_count": len(vectors)}
+
+    async def upsert_async(self, vectors: List[Dict[str, Any]], namespace: str = ""):
+        """
+        Async version of upsert method.
+
+        Args:
+            vectors: List of vectors to upsert. Each vector should be a dict with:
+                - Primary key field: Value for the primary key column (required)
+                - Vector field: Vector values (required)
+                - Other fields: Any additional metadata fields
+            namespace: Namespace (not used in MatrixOne)
+
+        Returns:
+            Dict with upsert statistics
+        """
+        if not vectors:
+            return {"upserted_count": 0}
+
+        # Get the actual primary key column name
+        id_column = await self._get_id_column_async()
+
+        # Process each vector individually for proper upsert behavior
+        for vector in vectors:
+            # Check if primary key field exists
+            if id_column not in vector:
+                raise ValueError(f"Each vector must have '{id_column}' field (primary key)")
+
+            # Check if vector field exists
+            if self.vector_column not in vector:
+                raise ValueError(f"Each vector must have '{self.vector_column}' field (vector values)")
+
+            # Prepare data - use all fields from the vector dict
+            data = dict(vector)
+
+            # Build upsert SQL using INSERT ... ON DUPLICATE KEY UPDATE
+            columns = list(data.keys())
+            columns_str = ", ".join(columns)
+
+            # Format values - use proper vector format
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    # Format vector as string with proper escaping
+                    vector_str = "[" + ",".join(map(str, value)) + "]"
+                    formatted_values.append(f"'{vector_str}'")
+                else:
+                    formatted_values.append(f"'{value}'")
+            values_str = "(" + ", ".join(formatted_values) + ")"
+
+            # Build ON DUPLICATE KEY UPDATE clause
+            update_clauses = []
+            for col in columns:
+                if col != id_column:  # Don't update the primary key
+                    update_clauses.append(f"{col} = VALUES({col})")
+            update_str = ", ".join(update_clauses)
+
+            # Execute upsert SQL
+            sql = (
+                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} "
+                f"ON DUPLICATE KEY UPDATE {update_str}"
+            )
+            await self.client.execute(sql)
+
+        return {"upserted_count": len(vectors)}
