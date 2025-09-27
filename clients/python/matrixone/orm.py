@@ -446,6 +446,56 @@ class BaseMatrixOneQuery:
         else:
             return f"({sql})"
 
+    def filter(self, condition, *params) -> "BaseMatrixOneQuery":
+        """Add WHERE conditions - SQLAlchemy style unified interface"""
+        if hasattr(condition, "compile"):
+            # This is a SQLAlchemy expression (OR, AND, BinaryExpression, etc.), compile it to SQL
+            compiled = condition.compile(compile_kwargs={"literal_binds": True})
+            formatted_condition = str(compiled)
+
+            # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+            import re
+
+            formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
+
+            # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
+            formatted_condition = re.sub(r"\w+\.(\w+)", r"\1", formatted_condition)
+
+            self._where_conditions.append(formatted_condition)
+        else:
+            # Handle string conditions - replace ? placeholders with actual values
+            formatted_condition = str(condition)
+
+            # If there are params but no ? placeholders, append them to the condition
+            if params and "?" not in formatted_condition:
+                for param in params:
+                    if hasattr(param, "_build_sql"):
+                        # This is a subquery object, convert it to SQL
+                        subquery_sql, _ = param._build_sql()
+                        formatted_condition += f" ({subquery_sql})"
+                    else:
+                        formatted_condition += f" {param}"
+            else:
+                # Add params to _where_params for processing
+                if params:
+                    self._where_params.extend(params)
+
+                # Process any remaining ? placeholders by replacing them with the next parameter
+                while "?" in formatted_condition and self._where_params:
+                    param = self._where_params.pop(0)
+                    if isinstance(param, str):
+                        formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
+                    elif hasattr(param, "_build_sql"):
+                        # This is a subquery object, convert it to SQL
+                        subquery_sql, _ = param._build_sql()
+                        formatted_condition = formatted_condition.replace("?", f"({subquery_sql})", 1)
+                    else:
+                        formatted_condition = formatted_condition.replace("?", str(param), 1)
+
+            self._where_conditions.append(formatted_condition)
+
+        return self
+
     def filter_by(self, **kwargs) -> "BaseMatrixOneQuery":
         """Add WHERE conditions from keyword arguments - SQLAlchemy style"""
         for key, value in kwargs.items():
@@ -458,37 +508,6 @@ class BaseMatrixOneQuery:
                     # For other types, use parameterized query
                     self._where_conditions.append(f"{key} = ?")
                     self._where_params.append(value)
-        return self
-
-    def filter(self, condition, *params) -> "BaseMatrixOneQuery":
-        """Add WHERE condition - SQLAlchemy style"""
-        # Handle SQLAlchemy BinaryExpression objects
-        if hasattr(condition, "compile"):
-            # This is a SQLAlchemy expression, compile it to SQL
-            compiled = condition.compile(compile_kwargs={"literal_binds": True})
-            formatted_condition = str(compiled)
-            # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-            import re
-
-            formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
-        else:
-            # Handle string conditions with parameters
-            formatted_condition = str(condition)
-            for param in params:
-                if hasattr(param, "_build_sql"):  # This is a subquery object
-                    # Convert subquery to SQL
-                    subquery_sql, _ = param._build_sql()
-                    if "?" in formatted_condition:
-                        formatted_condition = formatted_condition.replace("?", f"({subquery_sql})", 1)
-                    else:
-                        # If no ? placeholder, assume this is an IN clause with subquery
-                        formatted_condition = f"{formatted_condition} ({subquery_sql})"
-                elif isinstance(param, str):
-                    formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
-                else:
-                    formatted_condition = formatted_condition.replace("?", str(param), 1)
-
-        self._where_conditions.append(formatted_condition)
         return self
 
     def order_by(self, *columns) -> "BaseMatrixOneQuery":
