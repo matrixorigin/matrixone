@@ -274,6 +274,91 @@ class TestSimpleQueryInterface:
         expected = "SELECT * FROM articles WHERE MATCH(title, content) AGAINST('test')"
         assert sql1 == expected
 
+    def test_async_execute_behavior(self):
+        """Test execute method behavior with different client types."""
+        from matrixone.client import Client, FulltextIndexManager
+        from matrixone.async_client import AsyncClient, AsyncFulltextIndexManager
+        
+        # Test with sync client
+        sync_client = Client()
+        sync_client._fulltext_index = FulltextIndexManager(sync_client)
+        sync_builder = sync_client.fulltext_index.simple_query("articles")
+        sync_builder.columns("title", "content").search("test")
+        
+        # Should have execute method
+        assert hasattr(sync_builder, 'execute')
+        
+        # Test with async client
+        async_client = AsyncClient()
+        async_client._fulltext_index = AsyncFulltextIndexManager(async_client)
+        async_builder = async_client.fulltext_index.simple_query("articles")
+        async_builder.columns("title", "content").search("test")
+        
+        # Should have execute method but it should raise error for sync calls
+        assert hasattr(async_builder, 'execute')
+        
+        # Test that execute returns a coroutine for async client
+        import asyncio
+        result = async_builder.execute()
+        assert asyncio.iscoroutine(result), "execute() should return a coroutine for async client"
+        # Clean up the coroutine to avoid warning
+        result.close()
+
+    def test_transaction_simple_query_interface(self):
+        """Test TransactionSimpleFulltextQueryBuilder interface."""
+        from matrixone.client import Client, TransactionFulltextIndexManager
+        
+        # Mock transaction wrapper
+        class MockTransaction:
+            def execute(self, sql):
+                return f"TRANSACTION: {sql}"
+        
+        client = Client()
+        mock_tx = MockTransaction()
+        tx_manager = TransactionFulltextIndexManager(client, mock_tx)
+        
+        # Test simple_query returns TransactionSimpleFulltextQueryBuilder
+        tx_builder = tx_manager.simple_query("articles")
+        assert hasattr(tx_builder, 'execute')
+        assert hasattr(tx_builder, 'build_sql')
+        
+        # Test that it can build SQL
+        tx_builder.columns("title", "content").search("test")
+        sql = tx_builder.build_sql()
+        expected = "SELECT * FROM articles WHERE MATCH(title, content) AGAINST('test')"
+        assert sql == expected
+
+    def test_async_transaction_simple_query_interface(self):
+        """Test AsyncTransactionSimpleFulltextQueryBuilder interface."""
+        from matrixone.async_client import AsyncClient, AsyncTransactionFulltextIndexManager
+        
+        # Mock async transaction wrapper
+        class MockAsyncTransaction:
+            async def execute(self, sql):
+                return f"ASYNC_TRANSACTION: {sql}"
+        
+        async_client = AsyncClient()
+        mock_tx = MockAsyncTransaction()
+        tx_manager = AsyncTransactionFulltextIndexManager(async_client, mock_tx)
+        
+        # Test simple_query returns AsyncTransactionSimpleFulltextQueryBuilder
+        tx_builder = tx_manager.simple_query("articles")
+        assert hasattr(tx_builder, 'execute')
+        assert hasattr(tx_builder, 'build_sql')
+        
+        # Test that execute returns a coroutine for async transaction
+        import asyncio
+        result = tx_builder.execute()
+        assert asyncio.iscoroutine(result), "execute() should return a coroutine for async transaction"
+        # Clean up the coroutine to avoid warning
+        result.close()
+        
+        # Test that it can build SQL
+        tx_builder.columns("title", "content").search("test")
+        sql = tx_builder.build_sql()
+        expected = "SELECT * FROM articles WHERE MATCH(title, content) AGAINST('test')"
+        assert sql == expected
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

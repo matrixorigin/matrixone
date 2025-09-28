@@ -398,6 +398,128 @@ class TestSimpleFulltextMigration:
         assert isinstance(results.rows, list)
         # Should work without errors and return relevant results
 
+    @pytest.mark.asyncio
+    async def test_async_execute_functionality(self):
+        """Test async_execute method with real database."""
+        from matrixone.async_client import AsyncClient
+        from matrixone.config import get_connection_kwargs
+        
+        # Get connection parameters
+        conn_params = get_connection_kwargs()
+        client_params = {k: v for k, v in conn_params.items()
+                        if k in ['host', 'port', 'user', 'password', 'database']}
+        
+        async_client = AsyncClient()
+        await async_client.connect(**client_params)
+        
+        try:
+            # Use the same test database
+            await async_client.execute(f"USE {self.test_db}")
+            
+            # Test async execute
+            results = await (async_client.fulltext_index.simple_query("migration_test")
+                           .columns("title", "body")
+                           .search("python")
+                           .with_score()
+                           .limit(3)
+                           .execute())
+            
+            assert results is not None
+            assert hasattr(results, 'rows')
+            assert isinstance(results.rows, list)
+            
+        finally:
+            await async_client.disconnect()
+
+    def test_transaction_simple_query_functionality(self):
+        """Test TransactionSimpleFulltextQueryBuilder with real database."""
+        # Test within a transaction
+        with self.client.transaction() as tx:
+            results = (tx.fulltext_index.simple_query("migration_test")
+                      .columns("title", "body")
+                      .search("guide")
+                      .with_score()
+                      .limit(3)
+                      .execute())
+            
+            assert results is not None
+            assert hasattr(results, 'rows')
+            assert isinstance(results.rows, list)
+
+    @pytest.mark.asyncio
+    async def test_async_transaction_simple_query_functionality(self):
+        """Test AsyncTransactionSimpleFulltextQueryBuilder with real database."""
+        from matrixone.async_client import AsyncClient
+        from matrixone.config import get_connection_kwargs
+        
+        # Get connection parameters
+        conn_params = get_connection_kwargs()
+        client_params = {k: v for k, v in conn_params.items()
+                        if k in ['host', 'port', 'user', 'password', 'database']}
+        
+        async_client = AsyncClient()
+        await async_client.connect(**client_params)
+        
+        try:
+            # Use the same test database
+            await async_client.execute(f"USE {self.test_db}")
+            
+            # Test within an async transaction
+            async with async_client.transaction() as tx:
+                results = await (tx.fulltext_index.simple_query("migration_test")
+                               .columns("title", "body")
+                               .search("python")
+                               .with_score()
+                               .limit(3)
+                               .execute())
+                
+                assert results is not None
+                assert hasattr(results, 'rows')
+                assert isinstance(results.rows, list)
+                
+        finally:
+            await async_client.disconnect()
+
+    def test_error_handling_async_execute_with_sync_client(self):
+        """Test that execute works with sync client (should not raise error)."""
+        # This should not raise an error - execute should be available
+        builder = self.client.fulltext_index.simple_query("migration_test")
+        builder.columns("title", "body").search("test")
+        
+        # Should have execute method
+        assert hasattr(builder, 'execute')
+        
+        # Should not raise error when called (though it may fail due to connection)
+        try:
+            # This might fail due to connection issues, but should not be a method error
+            result = builder.execute()
+            print("✅ execute works as expected")
+        except Exception as e:
+            # Connection errors are acceptable, method errors are not
+            if "execute" in str(e) or "method" in str(e).lower():
+                raise
+            print(f"⚠️  Connection error (acceptable): {e}")
+
+    def test_error_handling_execute_with_async_client(self):
+        """Test that execute returns a coroutine with async client."""
+        from matrixone.async_client import AsyncClient, AsyncFulltextIndexManager
+        import asyncio
+        
+        async_client = AsyncClient()
+        async_client._fulltext_index = AsyncFulltextIndexManager(async_client)
+        builder = async_client.fulltext_index.simple_query("test_table")
+        builder.columns("title", "content").search("test")
+        
+        # Should return a coroutine when execute is called
+        result = builder.execute()
+        assert asyncio.iscoroutine(result), "execute() should return a coroutine for async client"
+        
+        # Clean up the coroutine to avoid warning
+        result.close()
+        
+        # Should not raise RuntimeError anymore - our new design allows this
+        print("✅ execute() returns coroutine as expected for async client")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

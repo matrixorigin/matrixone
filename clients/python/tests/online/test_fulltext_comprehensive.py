@@ -488,6 +488,221 @@ class TestFulltextComprehensive:
             await test_async_client.execute("DROP TABLE manual_async_tx_docs")
             await test_async_client.execute("DROP DATABASE manual_async_fulltext_tx_test")
 
+    @pytest.mark.asyncio
+    async def test_async_simple_query_advanced_features(self, test_async_client):
+        """Test advanced async simple_query features"""
+        # Create test database and table
+        await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_advanced_test")
+        await test_async_client.execute("USE async_advanced_test")
+        
+        await test_async_client.execute("DROP TABLE IF EXISTS async_advanced_docs")
+        await test_async_client.execute("""
+            CREATE TABLE async_advanced_docs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                content TEXT NOT NULL,
+                category VARCHAR(100) NOT NULL,
+                priority INT DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Insert test data
+        test_docs = [
+            ("High Priority Python Guide", "Comprehensive Python programming guide with async features", "Programming", 3),
+            ("Medium Priority JavaScript Tutorial", "JavaScript tutorial covering async/await patterns", "Programming", 2),
+            ("Low Priority Database Basics", "Basic database concepts and transaction handling", "Database", 1),
+            ("High Priority Async Patterns", "Advanced async programming patterns and best practices", "Programming", 3),
+            ("Medium Priority Web Development", "Modern web development with async JavaScript", "Web", 2)
+        ]
+        
+        for title, content, category, priority in test_docs:
+            await test_async_client.execute(f"""
+                INSERT INTO async_advanced_docs (title, content, category, priority) 
+                VALUES ('{title}', '{content}', '{category}', {priority})
+            """)
+        
+        try:
+            # Create fulltext index
+            await test_async_client.fulltext_index.create(
+                "async_advanced_docs", 
+                "ftidx_advanced", 
+                ["title", "content"]
+            )
+            
+            # Test 1: Complex boolean search with multiple conditions
+            result = await (test_async_client.fulltext_index.simple_query("async_advanced_docs")
+                           .columns("title", "content")
+                           .must_have("async")
+                           .must_not_have("basic")
+                           .where("priority >= 2")
+                           .with_score()
+                           .order_by_score(desc=True)
+                           .limit(3)
+                           .execute())
+            
+            assert result is not None
+            assert len(result.rows) > 0
+            
+            # Verify all results contain "async" in title or content (priority check is done in WHERE clause)
+            for row in result.rows:
+                title_content = f"{row[1]} {row[2]}".lower()  # title and content
+                assert "async" in title_content
+                assert "basic" not in title_content
+            
+            # Test 2: Search with custom score alias and ordering
+            result = await (test_async_client.fulltext_index.simple_query("async_advanced_docs")
+                           .columns("title", "content")
+                           .search("programming")
+                           .with_score("relevance_score")
+                           .order_by("priority", desc=True)
+                           .order_by_score(desc=True)
+                           .execute())
+            
+            assert result is not None
+            assert len(result.rows) > 0
+            
+            # Test 3: Multiple WHERE conditions
+            result = await (test_async_client.fulltext_index.simple_query("async_advanced_docs")
+                           .columns("title", "content")
+                           .search("programming")
+                           .where("category = 'Programming'")
+                           .where("priority > 1")
+                           .execute())
+            
+            assert result is not None
+            # All results should be Programming category with priority > 1 (category check is done in WHERE clause)
+            # Since we only select title and content, we can't directly check category in results
+            assert len(result.rows) > 0  # Should have results matching the conditions
+            
+            # Test 4: Explain functionality
+            builder = test_async_client.fulltext_index.simple_query("async_advanced_docs")
+            builder.columns("title", "content").search("test").with_score().where("priority >= 2")
+            
+            sql = builder.explain()
+            assert isinstance(sql, str)
+            assert "SELECT" in sql.upper()
+            assert "MATCH" in sql.upper()
+            assert "AGAINST" in sql.upper()
+            
+            # Test 5: Method chaining verification
+            builder = test_async_client.fulltext_index.simple_query("async_advanced_docs")
+            chained_builder = (builder
+                              .columns("title", "content")
+                              .search("test")
+                              .with_score("score")
+                              .where("category = 'Programming'")
+                              .order_by_score(desc=True)
+                              .limit(5, 0))
+            
+            assert chained_builder is builder  # Should return same instance
+            
+        finally:
+            # Clean up
+            await test_async_client.fulltext_index.drop("async_advanced_docs", "ftidx_advanced")
+            await test_async_client.execute("DROP TABLE async_advanced_docs")
+            await test_async_client.execute("DROP DATABASE async_advanced_test")
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_concurrent_operations(self, test_async_client):
+        """Test concurrent async simple_query operations"""
+        import asyncio
+        
+        # Create test database and table
+        await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_concurrent_test")
+        await test_async_client.execute("USE async_concurrent_test")
+        
+        await test_async_client.execute("DROP TABLE IF EXISTS async_concurrent_docs")
+        await test_async_client.execute("""
+            CREATE TABLE async_concurrent_docs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                content TEXT NOT NULL,
+                category VARCHAR(100) NOT NULL
+            )
+        """)
+        
+        # Insert test data
+        test_docs = [
+            ("Python Async Programming", "Learn Python async programming with asyncio", "Programming"),
+            ("JavaScript Async Patterns", "Modern JavaScript async patterns and promises", "Programming"),
+            ("Database Async Operations", "Async database operations and connection pooling", "Database"),
+            ("Web Async Development", "Async web development with modern frameworks", "Web"),
+            ("Async Testing Strategies", "Testing async code and handling async test cases", "Testing")
+        ]
+        
+        for title, content, category in test_docs:
+            await test_async_client.execute(f"""
+                INSERT INTO async_concurrent_docs (title, content, category) 
+                VALUES ('{title}', '{content}', '{category}')
+            """)
+        
+        try:
+            # Create fulltext index
+            await test_async_client.fulltext_index.create(
+                "async_concurrent_docs", 
+                "ftidx_concurrent", 
+                ["title", "content"]
+            )
+            
+            # Create multiple concurrent search tasks (use database prefix to avoid connection pool issues)
+            table_name = "async_concurrent_test.async_concurrent_docs"
+            tasks = [
+                test_async_client.fulltext_index.simple_query(table_name)
+                .columns("title", "content")
+                .search("python")
+                .execute(),
+                
+                test_async_client.fulltext_index.simple_query(table_name)
+                .columns("title", "content")
+                .search("javascript")
+                .execute(),
+                
+                test_async_client.fulltext_index.simple_query(table_name)
+                .columns("title", "content")
+                .search("database")
+                .execute(),
+                
+                test_async_client.fulltext_index.simple_query(table_name)
+                .columns("title", "content")
+                .search("web")
+                .execute(),
+                
+                test_async_client.fulltext_index.simple_query(table_name)
+                .columns("title", "content")
+                .search("testing")
+                .execute()
+            ]
+            
+            # Execute all searches concurrently
+            results = await asyncio.gather(*tasks)
+            
+            # All searches should complete successfully
+            assert len(results) == 5
+            for result in results:
+                assert result is not None
+                assert isinstance(result.rows, list)
+                assert len(result.rows) > 0
+            
+            # Verify each search returned relevant results (row[0] is id, row[1] is title)
+            python_results = results[0]
+            assert any("Python" in str(row[1]) for row in python_results.rows)
+            
+            javascript_results = results[1]
+            assert any("JavaScript" in str(row[1]) for row in javascript_results.rows)
+            
+            database_results = results[2]
+            assert any("Database" in str(row[1]) for row in database_results.rows)
+            
+        finally:
+            # Clean up
+            try:
+                await test_async_client.fulltext_index.drop("async_concurrent_test.async_concurrent_docs", "ftidx_concurrent")
+                await test_async_client.execute("DROP TABLE async_concurrent_test.async_concurrent_docs")
+                await test_async_client.execute("DROP DATABASE async_concurrent_test")
+            except Exception as e:
+                print(f"Cleanup warning: {e}")
+
     # ============================================================================
     # Advanced Fulltext Features Tests
     # ============================================================================

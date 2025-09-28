@@ -1182,7 +1182,7 @@ class AsyncFulltextIndexManager:
             table_or_columns: Either a table name (str), an ORM model class, or a list of columns
 
         Returns:
-            SimpleFulltextQueryBuilder: A builder instance for chaining search operations
+            AsyncSimpleFulltextQueryBuilder: An async builder instance for chaining search operations
 
         Example:
             # Search in a table
@@ -1191,10 +1191,7 @@ class AsyncFulltextIndexManager:
                 .search("machine learning") \\
                 .execute()
         """
-        # Import here to avoid circular imports
-        from .client import SimpleFulltextQueryBuilder
-
-        return SimpleFulltextQueryBuilder(self.client, table_or_columns)
+        return AsyncSimpleFulltextQueryBuilder(self.client, table_or_columns)
 
     async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
         """
@@ -1255,6 +1252,21 @@ class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
+
+    def simple_query(self, table_or_columns):
+        """
+        Create a simplified fulltext query builder for async transaction operations.
+
+        Returns a transaction-aware query builder that executes within the current async transaction.
+
+        Args:
+            table_or_columns: Either a table name, ORM model class, or list of columns
+
+        Returns:
+            AsyncTransactionSimpleFulltextQueryBuilder: Async transaction-aware query builder
+        """
+
+        return AsyncTransactionSimpleFulltextQueryBuilder(self.client, table_or_columns, self.transaction_wrapper)
 
 
 class AsyncClient:
@@ -3129,3 +3141,90 @@ class AsyncTransactionAccountManager:
             locked_time=row[6] if len(row) > 6 else None,
             locked_reason=row[7] if len(row) > 7 else None,
         )
+
+
+class AsyncSimpleFulltextQueryBuilder:
+    """
+    Async version of SimpleFulltextQueryBuilder for asynchronous operations.
+
+    Shares the same interface and logic as the synchronous version,
+    but with async execute() method for use with AsyncClient.
+    """
+
+    def __init__(self, client: "AsyncClient", table_or_columns):
+        """
+        Initialize async simple fulltext query builder.
+
+        Args:
+            client: AsyncClient instance
+            table_or_columns: Either a table name/model or specific columns
+        """
+        # Import here to avoid circular imports
+        from .client import SimpleFulltextQueryBuilder
+
+        self._base_builder = SimpleFulltextQueryBuilder(client, table_or_columns)
+        self.client = client
+
+    def __getattr__(self, name):
+        """
+        Delegate all builder methods to the base builder, but return self for chaining.
+        This allows us to reuse all the logic from SimpleFulltextQueryBuilder.
+        """
+        method = getattr(self._base_builder, name)
+        if callable(method):
+
+            def wrapper(*args, **kwargs):
+                result = method(*args, **kwargs)
+                # If the method returns the builder (for chaining), return self instead
+                if result is self._base_builder:
+                    return self
+                return result
+
+            return wrapper
+        return method
+
+    async def execute(self):
+        """
+        Execute the query asynchronously.
+
+        Returns:
+            Query result from AsyncClient.execute()
+        """
+        sql = self._base_builder.build_sql()
+        return await self.client.execute(sql)
+
+    def explain(self) -> str:
+        """Get the SQL query without executing it."""
+        return self._base_builder.explain()
+
+
+class AsyncTransactionSimpleFulltextQueryBuilder:
+    """Async transaction-aware simple fulltext query builder."""
+
+    def __init__(self, client: "AsyncClient", table_or_columns, transaction_wrapper):
+        """Initialize async transaction-aware query builder."""
+        # Import here to avoid circular imports
+        from .client import SimpleFulltextQueryBuilder
+
+        self._base_builder = SimpleFulltextQueryBuilder(client, table_or_columns)
+        self.transaction_wrapper = transaction_wrapper
+
+    def __getattr__(self, name):
+        """Delegate all builder methods to the base builder, but return self for chaining."""
+        method = getattr(self._base_builder, name)
+        if callable(method):
+
+            def wrapper(*args, **kwargs):
+                result = method(*args, **kwargs)
+                # If the method returns the builder (for chaining), return self instead
+                if result is self._base_builder:
+                    return self
+                return result
+
+            return wrapper
+        return method
+
+    async def execute(self):
+        """Execute the query asynchronously within the transaction."""
+        sql = self._base_builder.build_sql()
+        return await self.transaction_wrapper.execute(sql)

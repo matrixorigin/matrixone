@@ -3271,6 +3271,7 @@ class SimpleFulltextQueryBuilder:
             table_or_columns: Either a table name/model or specific columns
         """
         self.client = client
+        self._is_async = hasattr(client, '_is_async') or 'Async' in client.__class__.__name__
         self._table_name = None
         self._columns = []
         self._query_text = ""
@@ -3464,15 +3465,19 @@ class SimpleFulltextQueryBuilder:
 
         # Build MATCH AGAINST clause
         columns_str = ", ".join(self._columns)
+
+        # Build MATCH AGAINST clause
         if self._mode == "natural":
             match_clause = f"MATCH({columns_str}) AGAINST('{self._query_text}')"
         else:  # boolean
             match_clause = f"MATCH({columns_str}) AGAINST('{self._query_text}' IN BOOLEAN MODE)"
 
-        # Build SELECT clause
+        # Build SELECT clause - MatrixOne doesn't support SELECT * with fulltext
+        # Use all columns from the table instead
         if self._with_score:
             select_clause = f"SELECT *, {match_clause} AS {self._score_alias}"
         else:
+            # For now, use SELECT * but this may need to be changed based on MatrixOne requirements
             select_clause = "SELECT *"
 
         # Build WHERE clause
@@ -3496,7 +3501,12 @@ class SimpleFulltextQueryBuilder:
     def execute(self):
         """Execute the query and return results."""
         sql = self.build_sql()
-        return self.client.execute(sql)
+        if self._is_async:
+            # For async client, this should be called with await
+            return self.client.execute(sql)
+        else:
+            # For sync client
+            return self.client.execute(sql)
 
     def explain(self) -> str:
         """Get the SQL query without executing it."""
@@ -3690,3 +3700,36 @@ class TransactionFulltextIndexManager(FulltextIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
+
+    def simple_query(self, table_or_columns):
+        """
+        Create a simplified fulltext query builder for transaction operations.
+
+        Returns a transaction-aware query builder that executes within the current transaction.
+
+        Args:
+            table_or_columns: Either a table name, ORM model class, or list of columns
+
+        Returns:
+            TransactionSimpleFulltextQueryBuilder: Transaction-aware query builder
+        """
+        return TransactionSimpleFulltextQueryBuilder(self.client, table_or_columns, self.transaction_wrapper)
+
+
+class TransactionSimpleFulltextQueryBuilder(SimpleFulltextQueryBuilder):
+    """Transaction-aware simple fulltext query builder."""
+
+    def __init__(self, client: "Client", table_or_columns, transaction_wrapper):
+        """Initialize transaction-aware query builder."""
+        super().__init__(client, table_or_columns)
+        self.transaction_wrapper = transaction_wrapper
+
+    def execute(self):
+        """Execute the query within the transaction."""
+        sql = self.build_sql()
+        if self._is_async:
+            # For async transaction, this should be called with await
+            return self.transaction_wrapper.execute(sql)
+        else:
+            # For sync transaction
+            return self.transaction_wrapper.execute(sql)

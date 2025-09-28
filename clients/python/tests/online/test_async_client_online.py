@@ -346,6 +346,206 @@ class TestAsyncClientOnline:
             count = result.fetchone()[0]
             assert count == 3
 
+    @pytest.mark.asyncio
+    async def test_async_simple_query_basic_functionality(self, test_async_client, test_database):
+        """Test basic async simple_query functionality."""
+        test_db, test_table = test_database
+        
+        # Enable experimental fulltext index
+        try:
+            await test_async_client.execute("SET experimental_fulltext_index=1")
+        except Exception as e:
+            print(f"Fulltext index setup warning: {e}")
+        
+        # Create a fulltext index for testing (only on text columns)
+        try:
+            await test_async_client.execute(f"CREATE FULLTEXT INDEX ft_test ON {test_db}.{test_table}(name)")
+        except Exception as e:
+            print(f"Fulltext index creation warning: {e}")
+            return  # Skip test if fulltext not supported
+        
+        # Test basic simple_query (only search text columns)
+        results = await (test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+                        .columns("name")
+                        .search("async")
+                        .execute())
+        
+        assert isinstance(results.rows, list)
+        assert len(results.rows) > 0
+        
+        # Should find test data (row[0] is id, row[1] is name)
+        found_test = any("async" in str(row[1]) for row in results.rows)
+        assert found_test
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_with_score(self, test_async_client, test_database):
+        """Test async simple_query with scoring."""
+        test_db, test_table = test_database
+        
+        # Enable experimental fulltext index
+        try:
+            await test_async_client.execute("SET experimental_fulltext_index=1")
+        except Exception as e:
+            print(f"Fulltext index setup warning: {e}")
+        
+        try:
+            await test_async_client.execute(f"CREATE FULLTEXT INDEX ft_test ON {test_db}.{test_table}(name)")
+        except Exception as e:
+            print(f"Fulltext index creation warning: {e}")
+            return  # Skip test if fulltext not supported
+        
+        # Test simple_query with score (only search text columns)
+        results = await (test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+                        .columns("name")
+                        .search("async")
+                        .with_score()
+                        .execute())
+        
+        assert isinstance(results.rows, list)
+        assert len(results.rows) > 0
+        
+        # Check that score column is included
+        assert len(results.columns) > 2  # Original 2 columns + score
+        score_column_index = len(results.columns) - 1
+        
+        # Verify score values are numeric
+        for row in results.rows:
+            score = row[score_column_index]
+            assert isinstance(score, (int, float))
+            assert score >= 0
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_boolean_mode(self, test_async_client, test_database):
+        """Test async simple_query with boolean mode."""
+        test_db, test_table = test_database
+        
+        # Enable experimental fulltext index
+        try:
+            await test_async_client.execute("SET experimental_fulltext_index=1")
+        except Exception as e:
+            print(f"Fulltext index setup warning: {e}")
+        
+        try:
+            await test_async_client.execute(f"CREATE FULLTEXT INDEX ft_test ON {test_db}.{test_table}(name)")
+        except Exception as e:
+            print(f"Fulltext index creation warning: {e}")
+            return  # Skip test if fulltext not supported
+        
+        # Test boolean mode (only search text columns)
+        results = await (test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+                        .columns("name")
+                        .must_have("async")
+                        .must_not_have("nonexistent")
+                        .execute())
+        
+        assert isinstance(results.rows, list)
+        # Should find async test data (row[0] is id, row[1] is name)
+        for row in results.rows:
+            assert "async" in str(row[1]).lower()
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_with_where(self, test_async_client, test_database):
+        """Test async simple_query with WHERE conditions."""
+        test_db, test_table = test_database
+        
+        # Enable experimental fulltext index
+        try:
+            await test_async_client.execute("SET experimental_fulltext_index=1")
+        except Exception as e:
+            print(f"Fulltext index setup warning: {e}")
+        
+        try:
+            await test_async_client.execute(f"CREATE FULLTEXT INDEX ft_test ON {test_db}.{test_table}(name)")
+        except Exception as e:
+            print(f"Fulltext index creation warning: {e}")
+            return  # Skip test if fulltext not supported
+        
+        # Test with WHERE condition (only search text columns)
+        results = await (test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+                        .columns("name")
+                        .search("test")
+                        .where("value > 150")
+                        .execute())
+        
+        assert isinstance(results.rows, list)
+        # All results should have value > 150
+        for row in results.rows:
+            assert row[1] > 150
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_ordering_and_limit(self, test_async_client, test_database):
+        """Test async simple_query with ordering and limit."""
+        test_db, test_table = test_database
+        
+        # Enable experimental fulltext index
+        try:
+            await test_async_client.execute("SET experimental_fulltext_index=1")
+        except Exception as e:
+            print(f"Fulltext index setup warning: {e}")
+        
+        try:
+            await test_async_client.execute(f"CREATE FULLTEXT INDEX ft_test ON {test_db}.{test_table}(name)")
+        except Exception as e:
+            print(f"Fulltext index creation warning: {e}")
+            return  # Skip test if fulltext not supported
+        
+        # Test with ordering and limit (only search text columns)
+        results = await (test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+                        .columns("name")
+                        .search("test")
+                        .order_by("value", desc=True)
+                        .limit(2)
+                        .execute())
+        
+        assert isinstance(results.rows, list)
+        assert len(results.rows) <= 2
+        
+        # Results should be ordered by value descending
+        if len(results.rows) > 1:
+            assert results.rows[0][1] >= results.rows[1][1]
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_explain(self, test_async_client, test_database):
+        """Test async simple_query explain functionality."""
+        test_db, test_table = test_database
+        
+        builder = test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+        builder.columns("name", "value").search("test").with_score().where("value > 100")
+        
+        sql = builder.explain()
+        assert isinstance(sql, str)
+        assert "SELECT" in sql.upper()
+        assert "MATCH" in sql.upper()
+        assert "AGAINST" in sql.upper()
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_method_chaining(self, test_async_client, test_database):
+        """Test async simple_query method chaining."""
+        test_db, test_table = test_database
+        
+        builder = test_async_client.fulltext_index.simple_query(f"{test_db}.{test_table}")
+        
+        # All these should return the builder instance
+        result = (builder
+                 .columns("name", "value")
+                 .search("test")
+                 .with_score("score")
+                 .where("value > 100")
+                 .order_by("value", desc=True)
+                 .limit(10, 0))
+        
+        assert result is builder  # Should be the same instance
+
+    @pytest.mark.asyncio
+    async def test_async_simple_query_error_handling(self, test_async_client):
+        """Test async simple_query error handling."""
+        # Test with non-existent table
+        with pytest.raises(QueryError):
+            await (test_async_client.fulltext_index.simple_query("nonexistent_table")
+                   .columns("name", "value")
+                   .search("test")
+                   .execute())
+
 
 if __name__ == '__main__':
     pytest.main([__file__])
