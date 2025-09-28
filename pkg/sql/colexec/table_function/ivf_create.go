@@ -217,6 +217,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}
+		u.idxcfg.OpType = u.param.OpType
 		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
@@ -253,7 +254,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		// dimension
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
-		u.idxcfg.Type = "ivfflat"
+		u.idxcfg.Type = vectorindex.IVFFLAT
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
 		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)

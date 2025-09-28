@@ -154,8 +154,8 @@ func (builder *QueryBuilder) bindExternalScan(
 		tableDef.Createsql = string(json_byte)
 	}
 
-	terminated := ","
-	enclosedBy := []byte("\"")
+	terminated := tree.DefaultFieldsTerminated
+	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
 	escapedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
 		if stmt.Param.Tail.Fields.EnclosedBy != nil {

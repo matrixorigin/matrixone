@@ -82,7 +82,8 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 		return false
 	}
 
-	if value.Typ.GetId() != int32(types.T_array_float32) {
+	// check valid vector type
+	if value.Typ.GetId() != int32(types.T_array_float32) && value.Typ.GetId() != int32(types.T_array_float64) {
 		return false
 	}
 
@@ -170,11 +171,19 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	exprs = append(exprs, tree.NewNumVal(tblcfgstr, tblcfgstr, false, tree.P_char))
 
 	fnexpr := value.GetF()
-	f32vec := fnexpr.Args[0].GetLit().GetSval()
+	fvec := fnexpr.Args[0].GetLit().GetSval()
 
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(f32vec, f32vec, false, tree.P_char),
+	// no need to check valid vector type here. type already checked.
+	var vecfamily string
+	if partType.GetId() == int32(types.T_array_float32) {
+		vecfamily = "vecf32"
+	} else if partType.GetId() == int32(types.T_array_float64) {
+		vecfamily = "vecf64"
+	}
+
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(fvec, fvec, false, tree.P_char),
 		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
-			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
+			FamilyString: vecfamily, Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 
 	exprs = append(exprs, valExpr)
 

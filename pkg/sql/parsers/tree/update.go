@@ -385,6 +385,12 @@ type Terminated struct {
 	Value string
 }
 
+const (
+	DefaultFieldsTerminated = ","
+	DefaultFieldsEnclosedBy = "\""
+	DefaultFieldsEscapedBy  = "\\"
+)
+
 type Fields struct {
 	Terminated *Terminated
 	Optionally bool

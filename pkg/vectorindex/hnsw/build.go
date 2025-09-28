@@ -17,35 +17,24 @@ package hnsw
 import (
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-// Hnsw Build index implementation
-type HnswBuildIndex struct {
-	Id          string
-	Index       *usearch.Index
-	Path        string
-	Saved       bool
-	Size        int64
-	MaxCapacity uint
-}
-
-type HnswBuild struct {
+type HnswBuild[T types.RealNumbers] struct {
 	uid      string
 	cfg      vectorindex.IndexConfig
 	tblcfg   vectorindex.IndexTableConfig
-	indexes  []*HnswBuildIndex
+	indexes  []*HnswModel[T]
 	nthread  int
-	add_chan chan AddItem
+	add_chan chan AddItem[T]
 	err_chan chan error
 	wg       sync.WaitGroup
 	once     sync.Once
@@ -53,175 +42,14 @@ type HnswBuild struct {
 	count    atomic.Int64
 }
 
-type AddItem struct {
+type AddItem[T types.RealNumbers] struct {
 	key int64
-	vec []float32
-}
-
-// New HnswBuildIndex struct
-func NewHnswBuildIndex(id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint) (*HnswBuildIndex, error) {
-	var err error
-	idx := &HnswBuildIndex{}
-
-	idx.Id = id
-
-	idx.Index, err = usearch.NewIndex(cfg.Usearch)
-	if err != nil {
-		return nil, err
-	}
-
-	idx.MaxCapacity = max_capacity
-
-	err = idx.Index.Reserve(idx.MaxCapacity)
-	if err != nil {
-		return nil, err
-	}
-
-	err = idx.Index.ChangeThreadsAdd(uint(nthread))
-	if err != nil {
-		return nil, err
-	}
-	return idx, nil
-}
-
-// Destroy the struct
-func (idx *HnswBuildIndex) Destroy() error {
-	if idx.Index != nil {
-		err := idx.Index.Destroy()
-		if err != nil {
-			return err
-		}
-		idx.Index = nil
-	}
-
-	if idx.Saved && len(idx.Path) > 0 {
-		// remove the file
-		err := os.Remove(idx.Path)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Save the index to file
-func (idx *HnswBuildIndex) SaveToFile() error {
-	if idx.Saved {
-		return nil
-	}
-
-	f, err := os.CreateTemp("", "hnsw")
-	if err != nil {
-		return err
-	}
-
-	err = idx.Index.Save(f.Name())
-	if err != nil {
-		os.Remove(f.Name())
-		return err
-	}
-
-	// free memory
-	err = idx.Index.Destroy()
-	if err != nil {
-		return err
-	}
-	idx.Index = nil
-
-	idx.Saved = true
-	idx.Path = f.Name()
-	return nil
-}
-
-const InsertIndexBatchSize = 2000
-
-// Generate the SQL to update the secondary index tables.
-// 1. store the index file into the index table
-func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
-
-	err := idx.SaveToFile()
-	if err != nil {
-		return nil, err
-	}
-
-	fi, err := os.Stat(idx.Path)
-	if err != nil {
-		return nil, err
-	}
-
-	filesz := fi.Size()
-	offset := int64(0)
-	chunksz := int64(0)
-	chunkid := int64(0)
-
-	idx.Size = filesz
-
-	sqls := make([]string, 0, 5)
-
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
-	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
-	n := 0
-	for offset = 0; offset < filesz; {
-		if offset+vectorindex.MaxChunkSize < filesz {
-			chunksz = vectorindex.MaxChunkSize
-
-		} else {
-			chunksz = filesz - offset
-		}
-
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
-		values = append(values, tuple)
-
-		// offset and chunksz
-		offset += chunksz
-		chunkid++
-
-		n++
-		if n == InsertIndexBatchSize {
-			newsql := sql + strings.Join(values, ", ")
-			sqls = append(sqls, newsql)
-			values = values[:0]
-			n = 0
-		}
-	}
-
-	if len(values) > 0 {
-		newsql := sql + strings.Join(values, ", ")
-		sqls = append(sqls, newsql)
-	}
-
-	//sql += strings.Join(values, ", ")
-	//return []string{sql}, nil
-	return sqls, nil
-}
-
-// is the index empty
-func (idx *HnswBuildIndex) Empty() (bool, error) {
-	sz, err := idx.Index.Len()
-	if err != nil {
-		return false, err
-	}
-	return (sz == 0), nil
-}
-
-// check the index is full, i.e. 10K vectors
-func (idx *HnswBuildIndex) Full() (bool, error) {
-	sz, err := idx.Index.Len()
-	if err != nil {
-		return false, err
-	}
-	return (sz == idx.MaxCapacity), nil
-}
-
-// add vector to the index
-func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
-	return idx.Index.Add(uint64(key), vec)
+	vec []T
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, uid string, nworker int32,
-	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild[T types.RealNumbers](proc *process.Process, uid string, nworker int32,
+	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild[T], err error) {
 
 	// estimate the number of worker threads
 	nthread := 0
@@ -237,16 +65,16 @@ func NewHnswBuild(proc *process.Process, uid string, nworker int32,
 		nthread = 1
 	}
 
-	info = &HnswBuild{
+	info = &HnswBuild[T]{
 		uid:     uid,
 		cfg:     cfg,
 		tblcfg:  tblcfg,
-		indexes: make([]*HnswBuildIndex, 0, 16),
+		indexes: make([]*HnswModel[T], 0, 16),
 		nthread: int(nthread),
 	}
 
 	if nthread > 1 {
-		info.add_chan = make(chan AddItem, nthread*4)
+		info.add_chan = make(chan AddItem[T], nthread*4)
 		info.err_chan = make(chan error, nthread)
 
 		// create multi-threads worker for add
@@ -271,8 +99,8 @@ func NewHnswBuild(proc *process.Process, uid string, nworker int32,
 	return info, nil
 }
 
-func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
-	var res AddItem
+func (h *HnswBuild[T]) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
+	var res AddItem[T]
 	var ok bool
 
 	select {
@@ -293,7 +121,7 @@ func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, e
 	return false, nil
 }
 
-func (h *HnswBuild) CloseAndWait() {
+func (h *HnswBuild[T]) CloseAndWait() {
 	if h.nthread > 1 {
 		h.once.Do(func() {
 			close(h.add_chan)
@@ -303,7 +131,7 @@ func (h *HnswBuild) CloseAndWait() {
 }
 
 // destroy
-func (h *HnswBuild) Destroy() error {
+func (h *HnswBuild[T]) Destroy() error {
 
 	var errs error
 
@@ -319,7 +147,7 @@ func (h *HnswBuild) Destroy() error {
 	return errs
 }
 
-func (h *HnswBuild) Add(key int64, vec []float32) error {
+func (h *HnswBuild[T]) Add(key int64, vec []T) error {
 	if h.nthread > 1 {
 
 		select {
@@ -328,29 +156,29 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 		default:
 		}
 		// copy the []float32 slice.
-		h.add_chan <- AddItem{key, append(make([]float32, 0, len(vec)), vec...)}
+		h.add_chan <- AddItem[T]{key, append(make([]T, 0, len(vec)), vec...)}
 		return nil
 	} else {
 		return h.addVector(key, vec)
 	}
 }
 
-func (h *HnswBuild) createIndexUniqueKey(id int64) string {
+func (h *HnswBuild[T]) createIndexUniqueKey(id int64) string {
 	return fmt.Sprintf("%s:%d", h.uid, id)
 }
 
-func (h *HnswBuild) getIndexForAddSync() (idx *HnswBuildIndex, save_idx *HnswBuildIndex, err error) {
+func (h *HnswBuild[T]) getIndexForAddSync() (idx *HnswModel[T], save_idx *HnswModel[T], err error) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	return h.getIndexForAdd()
 }
 
-func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIndex, err error) {
+func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[T], err error) {
 
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -365,7 +193,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -382,10 +210,10 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 // add vector to the build
 // it will check the current index is full and add the vector to available index
 // sync version for multi-thread
-func (h *HnswBuild) addVectorSync(key int64, vec []float32) error {
+func (h *HnswBuild[T]) addVectorSync(key int64, vec []T) error {
 	var err error
-	var idx *HnswBuildIndex
-	var save_idx *HnswBuildIndex
+	var idx *HnswModel[T]
+	var save_idx *HnswModel[T]
 
 	idx, save_idx, err = h.getIndexForAddSync()
 	if err != nil {
@@ -406,10 +234,10 @@ func (h *HnswBuild) addVectorSync(key int64, vec []float32) error {
 // add vector to the build
 // it will check the current index is full and add the vector to available index
 // single-threaded version.
-func (h *HnswBuild) addVector(key int64, vec []float32) error {
+func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 	var err error
-	var idx *HnswBuildIndex
-	var save_idx *HnswBuildIndex
+	var idx *HnswModel[T]
+	var save_idx *HnswModel[T]
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -432,7 +260,7 @@ func (h *HnswBuild) addVector(key int64, vec []float32) error {
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
+func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 
 	h.CloseAndWait()
 
@@ -472,6 +300,6 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 	return sqls, nil
 }
 
-func (h *HnswBuild) GetIndexes() []*HnswBuildIndex {
+func (h *HnswBuild[T]) GetIndexes() []*HnswModel[T] {
 	return h.indexes
 }

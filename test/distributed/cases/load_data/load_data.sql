@@ -607,3 +607,22 @@ delete from load_data_0303;
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ',';
 select count(*) from load_data_0303;
 drop table load_data_0303;
+
+drop database if exists test;
+create database test;
+use test;
+
+create table t1(a bigint primary key, b vecf32(3), c varchar(10), d double);
+
+insert into t1 values(1, "[-1,-1,-1]", "aaaa", 1.213);
+insert into t1 values(2, "[-1, -1, 0]", "bbbb", 11.213);
+insert into t1 values(3, "[1,1,1]", "cccc", 111.213);
+
+select count(*) from t1;
+
+select * from t1 into outfile '$resources/into_outfile/load_data/t1.csv';
+truncate table t1;
+load data infile '$resources/into_outfile/load_data/t1.csv' into table t1 ignore 1 lines;
+select count(*) from t1;
+
+drop database test;

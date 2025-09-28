@@ -363,7 +363,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M QUANTIZATION
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC
 
 
 // Alter
@@ -7559,10 +7559,10 @@ index_option_list:
 	      opt1.HnswM = opt2.HnswM
 	    } else if opt2.HnswEfConstruction > 0 {
  	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
- 	    } else if len(opt2.HnswQuantization) > 0 {
-	      opt1.HnswQuantization = opt2.HnswQuantization
             } else if opt2.HnswEfSearch > 0 {
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
+ 	    } else if opt2.Async {
+	      opt1.Async = opt2.Async
  	    }
             $$ = opt1
         }
@@ -7650,10 +7650,10 @@ index_option:
 	io.HnswEfSearch = val
 	$$ = io
      }
-|    QUANTIZATION equal_opt STRING
+|    ASYNC
      {
 	io := tree.NewIndexOption()
-	io.HnswQuantization = $3
+	io.Async = true
 	$$ = io
      }
 	
@@ -12607,6 +12607,7 @@ non_reserved_keyword:
 |   ATTRIBUTE
 |   ACTION
 |   ALGORITHM
+|   ASYNC
 |   BEGIN
 |   BIGINT
 |   BIT
@@ -12727,7 +12728,6 @@ non_reserved_keyword:
 |   QUERY
 |   PAUSE
 |   PROFILES
-|   QUANTIZATION
 |   ROLE
 |   RANGE
 |   READ

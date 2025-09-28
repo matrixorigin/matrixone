@@ -886,8 +886,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 				// IVF indexDefs are aggregated and handled later
 				if _, ok := multiTableIndexes[indexdef.IndexName]; !ok {
 					multiTableIndexes[indexdef.IndexName] = &MultiTableIndex{
-						IndexAlgo: catalog.ToLower(indexdef.IndexAlgo),
-						IndexDefs: make(map[string]*IndexDef),
+						IndexAlgo:       catalog.ToLower(indexdef.IndexAlgo),
+						IndexAlgoParams: indexdef.IndexAlgoParams,
+						IndexDefs:       make(map[string]*IndexDef),
 					}
 				}
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
@@ -897,6 +898,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				if err != nil {
 					return err
 				}
+
 			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 				// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
 				err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
@@ -3578,7 +3580,6 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-
 			// Used by pre-insert vector index.
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
@@ -4238,8 +4239,9 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				// IVF indexDefs are aggregated and handled later
 				if _, ok := multiTableIndexes[indexdef.IndexName]; !ok {
 					multiTableIndexes[indexdef.IndexName] = &MultiTableIndex{
-						IndexAlgo: catalog.ToLower(indexdef.IndexAlgo),
-						IndexDefs: make(map[string]*IndexDef),
+						IndexAlgo:       catalog.ToLower(indexdef.IndexAlgo),
+						IndexAlgoParams: indexdef.IndexAlgoParams,
+						IndexDefs:       make(map[string]*IndexDef),
 					}
 				}
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
