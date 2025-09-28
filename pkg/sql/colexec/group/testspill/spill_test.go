@@ -30,6 +30,9 @@ func TestSpill(t *testing.T) {
 		embed.WithCNCount(3),
 		embed.WithTesting(),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
+			service.Adjust(func(config *embed.ServiceConfig) {
+				config.Log.Level = "debug"
+			})
 		}),
 	)
 	require.NoError(t, err)
