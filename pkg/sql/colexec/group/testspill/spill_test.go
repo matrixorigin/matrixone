@@ -81,8 +81,7 @@ func TestSpill(t *testing.T) {
 	// query
 	var a, b, c int
 	err = db.QueryRow(`
-		select 
-			count(sha2(product_id * customer_id, 256)),
+		select count(sha2(product_id * customer_id, 256))
 		from sales
 		`,
 	).Scan(&a, &b, &c)
