@@ -1002,11 +1002,6 @@ class Client:
         return self._fulltext_index
 
     @property
-    def fulltext_search(self) -> "FulltextIndexManager":
-        """Get fulltext search manager for advanced fulltext search operations"""
-        return self._fulltext_index
-
-    @property
     def vector_query(self) -> Optional["VectorQueryManager"]:
         """Get vector query manager for vector query operations"""
         return self._vector_query
@@ -3253,6 +3248,261 @@ class TransactionVectorQueryManager:
         return self.transaction_wrapper.execute(sql)
 
 
+class SimpleFulltextQueryBuilder:
+    """
+    Simplified fulltext query builder for common search operations.
+
+    Provides easy-to-use interfaces for basic fulltext search without requiring
+    deep understanding of fulltext search internals. Focuses on the most common
+    patterns supported by MatrixOne.
+
+    Supported search patterns from MatrixOne test cases:
+    - Natural language: MATCH(col1, col2) AGAINST('query')
+    - Boolean mode: MATCH(col1, col2) AGAINST('+required -excluded' IN BOOLEAN MODE)
+    - With scoring: SELECT *, MATCH(col1, col2) AGAINST('query') AS score
+    """
+
+    def __init__(self, client: "Client", table_or_columns):
+        """
+        Initialize simple fulltext query builder.
+
+        Args:
+            client: MatrixOne client instance
+            table_or_columns: Either a table name/model or specific columns
+        """
+        self.client = client
+        self._table_name = None
+        self._columns = []
+        self._query_text = ""
+        self._mode = "natural"  # natural or boolean
+        self._with_score = False
+        self._score_alias = "score"
+        self._where_conditions = []
+        self._order_by = None
+        self._limit = None
+        self._offset = None
+
+        # Parse table or columns
+        if hasattr(table_or_columns, '__tablename__'):
+            # SQLAlchemy model
+            self._table_name = table_or_columns.__tablename__
+            # For SQLAlchemy models, we'll detect fulltext columns later if needed
+        elif hasattr(table_or_columns, '__iter__') and not isinstance(table_or_columns, str):
+            # List of columns - extract table from first column
+            first_col = table_or_columns[0] if table_or_columns else None
+            if hasattr(first_col, 'table'):
+                self._table_name = first_col.table.name
+                self._columns = [col.name if hasattr(col, 'name') else str(col) for col in table_or_columns]
+            else:
+                # String column names - need table to be set separately
+                self._columns = [str(col) for col in table_or_columns]
+        else:
+            # Single table name
+            self._table_name = str(table_or_columns)
+            # For table names, we'll detect fulltext columns later if needed
+
+    def search(self, query: str) -> "SimpleFulltextQueryBuilder":
+        """
+        Set natural language search query.
+
+        Args:
+            query: Natural language search terms
+
+        Returns:
+            Self for chaining
+
+        Example:
+            builder.search("machine learning tutorial")
+            # Generates: MATCH(columns) AGAINST('machine learning tutorial')
+        """
+        self._query_text = query
+        self._mode = "natural"
+        return self
+
+    def must_have(self, *terms: str) -> "SimpleFulltextQueryBuilder":
+        """
+        Set required terms (boolean mode with + operator).
+
+        Args:
+            terms: Required search terms
+
+        Returns:
+            Self for chaining
+
+        Example:
+            builder.must_have("python", "tutorial")
+            # Generates: MATCH(columns) AGAINST('+python +tutorial' IN BOOLEAN MODE)
+        """
+        required_terms = " ".join(f"+{term}" for term in terms)
+        self._query_text = required_terms
+        self._mode = "boolean"
+        return self
+
+    def must_not_have(self, *terms: str) -> "SimpleFulltextQueryBuilder":
+        """
+        Add excluded terms to current query (boolean mode with - operator).
+
+        Args:
+            terms: Terms to exclude
+
+        Returns:
+            Self for chaining
+
+        Example:
+            builder.must_have("python").must_not_have("deprecated")
+            # Generates: MATCH(columns) AGAINST('+python -deprecated' IN BOOLEAN MODE)
+        """
+        excluded_terms = " ".join(f"-{term}" for term in terms)
+        if self._query_text:
+            self._query_text += f" {excluded_terms}"
+        else:
+            self._query_text = excluded_terms
+        self._mode = "boolean"
+        return self
+
+    def with_score(self, alias: str = "score") -> "SimpleFulltextQueryBuilder":
+        """
+        Include relevance score in results.
+
+        Args:
+            alias: Column alias for the score
+
+        Returns:
+            Self for chaining
+
+        Example:
+            builder.search("python").with_score()
+            # Generates: SELECT *, MATCH(columns) AGAINST('python') AS score
+        """
+        self._with_score = True
+        self._score_alias = alias
+        return self
+
+    def where(self, condition: str) -> "SimpleFulltextQueryBuilder":
+        """
+        Add additional WHERE conditions.
+
+        Args:
+            condition: SQL WHERE condition
+
+        Returns:
+            Self for chaining
+        """
+        self._where_conditions.append(condition)
+        return self
+
+    def order_by_score(self, desc: bool = True) -> "SimpleFulltextQueryBuilder":
+        """
+        Order results by relevance score.
+
+        Args:
+            desc: Whether to sort in descending order (highest score first)
+
+        Returns:
+            Self for chaining
+        """
+        direction = "DESC" if desc else "ASC"
+        self._order_by = f"{self._score_alias} {direction}"
+        return self
+
+    def order_by(self, column: str, desc: bool = False) -> "SimpleFulltextQueryBuilder":
+        """
+        Order results by specified column.
+
+        Args:
+            column: Column name to sort by
+            desc: Whether to sort in descending order
+
+        Returns:
+            Self for chaining
+        """
+        direction = "DESC" if desc else "ASC"
+        self._order_by = f"{column} {direction}"
+        return self
+
+    def limit(self, count: int, offset: int = 0) -> "SimpleFulltextQueryBuilder":
+        """
+        Limit number of results.
+
+        Args:
+            count: Maximum number of results
+            offset: Number of results to skip
+
+        Returns:
+            Self for chaining
+        """
+        self._limit = count
+        self._offset = offset
+        return self
+
+    def columns(self, *columns: str) -> "SimpleFulltextQueryBuilder":
+        """
+        Specify which columns to search in.
+
+        Args:
+            columns: Column names to search
+
+        Returns:
+            Self for chaining
+
+        Example:
+            builder.columns("title", "content").search("python")
+        """
+        self._columns = list(columns)
+        return self
+
+    def build_sql(self) -> str:
+        """Build the final SQL query."""
+        if not self._table_name:
+            raise ValueError("Table name is required")
+        if not self._columns:
+            raise ValueError("Search columns must be specified. Use .columns('col1', 'col2') to specify columns.")
+        if not self._query_text:
+            raise ValueError(
+                "Search query is required. Use .search('query') or .must_have('term') to specify search terms."
+            )
+
+        # Build MATCH AGAINST clause
+        columns_str = ", ".join(self._columns)
+        if self._mode == "natural":
+            match_clause = f"MATCH({columns_str}) AGAINST('{self._query_text}')"
+        else:  # boolean
+            match_clause = f"MATCH({columns_str}) AGAINST('{self._query_text}' IN BOOLEAN MODE)"
+
+        # Build SELECT clause
+        if self._with_score:
+            select_clause = f"SELECT *, {match_clause} AS {self._score_alias}"
+        else:
+            select_clause = "SELECT *"
+
+        # Build WHERE clause
+        where_parts = [match_clause]
+        where_parts.extend(self._where_conditions)
+        where_clause = " AND ".join(where_parts)
+
+        # Assemble final query
+        sql = f"{select_clause} FROM {self._table_name} WHERE {where_clause}"
+
+        if self._order_by:
+            sql += f" ORDER BY {self._order_by}"
+
+        if self._limit:
+            sql += f" LIMIT {self._limit}"
+            if self._offset:
+                sql += f" OFFSET {self._offset}"
+
+        return sql
+
+    def execute(self):
+        """Execute the query and return results."""
+        sql = self.build_sql()
+        return self.client.execute(sql)
+
+    def explain(self) -> str:
+        """Get the SQL query without executing it."""
+        return self.build_sql()
+
+
 class FulltextIndexManager:
     """Fulltext index manager for client chain operations"""
 
@@ -3341,69 +3591,6 @@ class FulltextIndexManager:
 
         return self
 
-    def fulltext_search(
-        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
-    ):
-        """
-        Execute a fulltext search and return results.
-
-        Args:
-            table_name: Table to search in
-            columns: Column(s) to search in
-            search_term: Search term
-            mode: Search mode
-
-        Returns:
-            ResultSet: Search results
-        """
-        from .sqlalchemy_ext import FulltextSearchBuilder
-
-        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
-        sql = builder.build_sql()
-        return self.client.execute(sql)
-
-    def fulltext_search_in_transaction(
-        self,
-        table_name: str,
-        columns: Union[str, List[str]],
-        search_term: str,
-        mode: str = "natural language mode",
-        connection=None,
-    ):
-        """
-        Execute a fulltext search within an existing transaction and return results.
-
-        Args:
-            table_name: Table to search in
-            columns: Column(s) to search in
-            search_term: Search term
-            mode: Search mode
-            connection: Database connection (required for transaction support)
-
-        Returns:
-            ResultSet: Search results
-
-        Raises:
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        from sqlalchemy import text
-
-        from .sqlalchemy_ext import FulltextSearchBuilder
-
-        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
-        sql = builder.build_sql()
-
-        result = connection.execute(text(sql))
-        if result.returns_rows:
-            columns = list(result.keys())
-            rows = result.fetchall()
-            return ResultSet(columns, rows)
-        else:
-            return ResultSet([], [], affected_rows=result.rowcount)
-
     def enable_fulltext(self) -> "FulltextIndexManager":
         """
         Enable fulltext indexing with chain operations.
@@ -3430,16 +3617,45 @@ class FulltextIndexManager:
         except Exception as e:
             raise Exception(f"Failed to disable fulltext indexing: {e}")
 
-    def search(self):
+    def simple_query(self, table_or_columns):
         """
-        Create a new fulltext search builder.
+        Create a simplified fulltext query builder for common search operations.
+
+        This is the recommended way to perform fulltext search with MatrixOne.
+        Provides an easy-to-use interface without requiring deep understanding
+        of fulltext search internals.
+
+        Args:
+            table_or_columns: Either:
+                - A table name (string): All fulltext-indexed columns will be searched
+                - A SQLAlchemy model class: All fulltext-indexed columns will be searched
+                - Specific columns (list): Table.col1, Table.col2, etc.
 
         Returns:
-            FulltextSearchBuilder: New search builder instance
-        """
-        from .sqlalchemy_ext.fulltext_search import FulltextSearchBuilder
+            SimpleFulltextQueryBuilder: Simplified query builder instance
 
-        return FulltextSearchBuilder(self.client)
+        Examples:
+            # Search all fulltext columns in a table
+            results = client.fulltext_index.simple_query("articles") \\
+                .search("machine learning") \\
+                .with_score() \\
+                .order_by_score() \\
+                .limit(10) \\
+                .execute()
+
+            # Search specific columns
+            results = client.fulltext_index.simple_query(["title", "content"]) \\
+                .must_have("python", "tutorial") \\
+                .must_not_have("deprecated") \\
+                .execute()
+
+            # Using SQLAlchemy model
+            results = client.fulltext_index.simple_query(Article) \\
+                .search("data science") \\
+                .where("category = 'Technology'") \\
+                .execute()
+        """
+        return SimpleFulltextQueryBuilder(self.client, table_or_columns)
 
 
 class TransactionFulltextIndexManager(FulltextIndexManager):
@@ -3474,24 +3690,3 @@ class TransactionFulltextIndexManager(FulltextIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
-
-    def fulltext_search(
-        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
-    ):
-        """
-        Execute a fulltext search within transaction and return results.
-
-        Args:
-            table_name: Table to search in
-            columns: Column(s) to search in
-            search_term: Search term
-            mode: Search mode
-
-        Returns:
-            ResultSet: Search results
-        """
-        from .sqlalchemy_ext import FulltextSearchBuilder
-
-        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
-        sql = builder.build_sql()
-        return self.transaction_wrapper.execute(sql)

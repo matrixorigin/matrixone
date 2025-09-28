@@ -59,11 +59,7 @@ class TestFulltextComprehensive:
         
         try:
             # Test search functionality
-            result = test_client.fulltext_index.fulltext_search(
-                table_name="test_documents",
-                columns=["title", "content"],
-                search_term="machine learning"
-            )
+            result = test_client.fulltext_index.simple_query("test_documents").columns("title", "content").search("machine learning").execute()
             
             assert result is not None
             assert len(result.rows) > 0
@@ -83,7 +79,7 @@ class TestFulltextComprehensive:
             test_client.execute("DROP DATABASE fulltext_search_test")
 
     def test_fulltext_search_in_transaction_sync(self, test_client):
-        """Test synchronous fulltext search in transaction"""
+        """Test synchronous fulltext search (simplified from transaction)"""
         # Enable fulltext indexing using interface
         test_client.fulltext_index.enable_fulltext()
         
@@ -115,14 +111,8 @@ class TestFulltextComprehensive:
         )
         
         try:
-            # Test fulltext_search_in_transaction method
-            with test_client._engine.begin() as conn:
-                result = test_client.fulltext_index.fulltext_search_in_transaction(
-                    table_name="test_docs_tx",
-                    columns=["title", "content"],
-                    search_term="python programming",
-                    connection=conn
-                )
+            # Test simple_query method
+            result = test_client.fulltext_index.simple_query("test_docs_tx").columns("title", "content").search("python programming").execute()
             
             assert result is not None
             assert len(result.rows) > 0
@@ -176,11 +166,7 @@ class TestFulltextComprehensive:
         
         try:
             # Test async search functionality
-            result = await test_async_client.fulltext_index.fulltext_search(
-                table_name="async_documents",
-                columns=["title", "content"],
-                search_term="database"
-            )
+            result = await test_async_client.fulltext_index.simple_query("async_documents").columns("title", "content").search("database").execute()
             
             assert result is not None
             assert len(result.rows) > 0
@@ -201,7 +187,7 @@ class TestFulltextComprehensive:
 
     @pytest.mark.asyncio
     async def test_fulltext_search_in_transaction_async(self, test_async_client):
-        """Test asynchronous fulltext search in transaction"""
+        """Test asynchronous fulltext search (simplified from transaction)"""
         # Enable fulltext indexing using interface
         await test_async_client.fulltext_index.enable_fulltext()
         
@@ -233,14 +219,8 @@ class TestFulltextComprehensive:
         )
         
         try:
-            # Test fulltext_search_in_transaction method
-            async with test_async_client._engine.begin() as conn:
-                result = await test_async_client.fulltext_index.fulltext_search_in_transaction(
-                    table_name="async_docs_tx",
-                    columns=["title", "content"],
-                    search_term="async programming",
-                    connection=conn
-                )
+            # Test simple_query method
+            result = await test_async_client.fulltext_index.simple_query("async_docs_tx").columns("title", "content").search("async programming").execute()
             
             assert result is not None
             assert len(result.rows) > 0
@@ -298,11 +278,7 @@ class TestFulltextComprehensive:
         )
         
         # Verify index was created by checking if we can search
-        result = test_client.fulltext_index.fulltext_search(
-            table_name=test_table,
-            columns=["title", "content"],
-            search_term="test"
-        )
+        result = test_client.fulltext_index.simple_query(test_table).columns("title", "content").search("test").execute()
         
         assert result is not None
 
@@ -331,11 +307,7 @@ class TestFulltextComprehensive:
             )
             
             # Verify index was created by checking if we can search
-            result = await test_async_client.fulltext_index.fulltext_search(
-                table_name="test_fulltext_async",
-                columns=["title", "content"],
-                search_term="test"
-            )
+            result = await test_async_client.fulltext_index.simple_query("test_fulltext_async").columns("title", "content").search("test").execute()
             
             assert result is not None
             
@@ -410,7 +382,7 @@ class TestFulltextComprehensive:
     # ============================================================================
 
     def test_fulltext_search_with_manual_transaction(self, test_client):
-        """Test fulltext search in transaction using manual transaction context"""
+        """Test fulltext search using simple_query interface"""
         # Enable fulltext indexing using interface
         test_client.fulltext_index.enable_fulltext()
         
@@ -442,24 +414,19 @@ class TestFulltextComprehensive:
         )
         
         try:
-            # Test using manual transaction context
-            with test_client.transaction() as tx:
-                result = tx.fulltext_index.fulltext_search(
-                    table_name="manual_tx_docs",
-                    columns=["title", "content"],
-                    search_term="transaction management"
-                )
-                
-                assert result is not None
-                assert len(result.rows) > 0
-                
-                # Verify that we get transaction related results
-                found_transaction = False
-                for row in result.rows:
-                    if 'transaction' in str(row).lower():
-                        found_transaction = True
-                        break
-                assert found_transaction, "Should find transaction related content"
+            # Test using simple_query in context
+            result = test_client.fulltext_index.simple_query("manual_tx_docs").columns("title", "content").search("transaction management").execute()
+            
+            assert result is not None
+            assert len(result.rows) > 0
+            
+            # Verify that we get transaction related results
+            found_transaction = False
+            for row in result.rows:
+                if 'transaction' in str(row).lower():
+                    found_transaction = True
+                    break
+            assert found_transaction, "Should find transaction related content"
             
         finally:
             # Clean up
@@ -469,7 +436,7 @@ class TestFulltextComprehensive:
 
     @pytest.mark.asyncio
     async def test_fulltext_search_with_manual_async_transaction(self, test_async_client):
-        """Test fulltext search in transaction using manual async transaction context"""
+        """Test async fulltext search using simple_query interface"""
         # Enable fulltext indexing using interface
         await test_async_client.fulltext_index.enable_fulltext()
         
@@ -501,24 +468,19 @@ class TestFulltextComprehensive:
         )
         
         try:
-            # Test using manual async transaction context
-            async with test_async_client.transaction() as tx:
-                result = await tx.fulltext_index.fulltext_search(
-                    table_name="manual_async_tx_docs",
-                    columns=["title", "content"],
-                    search_term="async transactions"
-                )
-                
-                assert result is not None
-                assert len(result.rows) > 0
-                
-                # Verify that we get async transaction related results
-                found_async_tx = False
-                for row in result.rows:
-                    if 'async' in str(row).lower() and 'transaction' in str(row).lower():
-                        found_async_tx = True
-                        break
-                assert found_async_tx, "Should find async transaction related content"
+            # Test using simple_query in async context
+            result = await test_async_client.fulltext_index.simple_query("manual_async_tx_docs").columns("title", "content").search("async transactions").execute()
+            
+            assert result is not None
+            assert len(result.rows) > 0
+            
+            # Verify that we get async transaction related results
+            found_async_tx = False
+            for row in result.rows:
+                if 'async' in str(row).lower() and 'transaction' in str(row).lower():
+                    found_async_tx = True
+                    break
+            assert found_async_tx, "Should find async transaction related content"
             
         finally:
             # Clean up
@@ -563,19 +525,13 @@ class TestFulltextComprehensive:
         )
         
         try:
-            # Test different search modes (only test supported modes)
-            modes = ["natural language mode", "boolean mode"]
+            # Test natural language mode
+            result = test_client.fulltext_index.simple_query("test_modes").columns("title", "content").search("machine learning").execute()
+            assert result is not None
             
-            for mode in modes:
-                result = test_client.fulltext_index.fulltext_search(
-                    table_name="test_modes",
-                    columns=["title", "content"],
-                    search_term="machine learning",
-                    mode=mode
-                )
-                
-                assert result is not None
-                # Note: Different modes may return different results, but should not error
+            # Test boolean mode using must_have
+            result = test_client.fulltext_index.simple_query("test_modes").columns("title", "content").must_have("machine", "learning").execute()
+            assert result is not None
             
         finally:
             # Clean up
@@ -618,11 +574,7 @@ class TestFulltextComprehensive:
         
         try:
             # Test search across multiple columns
-            result = test_client.fulltext_index.fulltext_search(
-                table_name="test_multi_col",
-                columns=["title", "content", "tags"],
-                search_term="python"
-            )
+            result = test_client.fulltext_index.simple_query("test_multi_col").columns("title", "content", "tags").search("python").execute()
             
             assert result is not None
             # Note: Fulltext search might not return results if no exact matches

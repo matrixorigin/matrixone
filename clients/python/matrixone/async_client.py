@@ -1171,68 +1171,30 @@ class AsyncFulltextIndexManager:
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} on table {table_name}: {e}")
 
-    async def fulltext_search(
-        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
-    ):
+    def simple_query(self, table_or_columns):
         """
-        Execute a fulltext search and return results.
+        Create a simplified fulltext query builder for common search operations.
+
+        This method provides an easy-to-use interface for fulltext search without
+        requiring deep knowledge of fulltext search syntax or the underlying builder pattern.
 
         Args:
-            table_name: Table to search in
-            columns: Column(s) to search in
-            search_term: Search term
-            mode: Search mode
+            table_or_columns: Either a table name (str), an ORM model class, or a list of columns
 
         Returns:
-            AsyncResultSet: Search results
+            SimpleFulltextQueryBuilder: A builder instance for chaining search operations
+
+        Example:
+            # Search in a table
+            results = await client.fulltext_index.simple_query("articles") \\
+                .columns("title", "content") \\
+                .search("machine learning") \\
+                .execute()
         """
-        from .sqlalchemy_ext import FulltextSearchBuilder
+        # Import here to avoid circular imports
+        from .client import SimpleFulltextQueryBuilder
 
-        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
-        sql = builder.build_sql()
-        return await self.client.execute(sql)
-
-    async def fulltext_search_in_transaction(
-        self,
-        table_name: str,
-        columns: Union[str, List[str]],
-        search_term: str,
-        mode: str = "natural language mode",
-        connection=None,
-    ):
-        """
-        Execute a fulltext search within an existing transaction and return results.
-
-        Args:
-            table_name: Table to search in
-            columns: Column(s) to search in
-            search_term: Search term
-            mode: Search mode
-            connection: Database connection (required for transaction support)
-
-        Returns:
-            AsyncResultSet: Search results
-
-        Raises:
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        from sqlalchemy import text
-
-        from .sqlalchemy_ext import FulltextSearchBuilder
-
-        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
-        sql = builder.build_sql()
-
-        result = await connection.execute(text(sql))
-        if result.returns_rows:
-            columns = list(result.keys())
-            rows = result.fetchall()
-            return AsyncResultSet(columns, rows)
-        else:
-            return AsyncResultSet([], [], affected_rows=result.rowcount)
+        return SimpleFulltextQueryBuilder(self.client, table_or_columns)
 
     async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
         """
@@ -1293,27 +1255,6 @@ class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
-
-    async def fulltext_search(
-        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
-    ):
-        """
-        Execute a fulltext search within transaction and return results.
-
-        Args:
-            table_name: Table to search in
-            columns: Column(s) to search in
-            search_term: Search term
-            mode: Search mode
-
-        Returns:
-            AsyncResultSet: Search results
-        """
-        from .sqlalchemy_ext import FulltextSearchBuilder
-
-        builder = FulltextSearchBuilder(table_name, columns).search(search_term).set_mode(mode)
-        sql = builder.build_sql()
-        return await self.transaction_wrapper.execute(sql)
 
 
 class AsyncClient:
