@@ -69,10 +69,12 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 		return 0, err
 	}
 
-	scanNode := builder.qry.Nodes[children[0]]
-	if scanNode.NodeType != plan.Node_TABLE_SCAN {
-		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
-	}
+	/*
+		scanNode := builder.qry.Nodes[children[0]]
+			if scanNode.NodeType != plan.Node_TABLE_SCAN {
+				return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
+			}
+	*/
 
 	// remove the first argment and put the first argument to Param
 	exprs = exprs[1:]
