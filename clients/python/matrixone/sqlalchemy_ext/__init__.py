@@ -25,8 +25,6 @@ from .fulltext_search import FulltextSearchBuilder as AdvancedFulltextSearchBuil
 from .fulltext_search import (
     FulltextSearchMode,
     boolean_match,
-    fulltext_and,
-    fulltext_or,
     group,
     natural_match,
 )
@@ -138,7 +136,5 @@ __all__ = [
     "FulltextFilter",
     "boolean_match",
     "natural_match",
-    "fulltext_and",
-    "fulltext_or",
     "group",
 ]

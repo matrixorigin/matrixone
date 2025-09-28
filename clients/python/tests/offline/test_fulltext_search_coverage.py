@@ -14,10 +14,9 @@ from matrixone.sqlalchemy_ext.fulltext_search import (
     FulltextIndexManager,
     boolean_match,
     natural_match,
-    group,
-    fulltext_and,
-    fulltext_or
+    group
 )
+from matrixone.sqlalchemy_ext.adapters import logical_and, logical_or, logical_not
 
 
 class MockColumn:

@@ -56,12 +56,13 @@ from .sqlalchemy_ext import (
     create_vector_table,
     enable_hnsw_indexing,
     enable_ivf_indexing,
-    fulltext_and,
-    fulltext_or,
     fulltext_search_builder,
     group,
     natural_match,
 )
+
+# Import generic logical adapters
+from .sqlalchemy_ext.adapters import logical_and, logical_not, logical_or
 from .version import FeatureRequirement, VersionInfo, VersionManager, requires_version
 
 __version__ = "1.0.0"
@@ -129,9 +130,11 @@ __all__ = [
     "FulltextFilter",
     "boolean_match",
     "natural_match",
-    "fulltext_and",
-    "fulltext_or",
     "group",
     "create_fulltext_index",
     "fulltext_search_builder",
+    # Generic logical adapters
+    "logical_and",
+    "logical_or",
+    "logical_not",
 ]

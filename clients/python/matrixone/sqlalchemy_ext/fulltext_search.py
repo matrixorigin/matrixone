@@ -67,7 +67,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import Boolean
-from sqlalchemy.sql import and_, or_, text
+from sqlalchemy.sql import and_, not_, or_, text
 from sqlalchemy.sql.elements import ClauseElement
 
 if TYPE_CHECKING:
@@ -664,6 +664,7 @@ class FulltextFilter(ClauseElement):
         self.columns = columns
         self.mode = mode
         self.query_builder = FulltextQueryBuilder()
+        self._natural_query = None  # Store natural language query separately
         # Set SQLAlchemy type info for compatibility
         self.type = Boolean()
 
@@ -707,6 +708,11 @@ class FulltextFilter(ClauseElement):
         self.query_builder.discourage(*items)
         return self
 
+    def set_natural_query(self, query: str) -> "FulltextFilter":
+        """Set natural language query string (used for NATURAL_LANGUAGE mode)."""
+        self._natural_query = query
+        return self
+
     def group(self, *filters: "FulltextFilter") -> "FulltextFilter":
         """Add nested query groups (OR semantics)."""
         builders = [f.query_builder for f in filters]
@@ -734,7 +740,12 @@ class FulltextFilter(ClauseElement):
             raise ValueError("Columns must be specified")
 
         columns_str = ", ".join(self.columns)
-        query_string = self.query_builder.build()
+
+        # For natural language mode, use the stored natural query if available
+        if self.mode == FulltextSearchMode.NATURAL_LANGUAGE and self._natural_query:
+            query_string = self._natural_query
+        else:
+            query_string = self.query_builder.build()
 
         if not query_string:
             raise ValueError("Query cannot be empty")
@@ -960,7 +971,7 @@ def natural_match(*columns, query: str) -> FulltextFilter:
             # String column name
             column_names.append(str(col))
 
-    return FulltextFilter(column_names, FulltextSearchMode.NATURAL_LANGUAGE).encourage(query)
+    return FulltextFilter(column_names, FulltextSearchMode.NATURAL_LANGUAGE).set_natural_query(query)
 
 
 def group() -> FulltextGroup:
@@ -1003,59 +1014,34 @@ def group() -> FulltextGroup:
     return FulltextGroup("or")
 
 
-# SQLAlchemy compatibility wrappers
-def fulltext_and(*conditions):
-    """Create AND expressions that support FulltextFilter objects.
+# Import generic logical adapters at the end to avoid circular imports
+try:
+    from .adapters import logical_and, logical_not, logical_or
+except ImportError:
+    # Fallback implementations if adapters module is not available
+    def logical_and(*conditions):
+        processed_conditions = []
+        for condition in conditions:
+            if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
+                processed_conditions.append(text(f"({condition.compile()})"))
+            else:
+                processed_conditions.append(condition)
+        return and_(*processed_conditions)
 
-    This is a wrapper around SQLAlchemy's and_() that can handle FulltextFilter objects.
+    def logical_or(*conditions):
+        processed_conditions = []
+        for condition in conditions:
+            if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
+                processed_conditions.append(text(f"({condition.compile()})"))
+            else:
+                processed_conditions.append(condition)
+        return or_(*processed_conditions)
 
-    Args:
-        *conditions: Mix of FulltextFilter objects and regular SQLAlchemy expressions
-
-    Returns:
-        SQLAlchemy expression that can be used with filter()
-
-    Example:
-        query.filter(fulltext_and(
-            boolean_match("title", "content").must("python"),
-            Article.category == "Programming"
-        ))
-    """
-    processed_conditions = []
-    for condition in conditions:
-        if isinstance(condition, FulltextFilter):
-            # Wrap each fulltext condition in parentheses for proper grouping
-            processed_conditions.append(text(f"({condition.compile()})"))
+    def logical_not(condition):
+        if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
+            return text(f"NOT ({condition.compile()})")
         else:
-            processed_conditions.append(condition)
-    return and_(*processed_conditions)
-
-
-def fulltext_or(*conditions):
-    """Create OR expressions that support FulltextFilter objects.
-
-    This is a wrapper around SQLAlchemy's or_() that can handle FulltextFilter objects.
-
-    Args:
-        *conditions: Mix of FulltextFilter objects and regular SQLAlchemy expressions
-
-    Returns:
-        SQLAlchemy expression that can be used with filter()
-
-    Example:
-        query.filter(fulltext_or(
-            boolean_match("title", "content").must("python"),
-            boolean_match("title", "content").must("java")
-        ))
-    """
-    processed_conditions = []
-    for condition in conditions:
-        if isinstance(condition, FulltextFilter):
-            # Wrap each fulltext condition in parentheses for proper grouping
-            processed_conditions.append(text(f"({condition.compile()})"))
-        else:
-            processed_conditions.append(condition)
-    return or_(*processed_conditions)
+            return not_(condition)
 
 
 # Remove old FulltextTerm and FulltextQuery classes as they are replaced by FulltextQueryBuilder
