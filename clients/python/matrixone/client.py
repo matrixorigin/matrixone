@@ -705,11 +705,23 @@ class Client:
                 elif isinstance(param, str):
                     # Escape single quotes in string values
                     escaped_param = param.replace("'", "''")
-                    final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
+                    # Handle both ? and %s placeholders
+                    if "?" in final_sql:
+                        final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
+                    elif "%s" in final_sql:
+                        final_sql = final_sql.replace("%s", f"'{escaped_param}'", 1)
                 elif param is None:
-                    final_sql = final_sql.replace("?", "NULL", 1)
+                    # Handle both ? and %s placeholders
+                    if "?" in final_sql:
+                        final_sql = final_sql.replace("?", "NULL", 1)
+                    elif "%s" in final_sql:
+                        final_sql = final_sql.replace("%s", "NULL", 1)
                 else:
-                    final_sql = final_sql.replace("?", str(param), 1)
+                    # Handle both ? and %s placeholders
+                    if "?" in final_sql:
+                        final_sql = final_sql.replace("?", str(param), 1)
+                    elif "%s" in final_sql:
+                        final_sql = final_sql.replace("%s", str(param), 1)
 
         return final_sql
 
@@ -777,11 +789,76 @@ class Client:
         """
         return SnapshotQueryBuilder(snapshot_name, self)
 
-    def query(self, model_class):
-        """Get MatrixOne query builder - SQLAlchemy style"""
+    def query(self, *columns):
+        """Get MatrixOne query builder - SQLAlchemy style
+
+        Args:
+            *columns: Can be:
+                - Single model class: query(Article) - returns all columns from model
+                - Multiple columns: query(Article.id, Article.title) - returns specific columns
+                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+
+        Examples:
+            # Traditional model query (all columns)
+            client.query(Article).filter(...).all()
+
+            # Column-specific query
+            client.query(Article.id, Article.title).filter(...).all()
+
+            # With fulltext score
+            client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
+
+        Returns:
+            MatrixOneQuery instance configured for the specified columns
+        """
         from .orm import MatrixOneQuery
 
-        return MatrixOneQuery(model_class, self)
+        if len(columns) == 1:
+            # Traditional single model class usage
+            column = columns[0]
+            if hasattr(column, '__tablename__'):
+                # This is a model class
+                return MatrixOneQuery(column, self)
+            else:
+                # This is a single column/expression - need to handle specially
+                # For now, we'll create a query that can handle column selections
+                query = MatrixOneQuery(None, self)
+                query._select_columns = [column]
+                # Try to infer table name from column
+                if hasattr(column, 'table') and hasattr(column.table, 'name'):
+                    query._table_name = column.table.name
+                return query
+        else:
+            # Multiple columns/expressions
+            model_class = None
+            select_columns = []
+
+            for column in columns:
+                if hasattr(column, '__tablename__'):
+                    # This is a model class - use its table
+                    model_class = column
+                else:
+                    # This is a column or expression
+                    select_columns.append(column)
+
+            if model_class:
+                query = MatrixOneQuery(model_class, self)
+                if select_columns:
+                    # Add additional columns to the model's default columns
+                    query._select_columns = select_columns
+                return query
+            else:
+                # No model class provided, need to infer table from columns
+                query = MatrixOneQuery(None, self)
+                query._select_columns = select_columns
+
+                # Try to infer table name from first column that has table info
+                for col in select_columns:
+                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
+                        query._table_name = col.table.name
+                        break
+
+                return query
 
     def cte_query(self):
         """Get CTE (Common Table Expression) query builder"""

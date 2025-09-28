@@ -332,17 +332,23 @@ class BaseMatrixOneQuery:
         self._limit_count = None
         self._offset_count = None
 
-        # Detect if this is a SQLAlchemy model
-        self._is_sqlalchemy_model = self._detect_sqlalchemy_model()
-
-        # Get table name and columns based on model type
-        if self._is_sqlalchemy_model:
-            self._table_name = model_class.__tablename__
-            self._columns = {col.name: col for col in model_class.__table__.columns}
+        # Handle None model_class (for column-only queries)
+        if model_class is None:
+            self._is_sqlalchemy_model = False
+            self._table_name = None  # Will be set later by query() method
+            self._columns = {}
         else:
-            # Fallback to class name
-            self._table_name = getattr(model_class, "_table_name", model_class.__name__.lower())
-            self._columns = getattr(model_class, "_columns", {})
+            # Detect if this is a SQLAlchemy model
+            self._is_sqlalchemy_model = self._detect_sqlalchemy_model()
+
+            # Get table name and columns based on model type
+            if self._is_sqlalchemy_model:
+                self._table_name = model_class.__tablename__
+                self._columns = {col.name: col for col in model_class.__table__.columns}
+            else:
+                # Fallback to class name
+                self._table_name = getattr(model_class, "_table_name", model_class.__name__.lower())
+                self._columns = getattr(model_class, "_columns", {})
 
     def _detect_sqlalchemy_model(self) -> bool:
         """Detect if the model class is a SQLAlchemy model"""
@@ -608,19 +614,28 @@ class BaseMatrixOneQuery:
             select_parts = []
             for col in self._select_columns:
                 if hasattr(col, "compile"):  # SQLAlchemy function object
-                    # Compile the function to SQL string
-                    compiled = col.compile(compile_kwargs={"literal_binds": True})
-                    sql_str = str(compiled)
-                    # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                    # Convert avg('column') to avg(column)
-                    import re
+                    # Check if this is a FulltextLabel (which already has AS in compile())
+                    if (
+                        hasattr(col, "_compiler_dispatch")
+                        and hasattr(col, "name")
+                        and "FulltextLabel" in str(type(col))
+                    ):
+                        # For FulltextLabel, use compile() which already includes AS
+                        sql_str = col.compile(compile_kwargs={"literal_binds": True})
+                    else:
+                        # For regular SQLAlchemy objects
+                        compiled = col.compile(compile_kwargs={"literal_binds": True})
+                        sql_str = str(compiled)
+                        # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                        # Convert avg('column') to avg(column)
+                        import re
 
-                    sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+                        sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
 
-                    # Handle SQLAlchemy label() method - add AS alias if present
-                    # But avoid using SQL reserved keywords as aliases
-                    if hasattr(col, "name") and col.name and col.name.upper() not in ["DISTINCT"]:
-                        sql_str = f"{sql_str} AS {col.name}"
+                        # Handle SQLAlchemy label() method - add AS alias if present
+                        # But avoid using SQL reserved keywords as aliases
+                        if hasattr(col, "name") and col.name and col.name.upper() not in ["DISTINCT"]:
+                            sql_str = f"{sql_str} AS {col.name}"
 
                     select_parts.append(sql_str)
                 else:
@@ -630,6 +645,9 @@ class BaseMatrixOneQuery:
             builder.select_all()
 
         # Build FROM clause with optional table alias and snapshot
+        if not self._table_name:
+            raise ValueError("Table name is required. Provide a model class or set table name manually.")
+
         if self._table_alias:
             builder._from_table = f"{self._table_name} AS {self._table_alias}"
         else:

@@ -59,7 +59,15 @@ class TestFulltextSearchOnline:
         # Create table
         try:
             cls.client.execute("DROP TABLE IF EXISTS test_articles")
-            Base.metadata.create_all(cls.client.get_sqlalchemy_engine())
+            cls.client.execute("""
+                CREATE TABLE IF NOT EXISTS test_articles (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    title VARCHAR(255) NOT NULL,
+                    content TEXT NOT NULL,
+                    tags VARCHAR(500),
+                    category VARCHAR(100)
+                )
+            """)
         except Exception as e:
             pytest.skip(f"Cannot create test table: {e}")
         
@@ -118,7 +126,7 @@ class TestFulltextSearchOnline:
         try:
             for article in test_articles:
                 cls.client.execute(
-                    "INSERT INTO test_articles (title, content, tags, category) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO test_articles (title, content, tags, category) VALUES (%s, %s, %s, %s)",
                     (article['title'], article['content'], article['tags'], article['category'])
                 )
         except Exception as e:
@@ -446,11 +454,19 @@ class TestAsyncFulltextSearch:
         
         # Create table if not exists
         sync_client.execute("DROP TABLE IF EXISTS test_articles")
-        Base.metadata.create_all(sync_client.get_sqlalchemy_engine())
+        sync_client.execute("""
+            CREATE TABLE IF NOT EXISTS test_articles (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(200),
+                content TEXT,
+                tags VARCHAR(500),
+                category VARCHAR(50)
+            )
+        """)
         
         # Insert at least one test record for async tests
         sync_client.execute(
-            "INSERT INTO test_articles (title, content, tags, category) VALUES (?, ?, ?, ?)",
+            "INSERT INTO test_articles (title, content, tags, category) VALUES (%s, %s, %s, %s)",
             ("Async Python Tutorial", "Learn async programming with Python asyncio", "python,async,tutorial", "Programming")
         )
         
@@ -512,15 +528,23 @@ class TestFulltextSearchEdgeCases:
         
         # Create table if not exists
         cls.client.execute("DROP TABLE IF EXISTS test_articles")
-        Base.metadata.create_all(cls.client.get_sqlalchemy_engine())
+        cls.client.execute("""
+            CREATE TABLE IF NOT EXISTS test_articles (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(200),
+                content TEXT,
+                tags VARCHAR(500),
+                category VARCHAR(50)
+            )
+        """)
         
         # Insert test data
         cls.client.execute(
-            "INSERT INTO test_articles (title, content, tags, category) VALUES (?, ?, ?, ?)",
+            "INSERT INTO test_articles (title, content, tags, category) VALUES (%s, %s, %s, %s)",
             ("Python Programming Guide", "Complete Python programming tutorial", "python,programming,guide", "Programming")
         )
         cls.client.execute(
-            "INSERT INTO test_articles (title, content, tags, category) VALUES (?, ?, ?, ?)",
+            "INSERT INTO test_articles (title, content, tags, category) VALUES (%s, %s, %s, %s)",
             ("Java Development", "Java application development guide", "java,development", "Programming")
         )
         
@@ -610,7 +634,7 @@ class TestFulltextSearchEdgeCases:
         """Test handling of special characters in search terms."""
         # Insert data with special characters
         self.client.execute(
-            "INSERT INTO test_articles (title, content, tags, category) VALUES (?, ?, ?, ?)",
+            "INSERT INTO test_articles (title, content, tags, category) VALUES (%s, %s, %s, %s)",
             ("C++ Programming", "Learn C++ programming language", "c++,programming", "Programming")
         )
         

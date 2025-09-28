@@ -479,6 +479,123 @@ class FulltextQueryBuilder:
         """Build the final query string."""
         return self.main_group.build()
 
+    def as_sql(
+        self,
+        table: str,
+        columns: List[str],
+        mode: str = FulltextSearchMode.BOOLEAN,
+        include_score: bool = False,
+        select_columns: Optional[List[str]] = None,
+        where_conditions: Optional[List[str]] = None,
+        order_by: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> str:
+        """Build a complete SQL query with optional AS score support.
+
+        This method generates a full SQL query similar to FulltextSearchBuilder but using
+        the query built by FulltextQueryBuilder.
+
+        Args:
+            table: Table name to search in
+            columns: List of columns to search in (must match FULLTEXT index)
+            mode: Search mode (BOOLEAN, NATURAL_LANGUAGE, etc.)
+            include_score: Whether to include relevance score in results
+            select_columns: Columns to select (default: all columns "*")
+            where_conditions: Additional WHERE conditions
+            order_by: ORDER BY clause (e.g., "score DESC")
+            limit: LIMIT value
+            offset: OFFSET value
+
+        Returns:
+            str: Complete SQL query
+
+        Examples:
+            # Basic query with score
+            query = FulltextQueryBuilder().must("python").encourage("tutorial")
+            sql = query.as_sql("articles", ["title", "content"], include_score=True)
+            # SELECT *, MATCH(title, content) AGAINST('+python tutorial' IN boolean mode) AS score
+            # FROM articles WHERE MATCH(title, content) AGAINST('+python tutorial' IN boolean mode)
+
+            # Query with custom columns and ORDER BY score
+            sql = query.as_sql("articles", ["title", "content"],
+                              select_columns=["id", "title"], include_score=True,
+                              order_by="score DESC", limit=10)
+        """
+        query_string = self.build()
+        if not query_string:
+            raise ValueError("Query is required - add at least one search term")
+
+        if not table:
+            raise ValueError("Table name is required")
+
+        if not columns:
+            raise ValueError("Search columns are required")
+
+        # Build columns string for MATCH()
+        columns_str = ", ".join(columns)
+
+        # Build SELECT clause
+        if select_columns:
+            select_parts = select_columns.copy()
+        else:
+            select_parts = ["*"]
+
+        if include_score:
+            score_expr = f"MATCH({columns_str}) AGAINST('{query_string}' IN {mode}) AS score"
+            select_parts.append(score_expr)
+
+        select_clause = f"SELECT {', '.join(select_parts)}"
+
+        # Build FROM clause
+        from_clause = f"FROM {table}"
+
+        # Build WHERE clause
+        where_parts = []
+
+        # Add fulltext search condition
+        fulltext_condition = f"MATCH({columns_str}) AGAINST('{query_string}' IN {mode})"
+        where_parts.append(fulltext_condition)
+
+        # Add additional WHERE conditions
+        if where_conditions:
+            where_parts.extend(where_conditions)
+
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        # Build ORDER BY clause
+        order_clause = f"ORDER BY {order_by}" if order_by else ""
+
+        # Build LIMIT clause
+        limit_clause = f"LIMIT {limit}" if limit else ""
+
+        # Build OFFSET clause
+        offset_clause = f"OFFSET {offset}" if offset else ""
+
+        # Combine all clauses
+        sql_parts = [select_clause, from_clause, where_clause, order_clause, limit_clause, offset_clause]
+        return " ".join(filter(None, sql_parts))
+
+    def as_score_sql(self, table: str, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN) -> str:
+        """Convenient method to generate SQL with score included.
+
+        This is equivalent to calling as_sql() with include_score=True.
+
+        Args:
+            table: Table name to search in
+            columns: List of columns to search in
+            mode: Search mode
+
+        Returns:
+            str: Complete SQL query with AS score
+
+        Example:
+            query = FulltextQueryBuilder().must("python").encourage("tutorial")
+            sql = query.as_score_sql("articles", ["title", "content"])
+            # Generates SQL with AS score automatically included
+        """
+        return self.as_sql(table, columns, mode, include_score=True)
+
 
 class FulltextFilter(ClauseElement):
     """Advanced fulltext filter for integrating fulltext search with ORM queries.
@@ -637,6 +754,59 @@ class FulltextFilter(ClauseElement):
         sql_text = self.compile()
         # Return a text clause that SQLAlchemy can handle
         return visitor.process(text(sql_text), **kw)
+
+    def label(self, name: str):
+        """Create a labeled version for use in SELECT clauses.
+
+        This allows using fulltext expressions as selectable columns with aliases:
+
+        Args:
+            name: The alias name for the column
+
+        Returns:
+            A SQLAlchemy labeled expression
+
+        Examples:
+            # Use as a SELECT column with score
+            query(Article, Article.id,
+                  boolean_match("title", "content").must("python").label("score"))
+
+            # Multiple fulltext scores
+            query(Article, Article.id,
+                  boolean_match("title", "content").must("python").label("relevance"),
+                  boolean_match("tags").must("programming").label("tag_score"))
+
+        Generated SQL:
+            SELECT articles.id,
+                   MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score
+            FROM articles
+        """
+        # Create a text expression that can be labeled
+        sql_text = self.compile()
+        text_expr = text(sql_text)
+
+        # Create a custom labeled expression
+        class FulltextLabel:
+            def __init__(self, text_expr, name):
+                self.text_expr = text_expr
+                self.name = name
+
+            def __str__(self):
+                # For ORM integration, return only the expression without AS
+                # The ORM will add the AS alias part
+                return sql_text
+
+            # Make it compatible with SQLAlchemy's compilation
+            def compile(self, compile_kwargs=None):
+                # For standalone use, include AS
+                return f"{sql_text} AS {self.name}"
+
+            def _compiler_dispatch(self, visitor, **kw):
+                # For SQLAlchemy integration, return only the expression
+                # SQLAlchemy will handle the AS alias
+                return sql_text
+
+        return FulltextLabel(text_expr, name)
 
     def __str__(self):
         """String representation for debugging."""
