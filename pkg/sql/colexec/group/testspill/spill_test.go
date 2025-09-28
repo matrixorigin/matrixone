@@ -84,8 +84,12 @@ func TestSpill(t *testing.T) {
 	// query
 	var count int
 	err = db.QueryRow(`
-		select count(sha2(product_id * customer_id, 256))
-		from sales
+		select count(*)
+		from (
+			select product_id, customer_id, sum(amount)
+			from sales
+			group by product_id, customer_id
+		)
 		`,
 	).Scan(&count)
 	require.NoError(t, err)
