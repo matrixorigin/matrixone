@@ -33,6 +33,13 @@ func (group *Group) shouldSpill() bool {
 		len(group.ctr.result1.AggList) > 0 &&
 		len(group.ctr.result1.ToPopped) > 0
 
+	logutil.Debug("shouldSpill",
+		zap.Any("threshold", group.SpillThreshold),
+		zap.Any("current usage", group.ctr.currentMemUsage),
+		zap.Any("agg list len", len(group.ctr.result1.AggList)),
+		zap.Any("to popped len", len(group.ctr.result1.ToPopped)),
+	)
+
 	if shouldSpill {
 		logutil.Debug("Group operator triggering spill",
 			zap.Int64("current_memory_usage", group.ctr.currentMemUsage),
