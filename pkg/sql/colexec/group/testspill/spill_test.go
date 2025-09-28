@@ -79,13 +79,13 @@ func TestSpill(t *testing.T) {
 	require.NoError(t, err)
 
 	// query
-	var a, b, c int
+	var count int
 	err = db.QueryRow(`
 		select count(sha2(product_id * customer_id, 256))
 		from sales
 		`,
-	).Scan(&a, &b, &c)
+	).Scan(&count)
 	require.NoError(t, err)
-	t.Logf("results: %v %v %v", a, b, c)
+	t.Logf("count: %v", count)
 
 }
