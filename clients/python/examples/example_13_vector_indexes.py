@@ -446,12 +446,7 @@ class VectorIndexDemo:
             
             # Test fulltext search - Natural Language Mode
             print("\n--- Testing Natural Language Mode ---")
-            result = self.client.fulltext_index.fulltext_search(
-                table_name="fulltext_test_docs",
-                columns=["title", "content"],
-                search_term="Python",
-                mode="NATURAL_LANGUAGE"
-            )
+            result = self.client.fulltext_index.simple_query("fulltext_test_docs").columns("title", "content").search("Python").execute()
             
             print(f"✓ Natural language search for 'Python': {len(result.rows)} results")
             for row in result.rows:
@@ -463,12 +458,7 @@ class VectorIndexDemo:
             
             # Test fulltext search - Boolean Mode
             print("\n--- Testing Boolean Mode ---")
-            result = self.client.fulltext_index.fulltext_search(
-                table_name="fulltext_test_docs",
-                columns=["title", "content"],
-                search_term="+Python +web",
-                mode="BOOLEAN"
-            )
+            result = self.client.fulltext_index.simple_query("fulltext_test_docs").columns("title", "content").must_have("Python", "web").execute()
             
             print(f"✓ Boolean search for '+Python +web': {len(result.rows)} results")
             for row in result.rows:
@@ -477,11 +467,7 @@ class VectorIndexDemo:
             # Test different algorithms using API
             print("\n--- Testing TF-IDF Algorithm ---")
             self.client.execute('SET ft_relevancy_algorithm = "TF-IDF"')
-            result = self.client.fulltext_index.fulltext_search(
-                table_name="fulltext_test_docs",
-                columns=["title", "content"],
-                search_term="Python"
-            )
+            result = self.client.fulltext_index.simple_query("fulltext_test_docs").columns("title", "content").search("Python").execute()
             
             print(f"✓ TF-IDF search for 'Python': {len(result.rows)} results")
             for row in result.rows:
@@ -564,12 +550,7 @@ class VectorIndexDemo:
                     print(f"✓ Inserted {len(articles)} async test articles")
                     
                     # Test async fulltext search
-                    result = await async_client.fulltext_index.fulltext_search(
-                        table_name="async_fulltext_docs",
-                        columns=["headline", "body"],
-                        search_term="technology",
-                        mode=FulltextModeType.NATURAL_LANGUAGE
-                    )
+                    result = await async_client.fulltext_index.simple_query("async_fulltext_docs").columns("headline", "body").search("technology").execute()
                     
                     print(f"✓ Async fulltext search for 'technology': {len(result.rows)} results")
                     for row in result.rows:

@@ -312,6 +312,39 @@ class Query:
             raise ValueError(f"Unknown query type: {self._query_type}")
 
 
+# CTE (Common Table Expression) support
+class CTE:
+    """CTE (Common Table Expression) class for MatrixOne queries"""
+
+    def __init__(self, name: str, query, recursive: bool = False):
+        self.name = name
+        self.query = query
+        self.recursive = recursive
+        self._sql = None
+        self._params = None
+
+    def _compile(self):
+        """Compile the CTE query to SQL"""
+        if self._sql is None:
+            if hasattr(self.query, "_build_sql"):
+                # This is a BaseMatrixOneQuery object
+                self._sql, self._params = self.query._build_sql()
+            elif isinstance(self.query, str):
+                # This is a raw SQL string
+                self._sql = self.query
+                self._params = []
+            else:
+                raise ValueError("CTE query must be a BaseMatrixOneQuery object or SQL string")
+        return self._sql, self._params
+
+    def as_sql(self) -> tuple[str, list]:
+        """Get the compiled SQL and parameters for this CTE"""
+        return self._compile()
+
+    def __str__(self):
+        return f"CTE({self.name})"
+
+
 # Base Query Builder - SQLAlchemy style
 class BaseMatrixOneQuery:
     """Base MatrixOne Query builder that contains common SQL building logic"""
@@ -332,6 +365,7 @@ class BaseMatrixOneQuery:
         self._order_by_columns = []
         self._limit_count = None
         self._offset_count = None
+        self._ctes = []  # List of CTE definitions
 
         # Handle None model_class (for column-only queries)
         if model_class is None:
@@ -371,13 +405,43 @@ class BaseMatrixOneQuery:
         self._select_columns = list(columns)
         return self
 
+    def cte(self, name: str, recursive: bool = False) -> CTE:
+        """Create a CTE (Common Table Expression) from this query - SQLAlchemy style
+
+        Args:
+            name: Name of the CTE
+            recursive: Whether this is a recursive CTE
+
+        Returns:
+            CTE object that can be used in other queries
+
+        Examples:
+            # Create a CTE from a query
+            user_stats = client.query(User).filter(User.active == True).cte("user_stats")
+
+            # Use the CTE in another query
+            result = client.query(user_stats).all()
+
+            # Recursive CTE example
+            hierarchy = client.query(Employee).filter(Employee.manager_id == None).cte("hierarchy", recursive=True)
+        """
+        return CTE(name, self, recursive)
+
     def join(self, table, on=None, isouter=False) -> "BaseMatrixOneQuery":
         """Add JOIN clause - SQLAlchemy style"""
         join_type = "LEFT JOIN" if isouter else "JOIN"
-        if on:
-            join_clause = f"{join_type} {table} ON {on}"
+
+        # Handle CTE objects
+        if hasattr(table, 'name') and hasattr(table, 'as_sql'):
+            # This is a CTE object
+            table_name = table.name
         else:
-            join_clause = f"{join_type} {table}"
+            table_name = str(table)
+
+        if on:
+            join_clause = f"{join_type} {table_name} ON {on}"
+        else:
+            join_clause = f"{join_type} {table_name}"
         self._joins.append(join_clause)
         return self
 
@@ -616,6 +680,16 @@ class BaseMatrixOneQuery:
 
         builder = MatrixOneSQLBuilder()
 
+        # Build CTE clause if any CTEs are defined
+        if self._ctes:
+            for cte in self._ctes:
+                if isinstance(cte, CTE):
+                    cte_sql, cte_params = cte.as_sql()
+                    builder._ctes.append({'name': cte.name, 'sql': cte_sql, 'params': cte_params})
+                else:
+                    # Handle legacy CTE format
+                    builder._ctes.append(cte)
+
         # Build SELECT clause with SQLAlchemy function support
         if self._select_columns:
             # Convert SQLAlchemy function objects to strings
@@ -688,7 +762,11 @@ class BaseMatrixOneQuery:
         if self._offset_count is not None:
             builder.offset(self._offset_count)
 
-        return builder.build()
+        # Build the final SQL and combine parameters
+        sql, params = builder.build()
+
+        # Parameters are already combined in builder.build() since we added CTEs to builder._ctes
+        return sql, params
 
     def _create_row_data(self, row, select_cols):
         """Create RowData object for aggregate queries"""
@@ -786,6 +864,30 @@ class MatrixOneQuery(BaseMatrixOneQuery):
     def __init__(self, model_class, client, transaction_wrapper=None):
         super().__init__(model_class, client, transaction_wrapper)
 
+    def with_cte(self, *ctes) -> "MatrixOneQuery":
+        """Add CTEs to this query - SQLAlchemy style
+
+        Args:
+            *ctes: CTE objects to add to the query
+
+        Returns:
+            Self for method chaining
+
+        Examples:
+            # Add a single CTE
+            user_stats = client.query(User).filter(User.active == True).cte("user_stats")
+            result = client.query(Article).with_cte(user_stats).join(user_stats, Article.user_id == user_stats.id).all()
+
+            # Add multiple CTEs
+            result = client.query(Article).with_cte(user_stats, category_stats).all()
+        """
+        for cte in ctes:
+            if isinstance(cte, CTE):
+                self._ctes.append(cte)
+            else:
+                raise ValueError("All arguments must be CTE objects")
+        return self
+
     def all(self) -> List:
         """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
@@ -849,265 +951,3 @@ def desc(column: str) -> str:
 def asc(column: str) -> str:
     """Create ascending order clause"""
     return f"{column} ASC"
-
-
-class CTEQuery:
-    """CTE (Common Table Expression) Query builder for MatrixOne"""
-
-    def __init__(self, client):
-        self.client = client
-        self._ctes = []  # List of CTE definitions
-        self._main_query = None  # The main query that uses CTEs
-
-    def with_cte(self, name: str, query) -> "CTEQuery":
-        """Add a CTE definition"""
-        if hasattr(query, "_build_sql"):
-            # This is a BaseMatrixOneQuery object
-            sql, params = query._build_sql()
-            self._ctes.append({"name": name, "sql": sql, "params": params})
-        elif isinstance(query, str):
-            # This is a raw SQL string
-            self._ctes.append({"name": name, "sql": query, "params": []})
-        else:
-            raise ValueError("CTE query must be a BaseMatrixOneQuery object or SQL string")
-        return self
-
-    def select_from(self, *columns) -> "CTEQuery":
-        """Start the main SELECT query that uses the CTEs"""
-        self._main_query = {
-            "type": "SELECT",
-            "columns": list(columns) if columns else ["*"],
-            "from_table": None,
-            "joins": [],
-            "where_conditions": [],
-            "where_params": [],
-            "group_by_columns": [],
-            "having_conditions": [],
-            "having_params": [],
-            "order_by_columns": [],
-            "limit_count": None,
-            "offset_count": None,
-        }
-        return self
-
-    def from_table(self, table_name: str, alias: str = None) -> "CTEQuery":
-        """Set the FROM table for the main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        if alias:
-            self._main_query["from_table"] = f"{table_name} AS {alias}"
-        else:
-            self._main_query["from_table"] = table_name
-        return self
-
-    def join(self, table: str, on: str = None, join_type: str = "JOIN") -> "CTEQuery":
-        """Add JOIN clause to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        if on:
-            join_clause = f"{join_type} {table} ON {on}"
-        else:
-            join_clause = f"{join_type} {table}"
-        self._main_query["joins"].append(join_clause)
-        return self
-
-    def inner_join(self, table: str, on: str = None) -> "CTEQuery":
-        """Add INNER JOIN clause"""
-        return self.join(table, on, "INNER JOIN")
-
-    def left_join(self, table: str, on: str = None) -> "CTEQuery":
-        """Add LEFT JOIN clause"""
-        return self.join(table, on, "LEFT JOIN")
-
-    def right_join(self, table: str, on: str = None) -> "CTEQuery":
-        """Add RIGHT JOIN clause"""
-        return self.join(table, on, "RIGHT JOIN")
-
-    def full_outer_join(self, table: str, on: str = None) -> "CTEQuery":
-        """Add FULL OUTER JOIN clause"""
-        return self.join(table, on, "FULL OUTER JOIN")
-
-    def where(self, condition: str, *params) -> "CTEQuery":
-        """Add WHERE condition to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        self._main_query["where_conditions"].append(condition)
-        self._main_query["where_params"].extend(params)
-        return self
-
-    def group_by(self, *columns) -> "CTEQuery":
-        """Add GROUP BY clause to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        self._main_query["group_by_columns"].extend(columns)
-        return self
-
-    def having(self, condition: str, *params) -> "CTEQuery":
-        """Add HAVING clause to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        self._main_query["having_conditions"].append(condition)
-        self._main_query["having_params"].extend(params)
-        return self
-
-    def order_by(self, *columns) -> "CTEQuery":
-        """Add ORDER BY clause to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        self._main_query["order_by_columns"].extend(columns)
-        return self
-
-    def limit(self, count: int) -> "CTEQuery":
-        """Add LIMIT clause to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        self._main_query["limit_count"] = count
-        return self
-
-    def offset(self, count: int) -> "CTEQuery":
-        """Add OFFSET clause to main query"""
-        if not self._main_query:
-            raise ValueError("Must call select_from() first")
-        self._main_query["offset_count"] = count
-        return self
-
-    def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build the complete CTE SQL query using unified SQL builder"""
-        if not self._ctes:
-            raise ValueError("At least one CTE must be defined")
-        if not self._main_query:
-            raise ValueError("Main query must be defined with select_from()")
-
-        from .sql_builder import MatrixOneSQLBuilder
-
-        builder = MatrixOneSQLBuilder()
-
-        # Add CTEs
-        for cte in self._ctes:
-            builder.with_cte(cte["name"], cte["sql"], cte["params"])
-
-        # Build main query
-        builder.select(*self._main_query["columns"])
-
-        if self._main_query["from_table"]:
-            builder.from_table(self._main_query["from_table"])
-
-        # Add JOIN clauses
-        builder._joins = self._main_query["joins"].copy()
-
-        # Add WHERE conditions and parameters
-        builder._where_conditions = self._main_query["where_conditions"].copy()
-        builder._where_params = self._main_query["where_params"].copy()
-
-        # Add GROUP BY columns
-        if self._main_query["group_by_columns"]:
-            builder.group_by(*self._main_query["group_by_columns"])
-
-        # Add HAVING conditions and parameters
-        builder._having_conditions = self._main_query["having_conditions"].copy()
-        builder._having_params = self._main_query["having_params"].copy()
-
-        # Add ORDER BY columns
-        if self._main_query["order_by_columns"]:
-            builder.order_by(*self._main_query["order_by_columns"])
-
-        # Add LIMIT and OFFSET
-        if self._main_query["limit_count"] is not None:
-            builder.limit(self._main_query["limit_count"])
-        if self._main_query["offset_count"] is not None:
-            builder.offset(self._main_query["offset_count"])
-
-        return builder.build()
-
-    def execute(self) -> List:
-        """Execute the CTE query and return results"""
-        sql, params = self._build_sql()
-        result = self.client.execute(sql, params)
-
-        # Return raw row data as simple objects
-        rows = []
-        for row in result.rows:
-            # Create a simple object with attributes for each column
-            row_obj = type("RowData", (), {})()
-            used_attr_names = set()  # Track used attribute names to handle duplicates
-
-            for i, col_name in enumerate(self._main_query["columns"]):
-                if i < len(row):
-                    # Handle column names with table prefixes (e.g., "dept_stats.department_id" -> "department_id")
-                    if "." in col_name:
-                        attr_name = col_name.split(".")[-1]  # Take the part after the dot
-                    else:
-                        attr_name = col_name
-
-                    # Replace spaces and special characters with underscores
-                    attr_name = attr_name.replace(" ", "_").replace("(", "").replace(")", "")
-
-                    # Handle duplicate attribute names by adding a suffix
-                    original_attr_name = attr_name
-                    counter = 2
-                    while attr_name in used_attr_names:
-                        attr_name = f"{original_attr_name}_{counter}"
-                        counter += 1
-
-                    used_attr_names.add(attr_name)
-                    setattr(row_obj, attr_name, row[i])
-            rows.append(row_obj)
-
-        return rows
-
-    def all(self) -> List:
-        """Alias for execute() - SQLAlchemy style"""
-        return self.execute()
-
-    def first(self) -> Optional:
-        """Execute query and return first result"""
-        self.limit(1)
-        results = self.execute()
-        return results[0] if results else None
-
-    def count(self) -> int:
-        """Execute query and return count of results"""
-        # Create a count query
-        count_sql_parts = []
-        all_params = []
-
-        # Build WITH clause (same as original)
-        with_clause = "WITH "
-        cte_parts = []
-        for cte in self._ctes:
-            cte_parts.append(f"{cte['name']} AS ({cte['sql']})")
-            all_params.extend(cte["params"])
-        with_clause += ", ".join(cte_parts)
-        count_sql_parts.append(with_clause)
-
-        # Build main SELECT COUNT(*) query
-        count_sql_parts.append("SELECT COUNT(*)")
-
-        # Build FROM clause
-        if self._main_query["from_table"]:
-            count_sql_parts.append(f"FROM {self._main_query['from_table']}")
-
-        # Build JOIN clauses
-        if self._main_query["joins"]:
-            count_sql_parts.append(" ".join(self._main_query["joins"]))
-
-        # Build WHERE clause
-        if self._main_query["where_conditions"]:
-            where_clause = "WHERE " + " AND ".join(self._main_query["where_conditions"])
-            count_sql_parts.append(where_clause)
-            all_params.extend(self._main_query["where_params"])
-
-        # Build GROUP BY clause
-        if self._main_query["group_by_columns"]:
-            group_clause = "GROUP BY " + ", ".join(self._main_query["group_by_columns"])
-            count_sql_parts.append(group_clause)
-
-        # Build HAVING clause
-        if self._main_query["having_conditions"]:
-            having_clause = "HAVING " + " AND ".join(self._main_query["having_conditions"])
-            count_sql_parts.append(having_clause)
-            all_params.extend(self._main_query["having_params"])
-
-        count_sql = " ".join(count_sql_parts)
-        result = self.client.execute(count_sql, all_params)
-        return result.rows[0][0] if result.rows else 0

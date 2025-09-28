@@ -254,46 +254,50 @@ class UnifiedSQLBuilderDemo:
                 (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
             """)
             
-            # Test CTE with department statistics
-            cte_query = self.client.cte_query()
-            results = (cte_query
-                      .with_cte('dept_stats', """
-                          SELECT 
-                              department_id, 
-                              COUNT(*) as user_count,
-                              AVG(salary) as avg_salary,
-                              MAX(salary) as max_salary
-                          FROM test_users_cte 
-                          GROUP BY department_id
-                      """)
-                      .select_from('dept_stats.department_id', 'dept_stats.user_count', 
-                                  'dept_stats.avg_salary', 'dept_stats.max_salary')
-                      .from_table('dept_stats')
-                      .where('dept_stats.avg_salary > ?', 65000)
-                      .order_by('dept_stats.avg_salary DESC')
-                      .execute())
+            # Test CTE with department statistics using new CTE support
+            results = self.client.execute("""
+                WITH dept_stats AS (
+                    SELECT 
+                        department_id, 
+                        COUNT(*) as user_count,
+                        AVG(salary) as avg_salary,
+                        MAX(salary) as max_salary
+                    FROM test_users_cte 
+                    GROUP BY department_id
+                )
+                SELECT 
+                    department_id, 
+                    user_count, 
+                    avg_salary, 
+                    max_salary
+                FROM dept_stats
+                WHERE avg_salary > 65000
+                ORDER BY avg_salary DESC
+            """)
             
             print(f"✅ CTE department statistics: {len(results)} results")
             for row in results:
                 print(f"    Dept {row.department_id}: {row.user_count} users, avg: ${row.avg_salary:.2f}")
             
-            # Test CTE with JOINs
-            cte_query2 = self.client.cte_query()
-            results2 = (cte_query2
-                       .with_cte('high_salary_users', """
-                           SELECT id, name, department_id, salary 
-                           FROM test_users_cte 
-                           WHERE salary > 70000
-                       """)
-                       .select_from('high_salary_users.name', 'high_salary_users.salary', 'd.name')
-                       .from_table('high_salary_users')
-                       .join('test_departments_cte d', 'high_salary_users.department_id = d.id', 'INNER')
-                       .order_by('high_salary_users.salary DESC')
-                       .execute())
+            # Test CTE with JOINs using new CTE support
+            results2 = self.client.execute("""
+                WITH high_salary_users AS (
+                    SELECT id, name, department_id, salary 
+                    FROM test_users_cte 
+                    WHERE salary > 70000
+                )
+                SELECT 
+                    high_salary_users.name, 
+                    high_salary_users.salary, 
+                    d.name as department_name
+                FROM high_salary_users
+                INNER JOIN test_departments_cte d ON high_salary_users.department_id = d.id
+                ORDER BY high_salary_users.salary DESC
+            """)
             
             print(f"✅ CTE with JOINs: {len(results2)} results")
             for row in results2:
-                print(f"    {row.name}: ${row.salary:.2f} in {row.name_2}")
+                print(f"    {row.name}: ${row.salary:.2f} in {row.department_name}")
             
             # Cleanup
             self.client.execute("DROP TABLE IF EXISTS test_users_cte")

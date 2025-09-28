@@ -798,6 +798,16 @@ class Client(BaseMatrixOneClient):
             if hasattr(column, '__tablename__'):
                 # This is a model class
                 return MatrixOneQuery(column, self)
+            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
+                # This is a CTE object
+                from .orm import CTE
+
+                if isinstance(column, CTE):
+                    query = MatrixOneQuery(None, self)
+                    query._table_name = column.name
+                    query._select_columns = ["*"]  # Default to select all from CTE
+                    query._ctes = [column]  # Add the CTE to the query
+                    return query
             else:
                 # This is a single column/expression - need to handle specially
                 # For now, we'll create a query that can handle column selections
@@ -838,12 +848,6 @@ class Client(BaseMatrixOneClient):
                         break
 
                 return query
-
-    def cte_query(self):
-        """Get CTE (Common Table Expression) query builder"""
-        from .orm import CTEQuery
-
-        return CTEQuery(self)
 
     @contextmanager
     def snapshot(self, snapshot_name: str):
@@ -2184,6 +2188,16 @@ class TransactionWrapper:
             if hasattr(column, '__tablename__'):
                 # This is a model class
                 return MatrixOneQuery(column, self.client, transaction_wrapper=self)
+            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
+                # This is a CTE object
+                from .orm import CTE
+
+                if isinstance(column, CTE):
+                    query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
+                    query._table_name = column.name
+                    query._select_columns = ["*"]  # Default to select all from CTE
+                    query._ctes = [column]  # Add the CTE to the query
+                    return query
             else:
                 # This is a single column/expression - need to handle specially
                 query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
