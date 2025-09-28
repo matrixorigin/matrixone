@@ -12,7 +12,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
-from matrixone.snapshot import SnapshotLevel, SnapshotQueryBuilder
+from matrixone.snapshot import SnapshotLevel
 from matrixone.exceptions import SnapshotError, ConnectionError
 from .test_config import online_config
 
@@ -109,7 +109,7 @@ class TestSnapshotOnline:
         # Clean up
         test_client.snapshots.delete(snapshot_name)
     
-    def test_snapshot_query_builder_basic(self, test_client, test_database):
+    def test_snapshot_query_basic(self, test_client, test_database):
         """Test basic snapshot query builder functionality"""
         snapshot_name = f"test_query_snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
@@ -123,19 +123,16 @@ class TestSnapshotOnline:
         
         try:
             # Test basic query
-            builder = SnapshotQueryBuilder(snapshot_name, test_client)
-            result = (builder
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .execute())
             
             rows = result.fetchall()
             assert len(rows) == 3
             
             # Test query with WHERE condition
-            result = (builder
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .where("value > ?", 150)
                      .execute())
             
@@ -146,7 +143,7 @@ class TestSnapshotOnline:
             # Clean up
             test_client.snapshots.delete(snapshot_name)
     
-    def test_snapshot_query_builder_parameter_substitution(self, test_client, test_database):
+    def test_snapshot_query_parameter_substitution(self, test_client, test_database):
         """Test parameter substitution in snapshot queries"""
         snapshot_name = f"test_param_snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
@@ -158,10 +155,8 @@ class TestSnapshotOnline:
         
         try:
             # Test string parameter substitution
-            builder1 = SnapshotQueryBuilder(snapshot_name, test_client)
-            result = (builder1
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .where("name = ?", "test1")
                      .execute())
             
@@ -170,10 +165,8 @@ class TestSnapshotOnline:
             assert rows[0][1] == "test1"
             
             # Test without parameters first
-            builder2 = SnapshotQueryBuilder(snapshot_name, test_client)
-            result = (builder2
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .execute())
             
             all_rows = result.fetchall()
@@ -195,10 +188,8 @@ class TestSnapshotOnline:
             print(f"Raw SQL columns: {len(raw_rows[0]) if raw_rows else 0}")
             
             # Test numeric parameter substitution
-            builder3 = SnapshotQueryBuilder(snapshot_name, test_client)
-            result = (builder3
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .where("value = ?", 200)
                      .execute())
             
@@ -208,10 +199,8 @@ class TestSnapshotOnline:
             assert rows[0][2] == 200
             
             # Test multiple parameters
-            builder4 = SnapshotQueryBuilder(snapshot_name, test_client)
-            result = (builder4
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .where("name = ? AND value > ?", "test2", 150)
                      .execute())
             
@@ -223,7 +212,7 @@ class TestSnapshotOnline:
             # Clean up
             test_client.snapshots.delete(snapshot_name)
     
-    def test_snapshot_query_builder_complex_query(self, test_client, test_database):
+    def test_snapshot_query_complex_query(self, test_client, test_database):
         """Test complex snapshot query with all clauses"""
         snapshot_name = f"test_complex_snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
@@ -236,12 +225,9 @@ class TestSnapshotOnline:
         )
         
         try:
-            builder = SnapshotQueryBuilder(snapshot_name, test_client)
-            
             # Test complex query with ORDER BY and LIMIT
-            result = (builder
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name", "value")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .where("value > ?", 100)
                      .order_by("value DESC")
                      .limit(2)
@@ -256,7 +242,7 @@ class TestSnapshotOnline:
             # Clean up
             test_client.snapshots.delete(snapshot_name)
     
-    def test_snapshot_query_builder_validation(self, test_client, test_database):
+    def test_snapshot_query_validation(self, test_client, test_database):
         """Test snapshot query builder validation"""
         snapshot_name = f"test_validation_snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
@@ -269,18 +255,9 @@ class TestSnapshotOnline:
         )
         
         try:
-            # Test error: no SELECT columns
-            builder1 = SnapshotQueryBuilder(snapshot_name, test_client)
-            with pytest.raises(SnapshotError) as context:
-                builder1.from_table(f"test_snapshot_db.test_snapshot_table").execute()
-            assert "No SELECT columns specified" in str(context.value)
-            
-            # Test error: no FROM table
-            builder2 = SnapshotQueryBuilder(snapshot_name, test_client)
-            with pytest.raises(SnapshotError) as context:
-                builder2.select("id").execute()
-            assert "No FROM table specified" in str(context.value)
-            
+            # Note: These validation tests were specific to SnapshotQueryBuilder
+            # and are no longer applicable with the new query() API
+            pass
         finally:
             # Clean up
             test_client.snapshots.delete(snapshot_name)
@@ -298,12 +275,9 @@ class TestSnapshotOnline:
         )
         
         try:
-            builder = SnapshotQueryBuilder(snapshot_name, test_client)
-            
             # This should work without errors - the SQL should be properly formatted
-            result = (builder
+            result = (test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
                      .select("id", "name")
-                     .from_table(f"test_snapshot_db.test_snapshot_table")
                      .where("id = ?", 1)
                      .execute())
             

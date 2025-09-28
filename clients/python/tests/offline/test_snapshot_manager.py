@@ -11,7 +11,7 @@ import os
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
-from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, SnapshotLevel
+from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotLevel
 from matrixone.exceptions import SnapshotError, ConnectionError as MatrixOneConnectionError, QueryError
 
 
@@ -277,161 +277,6 @@ class TestSnapshotManager(unittest.TestCase):
             self.assertFalse(result)
 
 
-class TestSnapshotQueryBuilder(unittest.TestCase):
-    """Test SnapshotQueryBuilder class"""
-    
-    def setUp(self):
-        """Set up test fixtures"""
-        self.mock_client = Mock()
-        self.builder = SnapshotQueryBuilder("test_snapshot", self.mock_client)
-    
-    def test_init(self):
-        """Test SnapshotQueryBuilder initialization"""
-        self.assertEqual(self.builder.snapshot_name, "test_snapshot")
-        self.assertEqual(self.builder.client, self.mock_client)
-        self.assertEqual(self.builder._select_columns, [])
-        self.assertIsNone(self.builder._from_table)
-    
-    def test_select(self):
-        """Test adding SELECT columns"""
-        result = self.builder.select("col1", "col2", "col3")
-        
-        self.assertEqual(self.builder._select_columns, ["col1", "col2", "col3"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_from_table(self):
-        """Test setting FROM table"""
-        result = self.builder.from_table("test_table")
-        
-        self.assertEqual(self.builder._from_table, "test_table")
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_join(self):
-        """Test adding JOIN"""
-        result = self.builder.join("table2", "table1.id = table2.id")
-        
-        self.assertEqual(self.builder._joins, ["JOIN table2 ON table1.id = table2.id"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_left_join(self):
-        """Test adding LEFT JOIN"""
-        result = self.builder.left_join("table2", "table1.id = table2.id")
-        
-        self.assertEqual(self.builder._joins, ["LEFT JOIN table2 ON table1.id = table2.id"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_right_join(self):
-        """Test adding RIGHT JOIN"""
-        result = self.builder.right_join("table2", "table1.id = table2.id")
-        
-        self.assertEqual(self.builder._joins, ["RIGHT JOIN table2 ON table1.id = table2.id"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_where(self):
-        """Test adding WHERE conditions"""
-        result = self.builder.where("col1 > ?", 100).where("col2 = ?", "test")
-        
-        self.assertEqual(self.builder._where_conditions, ["col1 > ?", "col2 = ?"])
-        self.assertEqual(self.builder._where_params, [100, "test"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_group_by(self):
-        """Test adding GROUP BY columns"""
-        result = self.builder.group_by("col1", "col2")
-        
-        self.assertEqual(self.builder._group_by_columns, ["col1", "col2"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_having(self):
-        """Test adding HAVING conditions"""
-        result = self.builder.having("COUNT(*) > ?", 5)
-        
-        self.assertEqual(self.builder._having_conditions, ["COUNT(*) > ?"])
-        self.assertEqual(self.builder._having_params, [5])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_order_by(self):
-        """Test adding ORDER BY columns"""
-        result = self.builder.order_by("col1", "col2 DESC")
-        
-        self.assertEqual(self.builder._order_by_columns, ["col1", "col2 DESC"])
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_limit(self):
-        """Test setting LIMIT"""
-        result = self.builder.limit(10)
-        
-        self.assertEqual(self.builder._limit_count, 10)
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_offset(self):
-        """Test setting OFFSET"""
-        result = self.builder.offset(20)
-        
-        self.assertEqual(self.builder._offset_count, 20)
-        self.assertEqual(result, self.builder)  # Test method chaining
-    
-    def test_execute_simple_query(self):
-        """Test executing a simple query"""
-        self.builder.select("col1", "col2").from_table("test_table")
-        
-        mock_result = Mock()
-        self.mock_client.execute = Mock(return_value=mock_result)
-        
-        result = self.builder.execute()
-        
-        expected_sql = "SELECT col1, col2 FROM test_table{snapshot = 'test_snapshot'}"
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        self.assertEqual(result, mock_result)
-    
-    def test_execute_complex_query(self):
-        """Test executing a complex query with all clauses"""
-        (self.builder
-         .select("col1", "col2", "COUNT(*)")
-         .from_table("test_table")
-         .join("table2", "test_table.id = table2.id")
-         .where("col1 > ?", 100)
-         .group_by("col1")
-         .having("COUNT(*) > ?", 5)
-         .order_by("col1", "col2 DESC")
-         .limit(10)
-         .offset(20))
-        
-        mock_result = Mock()
-        self.mock_client.execute = Mock(return_value=mock_result)
-        
-        result = self.builder.execute()
-        
-        expected_sql = ("SELECT col1, col2, COUNT(*) FROM test_table{snapshot = 'test_snapshot'} "
-                       "JOIN table2 ON test_table.id = table2.id "
-                       "WHERE col1 > 100 "
-                       "GROUP BY col1 "
-                       "HAVING COUNT(*) > 5 "
-                       "ORDER BY col1, col2 DESC "
-                       "LIMIT 10 "
-                       "OFFSET 20")
-        
-        self.mock_client.execute.assert_called_once_with(expected_sql)
-        self.assertEqual(result, mock_result)
-    
-    def test_execute_no_select_columns(self):
-        """Test executing query without SELECT columns"""
-        self.builder.from_table("test_table")
-        
-        with self.assertRaises(SnapshotError) as context:
-            self.builder.execute()
-        
-        self.assertIn("No SELECT columns specified", str(context.exception))
-    
-    def test_execute_no_from_table(self):
-        """Test executing query without FROM table"""
-        self.builder.select("col1")
-        
-        with self.assertRaises(SnapshotError) as context:
-            self.builder.execute()
-        
-        self.assertIn("No FROM table specified", str(context.exception))
-
 
 class TestSnapshotManagerIntegration(unittest.TestCase):
     """Integration tests for SnapshotManager"""
@@ -470,7 +315,7 @@ if __name__ == '__main__':
     # Add test cases
     test_suite.addTest(unittest.makeSuite(TestSnapshot))
     test_suite.addTest(unittest.makeSuite(TestSnapshotManager))
-    test_suite.addTest(unittest.makeSuite(TestSnapshotQueryBuilder))
+    # TestSnapshotQueryBuilder removed - SnapshotQueryBuilder is deprecated
     test_suite.addTest(unittest.makeSuite(TestSnapshotManagerIntegration))
     
     # Run the tests

@@ -12,8 +12,8 @@ T = TypeVar("T")
 class AsyncMatrixOneQuery(BaseMatrixOneQuery):
     """Async MatrixOne Query builder that mimics SQLAlchemy Query interface"""
 
-    def __init__(self, model_class, client, database: str = None, transaction_wrapper=None):
-        super().__init__(model_class, client, transaction_wrapper)
+    def __init__(self, model_class, client, database: str = None, transaction_wrapper=None, snapshot=None):
+        super().__init__(model_class, client, transaction_wrapper, snapshot)
         self.database = database
 
     def _build_sql(self) -> tuple[str, List[Any]]:
@@ -90,3 +90,20 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
 
         result = await self._execute(sql, params)
         return result.rows[0][0] if result.rows else 0
+
+    async def execute(self) -> Any:
+        """Execute the query based on its type"""
+        if self._query_type == "SELECT":
+            sql, params = self._build_sql()
+            return await self._execute(sql, params)
+        elif self._query_type == "INSERT":
+            sql, params = self._build_insert_sql()
+            return await self._execute(sql, params)
+        elif self._query_type == "UPDATE":
+            sql, params = self._build_update_sql()
+            return await self._execute(sql, params)
+        elif self._query_type == "DELETE":
+            sql, params = self._build_delete_sql()
+            return await self._execute(sql, params)
+        else:
+            raise ValueError(f"Unknown query type: {self._query_type}")

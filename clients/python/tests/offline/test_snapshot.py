@@ -56,8 +56,8 @@ def test_snapshot_management():
         retrieved_snapshot = client.snapshots.get("test_snapshot_001")
         print(f"✓ Retrieved snapshot: {retrieved_snapshot}")
         
-        # Test snapshot query
-        result = client.snapshot_query("test_snapshot_001", "SELECT * FROM test_snapshot")
+        # Test snapshot query using query builder
+        result = client.query("test_snapshot", snapshot="test_snapshot_001").select("*").execute()
         print(f"✓ Snapshot query executed: {len(result.fetchall())} rows")
         
         # Test snapshot context manager
@@ -67,10 +67,8 @@ def test_snapshot_management():
             print(f"✓ Snapshot context manager: {count} rows")
         
         # Test snapshot query builder
-        builder = client.snapshot_query_builder("test_snapshot_001")
-        result = (builder
+        result = (client.query("test_snapshot", snapshot="test_snapshot_001")
             .select("name", "value")
-            .from_table("test_snapshot")
             .where("value > ?", 150)
             .execute()
         )

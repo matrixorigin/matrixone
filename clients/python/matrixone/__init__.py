@@ -27,7 +27,7 @@ from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
-from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager, SnapshotQueryBuilder
+from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -82,7 +82,6 @@ __all__ = [
     "PubSubError",
     "Snapshot",
     "SnapshotManager",
-    "SnapshotQueryBuilder",
     "CloneManager",
     "SnapshotLevel",
     "MoCtlManager",

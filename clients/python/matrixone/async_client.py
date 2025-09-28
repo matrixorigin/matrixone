@@ -1829,25 +1829,11 @@ class AsyncClient(BaseMatrixOneClient):
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
-    def snapshot_query_builder(self, snapshot_name: str):
-        """
-        Get snapshot query builder
-
-        Args:
-            snapshot_name: Name of the snapshot
-
-        Returns:
-            AsyncSnapshotQueryBuilder instance
-        """
-        from .snapshot import AsyncSnapshotQueryBuilder
-
-        return AsyncSnapshotQueryBuilder(snapshot_name, self)
-
-    def query(self, model_class, database: str = None):
+    def query(self, model_class, database: str = None, snapshot: str = None):
         """Get async MatrixOne query builder - SQLAlchemy style"""
         from .async_orm import AsyncMatrixOneQuery
 
-        return AsyncMatrixOneQuery(model_class, self, database)
+        return AsyncMatrixOneQuery(model_class, self, database, None, snapshot)
 
     @asynccontextmanager
     async def snapshot(self, snapshot_name: str):
@@ -1866,49 +1852,6 @@ class AsyncClient(BaseMatrixOneClient):
 
         snapshot_client = SnapshotClient(self, snapshot_name)
         yield snapshot_client
-
-    async def snapshot_query(self, snapshot_name: str, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """
-        Execute query with snapshot asynchronously
-
-        Args:
-            snapshot_name: Name of the snapshot
-            sql: SQL query string
-            params: Query parameters
-
-        Returns:
-            AsyncResultSet with query results
-        """
-        if not self._engine:
-            raise ConnectionError("Not connected to database")
-
-        try:
-            # Insert snapshot hint after the first table name in FROM clause
-            import re
-
-            # Find the first table name after FROM and insert snapshot hint
-            pattern = r"(\bFROM\s+)(\w+)(\s|$)"
-
-            def replace_func(match):
-                return f"{match.group(1)}{match.group(2)}{{snapshot = '{snapshot_name}'}}{match.group(3)}"
-
-            snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
-
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self._substitute_parameters(snapshot_sql, params)
-
-            async with self._engine.begin() as conn:
-                result = await conn.execute(text(final_sql))
-
-                if result.returns_rows:
-                    rows = result.fetchall()
-                    columns = list(result.keys()) if hasattr(result, "keys") else []
-                    return AsyncResultSet(columns, rows)
-                else:
-                    return AsyncResultSet([], [], affected_rows=result.rowcount)
-
-        except Exception as e:
-            raise QueryError(f"Snapshot query execution failed: {e}")
 
     async def insert(self, table_name: str, data: dict) -> "AsyncResultSet":
         """
@@ -2422,19 +2365,20 @@ class AsyncTransactionWrapper:
         sql = self.client._build_batch_insert_sql(table_name, data_list)
         return await self.execute(sql)
 
-    def query(self, model_class, database: str = None):
+    def query(self, model_class, database: str = None, snapshot: str = None):
         """Get async MatrixOne query builder within transaction - SQLAlchemy style
 
         Args:
             model_class: SQLAlchemy model class
             database: Optional database name
+            snapshot: Optional snapshot name for snapshot queries
 
         Returns:
             AsyncMatrixOneQuery instance configured for the specified model within transaction
         """
         from .async_orm import AsyncMatrixOneQuery
 
-        return AsyncMatrixOneQuery(model_class, self.client, database, transaction_wrapper=self)
+        return AsyncMatrixOneQuery(model_class, self.client, database, transaction_wrapper=self, snapshot=snapshot)
 
 
 class AsyncTransactionSnapshotManager(AsyncSnapshotManager):

@@ -38,7 +38,7 @@ def teardown_sqlalchemy_mocks():
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 # Now import the classes we want to test
-from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, CloneManager, SnapshotLevel
+from matrixone.snapshot import SnapshotManager, Snapshot, CloneManager, SnapshotLevel
 from matrixone.exceptions import SnapshotError, ConnectionError as MatrixOneConnectionError, QueryError, CloneError
 
 

@@ -349,7 +349,7 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
         
         self.client._engine = mock_engine
         
-        result = await self.client.snapshot_query("test_snapshot", "SELECT id, name FROM users")
+        result = await self.client.query("users", snapshot="test_snapshot").select("id", "name").execute()
         
         expected_sql = "SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}"
         mock_connection.execute.assert_called_once()

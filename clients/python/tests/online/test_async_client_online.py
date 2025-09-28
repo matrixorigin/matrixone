@@ -169,21 +169,14 @@ class TestAsyncClientOnline:
                 table=test_table
             )
             
-            # Test snapshot query
-            result = await test_async_client.snapshot_query(
-                snapshot_name,
-                f"SELECT * FROM {test_db}.{test_table} WHERE value > ?",
-                (150,)
-            )
+            # Test snapshot query using query builder
+            result = await test_async_client.query(test_table, database=test_db, snapshot=snapshot_name).select("*").where("value > ?", 150).execute()
             
             rows = result.fetchall()
             assert len(rows) == 2  # Should have 2 rows with value > 150
             
             # Test snapshot query without parameters
-            result = await test_async_client.snapshot_query(
-                snapshot_name,
-                f"SELECT COUNT(*) FROM {test_db}.{test_table}"
-            )
+            result = await test_async_client.query(test_table, database=test_db, snapshot=snapshot_name).select("COUNT(*)").execute()
             
             count = result.fetchone()[0]
             assert count == 3
@@ -211,11 +204,7 @@ class TestAsyncClientOnline:
             )
             
             # Test that snapshot query works with proper syntax
-            result = await test_async_client.snapshot_query(
-                snapshot_name,
-                f"SELECT id, name FROM {test_db}.{test_table} WHERE id = ?",
-                (1,)
-            )
+            result = await test_async_client.query(test_table, database=test_db, snapshot=snapshot_name).select("id", "name").where("id = ?", 1).execute()
             
             rows = result.fetchall()
             assert len(rows) == 1

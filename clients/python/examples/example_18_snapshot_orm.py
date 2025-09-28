@@ -76,7 +76,7 @@ class SnapshotORMDemo:
                     client.execute(f"CREATE SNAPSHOT {snapshot_name}")
                     
                     # Test snapshot ORM query
-                    query = client.snapshot_query_builder(snapshot_name).select("name", "email", "age").from_table("users").where("department = ?", "Engineering")
+                    query = client.query("users", snapshot=snapshot_name).select("name", "email", "age").where("department = ?", "Engineering")
                     result = query.execute()
                     
                     self.logger.info(f"   Found {len(result.rows)} engineering users")
@@ -157,7 +157,7 @@ class SnapshotORMDemo:
                     await client.execute(f"CREATE SNAPSHOT {snapshot_name}")
                     
                     # Test async snapshot ORM query
-                    query = client.snapshot_query_builder(snapshot_name).select("name", "price").from_table("products").where("category = ?", "Electronics")
+                    query = client.query("products", snapshot=snapshot_name).select("name", "price").where("category = ?", "Electronics")
                     result = await query.execute()
                     
                     self.logger.info(f"   Found {len(result.rows)} electronics products")
@@ -250,7 +250,7 @@ class SnapshotORMDemo:
                     client.execute(f"CREATE SNAPSHOT {snapshot_name}")
                     
                     # Test complex query with JOIN
-                    query = client.snapshot_query_builder(snapshot_name).select("customers.name", "orders.product", "orders.amount").from_table("orders").join("customers", "orders.customer_id = customers.id")
+                    query = client.query("orders", snapshot=snapshot_name).select("customers.name", "orders.product", "orders.amount").join("customers", "orders.customer_id = customers.id")
                     result = query.execute()
                     
                     self.logger.info(f"   Found {len(result.rows)} order records with customer info")
@@ -286,7 +286,7 @@ class SnapshotORMDemo:
                 'error': str(e)
             })
 
-    def test_snapshot_query_builder_methods(self):
+    def test_snapshot_query_methods(self):
         """Test snapshot query builder methods"""
         print("\n=== Snapshot Query Builder Methods Tests ===")
         
@@ -328,17 +328,17 @@ class SnapshotORMDemo:
                     client.execute(f"CREATE SNAPSHOT {snapshot_name}")
                     
                     # Test select with specific columns
-                    query1 = client.snapshot_query_builder(snapshot_name).select("name", "value").from_table("test_data")
+                    query1 = client.query("test_data", snapshot=snapshot_name).select("name", "value")
                     result1 = query1.execute()
                     self.logger.info(f"   Select specific columns: {len(result1.rows)} rows")
                     
                     # Test where clause
-                    query2 = client.snapshot_query_builder(snapshot_name).select("*").from_table("test_data").where("category = ?", "A")
+                    query2 = client.query("test_data", snapshot=snapshot_name).select("*").where("category = ?", "A")
                     result2 = query2.execute()
                     self.logger.info(f"   Where clause: {len(result2.rows)} rows")
                     
                     # Test order by
-                    query3 = client.snapshot_query_builder(snapshot_name).select("*").from_table("test_data").order_by("value DESC")
+                    query3 = client.query("test_data", snapshot=snapshot_name).select("*").order_by("value DESC")
                     result3 = query3.execute()
                     self.logger.info(f"   Order by: {len(result3.rows)} rows")
                     
@@ -417,7 +417,7 @@ def main():
         # Run tests
         demo.test_sync_snapshot_orm()
         demo.test_complex_snapshot_queries()
-        demo.test_snapshot_query_builder_methods()
+        demo.test_snapshot_query_methods()
         
         # Run async tests
         asyncio.run(demo.test_async_snapshot_orm())

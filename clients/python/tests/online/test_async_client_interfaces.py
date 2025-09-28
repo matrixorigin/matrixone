@@ -60,13 +60,13 @@ class TestAsyncClientMissingInterfaces:
         assert client.vector_query is not None
 
     @pytest.mark.asyncio
-    async def test_snapshot_query_builder(self, client):
-        """Test snapshot_query_builder method"""
-        # Should return a SnapshotQueryBuilder instance
-        builder = client.snapshot_query_builder("test_snapshot")
-        assert builder is not None
-        assert hasattr(builder, 'snapshot_name')
-        assert builder.snapshot_name == "test_snapshot"
+    async def test_snapshot_query(self, client):
+        """Test query method with snapshot parameter"""
+        # Should return a query builder with snapshot
+        query = client.query("test_table", snapshot="test_snapshot")
+        assert query is not None
+        assert hasattr(query, '_snapshot_name')
+        assert query._snapshot_name == "test_snapshot"
 
     @pytest.mark.asyncio
     async def test_snapshot_context_manager(self, client):
@@ -359,7 +359,7 @@ class TestAsyncClientMissingInterfaces:
         # Test that all expected methods exist
         expected_methods = [
             'connected', 'create_table', 'drop_table', 'create_table_with_index', 
-            'create_table_orm', 'snapshot_query_builder', 'snapshot'
+            'create_table_orm', 'query', 'snapshot'
         ]
         
         for method_name in expected_methods:

@@ -155,21 +155,14 @@ class TestClientOnline(unittest.TestCase):
                 table=self.test_table
             )
             
-            # Test snapshot query
-            result = self.client.snapshot_query(
-                snapshot_name,
-                f"SELECT * FROM {self.test_table} WHERE value > ?",
-                (150,)
-            )
+            # Test snapshot query using query builder
+            result = self.client.query(self.test_table, snapshot=snapshot_name).select("*").where("value > ?", 150).execute()
             
             rows = result.fetchall()
             self.assertEqual(len(rows), 2)  # Should have 2 rows with value > 150
             
             # Test snapshot query without parameters
-            result = self.client.snapshot_query(
-                snapshot_name,
-                f"SELECT COUNT(*) FROM {self.test_table}"
-            )
+            result = self.client.query(self.test_table, snapshot=snapshot_name).select("COUNT(*)").execute()
             
             count = result.fetchone()[0]
             self.assertEqual(count, 3)
@@ -195,11 +188,7 @@ class TestClientOnline(unittest.TestCase):
             )
             
             # Test that snapshot query works with proper syntax
-            result = self.client.snapshot_query(
-                snapshot_name,
-                f"SELECT id, name FROM {self.test_table} WHERE id = ?",
-                (1,)
-            )
+            result = self.client.query(self.test_table, snapshot=snapshot_name).select("id", "name").where("id = ?", 1).execute()
             
             rows = result.fetchall()
             self.assertEqual(len(rows), 1)

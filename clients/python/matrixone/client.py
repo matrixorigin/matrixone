@@ -21,7 +21,7 @@ from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
 from .restore import RestoreManager, TransactionRestoreManager
-from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager, SnapshotQueryBuilder
+from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
 from .sqlalchemy_ext import MatrixOneDialect
 from .version import get_version_manager
 
@@ -715,60 +715,7 @@ class Client(BaseMatrixOneClient):
             raise ConnectionError("Not connected to database")
         return self._engine
 
-    def snapshot_query(self, snapshot_name: str, sql: str, params: Optional[Tuple] = None, conn=None) -> "ResultSet":
-        """
-        Execute query with snapshot
-
-        Args:
-            snapshot_name: Name of the snapshot
-            sql: SQL query string
-            params: Query parameters
-            conn: Optional SQLAlchemy connection
-
-        Returns:
-            ResultSet object
-        """
-        # Insert snapshot hint after the first table name in FROM clause
-        import re
-
-        # Find the first table name after FROM and insert snapshot hint
-        pattern = r"(\bFROM\s+)(\w+)(\s|$)"
-
-        def replace_func(match):
-            return f"{match.group(1)}{match.group(2)}{{snapshot = '{snapshot_name}'}}{match.group(3)}"
-
-        snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
-
-        # Handle parameter substitution for MatrixOne compatibility
-        final_sql = self._substitute_parameters(snapshot_sql, params)
-
-        if conn:
-            # Use provided SQLAlchemy connection
-            result = conn.execute(text(final_sql))
-
-            if result.returns_rows:
-                columns = list(result.keys())
-                rows = result.fetchall()
-                return ResultSet(columns, rows)
-            else:
-                return ResultSet([], [], affected_rows=result.rowcount)
-        else:
-            # Use engine connection pool
-            return self.execute(final_sql)
-
-    def snapshot_query_builder(self, snapshot_name: str) -> SnapshotQueryBuilder:
-        """
-        Get snapshot query builder
-
-        Args:
-            snapshot_name: Name of the snapshot
-
-        Returns:
-            SnapshotQueryBuilder instance
-        """
-        return SnapshotQueryBuilder(snapshot_name, self)
-
-    def query(self, *columns):
+    def query(self, *columns, snapshot: str = None):
         """Get MatrixOne query builder - SQLAlchemy style
 
         Args:
@@ -776,6 +723,7 @@ class Client(BaseMatrixOneClient):
                 - Single model class: query(Article) - returns all columns from model
                 - Multiple columns: query(Article.id, Article.title) - returns specific columns
                 - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+            snapshot: Optional snapshot name for snapshot queries
 
         Examples:
             # Traditional model query (all columns)
@@ -787,6 +735,9 @@ class Client(BaseMatrixOneClient):
             # With fulltext score
             client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
 
+            # Snapshot query
+            client.query(Article, snapshot="my_snapshot").filter(...).all()
+
         Returns:
             MatrixOneQuery instance configured for the specified columns
         """
@@ -795,15 +746,18 @@ class Client(BaseMatrixOneClient):
         if len(columns) == 1:
             # Traditional single model class usage
             column = columns[0]
-            if hasattr(column, '__tablename__'):
+            if isinstance(column, str):
+                # String table name
+                return MatrixOneQuery(column, self, snapshot=snapshot)
+            elif hasattr(column, '__tablename__'):
                 # This is a model class
-                return MatrixOneQuery(column, self)
+                return MatrixOneQuery(column, self, snapshot=snapshot)
             elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
                 # This is a CTE object
                 from .orm import CTE
 
                 if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self)
+                    query = MatrixOneQuery(None, self, snapshot=snapshot)
                     query._table_name = column.name
                     query._select_columns = ["*"]  # Default to select all from CTE
                     query._ctes = [column]  # Add the CTE to the query
@@ -811,7 +765,7 @@ class Client(BaseMatrixOneClient):
             else:
                 # This is a single column/expression - need to handle specially
                 # For now, we'll create a query that can handle column selections
-                query = MatrixOneQuery(None, self)
+                query = MatrixOneQuery(None, self, snapshot=snapshot)
                 query._select_columns = [column]
                 # Try to infer table name from column
                 if hasattr(column, 'table') and hasattr(column.table, 'name'):
@@ -831,14 +785,14 @@ class Client(BaseMatrixOneClient):
                     select_columns.append(column)
 
             if model_class:
-                query = MatrixOneQuery(model_class, self)
+                query = MatrixOneQuery(model_class, self, snapshot=snapshot)
                 if select_columns:
                     # Add additional columns to the model's default columns
                     query._select_columns = select_columns
                 return query
             else:
                 # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self)
+                query = MatrixOneQuery(None, self, snapshot=snapshot)
                 query._select_columns = select_columns
 
                 # Try to infer table name from first column that has table info
@@ -2059,7 +2013,21 @@ class SnapshotClient:
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
         """Execute SQL with snapshot"""
-        return self.client.snapshot_query(self.snapshot_name, sql, params)
+        # Insert snapshot hint after the first table name in FROM clause
+        import re
+
+        # Find the first table name after FROM and insert snapshot hint
+        pattern = r"(\bFROM\s+)(\w+)(\s|$)"
+
+        def replace_func(match):
+            return f"{match.group(1)}{match.group(2)}{{snapshot = '{self.snapshot_name}'}}{match.group(3)}"
+
+        snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
+
+        # Handle parameter substitution for MatrixOne compatibility
+        final_sql = self.client._substitute_parameters(snapshot_sql, params)
+
+        return self.client.execute(final_sql)
 
 
 class TransactionWrapper:
@@ -2168,7 +2136,7 @@ class TransactionWrapper:
         sql = self.client._build_batch_insert_sql(table_name, data_list)
         return self.execute(sql)
 
-    def query(self, *columns):
+    def query(self, *columns, snapshot: str = None):
         """Get MatrixOne query builder within transaction - SQLAlchemy style
 
         Args:
@@ -2176,6 +2144,7 @@ class TransactionWrapper:
                 - Single model class: query(Article) - returns all columns from model
                 - Multiple columns: query(Article.id, Article.title) - returns specific columns
                 - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+            snapshot: Optional snapshot name for snapshot queries
 
         Returns:
             MatrixOneQuery instance configured for the specified columns within transaction
@@ -2187,20 +2156,20 @@ class TransactionWrapper:
             column = columns[0]
             if hasattr(column, '__tablename__'):
                 # This is a model class
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self)
+                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
             elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
                 # This is a CTE object
                 from .orm import CTE
 
                 if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
+                    query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
                     query._table_name = column.name
                     query._select_columns = ["*"]  # Default to select all from CTE
                     query._ctes = [column]  # Add the CTE to the query
                     return query
             else:
                 # This is a single column/expression - need to handle specially
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
+                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
                 query._select_columns = [column]
                 # Try to infer table name from column
                 if hasattr(column, 'table') and hasattr(column.table, 'name'):
@@ -2220,14 +2189,14 @@ class TransactionWrapper:
                     select_columns.append(column)
 
             if model_class:
-                query = MatrixOneQuery(model_class, self.client, transaction_wrapper=self)
+                query = MatrixOneQuery(model_class, self.client, transaction_wrapper=self, snapshot=snapshot)
                 if select_columns:
                     # Add additional columns to the model's default columns
                     query._select_columns = select_columns
                 return query
             else:
                 # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
+                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
                 query._select_columns = select_columns
 
                 # Try to infer table name from first column that has table info

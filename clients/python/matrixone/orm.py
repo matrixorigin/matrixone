@@ -349,11 +349,11 @@ class CTE:
 class BaseMatrixOneQuery:
     """Base MatrixOne Query builder that contains common SQL building logic"""
 
-    def __init__(self, model_class, client, transaction_wrapper=None):
+    def __init__(self, model_class, client, transaction_wrapper=None, snapshot=None):
         self.model_class = model_class
         self.client = client
         self.transaction_wrapper = transaction_wrapper
-        self._snapshot_name = None
+        self._snapshot_name = snapshot
         self._table_alias = None  # Add table alias support
         self._select_columns = []
         self._joins = []
@@ -366,6 +366,12 @@ class BaseMatrixOneQuery:
         self._limit_count = None
         self._offset_count = None
         self._ctes = []  # List of CTE definitions
+        self._query_type = "SELECT"
+        # For INSERT
+        self._insert_values = []
+        # For UPDATE
+        self._update_set_columns = []
+        self._update_set_values = []
 
         # Handle None model_class (for column-only queries)
         if model_class is None:
@@ -377,7 +383,11 @@ class BaseMatrixOneQuery:
             self._is_sqlalchemy_model = self._detect_sqlalchemy_model()
 
             # Get table name and columns based on model type
-            if self._is_sqlalchemy_model:
+            if isinstance(model_class, str):
+                # String table name
+                self._table_name = model_class
+                self._columns = {}
+            elif self._is_sqlalchemy_model:
                 self._table_name = model_class.__tablename__
                 self._columns = {col.name: col for col in model_class.__table__.columns}
             else:
@@ -646,6 +656,10 @@ class BaseMatrixOneQuery:
                     self._where_params.append(value)
         return self
 
+    def where(self, condition: str, *params) -> "BaseMatrixOneQuery":
+        """Add WHERE condition - alias for filter method"""
+        return self.filter(condition, *params)
+
     def order_by(self, *columns) -> "BaseMatrixOneQuery":
         """Add ORDER BY clause - SQLAlchemy style"""
         for col in columns:
@@ -861,8 +875,8 @@ class BaseMatrixOneQuery:
 class MatrixOneQuery(BaseMatrixOneQuery):
     """MatrixOne Query builder that mimics SQLAlchemy Query interface"""
 
-    def __init__(self, model_class, client, transaction_wrapper=None):
-        super().__init__(model_class, client, transaction_wrapper)
+    def __init__(self, model_class, client, transaction_wrapper=None, snapshot=None):
+        super().__init__(model_class, client, transaction_wrapper, snapshot)
 
     def with_cte(self, *ctes) -> "MatrixOneQuery":
         """Add CTEs to this query - SQLAlchemy style
@@ -940,6 +954,23 @@ class MatrixOneQuery(BaseMatrixOneQuery):
 
         result = self._execute(sql, params)
         return result.rows[0][0] if result.rows else 0
+
+    def execute(self) -> Any:
+        """Execute the query based on its type"""
+        if self._query_type == "SELECT":
+            sql, params = self._build_sql()
+            return self._execute(sql, params)
+        elif self._query_type == "INSERT":
+            sql, params = self._build_insert_sql()
+            return self._execute(sql, params)
+        elif self._query_type == "UPDATE":
+            sql, params = self._build_update_sql()
+            return self._execute(sql, params)
+        elif self._query_type == "DELETE":
+            sql, params = self._build_delete_sql()
+            return self._execute(sql, params)
+        else:
+            raise ValueError(f"Unknown query type: {self._query_type}")
 
 
 # Helper functions for ORDER BY
