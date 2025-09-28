@@ -2113,6 +2113,15 @@ class TransactionWrapper:
         except Exception as e:
             raise QueryError(f"Transaction query execution failed: {e}")
 
+    def get_connection(self):
+        """
+        Get the underlying SQLAlchemy connection for direct use
+
+        Returns:
+            SQLAlchemy Connection instance bound to this transaction
+        """
+        return self.connection
+
     def get_sqlalchemy_session(self):
         """
         Get SQLAlchemy session that uses the same transaction

@@ -2297,6 +2297,15 @@ class AsyncTransactionWrapper:
         except Exception as e:
             raise QueryError(f"Transaction query execution failed: {e}")
 
+    def get_connection(self):
+        """
+        Get the underlying SQLAlchemy async connection for direct use
+
+        Returns:
+            SQLAlchemy AsyncConnection instance bound to this transaction
+        """
+        return self.connection
+
     async def get_sqlalchemy_session(self):
         """
         Get async SQLAlchemy session that uses the same transaction asynchronously
@@ -2305,7 +2314,18 @@ class AsyncTransactionWrapper:
             Async SQLAlchemy Session instance bound to this transaction
         """
         if self._sqlalchemy_session is None:
-            from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+            try:
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+            except ImportError:
+                # Fallback for older SQLAlchemy versions
+                from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+                from sqlalchemy.orm import sessionmaker as sync_sessionmaker
+
+                # Create a simple async sessionmaker equivalent
+                def async_sessionmaker(bind=None, **kwargs):
+                    # Remove class_ from kwargs if present to avoid conflicts
+                    kwargs.pop('class_', None)
+                    return sync_sessionmaker(bind=bind, class_=AsyncSession, **kwargs)
 
             # Create engine using the same connection parameters
             if not self.client._connection_params:
@@ -2316,7 +2336,7 @@ class AsyncTransactionWrapper:
                 f"{self.client._connection_params['password']}@"
                 f"{self.client._connection_params['host']}:"
                 f"{self.client._connection_params['port']}/"
-                f"{self.client._connection_params['db']}"
+                f"{self.client._connection_params['database']}"
             )
 
             # Create async engine that will use the same connection
