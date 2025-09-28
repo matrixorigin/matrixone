@@ -20,6 +20,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .account import Account, User
+from .async_vector_index_manager import AsyncVectorManager
+from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .exceptions import (
     AccountError,
     ConnectionError,
@@ -1269,7 +1271,34 @@ class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
         return AsyncTransactionSimpleFulltextQueryBuilder(self.client, table_or_columns, self.transaction_wrapper)
 
 
-class AsyncClient:
+class AsyncClientExecutor(BaseMatrixOneExecutor):
+    """Async client executor that uses AsyncClient's execute method"""
+
+    def __init__(self, client):
+        super().__init__(client)
+        self.client = client
+
+    async def _execute(self, sql: str):
+        return await self.client.execute(sql)
+
+    def _get_empty_result(self):
+        return AsyncResultSet([], [], affected_rows=0)
+
+    async def insert(self, table_name: str, data: dict):
+        """Async insert method"""
+        sql = self.base_client._build_insert_sql(table_name, data)
+        return await self._execute(sql)
+
+    async def batch_insert(self, table_name: str, data_list: list):
+        """Async batch insert method"""
+        if not data_list:
+            return self._get_empty_result()
+
+        sql = self.base_client._build_batch_insert_sql(table_name, data_list)
+        return await self._execute(sql)
+
+
+class AsyncClient(BaseMatrixOneClient):
     """
     MatrixOne Async Client
 
@@ -1892,23 +1921,8 @@ class AsyncClient:
         Returns:
             AsyncResultSet object
         """
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                formatted_values.append(str(value))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        return await self.execute(sql)
+        executor = AsyncClientExecutor(self)
+        return await executor.insert(table_name, data)
 
     async def batch_insert(self, table_name: str, data_list: list) -> "AsyncResultSet":
         """
@@ -1921,29 +1935,8 @@ class AsyncClient:
         Returns:
             AsyncResultSet object
         """
-        if not data_list:
-            return AsyncResultSet([], [], affected_rows=0)
-
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
-                else:
-                    formatted_values.append(str(value))
-            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
-        return await self.execute(sql)
+        executor = AsyncClientExecutor(self)
+        return await executor.batch_insert(table_name, data_list)
 
     @asynccontextmanager
     async def transaction(self):
@@ -2262,6 +2255,30 @@ class AsyncClient:
         return self
 
 
+class AsyncTransactionVectorIndexManager(AsyncVectorManager):
+    """Async transaction-aware vector index manager"""
+
+    def __init__(self, client, transaction_wrapper):
+        super().__init__(client)
+        self.transaction_wrapper = transaction_wrapper
+
+    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
+        """Execute SQL within transaction"""
+        return await self.transaction_wrapper.execute(sql, params)
+
+
+class AsyncTransactionVectorQueryManager:
+    """Async transaction-aware vector query manager"""
+
+    def __init__(self, client, transaction_wrapper):
+        self.client = client
+        self.transaction_wrapper = transaction_wrapper
+
+    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
+        """Execute SQL within transaction"""
+        return await self.transaction_wrapper.execute(sql, params)
+
+
 class AsyncTransactionWrapper:
     """Async transaction wrapper for executing queries within a transaction"""
 
@@ -2275,6 +2292,8 @@ class AsyncTransactionWrapper:
         self.pitr = AsyncTransactionPitrManager(client, self)
         self.pubsub = AsyncTransactionPubSubManager(client, self)
         self.account = AsyncTransactionAccountManager(self)
+        self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
+        self.vector_query = AsyncTransactionVectorQueryManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
@@ -2371,6 +2390,51 @@ class AsyncTransactionWrapper:
         if self._sqlalchemy_engine:
             await self._sqlalchemy_engine.dispose()
             self._sqlalchemy_engine = None
+
+    async def insert(self, table_name: str, data: dict) -> AsyncResultSet:
+        """
+        Insert data into a table within transaction asynchronously.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            AsyncResultSet object
+        """
+        sql = self.client._build_insert_sql(table_name, data)
+        return await self.execute(sql)
+
+    async def batch_insert(self, table_name: str, data_list: list) -> AsyncResultSet:
+        """
+        Batch insert data into a table within transaction asynchronously.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            AsyncResultSet object
+        """
+        if not data_list:
+            return AsyncResultSet([], [], affected_rows=0)
+
+        sql = self.client._build_batch_insert_sql(table_name, data_list)
+        return await self.execute(sql)
+
+    def query(self, model_class, database: str = None):
+        """Get async MatrixOne query builder within transaction - SQLAlchemy style
+
+        Args:
+            model_class: SQLAlchemy model class
+            database: Optional database name
+
+        Returns:
+            AsyncMatrixOneQuery instance configured for the specified model within transaction
+        """
+        from .async_orm import AsyncMatrixOneQuery
+
+        return AsyncMatrixOneQuery(model_class, self.client, database, transaction_wrapper=self)
 
 
 class AsyncTransactionSnapshotManager(AsyncSnapshotManager):

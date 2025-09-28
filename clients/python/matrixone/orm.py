@@ -184,7 +184,7 @@ class Query:
     def all(self) -> List:
         """Execute query and return all results"""
         sql, params = self._build_select_sql()
-        result = self.client.execute(sql, params)
+        result = self._execute(sql, params)
 
         models = []
         for row in result.rows:
@@ -227,7 +227,7 @@ class Query:
         if count_query._select_columns:
             sql = sql.replace(f"SELECT {', '.join(count_query._select_columns)}", "SELECT COUNT(*)")
 
-        result = self.client.execute(sql, params)
+        result = self._execute(sql, params)
         return result.rows[0][0] if result.rows else 0
 
     def insert(self, **kwargs) -> "Query":
@@ -301,13 +301,13 @@ class Query:
             return self.all()
         elif self._query_type == "INSERT":
             sql, params = self._build_insert_sql()
-            return self.client.execute(sql, params)
+            return self._execute(sql, params)
         elif self._query_type == "UPDATE":
             sql, params = self._build_update_sql()
-            return self.client.execute(sql, params)
+            return self._execute(sql, params)
         elif self._query_type == "DELETE":
             sql, params = self._build_delete_sql()
-            return self.client.execute(sql, params)
+            return self._execute(sql, params)
         else:
             raise ValueError(f"Unknown query type: {self._query_type}")
 
@@ -316,9 +316,10 @@ class Query:
 class BaseMatrixOneQuery:
     """Base MatrixOne Query builder that contains common SQL building logic"""
 
-    def __init__(self, model_class, client):
+    def __init__(self, model_class, client, transaction_wrapper=None):
         self.model_class = model_class
         self.client = client
+        self.transaction_wrapper = transaction_wrapper
         self._snapshot_name = None
         self._table_alias = None  # Add table alias support
         self._select_columns = []
@@ -349,6 +350,13 @@ class BaseMatrixOneQuery:
                 # Fallback to class name
                 self._table_name = getattr(model_class, "_table_name", model_class.__name__.lower())
                 self._columns = getattr(model_class, "_columns", {})
+
+    def _execute(self, sql, params=None):
+        """Execute SQL using either transaction wrapper or client"""
+        if self.transaction_wrapper:
+            return self.transaction_wrapper.execute(sql, params)
+        else:
+            return self.client.execute(sql, params)
 
     def _detect_sqlalchemy_model(self) -> bool:
         """Detect if the model class is a SQLAlchemy model"""
@@ -775,13 +783,13 @@ class BaseMatrixOneQuery:
 class MatrixOneQuery(BaseMatrixOneQuery):
     """MatrixOne Query builder that mimics SQLAlchemy Query interface"""
 
-    def __init__(self, model_class, client):
-        super().__init__(model_class, client)
+    def __init__(self, model_class, client, transaction_wrapper=None):
+        super().__init__(model_class, client, transaction_wrapper)
 
     def all(self) -> List:
         """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        result = self.client.execute(sql, params)
+        result = self._execute(sql, params)
 
         models = []
         for row in result.rows:
@@ -828,7 +836,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         # Replace SELECT * with COUNT(*)
         sql = sql.replace("SELECT *", "SELECT COUNT(*)")
 
-        result = self.client.execute(sql, params)
+        result = self._execute(sql, params)
         return result.rows[0][0] if result.rows else 0
 
 

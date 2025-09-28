@@ -12,8 +12,8 @@ T = TypeVar("T")
 class AsyncMatrixOneQuery(BaseMatrixOneQuery):
     """Async MatrixOne Query builder that mimics SQLAlchemy Query interface"""
 
-    def __init__(self, model_class, client, database: str = None):
-        super().__init__(model_class, client)
+    def __init__(self, model_class, client, database: str = None, transaction_wrapper=None):
+        super().__init__(model_class, client, transaction_wrapper)
         self.database = database
 
     def _build_sql(self) -> tuple[str, List[Any]]:
@@ -31,10 +31,17 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
 
         return sql, params
 
+    async def _execute(self, sql, params=None):
+        """Execute SQL using either transaction wrapper or client asynchronously"""
+        if self.transaction_wrapper:
+            return await self.transaction_wrapper.execute(sql, params)
+        else:
+            return await self.client.execute(sql, params)
+
     async def all(self) -> List:
         """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        result = await self.client.execute(sql, params)
+        result = await self._execute(sql, params)
 
         models = []
         for row in result.rows:
@@ -81,5 +88,5 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         # Replace SELECT * with COUNT(*)
         sql = sql.replace("SELECT *", "SELECT COUNT(*)")
 
-        result = await self.client.execute(sql, params)
+        result = await self._execute(sql, params)
         return result.rows[0][0] if result.rows else 0

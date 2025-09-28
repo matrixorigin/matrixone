@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from .account import AccountManager, TransactionAccountManager
+from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .exceptions import ConnectionError, QueryError
 from .logger import MatrixOneLogger, create_default_logger
 from .moctl import MoCtlManager
@@ -25,7 +26,21 @@ from .sqlalchemy_ext import MatrixOneDialect
 from .version import get_version_manager
 
 
-class Client:
+class ClientExecutor(BaseMatrixOneExecutor):
+    """Client executor that uses Client's execute method"""
+
+    def __init__(self, client):
+        super().__init__(client)
+        self.client = client
+
+    def _execute(self, sql: str):
+        return self.client.execute(sql)
+
+    def _get_empty_result(self):
+        return ResultSet([], [], affected_rows=0)
+
+
+class Client(BaseMatrixOneClient):
     """
     MatrixOne Client - SQLAlchemy wrapper for database operations.
 
@@ -548,23 +563,8 @@ class Client:
         Returns:
             ResultSet object
         """
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                formatted_values.append(str(value))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        return self.execute(sql)
+        executor = ClientExecutor(self)
+        return executor.insert(table_name, data)
 
     async def insert_async(self, table_name: str, data: dict) -> "ResultSet":
         """
@@ -607,29 +607,8 @@ class Client:
         Returns:
             ResultSet object
         """
-        if not data_list:
-            return ResultSet([], [], affected_rows=0)
-
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
-                else:
-                    formatted_values.append(str(value))
-            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
-        return self.execute(sql)
+        executor = ClientExecutor(self)
+        return executor.batch_insert(table_name, data_list)
 
     async def batch_insert_async(self, table_name: str, data_list: list) -> "ResultSet":
         """
@@ -2154,6 +2133,97 @@ class TransactionWrapper:
             self._sqlalchemy_session.close()
             self._sqlalchemy_session = None
 
+    def insert(self, table_name: str, data: dict) -> ResultSet:
+        """
+        Insert data into a table within transaction.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            ResultSet object
+        """
+        sql = self.client._build_insert_sql(table_name, data)
+        return self.execute(sql)
+
+    def batch_insert(self, table_name: str, data_list: list) -> ResultSet:
+        """
+        Batch insert data into a table within transaction.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            ResultSet object
+        """
+        if not data_list:
+            return ResultSet([], [], affected_rows=0)
+
+        sql = self.client._build_batch_insert_sql(table_name, data_list)
+        return self.execute(sql)
+
+    def query(self, *columns):
+        """Get MatrixOne query builder within transaction - SQLAlchemy style
+
+        Args:
+            *columns: Can be:
+                - Single model class: query(Article) - returns all columns from model
+                - Multiple columns: query(Article.id, Article.title) - returns specific columns
+                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+
+        Returns:
+            MatrixOneQuery instance configured for the specified columns within transaction
+        """
+        from .orm import MatrixOneQuery
+
+        if len(columns) == 1:
+            # Traditional single model class usage
+            column = columns[0]
+            if hasattr(column, '__tablename__'):
+                # This is a model class
+                return MatrixOneQuery(column, self.client, transaction_wrapper=self)
+            else:
+                # This is a single column/expression - need to handle specially
+                query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
+                query._select_columns = [column]
+                # Try to infer table name from column
+                if hasattr(column, 'table') and hasattr(column.table, 'name'):
+                    query._table_name = column.table.name
+                return query
+        else:
+            # Multiple columns/expressions
+            model_class = None
+            select_columns = []
+
+            for column in columns:
+                if hasattr(column, '__tablename__'):
+                    # This is a model class - use its table
+                    model_class = column
+                else:
+                    # This is a column or expression
+                    select_columns.append(column)
+
+            if model_class:
+                query = MatrixOneQuery(model_class, self.client, transaction_wrapper=self)
+                if select_columns:
+                    # Add additional columns to the model's default columns
+                    query._select_columns = select_columns
+                return query
+            else:
+                # No model class provided, need to infer table from columns
+                query = MatrixOneQuery(None, self.client, transaction_wrapper=self)
+                query._select_columns = select_columns
+
+                # Try to infer table name from first column that has table info
+                for col in select_columns:
+                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
+                        query._table_name = col.table.name
+                        break
+
+                return query
+
     def create_table(self, table_name: str, columns: dict, **kwargs) -> "TransactionWrapper":
         """
         Create a table within MatrixOne transaction.
@@ -2905,6 +2975,10 @@ class TransactionVectorIndexManager(VectorManager):
         super().__init__(client)
         self.transaction_wrapper = transaction_wrapper
 
+    def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
+        """Execute SQL within transaction"""
+        return self.transaction_wrapper.execute(sql, params)
+
     def create_ivf(
         self,
         table_name: str,
@@ -3212,6 +3286,10 @@ class TransactionVectorQueryManager:
     def __init__(self, client, transaction_wrapper):
         self.client = client
         self.transaction_wrapper = transaction_wrapper
+
+    def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
+        """Execute SQL within transaction"""
+        return self.transaction_wrapper.execute(sql, params)
 
     def similarity_search(
         self,
