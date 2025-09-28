@@ -374,6 +374,23 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			}
 
 			// alter all partition tables
+			if qry.RawSQL == "" {
+				for _, ac := range qry.Actions {
+					if _, ok := ac.Action.(*plan.AlterTable_Action_AlterName); ok {
+						value := ac.Action.(*plan.AlterTable_Action_AlterName)
+						return ps.Rename(
+							c.proc.Ctx,
+							qry.TableDef.TblId,
+							value.AlterName.OldName,
+							value.AlterName.NewName,
+							c.proc.GetTxnOperator(),
+						)
+					}
+				}
+
+				panic("missing RawSQL for alter partition tables")
+			}
+
 			metadata, err := ps.GetPartitionMetadata(
 				c.proc.Ctx,
 				qry.TableDef.TblId,
@@ -464,6 +481,21 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			c.proc.Ctx,
 			qry.TableDef.TblId,
 			partitions,
+			c.proc.GetTxnOperator(),
+		)
+	case plan.AlterPartitionType_RedefinePartitionTables:
+		stmt, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+		newOptions := stmt.(*tree.AlterTable).PartitionOption.(*tree.AlterPartitionRedefinePartitionClause).PartitionOption
+
+		return ps.Redefine(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			newOptions,
 			c.proc.GetTxnOperator(),
 		)
 	}

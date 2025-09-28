@@ -92,6 +92,87 @@ func (s *Service) Create(
 	)
 }
 
+func (s *Service) Redefine(
+	ctx context.Context,
+	tableID uint64,
+	stmt *tree.PartitionOption,
+	txnOp client.TxnOperator,
+) error {
+	if s.cfg.Disable {
+		return nil
+	}
+
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return s.store.Redefine(
+		ctx,
+		def,
+		stmt,
+		metadata,
+		txnOp,
+	)
+}
+
+func (s *Service) Rename(
+	ctx context.Context,
+	tableID uint64,
+	oldName, newName string,
+	txnOp client.TxnOperator,
+) error {
+	if s.cfg.Disable {
+		return nil
+	}
+
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return s.store.Rename(
+		ctx,
+		def,
+		oldName,
+		newName,
+		metadata,
+		txnOp,
+	)
+}
+
 func (s *Service) AddPartitions(
 	ctx context.Context,
 	tableID uint64,

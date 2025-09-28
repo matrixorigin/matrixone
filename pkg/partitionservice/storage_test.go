@@ -212,6 +212,26 @@ func (s *memStorage) TruncatePartitions(
 	return nil
 }
 
+func (s *memStorage) Rename(
+	ctx context.Context,
+	def *plan.TableDef,
+	oldName, newName string,
+	metadata partition.PartitionMetadata,
+	txnOp client.TxnOperator,
+) error {
+	return nil
+}
+
+func (s *memStorage) Redefine(
+	ctx context.Context,
+	def *plan.TableDef,
+	options *tree.PartitionOption,
+	metadata partition.PartitionMetadata,
+	txnOp client.TxnOperator,
+) error {
+	return nil
+}
+
 type partitionTable struct {
 	metadata   partition.PartitionMetadata
 	def        *plan.TableDef

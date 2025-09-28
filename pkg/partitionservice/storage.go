@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -277,6 +278,179 @@ func (s *Storage) Create(
 	)
 }
 
+func (s *Storage) Redefine(
+	ctx context.Context,
+	def *plan.TableDef,
+	options *tree.PartitionOption,
+	metadata partition.PartitionMetadata,
+	txnOp client.TxnOperator,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	opts := executor.Options{}.
+		WithTxn(txnOp).
+		WithAccountID(accountID)
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
+	return s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			v, _ := parsers.ParseOne(
+				ctx,
+				dialect.MYSQL,
+				def.Createsql,
+				1,
+			)
+			tmp := uuid.NewString()
+			stmt := v.(*tree.CreateTable)
+			stmt.PartitionOption = options
+			table := stmt.Table
+			stmt.Table = *tree.NewTableName(
+				tree.Identifier(tmp),
+				table.ObjectNamePrefix,
+				table.AtTsExpr,
+			)
+			sql := tree.StringWithOpts(
+				stmt,
+				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
+				tree.WithSingleQuoteString(),
+			)
+
+			// 1. create a temporary table
+			txn.Use(def.DbName)
+			rs, err := txn.Exec(
+				sql,
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			rs.Close()
+
+			// 2. select data into new temporary table
+			sql = fmt.Sprintf("insert into `%s` select * from `%s`",
+				tmp,
+				def.Name,
+			)
+			rs, err = txn.Exec(
+				sql,
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			rs.Close()
+
+			// 3. drop old table
+			sql = fmt.Sprintf("drop table `%s`", def.Name)
+			rs, err = txn.Exec(
+				sql,
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			rs.Close()
+
+			// 4. rename tmp to old table name
+			sql = fmt.Sprintf("rename table `%s` to `%s`", tmp, def.Name)
+			rs, err = txn.Exec(
+				sql,
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			rs.Close()
+
+			return nil
+		},
+		opts,
+	)
+}
+
+func (s *Storage) Rename(
+	ctx context.Context,
+	def *plan.TableDef,
+	oldName, newName string,
+	metadata partition.PartitionMetadata,
+	txnOp client.TxnOperator,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	opts := executor.Options{}.
+		WithTxn(txnOp).
+		WithAccountID(accountID)
+
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
+	return s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			for _, p := range metadata.Partitions {
+				txn.Use(metadata.DatabaseName)
+				res, err := txn.Exec(
+					fmt.Sprintf(
+						"rename table `%s` to `%s`",
+						p.PartitionTableName,
+						GetPartitionTableName(newName, p.Name),
+					),
+					executor.StatementOption{}.
+						WithIgnoreForeignKey().
+						WithIgnorePublish(),
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+
+				txn.Use(catalog.MO_CATALOG)
+				res, err = txn.Exec(
+					fmt.Sprintf("update %s set partition_table_name = '%s' where partition_table_name = '%s' and primary_table_id = %d",
+						catalog.MOPartitionTables,
+						GetPartitionTableName(newName, p.Name),
+						p.PartitionTableName,
+						metadata.TableID,
+					),
+					executor.StatementOption{},
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+
+				res, err = txn.Exec(
+					fmt.Sprintf("update %s set table_name = '%s' where table_id = %d",
+						catalog.MOPartitionMetadata,
+						newName,
+						metadata.TableID,
+					),
+					executor.StatementOption{},
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+
+				return nil
+			}
+			return nil
+		},
+		opts,
+	)
+}
+
 func (s *Storage) AddPartitions(
 	ctx context.Context,
 	def *plan.TableDef,
@@ -307,26 +481,10 @@ func (s *Storage) AddPartitions(
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			res, err := txn.Exec(
-				fmt.Sprintf("show create table `%s`.`%s`", def.DbName, metadata.TableName),
-				executor.StatementOption{},
-			)
-			if err != nil {
-				return err
-			}
-			createSQL := ""
-			res.ReadRows(
-				func(rows int, cols []*vector.Vector) bool {
-					createSQL = executor.GetStringRows(cols[1])[0]
-					return true
-				},
-			)
-			res.Close()
-
 			stmt, _ := parsers.ParseOne(
 				ctx,
 				dialect.MYSQL,
-				createSQL,
+				def.Createsql,
 				1,
 			)
 
@@ -418,6 +576,24 @@ func (s *Storage) DropPartitions(
 				return err
 			}
 			res.Close()
+
+			for i, p := range metadata.Partitions {
+				p.Position = uint32(i)
+
+				res, err := txn.Exec(
+					fmt.Sprintf("update %s set partition_ordinal_position = %d where partition_id = %d and primary_table_id = %d",
+						catalog.MOPartitionTables,
+						p.Position,
+						p.PartitionID,
+						metadata.TableID,
+					),
+					executor.StatementOption{},
+				)
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
 
 			txn.Use(metadata.DatabaseName)
 			for _, name := range tables {

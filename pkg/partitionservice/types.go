@@ -55,11 +55,24 @@ var (
 
 // PartitionService is used to maintaining the metadata of the partition table.
 type PartitionService interface {
-	// Create creates metadata of the partition table.
 	Create(
 		ctx context.Context,
 		tableID uint64,
 		stmt *tree.CreateTable,
+		txnOp client.TxnOperator,
+	) error
+
+	Redefine(
+		ctx context.Context,
+		tableID uint64,
+		stmt *tree.PartitionOption,
+		txnOp client.TxnOperator,
+	) error
+
+	Rename(
+		ctx context.Context,
+		tableID uint64,
+		oldName, newName string,
 		txnOp client.TxnOperator,
 	) error
 
@@ -112,6 +125,22 @@ type PartitionStorage interface {
 		ctx context.Context,
 		def *plan.TableDef,
 		stmt *tree.CreateTable,
+		metadata partition.PartitionMetadata,
+		txnOp client.TxnOperator,
+	) error
+
+	Redefine(
+		ctx context.Context,
+		def *plan.TableDef,
+		options *tree.PartitionOption,
+		metadata partition.PartitionMetadata,
+		txnOp client.TxnOperator,
+	) error
+
+	Rename(
+		ctx context.Context,
+		def *plan.TableDef,
+		oldName, newName string,
 		metadata partition.PartitionMetadata,
 		txnOp client.TxnOperator,
 	) error

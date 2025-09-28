@@ -1662,4 +1662,5 @@ enum AlterPartitionType {
 	AddPartitionTables = 0;
 	DropPartitionTables = 1;
 	TruncatePartitionTables = 2;
+	RedefinePartitionTables = 3;
 }
