@@ -11,8 +11,8 @@ You can use client.query(Model).snapshot("snapshot_name").filter_by(...).all() s
 import asyncio
 import logging
 from matrixone import Client, AsyncClient, SnapshotManager, SnapshotLevel
+from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, desc
-from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 from matrixone.config import get_connection_params, print_config

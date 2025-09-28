@@ -32,6 +32,7 @@ from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager, Sn
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
     FulltextAlgorithmType,
+    FulltextFilter,
     FulltextIndex,
     FulltextModeType,
     FulltextSearchBuilder,
@@ -45,6 +46,7 @@ from .sqlalchemy_ext import (
     VectorTableBuilder,
     VectorType,
     VectorTypeDecorator,
+    boolean_match,
     create_document_vector_table,
     create_fulltext_index,
     create_hnsw_index,
@@ -54,7 +56,11 @@ from .sqlalchemy_ext import (
     create_vector_table,
     enable_hnsw_indexing,
     enable_ivf_indexing,
+    fulltext_and,
+    fulltext_or,
     fulltext_search_builder,
+    group,
+    natural_match,
 )
 from .version import FeatureRequirement, VersionInfo, VersionManager, requires_version
 
@@ -120,6 +126,12 @@ __all__ = [
     "FulltextAlgorithmType",
     "FulltextModeType",
     "FulltextSearchBuilder",
+    "FulltextFilter",
+    "boolean_match",
+    "natural_match",
+    "fulltext_and",
+    "fulltext_or",
+    "group",
     "create_fulltext_index",
     "fulltext_search_builder",
 ]

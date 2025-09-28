@@ -448,7 +448,13 @@ class BaseMatrixOneQuery:
 
     def filter(self, condition, *params) -> "BaseMatrixOneQuery":
         """Add WHERE conditions - SQLAlchemy style unified interface"""
-        if hasattr(condition, "compile"):
+
+        # Check if condition contains FulltextFilter objects
+        if hasattr(condition, "compile") and self._contains_fulltext_filter(condition):
+            # Handle SQLAlchemy expressions that contain FulltextFilter objects
+            formatted_condition = self._process_fulltext_expression(condition)
+            self._where_conditions.append(formatted_condition)
+        elif hasattr(condition, "compile"):
             # This is a SQLAlchemy expression (OR, AND, BinaryExpression, etc.), compile it to SQL
             compiled = condition.compile(compile_kwargs={"literal_binds": True})
             formatted_condition = str(compiled)
@@ -495,6 +501,58 @@ class BaseMatrixOneQuery:
             self._where_conditions.append(formatted_condition)
 
         return self
+
+    def _contains_fulltext_filter(self, condition) -> bool:
+        """Check if a SQLAlchemy expression contains FulltextFilter objects."""
+        from .sqlalchemy_ext.fulltext_search import FulltextFilter
+
+        if isinstance(condition, FulltextFilter):
+            return True
+
+        # Check nested clauses
+        if hasattr(condition, 'clauses'):
+            for clause in condition.clauses:
+                if self._contains_fulltext_filter(clause):
+                    return True
+
+        return False
+
+    def _process_fulltext_expression(self, condition) -> str:
+        """Process SQLAlchemy expressions that contain FulltextFilter objects."""
+        import re
+
+        from .sqlalchemy_ext.fulltext_search import FulltextFilter
+
+        if isinstance(condition, FulltextFilter):
+            return condition.compile()
+
+        # Handle and_() expressions
+        if hasattr(condition, 'clauses') and hasattr(condition, 'operator'):
+            parts = []
+            for clause in condition.clauses:
+                if isinstance(clause, FulltextFilter):
+                    parts.append(clause.compile())
+                elif hasattr(clause, 'compile'):
+                    # Regular SQLAlchemy expression
+                    compiled = clause.compile(compile_kwargs={"literal_binds": True})
+                    formatted = str(compiled)
+                    # Fix quoted column names and table prefixes
+                    formatted = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted)
+                    formatted = re.sub(r"\w+\.(\w+)", r"\1", formatted)
+                    parts.append(formatted)
+                else:
+                    parts.append(str(clause))
+
+            # Determine operator
+            if str(condition.operator).upper() == 'AND':
+                return f"({' AND '.join(parts)})"
+            elif str(condition.operator).upper() == 'OR':
+                return f"({' OR '.join(parts)})"
+            else:
+                return f"({f' {condition.operator} '.join(parts)})"
+
+        # Fallback for other types
+        return str(condition)
 
     def filter_by(self, **kwargs) -> "BaseMatrixOneQuery":
         """Add WHERE conditions from keyword arguments - SQLAlchemy style"""

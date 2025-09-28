@@ -14,6 +14,9 @@ from .fulltext_index import (
     create_fulltext_index,
     fulltext_search_builder,
 )
+from .fulltext_search import (
+    FulltextFilter,
+)
 from .fulltext_search import FulltextIndexManager as FulltextSearchManager
 from .fulltext_search import (
     FulltextSearchAlgorithm,
@@ -21,6 +24,11 @@ from .fulltext_search import (
 from .fulltext_search import FulltextSearchBuilder as AdvancedFulltextSearchBuilder
 from .fulltext_search import (
     FulltextSearchMode,
+    boolean_match,
+    fulltext_and,
+    fulltext_or,
+    group,
+    natural_match,
 )
 from .hnsw_config import HNSWConfig, create_hnsw_config, disable_hnsw_indexing, enable_hnsw_indexing, get_hnsw_status
 from .ivf_config import (
@@ -127,4 +135,10 @@ __all__ = [
     "FulltextSearchAlgorithm",
     "AdvancedFulltextSearchBuilder",
     "FulltextSearchManager",
+    "FulltextFilter",
+    "boolean_match",
+    "natural_match",
+    "fulltext_and",
+    "fulltext_or",
+    "group",
 ]

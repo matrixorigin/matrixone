@@ -3,11 +3,72 @@ Advanced Fulltext Search Builder for MatrixOne
 
 This module provides an Elasticsearch-like query builder for MatrixOne fulltext search,
 with chainable methods and comprehensive search capabilities.
+
+## Column Matching Requirements
+
+**CRITICAL**: The columns specified in MATCH() must exactly match the columns
+defined in the FULLTEXT index. This is a MatrixOne requirement.
+
+Examples:
+- If your index is: `FULLTEXT(title, content, tags)`
+- Your MATCH() must be: `MATCH(title, content, tags) AGAINST(...)`
+- NOT: `MATCH(title) AGAINST(...)` or `MATCH(title, content) AGAINST(...)`
+
+## MatrixOne Limitations
+
+1. **Multiple MATCH() Functions**: MatrixOne does not support multiple
+   MATCH() functions in the same query.
+
+   ❌ WRONG: `WHERE MATCH(...) AND MATCH(...)`
+   ✅ CORRECT: Use chained filter() calls or combine terms in single MATCH()
+
+2. **Complex Nested Groups**: Some complex nested syntaxes are not supported.
+
+   ❌ WRONG: `'+learning -basic (+machine AI) (+deep neural)'`
+   ✅ CORRECT: `'+learning -basic +machine +deep'`
+
+## Supported Boolean Mode Operators
+
+### Group-level operators (applied to entire groups):
+- `+(group)`: Group must be present
+- `-(group)`: Group must not be present
+
+### Element-level operators:
+- `+term`: Term must contain (required)
+- `-term`: Term must not contain (excluded)
+- `term`: Term optional (should contain)
+- `"phrase"`: Exact phrase match
+- `term*`: Prefix match
+
+### Weight operators (within groups/elements):
+- `term`: Optional term with normal positive weight boost
+- `>term`: Higher relevance weight for term (high positive boost)
+- `<term`: Lower relevance weight for term (low positive boost)
+- `~term`: Reduced/suppressed relevance weight (negative or minimal boost)
+
+### Weight Operator Comparison:
+- `encourage("tutorial")` → `tutorial` : Encourages documents with "tutorial"
+- `discourage("legacy")` → `~legacy` : Discourages documents with "legacy"
+
+Both are optional (don't filter documents) but affect ranking differently.
+
+### MatrixOne Example:
+- `'+red -(<blue >is)'`: Must have 'red', must NOT have group containing 'blue' (low weight) and 'is' (high weight)
+
+## Supported Modes
+
+- **NATURAL LANGUAGE**: Default full-text search
+- **BOOLEAN**: Advanced boolean operators
+- **QUERY EXPANSION**: Automatic query expansion (limited support)
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, Optional
+
+from sqlalchemy import Boolean
+from sqlalchemy.sql import and_, or_, text
+from sqlalchemy.sql.elements import ClauseElement
 
 if TYPE_CHECKING:
     from ..client import Client
@@ -28,112 +89,806 @@ class FulltextSearchAlgorithm:
     BM25 = "BM25"
 
 
-class FulltextTerm:
-    """Represents a single search term with optional modifiers."""
+class FulltextElement:
+    """Represents a single fulltext element (term, phrase, prefix, etc.)."""
 
-    def __init__(self, term: str, modifier: str = ""):
-        self.term = term
-        self.modifier = modifier  # +, -, ~, etc.
+    def __init__(self, content: str, operator: str = "", weight_modifier: str = ""):
+        self.content = content
+        self.operator = operator  # "+", "-", "", etc.
+        self.weight_modifier = weight_modifier  # ">", "<", "~", etc.
 
-    def __str__(self) -> str:
-        return f"{self.modifier}{self.term}"
+    def build(self) -> str:
+        """Build the element string."""
+        if self.weight_modifier:
+            return f"{self.operator}{self.weight_modifier}{self.content}"
+        return f"{self.operator}{self.content}"
 
 
-class FulltextQuery:
-    """Represents a fulltext query with terms and phrases."""
+class FulltextGroup:
+    """Represents a group of fulltext elements for building nested boolean queries.
+
+    This class is used to create groups of terms that can be combined with
+    group-level operators (+, -, ~, no prefix) in MatrixOne's boolean mode.
+
+    Element-level Methods (within groups):
+        - medium(): Add terms with medium weight (no operators)
+        - high(): Add terms with high weight (>term)
+        - low(): Add terms with low weight (<term)
+        - phrase(): Add exact phrase matches ("phrase")
+        - prefix(): Add prefix matches (term*)
+
+    Group Types:
+        - "or": OR semantics (default) - any term in group can match
+        - "and": AND semantics - all terms in group must match
+        - "not": NOT semantics - none of the terms in group can match
+
+    Usage with Group-level Operators:
+        # Create groups and apply group-level operators
+        query.must(group().medium("java", "kotlin"))           # +(java kotlin)
+        query.encourage(group().medium("tutorial", "guide"))   # (tutorial guide)
+        query.discourage(group().medium("old", "outdated"))    # ~(old outdated)
+        query.must_not(group().medium("spam", "junk"))         # -(spam junk)
+
+    Element-level Weight Operators (inside groups):
+        # MatrixOne syntax: '+red -(<blue >is)'
+        group().low("blue").high("is")
+        # Used as: query.must("red").must_not(group().low("blue").high("is"))
+
+    Important Notes:
+        - Use medium() for normal terms inside groups (no operators)
+        - Use high()/low() for element-level weight control
+        - Group-level operators (+, -, ~) are applied by the parent query builder
+    """
+
+    def __init__(self, group_type: str = "or"):
+        self.elements: List[FulltextElement] = []
+        self.groups: List["FulltextGroup"] = []
+        self.group_type = group_type  # "or", "and", "not"
+        self.is_tilde = False  # Whether this group has tilde weight
+
+    def must(self, *terms: str) -> "FulltextGroup":
+        """Add required terms (only for top-level, groups should use medium() instead)."""
+        for term in terms:
+            # Groups don't use +/- operators on elements, only at group level
+            if self.group_type in ["or", "not"]:
+                # Inside groups, elements should not have +/- operators
+                self.elements.append(FulltextElement(term, ""))
+            else:
+                # Top-level (main group) can use + operator
+                self.elements.append(FulltextElement(term, "+"))
+        return self
+
+    def must_not(self, *terms: str) -> "FulltextGroup":
+        """Add excluded terms (only for top-level, groups should use medium() instead)."""
+        for term in terms:
+            # Groups don't use +/- operators on elements, only at group level
+            if self.group_type in ["or", "not"]:
+                # Inside groups, elements should not have +/- operators
+                self.elements.append(FulltextElement(term, ""))
+            else:
+                # Top-level (main group) can use - operator
+                self.elements.append(FulltextElement(term, "-"))
+        return self
+
+    def encourage(self, *terms: str) -> "FulltextGroup":
+        """Add terms that should be encouraged (normal positive weight).
+
+        These terms are optional - documents without them can still match,
+        but documents containing them will get normal positive scoring boost.
+
+        Args:
+            *terms: Terms to add with normal positive weight
+
+        Example:
+            # Documents with 'python' get normal positive boost
+            group.encourage("python")  # Generates: python
+        """
+        for term in terms:
+            # Optional terms never have operators
+            self.elements.append(FulltextElement(term, ""))
+        return self
+
+    def medium(self, *terms: str) -> "FulltextGroup":
+        """Add terms with medium/normal weight (no operators)."""
+        for term in terms:
+            self.elements.append(FulltextElement(term, ""))
+        return self
+
+    def phrase(self, phrase: str) -> "FulltextGroup":
+        """Add a phrase search."""
+        self.elements.append(FulltextElement(f'"{phrase}"', ""))
+        return self
+
+    def prefix(self, prefix: str) -> "FulltextGroup":
+        """Add a prefix search."""
+        self.elements.append(FulltextElement(f"{prefix}*", ""))
+        return self
+
+    def boost(self, term: str, weight: float) -> "FulltextGroup":
+        """Add a boosted term."""
+        self.elements.append(FulltextElement(f"{term}^{weight}", ""))
+        return self
+
+    def high(self, *terms: str) -> "FulltextGroup":
+        """Add terms with high weight (>term)."""
+        for term in terms:
+            self.elements.append(FulltextElement(term, "", ">"))
+        return self
+
+    def low(self, *terms: str) -> "FulltextGroup":
+        """Add terms with low weight (<term)."""
+        for term in terms:
+            self.elements.append(FulltextElement(term, "", "<"))
+        return self
+
+    def add_group(self, *groups: "FulltextGroup") -> "FulltextGroup":
+        """Add nested groups."""
+        for group in groups:
+            self.groups.append(group)
+        return self
+
+    def add_tilde_group(self, group: "FulltextGroup") -> "FulltextGroup":
+        """Add a group with tilde weight (~group)."""
+        group.is_tilde = True
+        self.groups.append(group)
+        return self
+
+    def build(self) -> str:
+        """Build the group string."""
+        parts = []
+
+        # Add elements
+        for element in self.elements:
+            parts.append(element.build())
+
+        # Add nested groups with appropriate prefix based on group type
+        for group in self.groups:
+            group_str = group.build()
+            if group_str:
+                if group.is_tilde:
+                    # For tilde groups, use ~(<content>) format
+                    parts.append(f"~({group_str})")
+                elif group.group_type == "not":
+                    # For NOT groups, use -(<content>) format
+                    parts.append(f"-({group_str})")
+                elif group.group_type == "and":
+                    # For AND groups, use +(<content>) format
+                    parts.append(f"+({group_str})")
+                else:  # or (default)
+                    # For OR groups, just use (<content>) format
+                    parts.append(f"({group_str})")
+
+        return " ".join(parts)
+
+
+class FulltextQueryBuilder:
+    """Builder for constructing fulltext boolean queries.
+
+    This class provides a chainable API for building complex fulltext search queries
+    that are compatible with MatrixOne's MATCH() AGAINST() syntax.
+    Core Methods (Group-level operators):
+        - must(): Required terms/groups (+ operator)
+        - must_not(): Excluded terms/groups (- operator)
+        - encourage(): Optional terms/groups with normal weight (no prefix)
+        - discourage(): Optional terms/groups with reduced weight (~ operator)
+
+    Parameter Types:
+        - str: Single term (e.g., "python")
+        - FulltextGroup: Group of terms (e.g., group().medium("java", "kotlin"))
+
+    Examples:
+        Basic usage:
+            query.must("python")                    # +python
+            query.encourage("tutorial")             # tutorial
+            query.discourage("legacy")              # ~legacy
+            query.must_not("deprecated")            # -deprecated
+
+        Group usage:
+            query.must(group().medium("java", "kotlin"))           # +(java kotlin)
+            query.encourage(group().medium("tutorial", "guide"))   # (tutorial guide)
+            query.discourage(group().medium("old", "outdated"))    # ~(old outdated)
+            query.must_not(group().medium("spam", "junk"))         # -(spam junk)
+
+        Complex combinations:
+            query.must("python")\\
+                 .encourage("tutorial")\\
+                 .discourage("legacy")\\
+                 .must_not(group().medium("spam", "junk"))
+            # Result: +python tutorial ~legacy -(spam junk)
+
+    MatrixOne Syntax Mapping:
+        - Group-level: +, -, ~, (no prefix) - applied to entire groups
+        - Element-level: >, < - applied within groups using high(), low()
+
+    Weight Operator Comparison:
+        - encourage("term"): Optional with normal positive weight boost
+        - discourage("term"): Optional with reduced/negative weight boost
+
+    Both are optional (don't filter documents) but affect ranking differently:
+        - encourage() encourages documents containing the term (higher ranking)
+        - discourage() discourages documents containing the term (lower ranking)
+    """
 
     def __init__(self):
-        self.terms: List[FulltextTerm] = []
-        self.phrases: List[str] = []
-        self.wildcards: List[str] = []
+        self.main_group = FulltextGroup("and")  # Main group with AND semantics
 
-    def add_term(
-        self, term: str, required: bool = False, excluded: bool = False, proximity: Optional[int] = None
-    ) -> "FulltextQuery":
-        """
-        Add a search term to the query.
+    def must(self, *items) -> "FulltextQueryBuilder":
+        """Add required terms or groups (+ operator at group level).
+
+        Documents MUST contain these terms/groups to match. This is equivalent
+        to the '+' operator in MatrixOne's boolean mode syntax.
 
         Args:
-            term: The search term
-            required: Whether the term is required (+) - must contain this term
-            excluded: Whether the term is excluded (-) - must not contain this term
-            proximity: Proximity modifier for boolean mode (not supported in MatrixOne)
-
-        Returns:
-            FulltextQuery: Self for chaining
+            *items: Can be strings (terms) or FulltextGroup objects
 
         Examples:
-            # Required term: +machine
-            .add_term("machine", required=True)
+            # Required term - documents must contain 'python'
+            query.must("python")  # Generates: +python
 
-            # Excluded term: -java
-            .add_term("java", excluded=True)
+            # Required group - documents must contain either 'java' OR 'kotlin'
+            query.must(group().medium("java", "kotlin"))  # Generates: +(java kotlin)
 
-            # Optional term: learning
-            .add_term("learning")
+            # Multiple required terms
+            query.must("python", "programming")  # Generates: +python +programming
+
+        Returns:
+            FulltextQueryBuilder: Self for method chaining
         """
-        modifier = ""
-        if required:
-            modifier = "+"
-        elif excluded:
-            modifier = "-"
-
-        # Note: proximity not supported in MatrixOne, but < > operators are supported
-        if proximity is not None:
-            modifier = f"{modifier}(<{term} >{proximity})"
-
-        self.terms.append(FulltextTerm(term, modifier))
+        for item in items:
+            if isinstance(item, FulltextGroup):
+                item.group_type = "and"  # Force group to be required
+                self.main_group.add_group(item)
+            else:
+                self.main_group.must(item)
         return self
 
-    def add_phrase(self, phrase: str) -> "FulltextQuery":
-        """
-        Add an exact phrase to the query.
+    def must_not(self, *items) -> "FulltextQueryBuilder":
+        """Add excluded terms or groups (- operator at group level).
+
+        Documents MUST NOT contain these terms/groups to match. This is equivalent
+        to the '-' operator in MatrixOne's boolean mode syntax.
 
         Args:
-            phrase: The exact phrase to search for (wrapped in double quotes)
-
-        Returns:
-            FulltextQuery: Self for chaining
+            *items: Can be strings (terms) or FulltextGroup objects
 
         Examples:
-            # Exact phrase: "machine learning"
-            .add_phrase("machine learning")
+            # Excluded term - documents must not contain 'deprecated'
+            query.must_not("deprecated")  # Generates: -deprecated
+
+            # Excluded group - documents must not contain 'spam' OR 'junk'
+            query.must_not(group().medium("spam", "junk"))  # Generates: -(spam junk)
+
+            # Multiple excluded terms
+            query.must_not("spam", "junk")  # Generates: -spam -junk
+
+        Returns:
+            FulltextQueryBuilder: Self for method chaining
         """
-        self.phrases.append(f'"{phrase}"')
+        for item in items:
+            if isinstance(item, FulltextGroup):
+                item.group_type = "not"  # Force group to be excluded
+                self.main_group.add_group(item)
+            else:
+                self.main_group.must_not(item)
         return self
 
-    def add_wildcard(self, pattern: str) -> "FulltextQuery":
-        """
-        Add a wildcard pattern to the query.
+    def encourage(self, *items) -> "FulltextQueryBuilder":
+        """Add terms or groups that should be encouraged (normal positive weight).
+
+        Documents can match without these terms, but containing them will
+        INCREASE the relevance score. This provides normal positive weight boost.
 
         Args:
-            pattern: Wildcard pattern with * suffix (e.g., "test*", "neural*")
-
-        Returns:
-            FulltextQuery: Self for chaining
+            *items: Can be strings (terms) or FulltextGroup objects
 
         Examples:
-            # Prefix match: neural*
-            .add_wildcard("neural*")
+            # Encourage documents with 'tutorial'
+            query.encourage("tutorial")  # Generates: tutorial
+
+            # Encourage documents with 'beginner' OR 'intro'
+            query.encourage(group().medium("beginner", "intro"))  # Generates: (beginner intro)
+
+            # Multiple encouraged terms
+            query.encourage("tutorial", "guide")  # Generates: tutorial guide
+
+        Weight Comparison:
+            - encourage("term"): Normal positive boost (encourages term)
+            - discourage("term"): Reduced/negative boost (discourages term)
+
+        Returns:
+            FulltextQueryBuilder: Self for method chaining
         """
-        self.wildcards.append(pattern)
+        for item in items:
+            if isinstance(item, FulltextGroup):
+                item.group_type = "or"  # Force group to be optional
+                self.main_group.add_group(item)
+            else:
+                self.main_group.encourage(item)
+        return self
+
+    def discourage(self, *items) -> "FulltextQueryBuilder":
+        """Add terms or groups that should be discouraged (~ operator at group level).
+
+        Documents can match without these terms, but containing them will
+        DECREASE the relevance score. This provides reduced or negative weight boost,
+        effectively discouraging documents that contain these terms.
+
+        Args:
+            *items: Can be strings (terms) or FulltextGroup objects
+
+        Examples:
+            # Discourage documents with 'legacy'
+            query.discourage("legacy")  # Generates: ~legacy
+
+            # Discourage documents with 'old' OR 'outdated'
+            query.discourage(group().medium("old", "outdated"))  # Generates: ~(old outdated)
+
+            # Multiple discouraged terms
+            query.discourage("legacy", "deprecated")  # Generates: ~legacy ~deprecated
+
+        Weight Comparison:
+            - encourage("term"): Normal positive boost (encourages term)
+            - discourage("term"): Reduced/negative boost (discourages term)
+
+        Use Cases:
+            # Search Python content, but discourage legacy versions
+            query.must("python").encourage("3.11").discourage("2.7")
+
+            # Find tutorials, but avoid outdated content
+            query.must("tutorial").discourage(group().medium("old", "deprecated"))
+
+        Returns:
+            FulltextQueryBuilder: Self for method chaining
+        """
+        for item in items:
+            if isinstance(item, FulltextGroup):
+                # Apply tilde to the entire group
+                self.main_group.add_tilde_group(item)
+            else:
+                # Apply tilde to individual term
+                self.main_group.elements.append(FulltextElement(item, "", "~"))
+        return self
+
+    def phrase(self, phrase: str) -> "FulltextQueryBuilder":
+        """Add a phrase search to the main group."""
+        self.main_group.phrase(phrase)
+        return self
+
+    def prefix(self, prefix: str) -> "FulltextQueryBuilder":
+        """Add a prefix search to the main group."""
+        self.main_group.prefix(prefix)
+        return self
+
+    def boost(self, term: str, weight: float) -> "FulltextQueryBuilder":
+        """Add a boosted term to the main group."""
+        self.main_group.boost(term, weight)
+        return self
+
+    def group(self, *builders: "FulltextQueryBuilder") -> "FulltextQueryBuilder":
+        """Add nested query builders as groups (OR semantics)."""
+        for builder in builders:
+            # Convert builder to group and add to main group
+            group = FulltextGroup("or")
+            # Add all elements from the builder's main group
+            group.elements.extend(builder.main_group.elements)
+            group.groups.extend(builder.main_group.groups)
+            self.main_group.groups.append(group)
         return self
 
     def build(self) -> str:
         """Build the final query string."""
-        parts = []
+        return self.main_group.build()
 
-        # Add terms
-        for term in self.terms:
-            parts.append(str(term))
 
-        # Add phrases
-        parts.extend(self.phrases)
+class FulltextFilter(ClauseElement):
+    """Advanced fulltext filter for integrating fulltext search with ORM queries.
 
-        # Add wildcards
-        parts.extend(self.wildcards)
+    This class wraps FulltextQueryBuilder to provide seamless integration
+    with MatrixOne ORM's filter() method, allowing fulltext search to be
+    combined with other SQL conditions.
 
-        return " ".join(parts)
+    Core Methods (Group-level operators):
+        - must(): Required terms/groups (+ operator)
+        - must_not(): Excluded terms/groups (- operator)
+        - encourage(): Optional terms/groups with normal weight (no prefix)
+        - discourage(): Optional terms/groups with reduced weight (~ operator)
+
+    Parameter Types:
+        - str: Single term (e.g., "python")
+        - FulltextGroup: Group of terms (e.g., group().medium("java", "kotlin"))
+
+    Usage with ORM:
+        # Basic fulltext filter
+        results = client.query(Article).filter(
+            boolean_match("title", "content").must("python").encourage("tutorial")
+        ).all()
+
+        # Combined with other conditions
+        results = client.query(Article).filter(
+            boolean_match("title", "content").must("python")
+        ).filter(
+            Article.category == "Programming"
+        ).all()
+
+        # Complex fulltext with groups
+        results = client.query(Article).filter(
+            boolean_match("title", "content", "tags")
+            .must("programming")
+            .must(group().medium("python", "java"))
+            .discourage(group().medium("legacy", "deprecated"))
+        ).all()
+
+    Weight Operator Examples:
+        # Encourage tutorials, discourage legacy content
+        boolean_match("title", "content")
+            .must("python")
+            .encourage("tutorial")   # Boost documents with 'tutorial'
+            .discourage("legacy")    # Lower ranking for 'legacy' documents
+
+    Supported MatrixOne Boolean Mode Operators:
+        Group-level: +, -, ~, (no prefix) - applied to entire groups/terms
+        Element-level: >, < - applied within groups using high(), low()
+        Other: "phrase", term* - exact phrases and prefix matching
+        Complex: +red -(<blue >is) - nested groups with mixed operators
+
+    Important MatrixOne Requirements:
+        **Column Matching**: The columns specified must exactly match
+        the columns defined in the FULLTEXT index. If your index is
+        `FULLTEXT(title, content, tags)`, you must include all three columns.
+
+        **Limitations**:
+        - Only one MATCH() function per query is supported
+        - Complex nested groups may have syntax restrictions
+        - Use fulltext_and/fulltext_or for combining with other conditions
+    """
+
+    def __init__(self, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN):
+        super().__init__()
+        self.columns = columns
+        self.mode = mode
+        self.query_builder = FulltextQueryBuilder()
+        # Set SQLAlchemy type info for compatibility
+        self.type = Boolean()
+
+    def columns(self, *columns: str) -> "FulltextFilter":
+        """Set the columns to search in."""
+        self.columns = list(columns)
+        return self
+
+    def must(self, *items) -> "FulltextFilter":
+        """Add required terms or groups (+ operator at group level)."""
+        self.query_builder.must(*items)
+        return self
+
+    def must_not(self, *items) -> "FulltextFilter":
+        """Add excluded terms or groups (- operator at group level)."""
+        self.query_builder.must_not(*items)
+        return self
+
+    def encourage(self, *items) -> "FulltextFilter":
+        """Add terms or groups that should be encouraged (normal positive weight)."""
+        self.query_builder.encourage(*items)
+        return self
+
+    def phrase(self, *phrases: str) -> "FulltextFilter":
+        """Add exact phrases - equivalent to "phrase"."""
+        self.query_builder.phrase(*phrases)
+        return self
+
+    def prefix(self, *terms: str) -> "FulltextFilter":
+        """Add prefix terms - equivalent to term*."""
+        self.query_builder.prefix(*terms)
+        return self
+
+    def boost(self, term: str, weight: float) -> "FulltextFilter":
+        """Add a boosted term (term^weight)."""
+        self.query_builder.boost(term, weight)
+        return self
+
+    def discourage(self, *items) -> "FulltextFilter":
+        """Add terms or groups that should be discouraged (~ operator at group level)."""
+        self.query_builder.discourage(*items)
+        return self
+
+    def group(self, *filters: "FulltextFilter") -> "FulltextFilter":
+        """Add nested query groups (OR semantics)."""
+        builders = [f.query_builder for f in filters]
+        self.query_builder.group(*builders)
+        return self
+
+    def natural_language(self) -> "FulltextFilter":
+        """Set to natural language mode."""
+        self.mode = FulltextSearchMode.NATURAL_LANGUAGE
+        return self
+
+    def boolean_mode(self) -> "FulltextFilter":
+        """Set to boolean mode."""
+        self.mode = FulltextSearchMode.BOOLEAN
+        return self
+
+    def query_expansion(self) -> "FulltextFilter":
+        """Set to query expansion mode."""
+        self.mode = FulltextSearchMode.QUERY_EXPANSION
+        return self
+
+    def compile(self, compile_kwargs=None):
+        """Compile to SQL expression for use in filter() method."""
+        if not self.columns:
+            raise ValueError("Columns must be specified")
+
+        columns_str = ", ".join(self.columns)
+        query_string = self.query_builder.build()
+
+        if not query_string:
+            raise ValueError("Query cannot be empty")
+
+        if self.mode == FulltextSearchMode.NATURAL_LANGUAGE:
+            return f"MATCH({columns_str}) AGAINST('{query_string}')"
+        elif self.mode == FulltextSearchMode.BOOLEAN:
+            return f"MATCH({columns_str}) AGAINST('{query_string}' IN BOOLEAN MODE)"
+        elif self.mode == FulltextSearchMode.QUERY_EXPANSION:
+            return f"MATCH({columns_str}) AGAINST('{query_string}' WITH QUERY EXPANSION)"
+        else:
+            return f"MATCH({columns_str}) AGAINST('{query_string}')"
+
+    def _compiler_dispatch(self, visitor, **kw):
+        """SQLAlchemy compiler dispatch method for complete compatibility."""
+        # Generate the MATCH() AGAINST() SQL
+        sql_text = self.compile()
+        # Return a text clause that SQLAlchemy can handle
+        return visitor.process(text(sql_text), **kw)
+
+    def __str__(self):
+        """String representation for debugging."""
+        return f"FulltextFilter({self.columns}, mode={self.mode})"
+
+    def __repr__(self):
+        """Detailed representation for debugging."""
+        return f"FulltextFilter(columns={self.columns}, mode='{self.mode}', query='{self.query_builder.build()}')"
+
+    def as_text(self):
+        """Convert to SQLAlchemy text() object for compatibility with and_(), or_(), etc."""
+        return text(self.compile())
+
+    @classmethod
+    def _create_and(cls, *conditions):
+        """Helper to create AND expressions with FulltextFilter support."""
+        processed_conditions = []
+        for condition in conditions:
+            if isinstance(condition, cls):
+                processed_conditions.append(condition.as_text())
+            else:
+                processed_conditions.append(condition)
+        return and_(*processed_conditions)
+
+    @classmethod
+    def _create_or(cls, *conditions):
+        """Helper to create OR expressions with FulltextFilter support."""
+        processed_conditions = []
+        for condition in conditions:
+            if isinstance(condition, cls):
+                processed_conditions.append(condition.as_text())
+            else:
+                processed_conditions.append(condition)
+        return or_(*processed_conditions)
+
+
+# Convenience functions for common use cases
+
+
+def boolean_match(*columns) -> FulltextFilter:
+    """Create a boolean mode fulltext filter for specified columns.
+
+    This is the main entry point for creating fulltext search queries that integrate
+    seamlessly with MatrixOne ORM's filter() method.
+
+    Args:
+        *columns: Column names or SQLAlchemy Column objects to search against
+
+    Returns:
+        FulltextFilter: A chainable filter object with methods:
+            - must(): Required terms/groups (+ operator)
+            - must_not(): Excluded terms/groups (- operator)
+            - encourage(): Optional terms/groups with normal weight (no prefix)
+            - discourage(): Optional terms/groups with reduced weight (~ operator)
+
+    Quick Start Examples:
+        # Basic search - must contain 'python'
+        boolean_match("title", "content").must("python")
+
+        # Multiple conditions - must have 'python', prefer 'tutorial', avoid 'legacy'
+        boolean_match("title", "content")
+            .must("python")
+            .encourage("tutorial")
+            .discourage("legacy")
+
+        # Group search - must contain either 'python' or 'java'
+        boolean_match("title", "content").must(group().medium("python", "java"))
+
+        # Complex combination
+        boolean_match("title", "content", "tags")
+            .must("programming")
+            .must(group().medium("python", "java"))
+            .encourage("tutorial")
+            .discourage(group().medium("legacy", "deprecated"))
+
+    Weight Operators Explained:
+        - encourage("term"): Encourages documents with 'term' (higher ranking)
+        - discourage("term"): Discourages documents with 'term' (lower ranking)
+        Both are optional - documents without these terms can still match
+
+    Important MatrixOne Requirements:
+        **Column Matching**: The columns specified in MATCH() must exactly
+        match the columns defined in the FULLTEXT index. For example, if your index
+        is `FULLTEXT(title, content, tags)`, you must use:
+        - ✅ `boolean_match("title", "content", "tags")` - Correct (exact match)
+        - ❌ `boolean_match("title", "content")` - Error (partial match)
+        - ❌ `boolean_match("title")` - Error (single field from multi-field index)
+
+    Examples:
+        # Basic boolean search (assuming index: FULLTEXT(title, content, tags))
+        boolean_match("title", "content", "tags").must("python").must_not("java")
+
+        # Complex boolean search with groups
+        boolean_match("title", "content", "tags").must("red").must(
+            group().medium("blue", "green")
+        ).must_not(
+            group().medium("spam")
+        )
+
+        # Using SQLAlchemy Column objects
+        boolean_match(Article.title, Article.content, Article.tags).must("python").must_not("java")
+    """
+    # Convert columns to strings
+    column_names = []
+    for col in columns:
+        if hasattr(col, 'name'):
+            # SQLAlchemy Column object
+            column_names.append(col.name)
+        elif hasattr(col, '__tablename__') and hasattr(col, 'name'):
+            # Model attribute
+            column_names.append(col.name)
+        else:
+            # String column name
+            column_names.append(str(col))
+
+    return FulltextFilter(column_names, FulltextSearchMode.BOOLEAN)
+
+
+def natural_match(*columns, query: str) -> FulltextFilter:
+    """Create a natural language mode fulltext filter for specified columns.
+
+    Args:
+        *columns: Column names or SQLAlchemy Column objects to search against
+        query: Natural language query string
+
+    Important:
+        **Column Matching Restriction**: The columns specified in MATCH() must exactly
+        match the columns defined in the FULLTEXT index. For example, if your index
+        is `FULLTEXT(title, content, tags)`, you must use:
+        - ✅ `natural_match("title", "content", "tags", query="...")` - Correct (exact match)
+        - ❌ `natural_match("title", "content", query="...")` - Error (partial match)
+        - ❌ `natural_match("title", query="...")` - Error (single field from multi-field index)
+
+    Examples:
+        # Natural language search (assuming index: FULLTEXT(title, content, tags))
+        natural_match("title", "content", "tags", query="machine learning AI")
+
+        # Using SQLAlchemy Column objects
+        natural_match(Article.title, Article.content, Article.tags, query="web development best practices")
+    """
+    # Convert columns to strings
+    column_names = []
+    for col in columns:
+        if hasattr(col, 'name'):
+            # SQLAlchemy Column object
+            column_names.append(col.name)
+        elif hasattr(col, '__tablename__') and hasattr(col, 'name'):
+            # Model attribute
+            column_names.append(col.name)
+        else:
+            # String column name
+            column_names.append(str(col))
+
+    return FulltextFilter(column_names, FulltextSearchMode.NATURAL_LANGUAGE).encourage(query)
+
+
+def group() -> FulltextGroup:
+    """Create a new query group builder with OR semantics between elements.
+
+    Creates a group where elements have OR relationship. The group-level semantics
+    (required, excluded, optional, reduced weight) are determined by how it's used:
+    - must(group()) → +(...)  - group is required
+    - must_not(group()) → -(...) - group is excluded
+    - encourage(group()) → (...) - group is optional with normal weight
+    - discourage(group()) → ~(...) - group is optional with reduced weight
+
+    Element-level Methods (use inside groups):
+        - medium(): Add terms with medium weight (no operators)
+        - high(): Add terms with high weight (>term)
+        - low(): Add terms with low weight (<term)
+        - phrase(): Add exact phrase matches ("phrase")
+        - prefix(): Add prefix matches (term*)
+
+    IMPORTANT: Inside groups, do NOT use must()/must_not() as they add +/- operators.
+    Use medium() for plain terms or high()/low() for element-level weight control.
+
+    Examples:
+        # Required group - must contain 'java' OR 'kotlin'
+        query.must(group().medium("java", "kotlin"))  # +(java kotlin)
+
+        # Excluded group - must not contain 'spam' OR 'junk'
+        query.must_not(group().medium("spam", "junk"))  # -(spam junk)
+
+        # Optional group with normal weight
+        query.encourage(group().medium("tutorial", "guide"))  # (tutorial guide)
+
+        # Optional group with reduced weight
+        query.discourage(group().medium("old", "outdated"))  # ~(old outdated)
+
+        # Complex MatrixOne style with element-level weights
+        query.must("red").must_not(group().low("blue").high("is"))
+        # Generates: '+red -(<blue >is)'
+    """
+    return FulltextGroup("or")
+
+
+# SQLAlchemy compatibility wrappers
+def fulltext_and(*conditions):
+    """Create AND expressions that support FulltextFilter objects.
+
+    This is a wrapper around SQLAlchemy's and_() that can handle FulltextFilter objects.
+
+    Args:
+        *conditions: Mix of FulltextFilter objects and regular SQLAlchemy expressions
+
+    Returns:
+        SQLAlchemy expression that can be used with filter()
+
+    Example:
+        query.filter(fulltext_and(
+            boolean_match("title", "content").must("python"),
+            Article.category == "Programming"
+        ))
+    """
+    processed_conditions = []
+    for condition in conditions:
+        if isinstance(condition, FulltextFilter):
+            # Wrap each fulltext condition in parentheses for proper grouping
+            processed_conditions.append(text(f"({condition.compile()})"))
+        else:
+            processed_conditions.append(condition)
+    return and_(*processed_conditions)
+
+
+def fulltext_or(*conditions):
+    """Create OR expressions that support FulltextFilter objects.
+
+    This is a wrapper around SQLAlchemy's or_() that can handle FulltextFilter objects.
+
+    Args:
+        *conditions: Mix of FulltextFilter objects and regular SQLAlchemy expressions
+
+    Returns:
+        SQLAlchemy expression that can be used with filter()
+
+    Example:
+        query.filter(fulltext_or(
+            boolean_match("title", "content").must("python"),
+            boolean_match("title", "content").must("java")
+        ))
+    """
+    processed_conditions = []
+    for condition in conditions:
+        if isinstance(condition, FulltextFilter):
+            # Wrap each fulltext condition in parentheses for proper grouping
+            processed_conditions.append(text(f"({condition.compile()})"))
+        else:
+            processed_conditions.append(condition)
+    return or_(*processed_conditions)
+
+
+# Remove old FulltextTerm and FulltextQuery classes as they are replaced by FulltextQueryBuilder
 
 
 class FulltextSearchBuilder:
@@ -214,7 +969,7 @@ class FulltextSearchBuilder:
         self._columns: List[str] = []
         self._search_mode = FulltextSearchMode.NATURAL_LANGUAGE
         self._algorithm = FulltextSearchAlgorithm.BM25
-        self._query_obj = FulltextQuery()
+        self._query_obj = FulltextQueryBuilder()
         self._include_score = False
         self._where_conditions: List[str] = []
         self._order_by: Optional[str] = None
@@ -312,8 +1067,8 @@ class FulltextSearchBuilder:
 
         Note: This method resets any previously added terms, phrases, or wildcards.
         """
-        self._query_obj = FulltextQuery()
-        self._query_obj.add_term(query_string)
+        self._query_obj = FulltextQueryBuilder()
+        self._query_obj.encourage(query_string)
         return self
 
     def add_term(
@@ -346,7 +1101,12 @@ class FulltextSearchBuilder:
             .add_term("learning", required=True)
             .add_term("java", excluded=True)
         """
-        self._query_obj.add_term(term, required, excluded, proximity)
+        if required:
+            self._query_obj.must(term)
+        elif excluded:
+            self._query_obj.must_not(term)
+        else:
+            self._query_obj.encourage(term)
         return self
 
     def add_phrase(self, phrase: str) -> "FulltextSearchBuilder":
@@ -367,7 +1127,7 @@ class FulltextSearchBuilder:
             .add_phrase("deep learning")
             .add_phrase("neural networks")
         """
-        self._query_obj.add_phrase(phrase)
+        self._query_obj.phrase(phrase)
         return self
 
     def add_wildcard(self, pattern: str) -> "FulltextSearchBuilder":
@@ -388,7 +1148,7 @@ class FulltextSearchBuilder:
             .add_wildcard("machine*")
             .add_wildcard("learn*")
         """
-        self._query_obj.add_wildcard(pattern)
+        self._query_obj.prefix(pattern.rstrip('*'))
         return self
 
     def with_score(self, include: bool = True) -> "FulltextSearchBuilder":

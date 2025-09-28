@@ -25,8 +25,8 @@ from matrixone.client import Client
 from matrixone.async_client import AsyncClient
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
+from matrixone.orm import declarative_base
 from sqlalchemy import func, Column, Integer, String, DECIMAL, TIMESTAMP
-from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 

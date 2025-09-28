@@ -7,8 +7,14 @@ Tests the fulltext search functionality with real database connection.
 
 import unittest
 import pytest
+import os
+import sys
+
+# Add the matrixone package to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone import Client
+from matrixone.config import get_connection_params
 from matrixone.sqlalchemy_ext.fulltext_search import (
     FulltextSearchMode,
     FulltextSearchAlgorithm
@@ -21,13 +27,16 @@ class TestFulltextSearchBuilderOnline(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test database and data."""
-        cls.client = Client(
-            host="localhost",
-            port=6001,
-            user="root",
-            password="111",
-            database="test"
-        )
+        # Get connection parameters using standard config
+        host, port, user, password, database = get_connection_params()
+        
+        cls.client = Client()
+        cls.client.connect(host=host, port=port, user=user, password=password, database=database)
+        
+        # Create test database
+        cls.test_db = "test_fulltext_builder"
+        cls.client.execute(f"CREATE DATABASE IF NOT EXISTS {cls.test_db}")
+        cls.client.execute(f"USE {cls.test_db}")
         
         # Create test table
         cls.client.execute("DROP TABLE IF EXISTS search_test_articles")
@@ -63,21 +72,26 @@ class TestFulltextSearchBuilderOnline(unittest.TestCase):
         cls.client.fulltext_index.enable_fulltext()
         
         # Create fulltext index
-        cls.client.fulltext_index.create(
-            "search_test_articles", 
-            "ftidx_search_test", 
-            ["title", "content"], 
-            FulltextSearchAlgorithm.BM25
-        )
+        try:
+            cls.client.fulltext_index.create(
+                "search_test_articles", 
+                "ftidx_search_test", 
+                ["title", "content"], 
+                FulltextSearchAlgorithm.BM25
+            )
+        except Exception:
+            # Index might already exist, ignore error
+            pass
     
     @classmethod
     def tearDownClass(cls):
         """Clean up test data."""
         try:
             cls.client.execute("DROP TABLE IF EXISTS search_test_articles")
+            cls.client.execute(f"DROP DATABASE IF EXISTS {cls.test_db}")
+            cls.client.disconnect()
         except:
             pass
-        cls.client.disconnect()
     
     def test_natural_language_search(self):
         """Test natural language search with expected results."""
