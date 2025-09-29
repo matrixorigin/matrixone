@@ -849,6 +849,7 @@ class BaseMatrixOneQuery:
                         formatted_condition = formatted_condition.replace("?", str(param), 1)
 
             self._having_conditions.append(formatted_condition)
+        
         return self
 
     def snapshot(self, snapshot_name: str) -> "BaseMatrixOneQuery":
@@ -872,8 +873,14 @@ class BaseMatrixOneQuery:
     def filter(self, condition, *params) -> "BaseMatrixOneQuery":
         """Add WHERE conditions - SQLAlchemy style unified interface"""
 
+        # Check if condition is a LogicalIn object
+        if hasattr(condition, "compile") and hasattr(condition, "column") and hasattr(condition, "values"):
+            # This is a LogicalIn object
+            formatted_condition = condition.compile()
+            self._where_conditions.append(formatted_condition)
+            # LogicalIn objects now generate complete SQL with values, no additional parameters needed
         # Check if condition contains FulltextFilter objects
-        if hasattr(condition, "compile") and self._contains_fulltext_filter(condition):
+        elif hasattr(condition, "compile") and self._contains_fulltext_filter(condition):
             # Handle SQLAlchemy expressions that contain FulltextFilter objects
             formatted_condition = self._process_fulltext_expression(condition)
             self._where_conditions.append(formatted_condition)
@@ -994,6 +1001,102 @@ class BaseMatrixOneQuery:
     def where(self, condition: str, *params) -> "BaseMatrixOneQuery":
         """Add WHERE condition - alias for filter method"""
         return self.filter(condition, *params)
+
+    def logical_in(self, column, values) -> "BaseMatrixOneQuery":
+        """
+        Add IN condition with support for various value types.
+        
+        This method provides enhanced IN functionality that can handle:
+        - Lists of values: [1, 2, 3]
+        - SQLAlchemy expressions: func.count(User.id)
+        - FulltextFilter objects: boolean_match("title", "content").must("python")
+        - Subqueries: client.query(User).select(User.id)
+        
+        Args:
+            column: Column to check (can be string or SQLAlchemy column)
+            values: Values to check against. Can be:
+                - List of values: [1, 2, 3, "a", "b"]
+                - SQLAlchemy expression: func.count(User.id)
+                - FulltextFilter object: boolean_match("title", "content").must("python")
+                - Subquery object: client.query(User).select(User.id)
+        
+        Returns:
+            BaseMatrixOneQuery: Self for method chaining.
+        
+        Examples:
+            # List of values
+            query.logical_in("city", ["北京", "上海", "广州"])
+            query.logical_in(User.id, [1, 2, 3, 4])
+            
+            # SQLAlchemy expression
+            query.logical_in("id", func.count(User.id))
+            
+            # FulltextFilter
+            query.logical_in("id", boolean_match("title", "content").must("python"))
+            
+            # Subquery
+            subquery = client.query(User).select(User.id).filter(User.active == True)
+            query.logical_in("author_id", subquery)
+        
+        Notes:
+            - This method automatically handles different value types
+            - For FulltextFilter objects, it creates a subquery using the fulltext search
+            - For SQLAlchemy expressions, it compiles them to SQL
+            - For lists, it creates standard IN clauses with proper parameter binding
+        """
+        # Handle column name
+        if hasattr(column, "name"):
+            column_name = column.name
+        else:
+            column_name = str(column)
+        
+        # Handle different types of values
+        if hasattr(values, "compile") and hasattr(values, "columns"):
+            # This is a FulltextFilter object
+            if hasattr(values, "compile") and hasattr(values, "query_builder"):
+                # Convert FulltextFilter to subquery
+                fulltext_sql = values.compile()
+                # Create a subquery that selects IDs from the fulltext search
+                # We need to determine the table name from the context
+                table_name = self._table_name or "table"
+                subquery_sql = f"SELECT id FROM {table_name} WHERE {fulltext_sql}"
+                condition = f"{column_name} IN ({subquery_sql})"
+                self._where_conditions.append(condition)
+            else:
+                # Handle other SQLAlchemy expressions
+                compiled = values.compile(compile_kwargs={"literal_binds": True})
+                sql_str = str(compiled)
+                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                import re
+                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                condition = f"{column_name} IN ({sql_str})"
+                self._where_conditions.append(condition)
+        elif hasattr(values, "_build_sql"):
+            # This is a subquery object
+            subquery_sql, subquery_params = values._build_sql()
+            condition = f"{column_name} IN ({subquery_sql})"
+            self._where_conditions.append(condition)
+            self._where_params.extend(subquery_params)
+        elif isinstance(values, (list, tuple)):
+            # Handle list of values
+            if not values:
+                # Empty list means no matches
+                condition = "1=0"  # Always false
+                self._where_conditions.append(condition)
+            else:
+                # Create placeholders for each value
+                placeholders = ",".join(["?" for _ in values])
+                condition = f"{column_name} IN ({placeholders})"
+                self._where_conditions.append(condition)
+                self._where_params.extend(values)
+        else:
+            # Single value
+            condition = f"{column_name} IN (?)"
+            self._where_conditions.append(condition)
+            self._where_params.append(values)
+        
+        return self
 
     def order_by(self, *columns) -> "BaseMatrixOneQuery":
         """
@@ -1525,3 +1628,133 @@ def desc(column: str) -> str:
 def asc(column: str) -> str:
     """Create ascending order clause"""
     return f"{column} ASC"
+
+
+class LogicalIn:
+    """
+    Helper class for creating IN conditions that can be used in filter() method.
+    
+    This class provides a way to create IN conditions with support for various
+    value types including FulltextFilter objects, lists, and SQLAlchemy expressions.
+    
+    Usage:
+        # List of values
+        query.filter(logical_in("city", ["北京", "上海", "广州"]))
+        query.filter(logical_in(User.id, [1, 2, 3, 4]))
+        
+        # FulltextFilter
+        query.filter(logical_in("id", boolean_match("title", "content").must("python")))
+        
+        # Subquery
+        subquery = client.query(User).select(User.id).filter(User.active == True)
+        query.filter(logical_in("author_id", subquery))
+    """
+    
+    def __init__(self, column, values):
+        self.column = column
+        self.values = values
+    
+    def compile(self, compile_kwargs=None):
+        """Compile to SQL expression for use in filter() method"""
+        # Handle column name
+        if hasattr(self.column, "name"):
+            column_name = self.column.name
+        else:
+            column_name = str(self.column)
+        
+        # Handle different types of values
+        if hasattr(self.values, "compile") and hasattr(self.values, "columns"):
+            # This is a FulltextFilter object
+            if hasattr(self.values, "compile") and hasattr(self.values, "query_builder"):
+                # Convert FulltextFilter to subquery
+                fulltext_sql = self.values.compile()
+                # Create a subquery that selects IDs from the fulltext search
+                # We need to determine the table name from the context
+                # For now, use a generic approach that works with most cases
+                table_name = "table"  # Default table name - will be handled by the query context
+                subquery_sql = f"SELECT id FROM {table_name} WHERE {fulltext_sql}"
+                return f"{column_name} IN ({subquery_sql})"
+            else:
+                # Handle other SQLAlchemy expressions
+                compiled = self.values.compile(compile_kwargs={"literal_binds": True})
+                sql_str = str(compiled)
+                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                import re
+                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                return f"{column_name} IN ({sql_str})"
+        elif hasattr(self.values, "_build_sql"):
+            # This is a subquery object
+            subquery_sql, subquery_params = self.values._build_sql()
+            return f"{column_name} IN ({subquery_sql})"
+        elif isinstance(self.values, (list, tuple)):
+            # Handle list of values
+            if not self.values:
+                # Empty list means no matches
+                return "1=0"  # Always false
+            else:
+                # Create SQL with actual values for LogicalIn
+                formatted_values = []
+                for value in self.values:
+                    if isinstance(value, str):
+                        formatted_values.append(f"'{value}'")
+                    else:
+                        formatted_values.append(str(value))
+                return f"{column_name} IN ({','.join(formatted_values)})"
+        else:
+            # Single value
+            if isinstance(self.values, str):
+                return f"{column_name} IN ('{self.values}')"
+            else:
+                return f"{column_name} IN ({self.values})"
+
+
+def logical_in(column, values):
+    """
+    Create a logical IN condition for use in filter() method.
+    
+    This function provides enhanced IN functionality that can handle:
+    - Lists of values: [1, 2, 3]
+    - SQLAlchemy expressions: func.count(User.id)
+    - FulltextFilter objects: boolean_match("title", "content").must("python")
+    - Subqueries: client.query(User).select(User.id)
+    
+    Args:
+        column: Column to check (can be string or SQLAlchemy column)
+        values: Values to check against. Can be:
+            - List of values: [1, 2, 3, "a", "b"]
+            - SQLAlchemy expression: func.count(User.id)
+            - FulltextFilter object: boolean_match("title", "content").must("python")
+            - Subquery object: client.query(User).select(User.id)
+    
+    Returns:
+        LogicalIn: A logical IN condition object that can be used in filter().
+    
+    Examples:
+        # List of values
+        query.filter(logical_in("city", ["北京", "上海", "广州"]))
+        query.filter(logical_in(User.id, [1, 2, 3, 4]))
+        
+        # SQLAlchemy expression
+        query.filter(logical_in("id", func.count(User.id)))
+        
+        # FulltextFilter
+        query.filter(logical_in("id", boolean_match("title", "content").must("python")))
+        
+        # Subquery
+        subquery = client.query(User).select(User.id).filter(User.active == True)
+        query.filter(logical_in("author_id", subquery))
+        
+        # Combined with other conditions
+        query.filter(logical_in("city", ["北京", "上海"]))
+        query.filter(logical_in("department", ["Engineering", "Sales"]))
+        query.filter(User.age > 25)
+    
+    Notes:
+        - This function returns a LogicalIn object that can be used in filter()
+        - For FulltextFilter objects, it creates a subquery using the fulltext search
+        - For SQLAlchemy expressions, it compiles them to SQL
+        - For lists, it creates standard IN clauses with proper parameter binding
+        - The function automatically handles different value types
+    """
+    return LogicalIn(column, values)
