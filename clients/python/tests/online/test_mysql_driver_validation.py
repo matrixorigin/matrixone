@@ -35,7 +35,7 @@ class TestMySQLDriverValidation:
         try:
             # Should succeed with MySQL engine
             client = Client.from_engine(engine)
-            assert client.connected is True
+            assert client.connected() is True
 
             # Test basic functionality
             result = client.execute("SELECT 1 as test_value")

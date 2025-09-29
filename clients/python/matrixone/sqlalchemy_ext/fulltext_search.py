@@ -277,6 +277,9 @@ class FulltextQueryBuilder:
         - FulltextGroup: Group of terms (e.g., group().medium("java", "kotlin"))
 
     Examples:
+
+    .. code-block:: python
+
         Basic usage:
             query.must("python")                    # +python
             query.encourage("tutorial")             # tutorial
@@ -511,6 +514,9 @@ class FulltextQueryBuilder:
             str: Complete SQL query
 
         Examples:
+
+        .. code-block:: python
+
             # Basic query with score
             query = FulltextQueryBuilder().must("python").encourage("tutorial")
             sql = query.as_sql("articles", ["title", "content"], include_score=True)
@@ -622,6 +628,9 @@ class FulltextFilter(ClauseElement):
         - FulltextGroup: Group of terms (e.g., group().medium("java", "kotlin"))
 
     Usage with ORM:
+
+    .. code-block:: python
+
         # Basic fulltext filter
         results = client.query(Article).filter(
             boolean_match("title", "content").must("python").encourage("tutorial")
@@ -643,6 +652,9 @@ class FulltextFilter(ClauseElement):
         ).all()
 
     Weight Operator Examples:
+
+    .. code-block:: python
+
         # Encourage tutorials, discourage legacy content
         boolean_match("title", "content")
             .must("python")
@@ -785,6 +797,9 @@ class FulltextFilter(ClauseElement):
             A SQLAlchemy labeled expression
 
         Examples:
+
+        .. code-block:: python
+
             # Use as a SELECT column with score
             query(Article, Article.id,
                   boolean_match("title", "content").must("python").label("score"))
@@ -795,6 +810,9 @@ class FulltextFilter(ClauseElement):
                   boolean_match("tags").must("programming").label("tag_score"))
 
         Generated SQL:
+
+        .. code-block:: sql
+
             SELECT articles.id,
                    MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score
             FROM articles
@@ -881,6 +899,9 @@ def boolean_match(*columns) -> FulltextFilter:
             - discourage(): Optional terms/groups with reduced weight (~ operator)
 
     Quick Start Examples:
+
+    .. code-block:: python
+
         # Basic search - must contain 'python'
         boolean_match("title", "content").must("python")
 
@@ -901,19 +922,25 @@ def boolean_match(*columns) -> FulltextFilter:
             .discourage(group().medium("legacy", "deprecated"))
 
     Weight Operators Explained:
-        - encourage("term"): Encourages documents with 'term' (higher ranking)
-        - discourage("term"): Discourages documents with 'term' (lower ranking)
-        Both are optional - documents without these terms can still match
+
+    - encourage("term"): Encourages documents with 'term' (higher ranking)
+    - discourage("term"): Discourages documents with 'term' (lower ranking)
+    - Both are optional - documents without these terms can still match
 
     Important MatrixOne Requirements:
-        **Column Matching**: The columns specified in MATCH() must exactly
-        match the columns defined in the FULLTEXT index. For example, if your index
-        is `FULLTEXT(title, content, tags)`, you must use:
-        - ✅ `boolean_match("title", "content", "tags")` - Correct (exact match)
-        - ❌ `boolean_match("title", "content")` - Error (partial match)
-        - ❌ `boolean_match("title")` - Error (single field from multi-field index)
+
+    **Column Matching**: The columns specified in MATCH() must exactly
+    match the columns defined in the FULLTEXT index. For example, if your index
+    is ``FULLTEXT(title, content, tags)``, you must use:
+
+    - ✅ ``boolean_match("title", "content", "tags")`` - Correct (exact match)
+    - ❌ ``boolean_match("title", "content")`` - Error (partial match)
+    - ❌ ``boolean_match("title")`` - Error (single field from multi-field index)
 
     Examples:
+
+    .. code-block:: python
+
         # Basic boolean search (assuming index: FULLTEXT(title, content, tags))
         boolean_match("title", "content", "tags").must("python").must_not("java")
 
@@ -1081,6 +1108,9 @@ class FulltextSearchBuilder:
         - QUERY_EXPANSION: Not supported in MatrixOne (auto-expands query with related terms)
 
     Examples:
+
+    .. code-block:: python
+
         # Natural language search
         results = client.fulltext_search() \\
             .table("articles") \\

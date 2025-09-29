@@ -41,7 +41,7 @@ class TestSQLAlchemyEngineIntegration:
             client = Client.from_engine(engine)
 
             # Test basic functionality
-            assert client.connected is True
+            assert client.connected() is True
 
             # Test query execution
             result = client.execute("SELECT 1 as test_value")
@@ -95,7 +95,7 @@ class TestSQLAlchemyEngineIntegration:
             client = Client.from_engine(engine, enable_sql_logging=True, slow_sql_threshold=0.1)
 
             # Test basic functionality
-            assert client.connected is True
+            assert client.connected() is True
 
             # Test query execution
             result = client.execute("SELECT 2 as test_value")
@@ -204,8 +204,8 @@ class TestSQLAlchemyEngineIntegration:
             client2 = Client.from_engine(engine)
 
             # Both clients should be connected
-            assert client1.connected is True
-            assert client2.connected is True
+            assert client1.connected() is True
+            assert client2.connected() is True
 
             # Test that both clients can execute queries
             result1 = client1.execute("SELECT 5 as test_value")
@@ -309,9 +309,7 @@ class TestSQLAlchemyEngineIntegration:
 
             # Test that vector managers are initialized (if available)
             # Note: Some managers might be None if dependencies are not available
-            assert hasattr(client, '_vector_index')
-            assert hasattr(client, '_vector_query')
-            assert hasattr(client, '_vector_data')
+            assert hasattr(client, '_vector')
             assert hasattr(client, '_fulltext_index')
 
         finally:

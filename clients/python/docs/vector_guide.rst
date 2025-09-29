@@ -573,7 +573,7 @@ Best Practices
 Next Steps
 ----------
 
-* Read the :doc:`api/vector_query_manager` for detailed vector query API
+* Read the :doc:`api/vector_manager` for detailed vector query API
 * Check out the :doc:`api/vector_manager` for vector index management
 * Explore :doc:`pinecone_guide` for Pinecone-compatible interface
 * Learn about :doc:`orm_guide` for ORM patterns with vectors

@@ -42,17 +42,17 @@ class AsyncVectorManager:
     Usage Examples:
         # Initialize async vector manager
         vector_ops = client.vector_ops
-        
+
         # Create vector table
         await vector_ops.create_table("documents", {
             "id": "int primary key",
             "content": "text",
             "embedding": "vecf32(384)"
         })
-        
+
         # Create vector index
         await vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=100)
-        
+
         # Vector similarity search
         results = await vector_ops.similarity_search(
             table_name="documents",

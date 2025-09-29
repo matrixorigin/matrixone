@@ -1641,6 +1641,7 @@ class AsyncClient(BaseMatrixOneClient):
         """Initialize vector managers after successful connection"""
         try:
             from .async_vector_index_manager import AsyncVectorManager
+
             self._vector = AsyncVectorManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)
         except ImportError:
@@ -2083,7 +2084,6 @@ class AsyncClient(BaseMatrixOneClient):
     def fulltext_index(self):
         """Get fulltext index manager for fulltext index operations"""
         return self._fulltext_index
-
 
     async def version(self) -> str:
         """

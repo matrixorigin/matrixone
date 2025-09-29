@@ -30,7 +30,6 @@ Vector Operations
    vector_type
    vector_index
    vector_manager
-   vector_query_manager
 
 Fulltext Search
 ===============

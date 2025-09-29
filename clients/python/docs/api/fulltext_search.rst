@@ -36,6 +36,3 @@ Fulltext Functions
 
 .. autofunction:: matrixone.sqlalchemy_ext.fulltext_search.group
 
-.. autofunction:: matrixone.sqlalchemy_ext.fulltext_search.create_fulltext_index
-
-.. autofunction:: matrixone.sqlalchemy_ext.fulltext_search.fulltext_search_builder

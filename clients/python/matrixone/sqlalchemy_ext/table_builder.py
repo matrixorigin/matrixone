@@ -49,6 +49,9 @@ class VectorTableBuilder:
     - MatrixOne-specific types: JSON, BLOB variants
 
     Usage Examples:
+
+    .. code-block:: python
+
         # Create a simple vector table
         builder = VectorTableBuilder('documents')
         table = (builder

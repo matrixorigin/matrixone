@@ -711,12 +711,12 @@ class Client(BaseMatrixOneClient):
         Args:
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data_list (list): List of dictionaries, where each dictionary represents
-                            a row to insert. All dictionaries must have the same keys.
-                            Example: [
-                                {'name': 'John', 'age': 30},
-                                {'name': 'Jane', 'age': 25},
-                                {'name': 'Bob', 'age': 35}
-                            ]
+                a row to insert. All dictionaries must have the same keys.
+                Example: [
+                    {'name': 'John', 'age': 30},
+                    {'name': 'Jane', 'age': 25},
+                    {'name': 'Bob', 'age': 35}
+                ]
 
         Returns:
             ResultSet: Object containing insertion results with:
@@ -1056,7 +1056,6 @@ class Client(BaseMatrixOneClient):
     #     return self._vector_query
     # Removed - functionality moved to vector_ops
 
-    @property
     def connected(self) -> bool:
         """Check if client is connected to database"""
         return self._engine is not None
@@ -2261,29 +2260,32 @@ class TransactionWrapper:
     - fulltext_index: TransactionFulltextIndexManager for fulltext operations
 
     Usage Examples:
-        # Basic transaction usage
-        with client.transaction() as tx:
-            tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
-            tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
-            # Transaction commits automatically on success
 
-        # Using managers within transaction
-        with client.transaction() as tx:
-            # Create snapshot within transaction
-            tx.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
+        .. code-block:: python
 
-            # Clone database within transaction
-            tx.clone.clone_database("new_db", "source_db")
+            # Basic transaction usage
+            with client.transaction() as tx:
+                tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+                tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
+                # Transaction commits automatically on success
 
-            # Vector operations within transaction
-            tx.vector.create_table("vectors", {"id": "int", "embedding": "vector(384,f32)"})
+            # Using managers within transaction
+            with client.transaction() as tx:
+                # Create snapshot within transaction
+                tx.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
 
-        # SQLAlchemy session integration
-        with client.transaction() as tx:
-            session = tx.get_sqlalchemy_session()
-            user = User(name="John")
-            session.add(user)
-            session.commit()
+                # Clone database within transaction
+                tx.clone.clone_database("new_db", "source_db")
+
+                # Vector operations within transaction
+                tx.vector.create_table("vectors", {"id": "int", "embedding": "vector(384,f32)"})
+
+            # SQLAlchemy session integration
+            with client.transaction() as tx:
+                session = tx.get_sqlalchemy_session()
+                user = User(name="John")
+                session.add(user)
+                session.commit()
 
     Note: This class is automatically created by the Client's transaction()
     context manager and should not be instantiated directly.
@@ -2300,7 +2302,6 @@ class TransactionWrapper:
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
-        # self.vector_query = TransactionVectorQueryManager(client, self)  # Removed - functionality moved to vector_ops
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
@@ -2912,46 +2913,49 @@ class VectorManager:
     - Vector index management and optimization
 
     Usage Examples:
-        # Initialize vector manager
-        vector_ops = client.vector_ops
 
-        # Create vector table
-        vector.create_table("documents", {
-            "id": "int",
-            "content": "text",
-            "embedding": "vector(384,f32)"
-        })
+        .. code-block:: python
 
-        # Create IVF index
-        vector.create_ivf(
-            table_name="documents",
-            name="idx_embedding_ivf",
-            column="embedding",
-            lists=100
-        )
+            # Initialize vector manager
+            vector_ops = client.vector_ops
 
-        # Create HNSW index
-        vector.create_hnsw(
-            table_name="documents",
-            name="idx_embedding_hnsw",
-            column="embedding",
-            m=16,
-            ef_construction=200
-        )
+            # Create vector table
+            vector.create_table("documents", {
+                "id": "int",
+                "content": "text",
+                "embedding": "vector(384,f32)"
+            })
 
-        # Insert vector data
-        vector.insert("documents", {
-            "id": 1,
-            "content": "Sample document",
-            "embedding": [0.1, 0.2, 0.3, ...]  # 384-dimensional vector
-        })
+            # Create IVF index
+            vector.create_ivf(
+                table_name="documents",
+                name="idx_embedding_ivf",
+                column="embedding",
+                lists=100
+            )
 
-        # Batch insert vector data
-        documents = [
-            {"id": 1, "content": "Doc 1", "embedding": [0.1, 0.2, ...]},
-            {"id": 2, "content": "Doc 2", "embedding": [0.3, 0.4, ...]}
-        ]
-        vector.batch_insert("documents", documents)
+            # Create HNSW index
+            vector.create_hnsw(
+                table_name="documents",
+                name="idx_embedding_hnsw",
+                column="embedding",
+                m=16,
+                ef_construction=200
+            )
+
+            # Insert vector data
+            vector.insert("documents", {
+                "id": 1,
+                "content": "Sample document",
+                "embedding": [0.1, 0.2, 0.3, ...]  # 384-dimensional vector
+            })
+
+            # Batch insert vector data
+            documents = [
+                {"id": 1, "content": "Doc 1", "embedding": [0.1, 0.2, ...]},
+                {"id": 2, "content": "Doc 2", "embedding": [0.3, 0.4, ...]}
+            ]
+            vector.batch_insert("documents", documents)
 
     Note: Vector operations require appropriate vector data and indexing
     strategies. Vector dimensions and precision must match your embedding
@@ -3524,9 +3528,6 @@ class TransactionVectorIndexManager(VectorManager):
             raise Exception(f"Failed to drop vector index {name} from table {table_name} in transaction: {e}")
 
 
-# VectorQueryManager and TransactionVectorQueryManager classes removed - functionality moved to VectorManager
-
-
 class SimpleFulltextQueryBuilder:
     """
     Simplified fulltext query builder for common search operations.
@@ -3536,9 +3537,10 @@ class SimpleFulltextQueryBuilder:
     patterns supported by MatrixOne.
 
     Supported search patterns from MatrixOne test cases:
-    - Natural language: MATCH(col1, col2) AGAINST('query')
-    - Boolean mode: MATCH(col1, col2) AGAINST('+required -excluded' IN BOOLEAN MODE)
-    - With scoring: SELECT *, MATCH(col1, col2) AGAINST('query') AS score
+
+    - Natural language: ``MATCH(col1, col2) AGAINST('query')``
+    - Boolean mode: ``MATCH(col1, col2) AGAINST('+required -excluded' IN BOOLEAN MODE)``
+    - With scoring: ``SELECT *, MATCH(col1, col2) AGAINST('query') AS score``
     """
 
     def __init__(self, client: "Client", table_or_columns):
@@ -3651,6 +3653,9 @@ class SimpleFulltextQueryBuilder:
             Self for chaining
 
         Example:
+
+        .. code-block:: python
+
             builder.search("python").with_score()
             # Generates: SELECT *, MATCH(columns) AGAINST('python') AS score
         """
@@ -3819,36 +3824,39 @@ class FulltextIndexManager:
     - Integration with fulltext search queries
 
     Usage Examples:
-        # Initialize fulltext index manager
-        fulltext = client.fulltext_index
 
-        # Create fulltext index on single column
-        fulltext.create(
-            table_name="documents",
-            name="idx_content",
-            columns="content",
-            algorithm="BM25"
-        )
+        .. code-block:: python
 
-        # Create fulltext index on multiple columns
-        fulltext.create(
-            table_name="articles",
-            name="idx_title_content",
-            columns=["title", "content"],
-            algorithm="TF-IDF"
-        )
+            # Initialize fulltext index manager
+            fulltext = client.fulltext_index
 
-        # Drop fulltext index
-        fulltext.drop("documents", "idx_content")
+            # Create fulltext index on single column
+            fulltext.create(
+                table_name="documents",
+                name="idx_content",
+                columns="content",
+                algorithm="BM25"
+            )
 
-        # List fulltext indexes
-        indexes = fulltext.list("documents")
+            # Create fulltext index on multiple columns
+            fulltext.create(
+                table_name="articles",
+                name="idx_title_content",
+                columns=["title", "content"],
+                algorithm="TF-IDF"
+            )
 
-        # Check if index exists
-        exists = fulltext.exists("documents", "idx_content")
+            # Drop fulltext index
+            fulltext.drop("documents", "idx_content")
 
-        # Get index information
-        info = fulltext.get_info("documents", "idx_content")
+            # List fulltext indexes
+            indexes = fulltext.list("documents")
+
+            # Check if index exists
+            exists = fulltext.exists("documents", "idx_content")
+
+            # Get index information
+            info = fulltext.get_info("documents", "idx_content")
 
     Note: Fulltext indexes significantly improve text search performance
     but require additional storage space. Choose appropriate algorithms

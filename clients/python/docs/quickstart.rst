@@ -49,17 +49,17 @@ Basic Usage with Table Models and Modern API
    print(result.fetchall())
 
    # Complex query using query builder
-   result = client.query("users").select("*").where("id = ?", 1).execute()
+   result = client.query(User).select("*").filter(User.id == 1).execute()
    print(result.fetchall())
 
    # Update data using query API
-   client.query("users").update({"name": "Jane Doe"}).where("id = ?", 1).execute()
+   client.query(User).update({"name": "Jane Doe"}).filter(User.id == 1).execute()
 
    # Delete data using query API
-   client.query("users").where("id = ?", 1).delete()
+   client.query(User).filter(User.id == 1).delete()
 
    # Drop table using drop_table API
-   client.drop_table("users")
+   client.drop_table(User)
 
    client.disconnect()
 
@@ -109,7 +109,7 @@ Async Usage with Table Models and Modern API
            print(f"Product: {row[1]}, Price: ${row[2]}")
        
        # Complex query using async query builder
-       result = await client.query("products").select("*").where("category = ?", "Electronics").execute()
+       result = await client.query(Product).select("*").filter(Product.category == "Electronics").execute()
        rows = result.fetchall()
        for row in rows:
            print(f"Product: {row[1]}, Price: ${row[2]}")
@@ -119,10 +119,10 @@ Async Usage with Table Models and Modern API
            {"id": 2, "name": "Phone", "price": 699.99, "category": "Electronics"},
            {"id": 3, "name": "Book", "price": 29.99, "category": "Education"}
        ]
-       await client.batch_insert("products", products)
+       await client.batch_insert(Product, products)
        
        # Clean up using async drop_table API
-       await client.drop_table("products")
+       await client.drop_table(Product)
        await client.disconnect()
 
    asyncio.run(async_quickstart())
