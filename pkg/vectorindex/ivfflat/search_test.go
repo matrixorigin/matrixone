@@ -112,7 +112,8 @@ func TestIvfSearchParserError(t *testing.T) {
 	idx := &IvfflatSearchIndex[float32]{}
 
 	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
-	require.NotNil(t, err)
+	t.Logf("error: %v", err)
+	require.Error(t, err)
 }
 
 func TestIvfSearchCancel(t *testing.T) {

@@ -140,6 +140,7 @@ type Source struct {
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
+	Limit              uint64
 
 	RecvMsgList []plan.MsgHeader
 }

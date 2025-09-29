@@ -80,6 +80,20 @@ var (
 			"vector_sorensen_ops":   usearch.Sorensen,
 		*/
 	}
+
+	MetricTypeToDistFuncName = map[MetricType]string{
+		Metric_L2Distance:     DistFn_L2Distance,
+		Metric_L2sqDistance:   DistFn_L2sqDistance,
+		Metric_InnerProduct:   DistFn_InnerProduct,
+		Metric_CosineDistance: DistFn_CosineDistance,
+	}
+
+	DistFuncNameToMetricType = map[string]MetricType{
+		DistFn_L2Distance:     Metric_L2Distance,
+		DistFn_L2sqDistance:   Metric_L2sqDistance,
+		DistFn_InnerProduct:   Metric_InnerProduct,
+		DistFn_CosineDistance: Metric_CosineDistance,
+	}
 )
 
 // DistanceFunction is a function that computes the distance between two vectors

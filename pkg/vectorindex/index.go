@@ -74,7 +74,7 @@ type SearchResultHeap []SearchResultIf
 func (h SearchResultHeap) Len() int { return len(h) }
 
 func (h SearchResultHeap) Less(i, j int) bool {
-	return h[i].GetDistance() < h[j].GetDistance()
+	return h[i].GetDistance() > h[j].GetDistance()
 }
 
 func (h SearchResultHeap) Swap(i, j int) {

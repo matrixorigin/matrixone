@@ -166,6 +166,9 @@ func (r *EmptyReader) GetOrderBy() []*plan.OrderBySpec {
 func (r *EmptyReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
+func (r *EmptyReader) SetLimit(limit uint64) {
+}
+
 func (r *EmptyReader) Close() error {
 	return nil
 }
@@ -230,6 +233,11 @@ type withFilterMixin struct {
 		pkSeqNum  int32
 		colTypes  []types.Type
 	}
+
+	orderByLimitState struct {
+		orderBy []*plan.OrderBySpec
+		limit   uint64
+	}
 }
 
 type reader struct {
@@ -275,6 +283,12 @@ func (r *mergeReader) GetOrderBy() []*plan.OrderBySpec {
 func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	for i := range r.rds {
 		r.rds[i].SetOrderBy(orderby)
+	}
+}
+
+func (r *mergeReader) SetLimit(limit uint64) {
+	for i := range r.rds {
+		r.rds[i].SetLimit(limit)
 	}
 }
 
@@ -389,6 +403,10 @@ func (r *reader) Close() error {
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
+}
+
+func (r *reader) SetLimit(limit uint64) {
+	r.source.SetLimit(limit)
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {
@@ -535,6 +553,7 @@ func (r *reader) Read(
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
+		objectio.BlockReadTopOp{},
 		policy,
 		r.name,
 		outBatch,

@@ -21,8 +21,6 @@ import (
 	"slices"
 	"sort"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"go.uber.org/zap"
 )
 
 func NewLocalDataSource(
@@ -134,6 +133,7 @@ type LocalDisttaeDataSource struct {
 	blockZMS []index.ZM
 	sorted   bool // blks need to be sorted by zonemap
 	OrderBy  []*plan.OrderBySpec
+	Limit    uint64
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
@@ -156,6 +156,10 @@ func (ls *LocalDisttaeDataSource) String() string {
 
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
+}
+
+func (ls *LocalDisttaeDataSource) SetLimit(limit uint64) {
+	ls.Limit = limit
 }
 
 func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
@@ -385,7 +389,7 @@ func (ls *LocalDisttaeDataSource) Next(
 
 func (ls *LocalDisttaeDataSource) handleOrderBy() {
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
-	if len(ls.OrderBy) > 0 {
+	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
 			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			ls.getBlockZMs()

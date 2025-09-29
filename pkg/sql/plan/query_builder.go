@@ -297,6 +297,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		for _, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 			localToGlobal: make([][2]int32, 0),
@@ -364,6 +368,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if len(col.Name) == 0 {
 					col.Name = node.TableDef.Cols[col.ColPos].Name
 				}
+			}
+		}
+
+		remapInfo.tip = "OrderBy"
+		for idx, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(orderBy.Expr, colMap, &remapInfo)
+			if err != nil {
+				return nil, err
 			}
 		}
 
@@ -1906,6 +1920,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
+		builder.pushdownVectorIndexTopToTableScan(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
