@@ -1,7 +1,111 @@
 Best Practices Guide
 ====================
 
-This guide provides best practices for using the MatrixOne Python SDK effectively in production environments.
+This guide provides best practices for using the MatrixOne Python SDK effectively in production environments, with emphasis on modern API usage and avoiding raw SQL when possible.
+
+API-First Approach
+------------------
+
+**Prefer Client API Over Raw SQL:**
+
+The MatrixOne Python SDK provides high-level APIs that are more maintainable, type-safe, and feature-rich than raw SQL. Always prefer these APIs when available.
+
+.. code-block:: python
+
+   # ✅ Good: Use client API
+   from matrixone import Client
+   from matrixone.orm import logical_in
+   from matrixone.config import get_connection_params
+
+   client = Client()
+   host, port, user, password, database = get_connection_params()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create tables using API
+   client.create_table("users", {
+       "id": "int",
+       "username": "varchar(50)",
+       "email": "varchar(100)",
+       "age": "int"
+   }, primary_key="id")
+
+   # Insert data using API
+   client.batch_insert("users", [
+       {"id": 1, "username": "alice", "email": "alice@example.com", "age": 25},
+       {"id": 2, "username": "bob", "email": "bob@example.com", "age": 30}
+   ])
+
+   # Query using modern query builder
+   results = client.query("users").filter(logical_in("age", [25, 30])).all()
+
+   # ❌ Avoid: Raw SQL when API alternatives exist
+   # client.execute("CREATE TABLE users (id INT, username VARCHAR(50), ...)")
+   # client.execute("INSERT INTO users VALUES (1, 'alice', 'alice@example.com', 25)")
+   # client.execute("SELECT * FROM users WHERE age IN (25, 30)")
+
+**Use Modern Query Building Features:**
+
+.. code-block:: python
+
+   from matrixone.orm import logical_in
+   from matrixone.sqlalchemy_ext import boolean_match
+   from sqlalchemy import func
+
+   # ✅ Good: Use logical_in for flexible IN conditions
+   results = client.query("users").filter(logical_in("department_id", [1, 2, 3])).all()
+
+   # ✅ Good: Use fulltext search integration
+   fulltext_filter = boolean_match("bio").must("python developer")
+   results = client.query("users").filter(logical_in("id", fulltext_filter)).all()
+
+   # ✅ Good: Use expressions in group_by and having
+   results = (client.query("users")
+              .select("department_id", func.count("id").label("user_count"))
+              .group_by("department_id")
+              .having(func.count("id") > 1)
+              .all())
+
+   # ✅ Good: Use explain for query optimization
+   explain_result = client.query("users").filter("age > 25").explain(verbose=True)
+
+   # ❌ Avoid: Complex raw SQL when query builder can handle it
+   # client.execute("SELECT department_id, COUNT(id) as user_count FROM users 
+   #                 WHERE age > 25 GROUP BY department_id HAVING COUNT(id) > 1")
+
+**Leverage Vector and Fulltext Operations:**
+
+.. code-block:: python
+
+   # ✅ Good: Use vector operations API
+   client.vector.create_hnsw(
+       table_name="documents",
+       name="idx_embedding",
+       column="embedding",
+       m=16,
+       ef_construction=200
+   )
+
+   results = client.vector_query.similarity_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=5,
+       distance_function="cosine"
+   )
+
+   # ✅ Good: Use fulltext search API
+   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
+   
+   results = client.fulltext_index.simple_query(
+       table_name="products",
+       columns=["description"],
+       query="laptop OR phone",
+       limit=10
+   )
+
+   # ❌ Avoid: Raw SQL for vector and fulltext operations
+   # client.execute("CREATE INDEX idx_embedding ON documents USING hnsw (embedding vector_l2_ops)")
+   # client.execute("SELECT * FROM documents ORDER BY embedding <-> %s LIMIT 5")
 
 Connection Management
 ---------------------

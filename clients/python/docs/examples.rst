@@ -1,13 +1,13 @@
 Examples
 ========
 
-This section provides comprehensive examples of using the MatrixOne Python SDK with modern ORM patterns and client interfaces.
+This section provides comprehensive examples of using the MatrixOne Python SDK with modern API patterns, showcasing the latest features and best practices.
 
-Basic Operations
-----------------
+Modern API Examples
+-------------------
 
-Connection with Configuration Helper
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Connection and Basic Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -29,10 +29,191 @@ Connection with Configuration Helper
    print(result.fetchall())
 
    # Get backend version information
-   version = client.get_backend_version()
+   version = client.version()
    print(f"MatrixOne version: {version}")
 
    client.disconnect()
+
+Table Management with Modern API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create table using modern API
+   client.create_table("products", {
+       "id": "int",
+       "name": "varchar(200)",
+       "description": "text",
+       "price": "decimal(10,2)",
+       "category": "varchar(50)",
+       "in_stock": "boolean"
+   }, primary_key="id")
+
+   # Insert data efficiently
+   products_data = [
+       {"id": 1, "name": "Laptop", "description": "High-performance laptop", "price": 999.99, "category": "Electronics", "in_stock": True},
+       {"id": 2, "name": "Phone", "description": "Smartphone with AI features", "price": 699.99, "category": "Electronics", "in_stock": True},
+       {"id": 3, "name": "Book", "description": "Programming guide", "price": 29.99, "category": "Education", "in_stock": False}
+   ]
+   client.batch_insert("products", products_data)
+
+   # Create indexes for better performance
+   client.create_index("products", "idx_category", "category")
+   client.create_index("products", "idx_price", "price")
+
+   print("Table created and data inserted successfully")
+
+Modern Query Building
+~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import logical_in
+   from matrixone.sqlalchemy_ext import boolean_match
+   from sqlalchemy import func
+   from matrixone.config import get_connection_params
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Modern query building with enhanced features
+   query = client.query("products")
+   
+   # Basic filtering
+   results = query.filter("price > 500").all()
+   print("Expensive products:", results)
+
+   # Using logical_in for flexible IN conditions
+   results = query.filter(logical_in("category", ["Electronics", "Education"])).all()
+   print("Products in Electronics or Education:", results)
+
+   # Complex queries with expressions
+   results = (query
+              .select("category", func.count("id").label("product_count"))
+              .group_by("category")
+              .having(func.count("id") > 1)
+              .all())
+   print("Categories with multiple products:", results)
+
+   # Order by with expressions
+   results = (query
+              .select("name", "price")
+              .order_by(func.upper("name"))
+              .all())
+   print("Products ordered by name:", results)
+
+   # Explain queries for optimization
+   explain_result = query.filter("price > 500").explain(verbose=True)
+   print("Query execution plan:", explain_result)
+
+   # Generate SQL without executing
+   sql = query.filter(logical_in("category", ["Electronics"])).to_sql()
+   print("Generated SQL:", sql)
+
+Vector Operations Example
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import numpy as np
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create vector table
+   client.create_table("documents", {
+       "id": "int",
+       "title": "varchar(200)",
+       "content": "text",
+       "embedding": "vector(384,f32)"
+   }, primary_key="id")
+
+   # Create HNSW index for similarity search
+   client.vector.create_hnsw(
+       table_name="documents",
+       name="idx_embedding",
+       column="embedding",
+       m=16,
+       ef_construction=200
+   )
+
+   # Insert documents with embeddings
+   documents_data = [
+       {
+           "id": 1,
+           "title": "AI Research Paper",
+           "content": "Advanced artificial intelligence research",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
+       },
+       {
+           "id": 2,
+           "title": "Machine Learning Guide",
+           "content": "Comprehensive machine learning tutorial",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
+       }
+   ]
+   client.batch_insert("documents", documents_data)
+
+   # Vector similarity search
+   query_vector = np.random.rand(384).astype(np.float32).tolist()
+   results = client.vector_query.similarity_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=5,
+       distance_function="cosine"
+   )
+
+   print("Similar documents:")
+   for result in results:
+       print(f"  ID: {result[0]}, Title: {result[1]}, Distance: {result[-1]:.4f}")
+
+Fulltext Search Example
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.sqlalchemy_ext import boolean_match
+   from matrixone.orm import logical_in
+   from matrixone.config import get_connection_params
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create fulltext index
+   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
+
+   # Simple fulltext search
+   results = client.fulltext_index.simple_query(
+       table_name="products",
+       columns=["description"],
+       query="laptop OR phone",
+       limit=10
+   )
+   print("Fulltext search results:", results)
+
+   # Advanced fulltext search with boolean expressions
+   fulltext_filter = boolean_match("description").must("laptop").should("phone").must_not("broken")
+   results = client.query("products").filter(logical_in("id", fulltext_filter)).all()
+   print("Advanced fulltext search results:", results)
 
 SQLAlchemy ORM Integration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

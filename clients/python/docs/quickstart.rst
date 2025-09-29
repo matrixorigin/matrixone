@@ -1,7 +1,7 @@
 Quick Start
 ===========
 
-This guide will help you get started with the MatrixOne Python SDK quickly using modern ORM patterns and client interfaces.
+This guide will help you get started with the MatrixOne Python SDK quickly using modern ORM patterns, vector search, fulltext search, and enhanced query building capabilities.
 
 Basic Usage with Configuration Helper
 --------------------------------------
@@ -26,7 +26,7 @@ Basic Usage with Configuration Helper
    print(result.fetchall())
 
    # Get backend version (auto-detected)
-   version = client.get_backend_version()
+   version = client.version()
    print(f"MatrixOne version: {version}")
 
    client.disconnect()
@@ -291,10 +291,149 @@ Error Handling
 
    robust_connection_example()
 
+Enhanced Query Building with logical_in
+---------------------------------------
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import logical_in
+   from matrixone.sqlalchemy_ext import boolean_match
+   from sqlalchemy import func
+   from matrixone.config import get_connection_params
+
+   def enhanced_query_example():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Create a sample table
+       client.create_table("products", {
+           "id": "int",
+           "name": "varchar(100)",
+           "category": "varchar(50)",
+           "price": "decimal(10,2)",
+           "description": "text"
+       }, primary_key="id")
+
+       # Insert sample data
+       products = [
+           {"id": 1, "name": "Laptop", "category": "Electronics", "price": 999.99, "description": "High-performance laptop"},
+           {"id": 2, "name": "Phone", "category": "Electronics", "price": 699.99, "description": "Smartphone with AI features"},
+           {"id": 3, "name": "Book", "category": "Education", "price": 29.99, "description": "Programming guide"},
+           {"id": 4, "name": "Tablet", "category": "Electronics", "price": 499.99, "description": "Portable tablet device"}
+       ]
+       client.batch_insert("products", products)
+
+       # Enhanced query building with logical_in
+       query = client.query("products")
+       
+       # Filter by multiple categories
+       results = query.filter(logical_in("category", ["Electronics", "Education"])).all()
+       print("Products in Electronics or Education:")
+       for row in results:
+           print(f"  {row[1]} - {row[2]} - ${row[3]}")
+
+       # Filter by price range using logical_in with subquery
+       price_range_query = client.query("products").select(func.min("price"), func.max("price"))
+       results = query.filter(logical_in("price", price_range_query)).all()
+       print("Products in price range:")
+       for row in results:
+           print(f"  {row[1]} - ${row[3]}")
+
+       # Create fulltext index for advanced search
+       client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
+
+       # Use logical_in with fulltext search
+       fulltext_filter = boolean_match("description").must("laptop OR phone")
+       results = query.filter(logical_in("id", fulltext_filter)).all()
+       print("Products matching fulltext search:")
+       for row in results:
+           print(f"  {row[1]} - {row[4]}")
+
+       client.disconnect()
+
+   enhanced_query_example()
+
+Vector Search with Enhanced Features
+------------------------------------
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+   import numpy as np
+
+   def vector_search_example():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Create vector table
+       client.create_table("documents", {
+           "id": "int",
+           "title": "varchar(200)",
+           "content": "text",
+           "embedding": "vector(384,f32)"
+       }, primary_key="id")
+
+       # Create HNSW index for fast vector search
+       client.vector.create_hnsw(
+           table_name="documents",
+           name="idx_embedding_hnsw",
+           column="embedding",
+           m=16,
+           ef_construction=200
+       )
+
+       # Insert documents with embeddings
+       documents = [
+           {
+               "id": 1,
+               "title": "AI Research Paper",
+               "content": "Advanced artificial intelligence research",
+               "embedding": np.random.rand(384).astype(np.float32).tolist()
+           },
+           {
+               "id": 2,
+               "title": "Machine Learning Guide",
+               "content": "Comprehensive machine learning tutorial",
+               "embedding": np.random.rand(384).astype(np.float32).tolist()
+           },
+           {
+               "id": 3,
+               "title": "Data Science Handbook",
+               "content": "Complete data science reference",
+               "embedding": np.random.rand(384).astype(np.float32).tolist()
+           }
+       ]
+       client.batch_insert("documents", documents)
+
+       # Perform vector similarity search
+       query_vector = np.random.rand(384).astype(np.float32).tolist()
+       results = client.vector_query.similarity_search(
+           table_name="documents",
+           vector_column="embedding",
+           query_vector=query_vector,
+           limit=3,
+           distance_function="cosine"
+       )
+
+       print("Vector Search Results:")
+       for result in results:
+           print(f"  {result[1]} (Similarity: {1 - result[-1]:.4f})")
+
+       client.disconnect()
+
+   vector_search_example()
+
 Next Steps
 ----------
 
 * Read the :doc:`api/index` for detailed API documentation
+* Check out the :doc:`logical_in_guide` for advanced query building
+* Explore :doc:`vector_guide` for comprehensive vector operations
+* Learn about :doc:`fulltext_guide` for text search capabilities
 * Check out the :doc:`examples` for comprehensive usage examples
 * Learn about :doc:`contributing` to contribute to the project
 * Run ``make examples`` to test all examples with your MatrixOne setup

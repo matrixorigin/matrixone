@@ -26,22 +26,25 @@ help: ## Show help information
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(check-env|show-deps|info|status):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📦 Dependencies:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(install|dev-setup|install-sqlalchemy):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(install|dev-setup|install-sqlalchemy14|install-sqlalchemy20):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🧪 Testing:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|coverage|test-matrix):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|test-offline|test-online|test-fast|coverage|test-matrix|test-sqlalchemy14|test-sqlalchemy20):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🔧 Code Quality:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(lint|format|type-check|pre-commit):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)📖 Documentation:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(docs|docs-check|docs-serv):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📚 Examples:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(example|examples):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🏗️  Build & Publish:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(build|publish|release-check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(build|build-release|publish-test|publish|release-check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📋 Version Management:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(version):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(version|version-bump):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🧹 Utilities:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(clean):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
@@ -222,6 +225,20 @@ type-check-strict: ## Run strict type checking with mypy
 	mypy matrixone --ignore-missing-imports --strict
 	@echo "$(GREEN)Strict type checking completed!$(NC)"
 
+.PHONY: docs
+docs: ## Generate documentation
+	@echo "$(BLUE)Generating documentation...$(NC)"
+	@if command -v sphinx-build >/dev/null 2>&1; then \
+		echo "$(YELLOW)Building Sphinx documentation...$(NC)"; \
+		sphinx-build -b html docs docs/_build/html; \
+		echo "$(GREEN)Documentation generated in docs/_build/html/$(NC)"; \
+		echo "$(YELLOW)Open docs/_build/html/index.html in your browser to view$(NC)"; \
+	else \
+		echo "$(YELLOW)⚠️  Sphinx not available, cannot generate documentation$(NC)"; \
+		echo "$(YELLOW)   Install with: pip install sphinx sphinx-rtd-theme$(NC)"; \
+		exit 1; \
+	fi
+
 .PHONY: docs-check
 docs-check: ## Check documentation for errors and warnings
 	@echo "$(BLUE)Checking documentation...$(NC)"
@@ -233,6 +250,19 @@ docs-check: ## Check documentation for errors and warnings
 		echo "$(YELLOW)   Install with: pip install sphinx sphinx-rtd-theme$(NC)"; \
 	fi
 	@echo "$(GREEN)Documentation check completed!$(NC)"
+
+.PHONY: docs-serv
+docs-serv: ## Start documentation server (requires Python http.server)
+	@echo "$(BLUE)Starting documentation server...$(NC)"
+	@if [ -d "docs/_build/html" ]; then \
+		echo "$(YELLOW)Serving documentation from docs/_build/html/$(NC)"; \
+		echo "$(YELLOW)Open http://localhost:8000 in your browser$(NC)"; \
+		echo "$(YELLOW)Press Ctrl+C to stop the server$(NC)"; \
+		cd docs/_build/html && python3 -m http.server 8000; \
+	else \
+		echo "$(YELLOW)⚠️  Documentation not found. Run 'make docs' first$(NC)"; \
+		exit 1; \
+	fi
 
 .PHONY: pre-commit
 pre-commit: format lint type-check test-offline test-online docs-check ## Run pre-commit checks

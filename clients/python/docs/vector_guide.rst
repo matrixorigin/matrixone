@@ -1,58 +1,153 @@
 Vector Search Guide
 ===================
 
-This guide covers vector search and indexing capabilities in the MatrixOne Python SDK, including IVF and HNSW vector indexes.
+This guide covers comprehensive vector search and indexing capabilities in the MatrixOne Python SDK, including modern vector operations for AI applications.
 
 Overview
 --------
 
-MatrixOne supports advanced vector operations for AI and machine learning applications:
+MatrixOne provides powerful vector operations designed for modern AI and machine learning applications:
 
-* **Vector Data Types**: Support for f32 and f64 vector types with configurable dimensions
-* **IVF Indexing**: Inverted File (IVF) indexes for efficient approximate nearest neighbor search
-* **HNSW Indexing**: Hierarchical Navigable Small Worlds for high-performance vector search
-* **Distance Metrics**: L2, cosine, and inner product distance calculations
-* **ORM Integration**: Seamless integration with SQLAlchemy models
-* **Pinecone-Compatible Interface**: Familiar API for users migrating from Pinecone
+* **Modern Vector API**: High-level vector operations with `VectorManager` and `VectorQueryManager`
+* **Multiple Index Types**: HNSW and IVF indexes for different performance characteristics
+* **Flexible Data Types**: Support for f32 and f64 vector types with configurable dimensions
+* **Distance Metrics**: L2, cosine, inner product, and negative inner product calculations
+* **Client Integration**: Seamless integration with MatrixOne client interface
+* **ORM Support**: Full SQLAlchemy integration with vector types
+* **Performance Optimization**: Built-in query optimization and index management
 
 For detailed information about the Pinecone-compatible index interface, see the :doc:`pinecone_guide`.
 
-Vector Data Types
------------------
+Modern Vector Operations
+------------------------
 
-Defining Vector Columns with ORM
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The MatrixOne Python SDK provides a modern, high-level API for vector operations that simplifies common AI workflows.
+
+Creating Vector Tables
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
    from matrixone import Client
-   from matrixone.sqlalchemy_ext import create_vector_column
+   from matrixone.config import get_connection_params
+   import numpy as np
 
-   Base = declarative_base()
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   class Document(Base):
-       __tablename__ = 'documents'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       title = Column(String(200), nullable=False)
-       content = Column(Text)
-       # 384-dimensional f32 vector for embeddings
-       embedding = create_vector_column(384, "f32")
-       # 512-dimensional f64 vector for features
-       features = create_vector_column(512, "f64")
+   # Create vector table using client API
+   client.create_table("documents", {
+       "id": "int",
+       "title": "varchar(200)",
+       "content": "text",
+       "embedding": "vector(384,f32)",  # 384-dimensional f32 vector
+       "metadata": "json"
+   }, primary_key="id")
 
-   class Product(Base):
-       __tablename__ = 'products'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       name = Column(String(200), nullable=False)
-       description = Column(Text)
-       # 128-dimensional vector for product features
-       feature_vector = create_vector_column(128, "f32")
+   # Create another vector table for products
+   client.create_table("products", {
+       "id": "int",
+       "name": "varchar(200)",
+       "description": "text",
+       "features": "vector(512,f64)",  # 512-dimensional f64 vector
+       "category": "varchar(50)"
+   }, primary_key="id")
 
-Working with Vector Data
+Vector Index Management
+~~~~~~~~~~~~~~~~~~~~~~~
+
+MatrixOne provides powerful vector index management through the `VectorManager`:
+
+.. code-block:: python
+
+   # Create HNSW index for fast similarity search
+   client.vector.create_hnsw(
+       table_name="documents",
+       name="idx_embedding_hnsw",
+       column="embedding",
+       m=16,                    # Number of bi-directional links
+       ef_construction=200      # Size of dynamic candidate list
+   )
+
+   # Create IVF index for different performance characteristics
+   client.vector.create_ivf(
+       table_name="products",
+       name="idx_features_ivf",
+       column="features",
+       lists=100,               # Number of clusters
+       op_type="vector_l2_ops"  # Distance function
+   )
+
+   # List all vector indexes
+   indexes = client.vector.list_indexes("documents")
+   print("Vector indexes:", indexes)
+
+   # Drop an index
+   client.vector.drop_index("documents", "idx_embedding_hnsw")
+
+Vector Similarity Search
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The `VectorQueryManager` provides powerful similarity search capabilities:
+
+.. code-block:: python
+
+   # Insert vector data
+   documents_data = [
+       {
+           "id": 1,
+           "title": "AI Research Paper",
+           "content": "Advanced artificial intelligence research",
+           "embedding": np.random.rand(384).astype(np.float32).tolist(),
+           "metadata": '{"author": "Dr. Smith", "year": 2024}'
+       },
+       {
+           "id": 2,
+           "title": "Machine Learning Guide",
+           "content": "Comprehensive machine learning tutorial",
+           "embedding": np.random.rand(384).astype(np.float32).tolist(),
+           "metadata": '{"author": "Dr. Johnson", "year": 2024}'
+       },
+       {
+           "id": 3,
+           "title": "Data Science Handbook",
+           "content": "Complete data science reference",
+           "embedding": np.random.rand(384).astype(np.float32).tolist(),
+           "metadata": '{"author": "Dr. Brown", "year": 2023}'
+       }
+   ]
+   client.batch_insert("documents", documents_data)
+
+   # Perform similarity search
+   query_vector = np.random.rand(384).astype(np.float32).tolist()
+   
+   # Basic similarity search
+   results = client.vector_query.similarity_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=5,
+       distance_function="cosine"
+   )
+   
+   print("Similar documents:")
+   for result in results:
+       print(f"  ID: {result[0]}, Title: {result[1]}, Distance: {result[-1]:.4f}")
+
+   # Range search - find all vectors within a distance threshold
+   results = client.vector_query.range_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       distance_threshold=0.8,
+       distance_function="l2"
+   )
+   
+   print(f"Documents within distance 0.8: {len(results)} results")
+
+Advanced Vector Operations
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python

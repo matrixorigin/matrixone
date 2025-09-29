@@ -1,27 +1,82 @@
 ORM Usage Guide
 ===============
 
-This guide provides comprehensive information on using the MatrixOne Python SDK with SQLAlchemy ORM patterns.
+This guide provides comprehensive information on using the MatrixOne Python SDK with modern ORM patterns and advanced query building capabilities.
 
 Overview
 --------
 
-The MatrixOne Python SDK integrates seamlessly with SQLAlchemy, providing:
+The MatrixOne Python SDK provides powerful ORM capabilities that integrate seamlessly with SQLAlchemy, offering:
 
-* Standard SQLAlchemy declarative models
-* Client-managed table creation and deletion
-* Transaction support with ORM
-* Advanced features like vector and fulltext indexing
+* **Modern Query Builder**: Enhanced query building with `MatrixOneQuery` and `BaseMatrixOneQuery`
+* **SQLAlchemy Integration**: Full SQLAlchemy declarative models and session management
+* **Advanced Query Features**: Support for `logical_in`, `having`, `group_by`, `order_by` with expressions
+* **Vector and Fulltext Support**: Built-in support for vector similarity search and fulltext indexing
+* **Transaction Management**: Comprehensive transaction support with ORM
+* **Async Support**: Full async/await support with `AsyncClient`
+* **Type Safety**: Complete type hints and validation
 
-Basic ORM Setup
-----------------
+Modern Query Builder Usage
+---------------------------
 
-Defining Models
-~~~~~~~~~~~~~~~
+The MatrixOne Python SDK provides a powerful query builder that supports both traditional SQLAlchemy patterns and enhanced MatrixOne-specific features.
+
+Basic Query Building
+~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from sqlalchemy import Column, Integer, String, Text, DECIMAL, TIMESTAMP, func
+   from matrixone import Client
+   from matrixone.orm import logical_in
+   from sqlalchemy import func
+   from matrixone.config import get_connection_params
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create a table using the client API
+   client.create_table("users", {
+       "id": "int",
+       "username": "varchar(50)",
+       "email": "varchar(100)",
+       "age": "int",
+       "department_id": "int",
+       "salary": "decimal(10,2)"
+   }, primary_key="id")
+
+   # Insert data using the client API
+   users_data = [
+       {"id": 1, "username": "alice", "email": "alice@example.com", "age": 25, "department_id": 1, "salary": 50000.00},
+       {"id": 2, "username": "bob", "email": "bob@example.com", "age": 30, "department_id": 1, "salary": 60000.00},
+       {"id": 3, "username": "charlie", "email": "charlie@example.com", "age": 35, "department_id": 2, "salary": 70000.00}
+   ]
+   client.batch_insert("users", users_data)
+
+   # Modern query building with enhanced features
+   query = client.query("users")
+   
+   # Basic filtering
+   results = query.filter("age > 25").all()
+   print("Users over 25:", results)
+
+   # Using logical_in for flexible IN conditions
+   results = query.filter(logical_in("department_id", [1, 2])).all()
+   print("Users in departments 1 or 2:", results)
+
+   # Complex queries with expressions
+   results = query.filter(logical_in("id", [1, 2, 3])).filter("salary > 55000").all()
+   print("High-earning users:", results)
+
+SQLAlchemy Integration
+~~~~~~~~~~~~~~~~~~~~~~
+
+For more complex scenarios, you can use full SQLAlchemy integration:
+
+.. code-block:: python
+
+   from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, func
    from sqlalchemy.ext.declarative import declarative_base
    from matrixone import Client
 
@@ -53,8 +108,53 @@ Defining Models
        def __repr__(self):
            return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
 
+Advanced Query Features
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The MatrixOne query builder supports advanced features that go beyond basic SQLAlchemy:
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import logical_in
+   from sqlalchemy import func
+   from matrixone.sqlalchemy_ext import boolean_match
+
+   # Advanced filtering with logical_in
+   query = client.query("users")
+   
+   # Filter by multiple values
+   results = query.filter(logical_in("department_id", [1, 2, 3])).all()
+   
+   # Filter with fulltext search integration
+   fulltext_filter = boolean_match("bio").must("python developer")
+   results = query.filter(logical_in("id", fulltext_filter)).all()
+   
+   # Complex expressions with group_by and having
+   results = (query
+              .select("department_id", func.count("id").label("user_count"))
+              .group_by("department_id")
+              .having(func.count("id") > 1)
+              .all())
+   
+   # Order by with expressions
+   results = (query
+              .select("username", "salary")
+              .order_by(func.upper("username"))
+              .all())
+
+   # Explain queries for optimization
+   explain_result = query.filter("age > 25").explain(verbose=True)
+   print("Query execution plan:", explain_result)
+
+   # Generate SQL without executing
+   sql = query.filter(logical_in("id", [1, 2, 3])).to_sql()
+   print("Generated SQL:", sql)
+
 Table Management with Client Interface
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The MatrixOne client provides powerful table management capabilities:
 
 .. code-block:: python
 
@@ -63,27 +163,197 @@ Table Management with Client Interface
 
    # Get connection parameters
    host, port, user, password, database = get_connection_params()
-
-   # Create client and connect
    client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create all tables defined in Base metadata
-   client.create_all(Base)
-   print("✓ Tables created using ORM interface")
+   # Create tables with various column types
+   client.create_table("products", {
+       "id": "int",
+       "name": "varchar(200)",
+       "description": "text",
+       "price": "decimal(10,2)",
+       "category": "varchar(50)",
+       "in_stock": "boolean",
+       "created_at": "timestamp"
+   }, primary_key="id")
 
-   # Verify table creation
-   result = client.execute("SHOW TABLES")
-   tables = result.fetchall()
-   print(f"✓ Found {len(tables)} tables:")
-   for table in tables:
-       print(f"  - {table[0]}")
+   # Create vector table for AI applications
+   client.create_table("documents", {
+       "id": "int",
+       "title": "varchar(200)",
+       "content": "text",
+       "embedding": "vector(384,f32)"
+   }, primary_key="id")
 
-   # Drop all tables when done
-   client.drop_all(Base)
-   print("✓ Tables dropped using ORM interface")
+   # Insert data efficiently
+   products_data = [
+       {"id": 1, "name": "Laptop", "description": "High-performance laptop", "price": 999.99, "category": "Electronics", "in_stock": True},
+       {"id": 2, "name": "Phone", "description": "Smartphone with AI features", "price": 699.99, "category": "Electronics", "in_stock": True},
+       {"id": 3, "name": "Book", "description": "Programming guide", "price": 29.99, "category": "Education", "in_stock": False}
+   ]
+   client.batch_insert("products", products_data)
 
-   client.disconnect()
+   # Create indexes for better performance
+   client.create_index("products", "idx_category", "category")
+   client.create_index("products", "idx_price", "price")
+
+   # Create vector index for similarity search
+   client.vector.create_hnsw(
+       table_name="documents",
+       name="idx_embedding",
+       column="embedding",
+       m=16,
+       ef_construction=200
+   )
+
+   # Create fulltext index for text search
+   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
+
+Vector Operations Integration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MatrixOne provides powerful vector operations for AI applications:
+
+.. code-block:: python
+
+   import numpy as np
+
+   # Insert documents with embeddings
+   documents_data = [
+       {
+           "id": 1,
+           "title": "AI Research Paper",
+           "content": "Advanced artificial intelligence research",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
+       },
+       {
+           "id": 2,
+           "title": "Machine Learning Guide",
+           "content": "Comprehensive machine learning tutorial",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
+       }
+   ]
+   client.batch_insert("documents", documents_data)
+
+   # Vector similarity search
+   query_vector = np.random.rand(384).astype(np.float32).tolist()
+   results = client.vector_query.similarity_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=5,
+       distance_function="cosine"
+   )
+
+   print("Similar documents:", results)
+
+Fulltext Search Integration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MatrixOne provides powerful fulltext search capabilities:
+
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import boolean_match
+
+   # Create fulltext index
+   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
+
+   # Simple fulltext search
+   results = client.fulltext_index.simple_query(
+       table_name="products",
+       columns=["description"],
+       query="laptop OR phone",
+       limit=10
+   )
+
+   # Advanced fulltext search with boolean expressions
+   fulltext_filter = boolean_match("description").must("laptop").should("phone").must_not("broken")
+   results = client.query("products").filter(logical_in("id", fulltext_filter)).all()
+
+   print("Fulltext search results:", results)
+
+Transaction Management
+~~~~~~~~~~~~~~~~~~~~~~
+
+MatrixOne provides comprehensive transaction support:
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Transaction with automatic rollback on error
+   try:
+       with client.transaction() as tx:
+           # Insert multiple records
+           tx.insert("users", {"username": "alice", "email": "alice@example.com"})
+           tx.insert("users", {"username": "bob", "email": "bob@example.com"})
+           
+           # Update records
+           tx.execute("UPDATE users SET email = %s WHERE username = %s", 
+                     ("alice.new@example.com", "alice"))
+           
+           # Transaction will be committed automatically
+           print("Transaction completed successfully")
+   except Exception as e:
+       print(f"Transaction failed and was rolled back: {e}")
+
+   # Manual transaction control
+   tx = client.transaction()
+   try:
+       tx.insert("users", {"username": "charlie", "email": "charlie@example.com"})
+       tx.execute("UPDATE users SET email = %s WHERE username = %s", 
+                 ("charlie.new@example.com", "charlie"))
+       tx.commit()
+       print("Manual transaction committed")
+   except Exception as e:
+       tx.rollback()
+       print(f"Manual transaction rolled back: {e}")
+
+Async Operations
+~~~~~~~~~~~~~~~~
+
+MatrixOne provides full async support for modern Python applications:
+
+.. code-block:: python
+
+   import asyncio
+   from matrixone import AsyncClient
+   from matrixone.config import get_connection_params
+
+   async def async_operations():
+       # Get connection parameters
+       host, port, user, password, database = get_connection_params()
+       client = AsyncClient()
+       await client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       try:
+           # Async query execution
+           result = await client.execute("SELECT COUNT(*) as user_count FROM users")
+           print(f"User count: {result.rows[0][0]}")
+
+           # Async transaction
+           async with client.transaction() as tx:
+               await tx.insert("users", {"username": "async_user", "email": "async@example.com"})
+               await tx.execute("UPDATE users SET email = %s WHERE username = %s", 
+                               ("async.new@example.com", "async_user"))
+
+           # Async query building
+           query = client.query("users")
+           results = await query.filter("username LIKE %s", "async%").all()
+           print("Async query results:", results)
+
+       finally:
+           await client.disconnect()
+
+   # Run async operations
+   asyncio.run(async_operations())
 
 Working with SQLAlchemy Sessions
 ---------------------------------
@@ -91,15 +361,20 @@ Working with SQLAlchemy Sessions
 Session Management
 ~~~~~~~~~~~~~~~~~~
 
+MatrixOne provides seamless SQLAlchemy session integration:
+
 .. code-block:: python
 
    from sqlalchemy.orm import sessionmaker
    from matrixone import Client
+   from matrixone.config import get_connection_params
 
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
    client = Client()
-   client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+   client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create tables
+   # Create tables using ORM
    client.create_all(Base)
 
    # Get SQLAlchemy engine from client
