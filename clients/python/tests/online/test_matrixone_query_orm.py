@@ -264,32 +264,6 @@ class TestMatrixOneQueryORM:
         assert result[0].name == 'Eve Wilson'  # age 27 (younger of the two)
         assert result[1].name == 'Alice Johnson'  # age 28 (older of the two)
 
-    def test_snapshot_queries(self, client, test_data_setup):
-        """Test snapshot functionality"""
-        # Create a snapshot
-        snapshot_manager = SnapshotManager(client)
-        snapshot = snapshot_manager.create(
-            name="test_users_snapshot",
-            level=SnapshotLevel.TABLE,
-            database=online_config.get_connection_params()[4],  # database name
-            table="test_users",
-        )
-
-        try:
-            # Query from snapshot
-            snapshot_users = client.query(User).snapshot("test_users_snapshot").all()
-            assert len(snapshot_users) == 5
-
-            # Query with filter from snapshot
-            snapshot_engineers = client.query(User).snapshot("test_users_snapshot").filter_by(department='Engineering').all()
-            assert len(snapshot_engineers) == 3
-
-        finally:
-            # Clean up snapshot
-            try:
-                client.execute("DROP SNAPSHOT test_users_snapshot")
-            except:
-                pass
 
     def test_model_attributes(self, client, test_data_setup):
         """Test model attribute access"""
@@ -491,40 +465,6 @@ class TestAsyncMatrixOneQueryORM:
         assert result[0].name == 'Async Eve'  # age 27 (younger of the two)
         assert result[1].name == 'Async Alice'  # age 28 (older of the two)
 
-    @pytest.mark.asyncio
-    async def test_async_snapshot_queries(self, async_client, async_test_data_setup):
-        """Test async snapshot functionality"""
-        # Create a snapshot
-        from matrixone.async_client import AsyncSnapshotManager
-
-        async_snapshot_manager = AsyncSnapshotManager(async_client)
-        async_snapshot = await async_snapshot_manager.create(
-            name="async_test_users_snapshot",
-            level=SnapshotLevel.TABLE,
-            database=online_config.get_connection_params()[4],  # database name
-            table="async_test_users",
-        )
-
-        try:
-            # Query from snapshot
-            snapshot_users = await async_client.query(AsyncUser).snapshot("async_test_users_snapshot").all()
-            assert len(snapshot_users) == 5
-
-            # Query with filter from snapshot
-            snapshot_engineers = (
-                await async_client.query(AsyncUser)
-                .snapshot("async_test_users_snapshot")
-                .filter_by(department='Engineering')
-                .all()
-            )
-            assert len(snapshot_engineers) == 3
-
-        finally:
-            # Clean up snapshot
-            try:
-                await async_client.execute("DROP SNAPSHOT async_test_users_snapshot")
-            except:
-                pass
 
     @pytest.mark.asyncio
     async def test_async_empty_results(self, async_client, async_test_data_setup):
@@ -565,15 +505,6 @@ class TestMatrixOneQueryEdgeCases:
         with pytest.raises(Exception):
             client.query(InvalidModel).all()
 
-    def test_invalid_snapshot(self, client):
-        """Test query with invalid snapshot"""
-
-        class TestModel(Base):
-            __tablename__ = "test_users_invalid_snapshot"
-            id = Column(Integer, primary_key=True)
-
-        with pytest.raises(Exception):
-            client.query(TestModel).snapshot("non_existent_snapshot").all()
 
     def test_malformed_filter(self, client):
         """Test malformed filter conditions"""

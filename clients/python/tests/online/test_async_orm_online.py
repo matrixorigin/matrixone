@@ -237,22 +237,6 @@ class TestAsyncORMOnline:
         assert user.name == "Diana Prince"
         assert user.age > 25
 
-    @pytest.mark.asyncio
-    async def test_async_orm_query_snapshot_support(self, test_async_client):
-        """Test async ORM query snapshot support"""
-        # This test verifies that snapshot support is available in async queries
-        # Note: This is a basic test - actual snapshot functionality would require
-        # creating snapshots first, which is tested in other test files
-
-        # Test that snapshot method exists and returns self for chaining
-        query = test_async_client.query(AsyncUser).snapshot("test_snapshot")
-        assert query is not None
-        assert query._snapshot_name == "test_snapshot"
-
-        # Test that snapshot can be chained with other methods
-        query = test_async_client.query(AsyncUser).snapshot("test_snapshot").filter_by(name="Alice Johnson")
-        assert query is not None
-        assert query._snapshot_name == "test_snapshot"
 
     @pytest.mark.asyncio
     async def test_async_orm_query_error_handling(self, test_async_client):

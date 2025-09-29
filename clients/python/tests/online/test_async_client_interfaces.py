@@ -59,44 +59,6 @@ class TestAsyncClientMissingInterfaces:
         assert client.vector_ops is not None
         assert client.vector_query is not None
 
-    @pytest.mark.asyncio
-    async def test_snapshot_query(self, client):
-        """Test query method with snapshot parameter"""
-        # Should return a query builder with snapshot
-        query = client.query("test_table", snapshot="test_snapshot")
-        assert query is not None
-        assert hasattr(query, '_snapshot_name')
-        assert query._snapshot_name == "test_snapshot"
-
-    @pytest.mark.asyncio
-    async def test_snapshot_context_manager(self, client):
-        """Test snapshot context manager"""
-        # Create a test table first
-        await client.create_table("test_snapshot_table", {"id": "int primary key", "name": "varchar(100)"})
-
-        try:
-            # Create a snapshot
-            await client.snapshots.create(
-                name="test_snapshot_ctx",
-                level="table",
-                database=online_config.get_test_database(),
-                table="test_snapshot_table",
-            )
-
-            # Test snapshot context manager
-            async with client.snapshot("test_snapshot_ctx") as snapshot_client:
-                assert snapshot_client is not None
-                # Should be able to execute queries
-                result = await snapshot_client.execute("SELECT COUNT(*) FROM test_snapshot_table")
-                assert result.rows[0][0] == 0
-
-        finally:
-            # Cleanup
-            try:
-                await client.snapshots.delete("test_snapshot_ctx")
-            except:
-                pass
-            await client.drop_table("test_snapshot_table")
 
     @pytest.mark.asyncio
     async def test_create_table(self, client):

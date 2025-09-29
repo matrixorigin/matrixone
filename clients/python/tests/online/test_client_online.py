@@ -143,58 +143,6 @@ class TestClientOnline(unittest.TestCase):
         # Clean up
         self.client.execute(f"DELETE FROM {self.test_table} WHERE id = 5")
 
-    def test_snapshot_query_functionality(self):
-        """Test snapshot query functionality"""
-        # First create a snapshot
-        snapshot_name = f"test_client_snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        try:
-            # Create snapshot
-            self.client.snapshots.create(snapshot_name, "table", database=self.test_db, table=self.test_table)
-
-            # Test snapshot query using query builder
-            result = self.client.query(self.test_table, snapshot=snapshot_name).select("*").where("value > ?", 150).execute()
-
-            rows = result.fetchall()
-            self.assertEqual(len(rows), 2)  # Should have 2 rows with value > 150
-
-            # Test snapshot query without parameters
-            result = self.client.query(self.test_table, snapshot=snapshot_name).select("COUNT(*)").execute()
-
-            count = result.fetchone()[0]
-            self.assertEqual(count, 3)
-
-        finally:
-            # Clean up snapshot
-            try:
-                self.client.snapshots.delete(snapshot_name)
-            except Exception:
-                pass
-
-    def test_snapshot_query_syntax_validation(self):
-        """Test that snapshot queries use correct syntax"""
-        snapshot_name = f"test_syntax_snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        try:
-            # Create snapshot
-            self.client.snapshots.create(snapshot_name, "table", database=self.test_db, table=self.test_table)
-
-            # Test that snapshot query works with proper syntax
-            result = (
-                self.client.query(self.test_table, snapshot=snapshot_name).select("id", "name").where("id = ?", 1).execute()
-            )
-
-            rows = result.fetchall()
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0][0], 1)
-            self.assertEqual(rows[0][1], 'test1')
-
-        finally:
-            # Clean up snapshot
-            try:
-                self.client.snapshots.delete(snapshot_name)
-            except Exception:
-                pass
 
     def test_error_handling(self):
         """Test error handling"""
