@@ -1395,6 +1395,108 @@ class BaseMatrixOneQuery:
                             select_cols.append(col_str)
         return select_cols
 
+    def update(self, **kwargs) -> "BaseMatrixOneQuery":
+        """
+        Start UPDATE operation - SQLAlchemy style
+
+        This method allows you to update records in the database using a fluent interface
+        similar to SQLAlchemy's update() method. It supports both SQLAlchemy expressions
+        and simple key-value pairs for setting column values.
+
+        Args:
+            **kwargs: Column names and their new values to set
+
+        Returns:
+            Self for method chaining
+
+        Examples:
+            # Update with simple key-value pairs
+            query = client.query(User)
+            query.update(name="New Name", email="new@example.com").filter(User.id == 1).execute()
+
+            # Update with SQLAlchemy expressions
+            from sqlalchemy import func
+            query = client.query(User)
+            query.update(
+                last_login=func.now(),
+                login_count=User.login_count + 1
+            ).filter(User.id == 1).execute()
+
+            # Update multiple records with conditions
+            query = client.query(User)
+            query.update(status="inactive").filter(User.last_login < "2023-01-01").execute()
+
+            # Update with complex conditions
+            query = client.query(User)
+            query.update(
+                status="premium",
+                premium_until=func.date_add(func.now(), func.interval(1, "YEAR"))
+            ).filter(
+                User.subscription_type == "paid",
+                User.payment_status == "active"
+            ).execute()
+        """
+        self._query_type = "UPDATE"
+
+        # Handle both SQLAlchemy expressions and simple values
+        for key, value in kwargs.items():
+            if hasattr(value, "compile"):  # SQLAlchemy expression
+                # Compile the expression to SQL
+                compiled = value.compile(compile_kwargs={"literal_binds": True})
+                sql_str = str(compiled)
+
+                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                import re
+
+                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+
+                self._update_set_columns.append(f"{key} = {sql_str}")
+            else:  # Simple value
+                self._update_set_columns.append(f"{key} = ?")
+                self._update_set_values.append(value)
+
+        return self
+
+    def _build_update_sql(self) -> tuple[str, List[Any]]:
+        """
+        Build UPDATE SQL query directly to handle SQLAlchemy expressions
+
+        Returns:
+            Tuple of (SQL string, parameters list)
+
+        Raises:
+            ValueError: If no SET clauses are provided for UPDATE
+        """
+        if not self._update_set_columns:
+            raise ValueError("No SET clauses provided for UPDATE")
+
+        # Build SET clause
+        set_clauses = []
+        params = []
+
+        value_index = 0
+        for col in self._update_set_columns:
+            if " = ?" in col:
+                # Simple value assignment
+                col_name = col.split(" = ?")[0]
+                set_clauses.append(f"{col_name} = ?")
+                params.append(self._update_set_values[value_index])
+                value_index += 1
+            else:
+                # SQLAlchemy expression (already compiled to SQL)
+                set_clauses.append(col)
+
+        # Build WHERE clause
+        where_clause = ""
+        if self._where_conditions:
+            where_clause = " WHERE " + " AND ".join(self._where_conditions)
+            params.extend(self._where_params)
+
+        # Build final SQL
+        sql = f"UPDATE {self._table_name} SET {', '.join(set_clauses)}{where_clause}"
+
+        return sql, params
+
 
 # MatrixOne Snapshot Query Builder - SQLAlchemy style
 class MatrixOneQuery(BaseMatrixOneQuery):
@@ -1542,12 +1644,24 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             sql = query.to_sql()
             print(sql)  # "SELECT * FROM users WHERE age > 25 ORDER BY name"
 
+            query = client.query(User).update(name="New Name").filter(User.id == 1)
+            sql = query.to_sql()
+            print(sql)  # "UPDATE users SET name = 'New Name' WHERE id = 1"
+
         Notes:
             - This method returns the SQL with parameters substituted
             - Use this for debugging or logging purposes
             - The returned SQL is ready to be executed directly
         """
-        sql, params = self._build_sql()
+        # Build SQL based on query type
+        if self._query_type == "UPDATE":
+            sql, params = self._build_update_sql()
+        elif self._query_type == "INSERT":
+            sql, params = self._build_insert_sql()
+        elif self._query_type == "DELETE":
+            sql, params = self._build_delete_sql()
+        else:
+            sql, params = self._build_sql()
 
         # Substitute parameters for better readability
         if params:
