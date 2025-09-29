@@ -3,7 +3,7 @@ Comprehensive Async Client Query Tests
 
 This file consolidates all async client and query-related tests from:
 - test_async.py (comprehensive async client tests)
-- test_async_simple.py (basic async client tests) 
+- test_async_simple.py (basic async client tests)
 - test_async_sqlalchemy_transaction.py (SQLAlchemy integration tests)
 
 The merged file eliminates redundancy while maintaining full test coverage.

@@ -3,7 +3,7 @@ Comprehensive Fulltext Search Tests
 
 This file consolidates all fulltext search-related tests from:
 - test_fulltext_index.py (22 tests)
-- test_fulltext_label.py (17 tests) 
+- test_fulltext_label.py (17 tests)
 - test_fulltext_search_builder.py (21 tests)
 - test_fulltext_search_coverage.py (30 tests)
 - test_fulltext_search_offline.py (56 tests)
@@ -106,7 +106,7 @@ class TestFulltextIndex(unittest.TestCase):
     def test_fulltext_index_str(self):
         """Test FulltextIndex string representation"""
         index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25)
-        
+
         str_repr = str(index)
         assert "ftidx_test" in str_repr
         assert "title" in str_repr
@@ -115,14 +115,14 @@ class TestFulltextIndex(unittest.TestCase):
     def test_fulltext_index_repr(self):
         """Test FulltextIndex representation"""
         index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25)
-        
+
         repr_str = repr(index)
         assert "ftidx_test" in repr_str
 
     def test_fulltext_index_multiple_columns(self):
         """Test FulltextIndex with multiple columns"""
         index = FulltextIndex("ftidx_test", ["title", "content", "summary"], FulltextAlgorithmType.BM25)
-        
+
         assert index.name == "ftidx_test"
         assert index.get_columns() == ["title", "content", "summary"]
 
@@ -162,11 +162,7 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
 
     def test_group_with_weights(self):
         """Test group with weight operators."""
-        expr = (
-            boolean_match("title", "content")
-            .must("main")
-            .must(group().high("important").medium("normal").low("minor"))
-        )
+        expr = boolean_match("title", "content").must("main").must(group().high("important").medium("normal").low("minor"))
         sql = expr.compile()
 
         # Should contain weight operators within groups
@@ -230,7 +226,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
         """Test phrase and prefix matching."""
         expr = boolean_match("title", "content").phrase("machine learning").prefix("neural")
         sql = expr.compile()
-        
+
         # Should contain phrase and prefix syntax
         self.assertIn('"machine learning"', sql)
         self.assertIn("neural*", sql)
@@ -241,9 +237,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
         inner_group = group().medium("python", "java")
         outer_group = group().medium("programming").medium("tutorial")
 
-        expr = (
-            boolean_match("title", "content").must("coding").must(inner_group).encourage(outer_group)
-        )
+        expr = boolean_match("title", "content").must("coding").must(inner_group).encourage(outer_group)
         sql = expr.compile()
 
         # Should contain nested structure
@@ -405,7 +399,7 @@ class TestFulltextEdgeCases(unittest.TestCase):
         """Test unknown search mode handling."""
         filter_obj = FulltextFilter(["title", "content"], "unknown_mode")
         filter_obj.encourage("test")
-        
+
         result = filter_obj.compile()
         # Should default to basic AGAINST syntax
         self.assertEqual(result, "MATCH(title, content) AGAINST('test')")
@@ -450,13 +444,13 @@ class TestFulltextLabel(unittest.TestCase):
         """Test multiple labels on different expressions."""
         expr1 = boolean_match("title", "content").must("python").label("python_score")
         expr2 = boolean_match("title", "content").must("java").label("java_score")
-        
+
         sql1 = expr1.compile()
         sql2 = expr2.compile()
 
         expected1 = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python_score"
         expected2 = "MATCH(title, content) AGAINST('+java' IN BOOLEAN MODE) AS java_score"
-        
+
         self.assertEqual(sql1, expected1)
         self.assertEqual(sql2, expected2)
 

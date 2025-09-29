@@ -303,6 +303,122 @@ class TestSnapshotOnline:
             # Clean up
             test_client.snapshots.delete(snapshot_name)
 
+    def test_snapshot_management_comprehensive(self, test_client, test_database):
+        """Test comprehensive snapshot management functionality - from test_snapshot.py"""
+        snapshot_name = f"test_snapshot_001_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        try:
+            # Create snapshot using the snapshot manager
+            snapshot = test_client.snapshots.create(
+                name=snapshot_name,
+                level="table",
+                database="test_snapshot_db",
+                table="test_snapshot_table",
+                description="Test snapshot for SDK",
+            )
+
+            assert snapshot is not None
+            assert snapshot.name == snapshot_name
+
+            # List snapshots
+            snapshots = test_client.snapshots.list()
+            snapshot_names = [s.name for s in snapshots]
+            assert snapshot_name in snapshot_names
+
+            # Get specific snapshot
+            retrieved_snapshot = test_client.snapshots.get(snapshot_name)
+            assert retrieved_snapshot.name == snapshot_name
+
+            # Test snapshot query using query builder
+            result = test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name).select("*").execute()
+            rows = result.fetchall()
+            assert len(rows) == 3  # We inserted 3 test rows
+
+            # Test snapshot context manager
+            with test_client.snapshot(snapshot_name) as snapshot_client:
+                result = snapshot_client.execute("SELECT COUNT(*) FROM test_snapshot_db.test_snapshot_table")
+                count = result.scalar()
+                assert count == 3
+
+            # Test snapshot query builder with WHERE clause
+            result = (
+                test_client.query("test_snapshot_db.test_snapshot_table", snapshot=snapshot_name)
+                .select("id", "name", "value")
+                .where("value > ?", 150)
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) == 2  # Only rows with value > 150
+
+        finally:
+            # Clean up
+            test_client.snapshots.delete(snapshot_name)
+
+    def test_snapshot_error_handling(self, test_client, test_database):
+        """Test snapshot error handling - from test_snapshot.py"""
+        # Test non-existent snapshot
+        with pytest.raises(SnapshotError):
+            test_client.snapshots.get("non_existent_snapshot")
+
+        # Test invalid snapshot level
+        with pytest.raises(SnapshotError):
+            test_client.snapshots.create("test", "invalid_level")
+
+    def test_snapshot_syntax_variations(self, test_client, test_database):
+        """Test different snapshot syntax variations - from test_snapshot_syntax.py"""
+        # Create a test table for syntax testing
+        test_table = "test_syntax_table"
+        test_client.execute(f"CREATE TABLE IF NOT EXISTS {test_table} (id INT PRIMARY KEY, name VARCHAR(100))")
+        test_client.execute(f"INSERT INTO {test_table} (id, name) VALUES (1, 'test')")
+
+        try:
+            # Test different snapshot syntax variations
+            syntax_variations = [
+                f"CREATE SNAPSHOT test_snapshot_001 TABLE test_snapshot_db.{test_table}",
+                f"CREATE SNAPSHOT test_snapshot_001 OF TABLE test_snapshot_db.{test_table}",
+                f"CREATE SNAPSHOT test_snapshot_001 FOR TABLE test_snapshot_db.{test_table}",
+                f"CREATE SNAPSHOT test_snapshot_001 FROM TABLE test_snapshot_db.{test_table}",
+                f"CREATE SNAPSHOT test_snapshot_001 CLONE TABLE test_snapshot_db.{test_table}",
+            ]
+
+            snapshot_created = False
+            for i, syntax in enumerate(syntax_variations):
+                try:
+                    test_client.execute(syntax)
+                    snapshot_created = True
+                    print(f"✓ Syntax {i+1} worked: {syntax}")
+                    break
+                except Exception as e:
+                    print(f"✗ Syntax {i+1} failed: {e}")
+
+            if snapshot_created:
+                # Try to drop the snapshot
+                try:
+                    test_client.execute("DROP SNAPSHOT test_snapshot_001")
+                    print("✓ Snapshot dropped successfully")
+                except Exception as e:
+                    print(f"✗ Failed to drop snapshot: {e}")
+
+            # Test listing snapshots
+            try:
+                result = test_client.execute("SHOW SNAPSHOTS")
+                snapshots = result.fetchall()
+                print(f"✓ SHOW SNAPSHOTS worked: {len(snapshots)} snapshots found")
+            except Exception as e:
+                print(f"✗ SHOW SNAPSHOTS failed: {e}")
+
+            # Test other snapshot commands
+            try:
+                result = test_client.execute("SELECT * FROM mo_catalog.mo_snapshots")
+                rows = result.fetchall()
+                print(f"✓ mo_catalog.mo_snapshots query worked: {len(rows)} rows")
+            except Exception as e:
+                print(f"✗ mo_catalog.mo_snapshots query failed: {e}")
+
+        finally:
+            # Clean up test table
+            test_client.execute(f"DROP TABLE IF EXISTS {test_table}")
+
 
 if __name__ == '__main__':
     unittest.main()
