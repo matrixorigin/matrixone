@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -248,8 +247,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 		for _, indexDef := range newTableDef.Indexes {
 
-			// DO NOT check SkipIndexesCopy here.  If affectedPk == true, SkipIndexesCopy[indexname] always false
-			// only check affectedCols.  If affected == true, run re-index
+			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
+			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
+			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
+			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
 			affected := false
 			for _, part := range indexDef.Parts {
 				if slices.Index(qry.AffectedCols, part) != -1 {
@@ -614,10 +615,8 @@ func cloneUnaffectedIndexes(
 		newIdxColNameToTblName = make(map[string][]IndexTypeInfo)
 	)
 
-	logutil.Infof("affected cols %v\n", affectedCols)
-	logutil.Infof("skipIndexesCopy %v\n", skipIndexesCopy)
-	os.Stderr.WriteString(fmt.Sprintf("affected cols %v\n", affectedCols))
-	os.Stderr.WriteString(fmt.Sprintf("skipIndexesCopy %v\n", skipIndexesCopy))
+	logutil.Infof("cloneUnaffectedIndex: affected cols %v\n", affectedCols)
+	logutil.Infof("cloneUnaffectedIndex: skipIndexesCopy %v\n", skipIndexesCopy)
 
 	releaseClone := func() {
 		if clone != nil {
@@ -649,8 +648,6 @@ func cloneUnaffectedIndexes(
 			catalog.IsIvfIndexAlgo(idxTbl.IndexAlgo)) {
 			// only check parts when fulltext/hnsw/ivfflat index
 
-			logutil.Infof("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
-			os.Stderr.WriteString(fmt.Sprintf("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts))
 			for _, part := range idxTbl.Parts {
 				if slices.Index(affectedCols, part) != -1 {
 					affected = true
@@ -664,7 +661,7 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		os.Stderr.WriteString(fmt.Sprintf("old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts))
+		logutil.Infof("cloneUnaffectedIndex: old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 
 		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
@@ -687,7 +684,7 @@ func cloneUnaffectedIndexes(
 
 		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
 		newIdxColNameToTblName[idxTbl.IndexName] = m
-		os.Stderr.WriteString(fmt.Sprintf("new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts))
+		logutil.Infof("cloneUnaffectedIndex: new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 	}
 
 	cctx := compilerContext{
@@ -719,8 +716,7 @@ func cloneUnaffectedIndexes(
 				continue
 			}
 
-			logutil.Infof("clone %v -> %v\n", oriIdxTblName, newIdxTblName)
-			os.Stderr.WriteString(fmt.Sprintf("clone %v -> %v\n", oriIdxTblName, newIdxTblName))
+			logutil.Infof("cloneUnaffectedIndex: clone %v -> %v\n", oriIdxTblName, newIdxTblName)
 			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
 
 			clonePlan := plan.CloneTable{
