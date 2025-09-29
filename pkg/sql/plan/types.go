@@ -476,8 +476,9 @@ type OriginTableMessageForFuzzy struct {
 }
 
 type MultiTableIndex struct {
-	IndexAlgo string
-	IndexDefs map[string]*plan.IndexDef
+	IndexAlgo       string
+	IndexAlgoParams string
+	IndexDefs       map[string]*plan.IndexDef
 }
 
 type RemapInfo struct {
