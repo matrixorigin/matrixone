@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+/*
 func mockIscpRegisterJobSuccess(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID, startFromNow bool) (bool, error) {
 	return true, nil
 }
@@ -35,6 +36,7 @@ func mockIscpRegisterJobSuccess(ctx context.Context, cnUUID string, txn client.T
 func mockIscpUnregisterJobSuccess(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {
 	return true, nil
 }
+*/
 
 func mockIscpRegisterJobError(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID, startFromNow bool) (bool, error) {
 	return false, moerr.NewInternalErrorNoCtx("mock register job error")
