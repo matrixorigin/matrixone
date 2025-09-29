@@ -19,10 +19,11 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -164,7 +165,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	//5. ISCP: temp table already created pitr and iscp job with temp table name
 	// and we don't want iscp to run with temp table so drop pitr and iscp job with the temp table here
 	newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
-	DropAllIndexCdcTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
+	err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
+	if err != nil {
+		return err
+	}
 
 	// 6. copy the original table data to the temporary replica table
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
@@ -179,8 +183,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	//6. copy on writing unaffected index table
-	if err = cowUnaffectedIndexes(
-		c, dbName, qry.AffectedCols, newRel, qry.TableDef, nil,
+	if err = cloneUnaffectedIndexes(
+		c, dbName, qry.Options.SkipIndexesCopy, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
 		return err
 	}
@@ -198,26 +202,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.String("copy tableName", qry.CopyTableDef.Name),
 			zap.Error(err))
 		return err
-	}
-
-	// 7.1 delete all index objects of the table in mo_catalog.mo_indexes
-	if qry.Database != catalog.MO_CATALOG && qry.TableDef.Name != catalog.MO_INDEXES {
-		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
-			deleteSql := fmt.Sprintf(
-				deleteMoIndexesWithTableIdFormat,
-				qry.GetTableDef().TblId,
-			)
-			err = c.runSql(deleteSql)
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "delete all index meta data of origin table in `mo_indexes` for alter table",
-					zap.String("databaseName", dbName),
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("delete all index sql", deleteSql),
-					zap.Error(err))
-
-				return err
-			}
-		}
 	}
 
 	newId := newRel.GetTableID(c.proc.Ctx)
@@ -253,6 +237,24 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		id := newRel.GetTableID(c.proc.Ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
+
+			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
+			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
+			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
+			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
+			affected := false
+			for _, part := range indexDef.Parts {
+				if slices.Index(qry.AffectedCols, part) != -1 {
+					affected = true
+					break
+				}
+			}
+
+			if !affected {
+				// column not affected means index already cloned in cloneUnaffectedIndexes()
+				continue
+			}
+
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
 				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -577,14 +579,20 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	return fatherRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
-func cowUnaffectedIndexes(
+func cloneUnaffectedIndexes(
 	c *Compile,
 	dbName string,
+	skipIndexesCopy map[string]bool,
 	affectedCols []string,
 	newRel engine.Relation,
 	oriTblDef *plan.TableDef,
 	cloneSnapshot *plan.Snapshot,
 ) (err error) {
+
+	type IndexTypeInfo struct {
+		IndexTableName string
+		AlgoTableType  string
+	}
 
 	var (
 		clone *table_clone.TableClone
@@ -594,9 +602,12 @@ func cowUnaffectedIndexes(
 
 		newTblDef = newRel.GetTableDef(c.proc.Ctx)
 
-		oriIdxColNameToTblName  = make(map[string]string)
-		newIdxTColNameToTblName = make(map[string]string)
+		oriIdxColNameToTblName = make(map[string][]IndexTypeInfo)
+		newIdxColNameToTblName = make(map[string][]IndexTypeInfo)
 	)
+
+	logutil.Infof("cloneUnaffectedIndex: affected cols %v\n", affectedCols)
+	logutil.Infof("cloneUnaffectedIndex: skipIndexesCopy %v\n", skipIndexesCopy)
 
 	releaseClone := func() {
 		if clone != nil {
@@ -611,15 +622,73 @@ func cowUnaffectedIndexes(
 	}()
 
 	for _, idxTbl := range oriTblDef.Indexes {
-		if slices.Index(affectedCols, idxTbl.IndexName) != -1 {
+
+		// NOTE: The index name of regular, maste, unqiue index is same as affected column name.
+		// SkipIndexesCopy means UnaffectedIndexes[string][bool].
+		// Affected indexes are processed in bind_insert when SkipIndexesCopy = false (UnaffectedIndexes = false)
+		// Unaffected indexes is cloned here.
+		//
+		// 1. If affectedPk == true, SkipIndexesCopy[indexname] always false (empty) and nothing being cloned. All indexes are affected.
+		// 2. If affectedPK == false, SkipIndexesCopy[indexname] will set to true when index is affected with affected column.
+		// The condition is (indexname NOT IN affected_columns) wil set SkipIndexesCopy to true (UnAffectedIndexes == true)
+		//
+		// NOTE for Fulltext/HNSW/Ivfflat Index:
+		// However, fulltext/hnsw/ivfflat index name is user-defined which is not related to column name so
+		// SkipIndexesCopy will always be true in these cases (UnAffectedIndex==true).
+		// Even SkipIndexesCopy is true, it does not mean it is really unaffected Index for fulltext/hnsw/ivfflat index.
+		// check the Parts to determine affected or not.  If unaffected index, try clone.  Otherwise, re-build the index
+		if !skipIndexesCopy[idxTbl.IndexName] {
+			// This index is affected index, skip it
 			continue
 		}
 
-		oriIdxColNameToTblName[idxTbl.IndexName] = idxTbl.IndexTableName
+		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
+			continue
+		}
+
+		affected := false
+		if !idxTbl.Unique && (catalog.IsFullTextIndexAlgo(idxTbl.IndexAlgo) ||
+			catalog.IsHnswIndexAlgo(idxTbl.IndexAlgo) ||
+			catalog.IsIvfIndexAlgo(idxTbl.IndexAlgo)) {
+			// only check parts when fulltext/hnsw/ivfflat index
+
+			for _, part := range idxTbl.Parts {
+				if slices.Index(affectedCols, part) != -1 {
+					affected = true
+					break
+
+				}
+			}
+		}
+
+		if affected {
+			continue
+		}
+
+		logutil.Infof("cloneUnaffectedIndex: old %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
+
+		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
+		if !ok {
+			m = make([]IndexTypeInfo, 0, 3)
+		}
+
+		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		oriIdxColNameToTblName[idxTbl.IndexName] = m
 	}
 
 	for _, idxTbl := range newTblDef.Indexes {
-		newIdxTColNameToTblName[idxTbl.IndexName] = idxTbl.IndexTableName
+		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
+			continue
+		}
+
+		m, ok := newIdxColNameToTblName[idxTbl.IndexName]
+		if !ok {
+			m = make([]IndexTypeInfo, 0, 3)
+		}
+
+		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		newIdxColNameToTblName[idxTbl.IndexName] = m
+		logutil.Infof("cloneUnaffectedIndex: new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 	}
 
 	cctx := compilerContext{
@@ -629,38 +698,57 @@ func cowUnaffectedIndexes(
 		proc:      c.proc,
 	}
 
-	for colName, oriIdxTblName := range oriIdxColNameToTblName {
-		newIdxTblName, ok := newIdxTColNameToTblName[colName]
+	for idxName, oriIdxTblNames := range oriIdxColNameToTblName {
+		newIdxTblNames, ok := newIdxColNameToTblName[idxName]
 		if !ok {
 			continue
 		}
 
-		oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName, cloneSnapshot)
+		for _, oriIdxTblName := range oriIdxTblNames {
 
-		clonePlan := plan.CloneTable{
-			CreateTable:     nil,
-			ScanSnapshot:    cloneSnapshot,
-			SrcTableDef:     oriIdxTblDef,
-			SrcObjDef:       oriIdxObjRef,
-			DstDatabaseName: dbName,
-			DstTableName:    newIdxTblName,
-		}
+			var newIdxTblName IndexTypeInfo
+			found := false
+			for _, idxinfo := range newIdxTblNames {
+				if oriIdxTblName.AlgoTableType == idxinfo.AlgoTableType {
+					newIdxTblName = idxinfo
+					found = true
+					break
+				}
+			}
 
-		if clone, err = constructTableClone(c, &clonePlan); err != nil {
-			return err
-		}
+			if !found {
+				continue
+			}
 
-		if err = clone.Prepare(c.proc); err != nil {
+			logutil.Infof("cloneUnaffectedIndex: clone %v -> %v\n", oriIdxTblName, newIdxTblName)
+			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
+
+			clonePlan := plan.CloneTable{
+				CreateTable:     nil,
+				ScanSnapshot:    cloneSnapshot,
+				SrcTableDef:     oriIdxTblDef,
+				SrcObjDef:       oriIdxObjRef,
+				DstDatabaseName: dbName,
+				DstTableName:    newIdxTblName.IndexTableName,
+			}
+
+			if clone, err = constructTableClone(c, &clonePlan); err != nil {
+				return err
+			}
+
+			if err = clone.Prepare(c.proc); err != nil {
+				releaseClone()
+				return err
+			}
+
+			if _, err = clone.Call(c.proc); err != nil {
+				releaseClone()
+				return err
+			}
+
 			releaseClone()
-			return err
-		}
 
-		if _, err = clone.Call(c.proc); err != nil {
-			releaseClone()
-			return err
 		}
-
-		releaseClone()
 	}
 
 	return nil
