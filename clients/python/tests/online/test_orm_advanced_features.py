@@ -204,7 +204,7 @@ class TestORMAdvancedFeatures:
     def test_group_by_operations(self, test_client, test_database):
         """Test GROUP BY operations"""
         # Group products by category
-        query = test_client.query(Product).select("category", func.count("id")).group_by("category")
+        query = test_client.query(Product).select("category", func.count("id")).group_by(Product.category)
 
         # This will test the SQL generation, though execution may need adjustment
         sql, params = query._build_sql()
@@ -215,7 +215,10 @@ class TestORMAdvancedFeatures:
         """Test HAVING operations"""
         # Find categories with more than 1 product
         query = (
-            test_client.query(Product).select("category", func.count("id")).group_by("category").having(func.count("id") > 1)
+            test_client.query(Product)
+            .select("category", func.count("id"))
+            .group_by(Product.category)
+            .having(func.count("id") > 1)
         )
 
         sql, params = query._build_sql()
@@ -255,9 +258,9 @@ class TestORMAdvancedFeatures:
         query = (
             test_client.query(User)
             .select("department_id", func.avg("age"))
-            .group_by("department_id")
+            .group_by(User.department_id)
             .having(func.avg("age") > 30)
-            .order_by("avg(age) DESC")
+            .order_by(func.avg("age").desc())
             .limit(5)
         )
 

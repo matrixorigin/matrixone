@@ -111,7 +111,39 @@ class Query:
         return self
 
     def group_by(self, *columns) -> "Query":
-        """Add GROUP BY clause"""
+        """
+        Add GROUP BY clause to the query.
+
+        The GROUP BY clause is used to group rows that have the same values in specified columns,
+        typically used with aggregate functions like COUNT, SUM, AVG, etc.
+
+        Args:
+            *columns: Columns to group by as strings.
+                    Can include column names, expressions, or functions.
+
+        Returns:
+            Query: Self for method chaining.
+
+        Examples:
+            # Basic GROUP BY
+            query.group_by("department")
+            query.group_by("department", "status")
+            query.group_by("YEAR(created_at)")
+
+            # Multiple columns
+            query.group_by("department", "status", "category")
+
+            # With expressions
+            query.group_by("YEAR(created_at)", "MONTH(created_at)")
+
+        Notes:
+            - GROUP BY is typically used with aggregate functions (COUNT, SUM, AVG, etc.)
+            - Multiple columns can be grouped together
+            - For SQLAlchemy expression support, use MatrixOneQuery instead
+
+        Raises:
+            ValueError: If columns are not strings
+        """
         self._group_by_columns.extend([str(col) for col in columns])
         return self
 
@@ -161,7 +193,41 @@ class Query:
         return self
 
     def order_by(self, *columns) -> "Query":
-        """Add ORDER BY clause"""
+        """
+        Add ORDER BY clause to the query.
+
+        The ORDER BY clause is used to sort the result set by one or more columns,
+        either in ascending (ASC) or descending (DESC) order.
+
+        Args:
+            *columns: Columns to order by as strings.
+                    Can include column names with optional ASC/DESC keywords.
+
+        Returns:
+            Query: Self for method chaining.
+
+        Examples:
+            # Basic ORDER BY
+            query.order_by("name")
+            query.order_by("created_at DESC")
+            query.order_by("department ASC", "name DESC")
+
+            # Multiple columns
+            query.order_by("department", "name", "age DESC")
+
+            # With expressions
+            query.order_by("COUNT(*) DESC")
+            query.order_by("AVG(salary) ASC")
+
+        Notes:
+            - ORDER BY sorts the result set in ascending order by default
+            - Use "DESC" for descending order, "ASC" for explicit ascending order
+            - Multiple columns are ordered from left to right
+            - For SQLAlchemy expression support, use MatrixOneQuery instead
+
+        Raises:
+            ValueError: If columns are not strings
+        """
         for col in columns:
             self._order_by_columns.append(str(col))
         return self
@@ -605,10 +671,69 @@ class BaseMatrixOneQuery:
         return self.leftjoin(target, onclause)
 
     def group_by(self, *columns) -> "BaseMatrixOneQuery":
-        """Add GROUP BY clause - SQLAlchemy style"""
+        """
+        Add GROUP BY clause to the query - SQLAlchemy style compatibility.
+
+        The GROUP BY clause is used to group rows that have the same values in specified columns,
+        typically used with aggregate functions like COUNT, SUM, AVG, etc.
+
+        Args:
+            *columns: Columns to group by. Can be:
+                - SQLAlchemy column expressions (e.g., User.department, func.year(User.created_at))
+                - String column names (e.g., "department", "created_at")
+                - SQLAlchemy function expressions (e.g., func.year(User.created_at))
+
+        Returns:
+            BaseMatrixOneQuery: Self for method chaining.
+
+        Examples:
+            # SQLAlchemy column expressions (recommended)
+            query.group_by(User.department)
+            query.group_by(User.department, User.status)
+            query.group_by(func.year(User.created_at))
+            query.group_by(func.date(User.created_at), User.department)
+
+            # String column names
+            query.group_by("department")
+            query.group_by("department", "status")
+            query.group_by("YEAR(created_at)")
+
+            # Mixed expressions
+            query.group_by(User.department, "status")
+            query.group_by(func.year(User.created_at), "department")
+
+            # Complex expressions
+            query.group_by(
+                User.department,
+                func.year(User.created_at),
+                func.month(User.created_at)
+            )
+
+        Notes:
+            - GROUP BY is typically used with aggregate functions (COUNT, SUM, AVG, etc.)
+            - SQLAlchemy expressions provide better type safety and integration
+            - Multiple columns can be grouped together
+            - Column references in SQLAlchemy expressions are automatically
+              converted to MatrixOne-compatible format
+
+        Raises:
+            ValueError: If invalid column type is provided
+            SQLAlchemyError: If SQLAlchemy expression compilation fails
+        """
         for col in columns:
             if isinstance(col, str):
                 self._group_by_columns.append(col)
+            elif hasattr(col, "compile"):  # SQLAlchemy expression
+                # Compile the expression to SQL string
+                compiled = col.compile(compile_kwargs={"literal_binds": True})
+                sql_str = str(compiled)
+                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                import re
+
+                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+                # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
+                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                self._group_by_columns.append(sql_str)
             else:
                 self._group_by_columns.append(str(col))
         return self
@@ -871,18 +996,79 @@ class BaseMatrixOneQuery:
         return self.filter(condition, *params)
 
     def order_by(self, *columns) -> "BaseMatrixOneQuery":
-        """Add ORDER BY clause - SQLAlchemy style"""
+        """
+        Add ORDER BY clause to the query - SQLAlchemy style compatibility.
+
+        The ORDER BY clause is used to sort the result set by one or more columns,
+        either in ascending (ASC) or descending (DESC) order.
+
+        Args:
+            *columns: Columns to order by. Can be:
+                - SQLAlchemy column expressions (e.g., User.name, User.created_at.desc())
+                - String column names (e.g., "name", "created_at DESC")
+                - SQLAlchemy function expressions (e.g., func.count(User.id))
+                - SQLAlchemy desc/asc expressions (e.g., desc(User.name), asc(User.age))
+
+        Returns:
+            BaseMatrixOneQuery: Self for method chaining.
+
+        Examples:
+            # SQLAlchemy column expressions (recommended)
+            query.order_by(User.name)
+            query.order_by(User.created_at.desc())
+            query.order_by(User.department, User.name.asc())
+
+            # String column names
+            query.order_by("name")
+            query.order_by("created_at DESC")
+            query.order_by("department ASC", "name DESC")
+
+            # SQLAlchemy desc/asc functions
+            from sqlalchemy import desc, asc
+            query.order_by(desc(User.created_at))
+            query.order_by(asc(User.name), desc(User.age))
+
+            # Function expressions
+            query.order_by(func.count(User.id).desc())
+            query.order_by(func.avg(User.salary).asc())
+
+            # Mixed expressions
+            query.order_by(User.department, "name DESC")
+            query.order_by(func.count(User.id).desc(), User.name.asc())
+
+            # Complex expressions
+            query.order_by(
+                User.department.asc(),
+                func.count(User.id).desc(),
+                User.name.asc()
+            )
+
+        Notes:
+            - ORDER BY sorts the result set in ascending order by default
+            - Use .desc() or desc() for descending order
+            - Use .asc() or asc() for explicit ascending order
+            - Multiple columns are ordered from left to right
+            - SQLAlchemy expressions provide better type safety and integration
+            - Column references in SQLAlchemy expressions are automatically
+              converted to MatrixOne-compatible format
+
+        Raises:
+            ValueError: If invalid column type is provided
+            SQLAlchemyError: If SQLAlchemy expression compilation fails
+        """
         for col in columns:
             if isinstance(col, str):
                 self._order_by_columns.append(col)
-            elif hasattr(col, "compile"):  # SQLAlchemy function object
-                # Compile the function to SQL string
+            elif hasattr(col, "compile"):  # SQLAlchemy expression
+                # Compile the expression to SQL string
                 compiled = col.compile(compile_kwargs={"literal_binds": True})
                 sql_str = str(compiled)
                 # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
                 import re
 
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
+                # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
+                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
                 self._order_by_columns.append(sql_str)
             else:
                 self._order_by_columns.append(str(col))
@@ -1207,6 +1393,127 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             return self._execute(sql, params)
         else:
             raise ValueError(f"Unknown query type: {self._query_type}")
+
+    def to_sql(self) -> str:
+        """
+        Generate the complete SQL statement for this query.
+
+        Returns the SQL string that would be executed, with parameters
+        properly substituted for better readability.
+
+        Returns:
+            str: The complete SQL statement as a string.
+
+        Examples:
+            query = client.query(User).filter(User.age > 25).order_by(User.name)
+            sql = query.to_sql()
+            print(sql)  # "SELECT * FROM users WHERE age > 25 ORDER BY name"
+
+        Notes:
+            - This method returns the SQL with parameters substituted
+            - Use this for debugging or logging purposes
+            - The returned SQL is ready to be executed directly
+        """
+        sql, params = self._build_sql()
+
+        # Substitute parameters for better readability
+        if params:
+            formatted_sql = sql
+            for param in params:
+                if isinstance(param, str):
+                    formatted_sql = formatted_sql.replace("?", f"'{param}'", 1)
+                else:
+                    formatted_sql = formatted_sql.replace("?", str(param), 1)
+            return formatted_sql
+        else:
+            return sql
+
+    def explain(self, verbose: bool = False) -> Any:
+        """
+        Execute EXPLAIN statement for this query.
+
+        Shows the query execution plan without actually executing the query.
+        Useful for understanding how MatrixOne will execute the query and
+        optimizing query performance.
+
+        Args:
+            verbose (bool): Whether to include verbose output.
+                           Defaults to False.
+
+        Returns:
+            Any: The result set containing the execution plan.
+
+        Examples:
+            # Basic EXPLAIN
+            plan = client.query(User).filter(User.age > 25).explain()
+
+            # EXPLAIN with verbose output
+            plan = client.query(User).filter(User.age > 25).explain(verbose=True)
+
+            # EXPLAIN for complex queries
+            plan = (client.query(User)
+                   .filter(User.department == 'Engineering')
+                   .order_by(User.salary.desc())
+                   .explain(verbose=True))
+
+        Notes:
+            - EXPLAIN shows the execution plan without executing the query
+            - Use verbose=True for more detailed information
+            - Helpful for query optimization and performance tuning
+        """
+        sql, params = self._build_sql()
+
+        # Build EXPLAIN statement
+        if verbose:
+            explain_sql = f"EXPLAIN VERBOSE {sql}"
+        else:
+            explain_sql = f"EXPLAIN {sql}"
+
+        return self._execute(explain_sql, params)
+
+    def explain_analyze(self, verbose: bool = False) -> Any:
+        """
+        Execute EXPLAIN ANALYZE statement for this query.
+
+        Shows the query execution plan and actually executes the query,
+        providing both the plan and actual execution statistics.
+        Useful for understanding query performance with real data.
+
+        Args:
+            verbose (bool): Whether to include verbose output.
+                           Defaults to False.
+
+        Returns:
+            Any: The result set containing the execution plan and statistics.
+
+        Examples:
+            # Basic EXPLAIN ANALYZE
+            result = client.query(User).filter(User.age > 25).explain_analyze()
+
+            # EXPLAIN ANALYZE with verbose output
+            result = client.query(User).filter(User.age > 25).explain_analyze(verbose=True)
+
+            # EXPLAIN ANALYZE for complex queries
+            result = (client.query(User)
+                    .filter(User.department == 'Engineering')
+                    .order_by(User.salary.desc())
+                    .explain_analyze(verbose=True))
+
+        Notes:
+            - EXPLAIN ANALYZE actually executes the query and shows statistics
+            - Use verbose=True for more detailed information
+            - Provides actual execution time and row counts
+            - Use with caution on large datasets as it executes the full query
+        """
+        sql, params = self._build_sql()
+
+        # Build EXPLAIN ANALYZE statement
+        if verbose:
+            explain_sql = f"EXPLAIN ANALYZE VERBOSE {sql}"
+        else:
+            explain_sql = f"EXPLAIN ANALYZE {sql}"
+
+        return self._execute(explain_sql, params)
 
 
 # Helper functions for ORDER BY

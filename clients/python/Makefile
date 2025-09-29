@@ -227,7 +227,7 @@ docs-check: ## Check documentation for errors and warnings
 	@echo "$(BLUE)Checking documentation...$(NC)"
 	@if command -v sphinx-build >/dev/null 2>&1; then \
 		echo "$(YELLOW)Running Sphinx documentation check...$(NC)"; \
-		sphinx-build -W -b html -d _build/doctrees docs _build/html || echo "$(YELLOW)⚠️  Documentation check completed with warnings$(NC)"; \
+		sphinx-build -W -b html -d docs/_build/doctrees docs docs/_build/html || echo "$(YELLOW)⚠️  Documentation check completed with warnings$(NC)"; \
 	else \
 		echo "$(YELLOW)⚠️  Sphinx not available, skipping documentation check$(NC)"; \
 		echo "$(YELLOW)   Install with: pip install sphinx sphinx-rtd-theme$(NC)"; \
