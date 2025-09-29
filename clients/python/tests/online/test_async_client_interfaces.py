@@ -59,7 +59,6 @@ class TestAsyncClientMissingInterfaces:
         assert client.vector_ops is not None
         assert client.vector_query is not None
 
-
     @pytest.mark.asyncio
     async def test_create_table(self, client):
         """Test create_table method"""

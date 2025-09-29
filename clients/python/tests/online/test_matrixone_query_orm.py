@@ -264,7 +264,6 @@ class TestMatrixOneQueryORM:
         assert result[0].name == 'Eve Wilson'  # age 27 (younger of the two)
         assert result[1].name == 'Alice Johnson'  # age 28 (older of the two)
 
-
     def test_model_attributes(self, client, test_data_setup):
         """Test model attribute access"""
         user = client.query(User).first()
@@ -465,7 +464,6 @@ class TestAsyncMatrixOneQueryORM:
         assert result[0].name == 'Async Eve'  # age 27 (younger of the two)
         assert result[1].name == 'Async Alice'  # age 28 (older of the two)
 
-
     @pytest.mark.asyncio
     async def test_async_empty_results(self, async_client, async_test_data_setup):
         """Test async queries that return empty results"""
@@ -504,7 +502,6 @@ class TestMatrixOneQueryEdgeCases:
 
         with pytest.raises(Exception):
             client.query(InvalidModel).all()
-
 
     def test_malformed_filter(self, client):
         """Test malformed filter conditions"""

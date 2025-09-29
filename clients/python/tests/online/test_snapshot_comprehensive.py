@@ -5,7 +5,7 @@ Merged from multiple snapshot test files to reduce redundancy while maintaining 
 
 This file consolidates tests from:
 - test_snapshot_online.py (10 tests)
-- test_snapshot_restore.py (6 tests) 
+- test_snapshot_restore.py (6 tests)
 - test_client_online.py (2 snapshot tests)
 - test_async_client_online.py (2 async snapshot tests)
 - test_matrixone_query_orm.py (3 snapshot tests)
@@ -183,7 +183,9 @@ class TestSnapshotComprehensive:
         """Test basic snapshot creation and management - from test_snapshot_restore.py"""
         # Create test data in the correct database
         test_db = online_config.get_test_database()
-        test_client.execute(f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
+        test_client.execute(
+            f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)"
+        )
         test_client.execute(f"DELETE FROM {test_db}.snapshot_test")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (1, 'test1', 100)")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (2, 'test2', 200)")
@@ -236,7 +238,9 @@ class TestSnapshotComprehensive:
         """Test snapshot enumeration and information - from test_snapshot_restore.py"""
         # Create test table in the correct database
         test_db = online_config.get_test_database()
-        test_client.execute(f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
+        test_client.execute(
+            f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)"
+        )
         test_client.execute(f"DELETE FROM {test_db}.snapshot_test")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (1, 'enum_test1', 100)")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (2, 'enum_test2', 200)")
@@ -409,7 +413,12 @@ class TestSnapshotComprehensive:
             test_client.snapshots.create(snapshot_name, "table", database=test_db, table=test_table)
 
             # Test snapshot query using query builder
-            result = test_client.query(f"{test_db}.{test_table}", snapshot=snapshot_name).select("*").where("value > ?", 150).execute()
+            result = (
+                test_client.query(f"{test_db}.{test_table}", snapshot=snapshot_name)
+                .select("*")
+                .where("value > ?", 150)
+                .execute()
+            )
 
             rows = result.fetchall()
             assert len(rows) == 2  # Should have 2 rows with value > 150
@@ -510,7 +519,9 @@ class TestSnapshotComprehensive:
         """Test snapshot restore operations - from test_snapshot_restore.py"""
         # Create test data in the correct database
         test_db = online_config.get_test_database()
-        test_client.execute(f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
+        test_client.execute(
+            f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)"
+        )
         test_client.execute(f"DELETE FROM {test_db}.snapshot_test")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (1, 'restore_test1', 100)")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (2, 'restore_test2', 200)")
@@ -728,9 +739,7 @@ class TestSnapshotComprehensive:
 
             # Test snapshot query without parameters
             result = (
-                await test_async_client.query(f"{test_db}.{test_table}", snapshot=snapshot_name)
-                .select("COUNT(*)")
-                .execute()
+                await test_async_client.query(f"{test_db}.{test_table}", snapshot=snapshot_name).select("COUNT(*)").execute()
             )
 
             count = result.fetchone()[0]
@@ -825,7 +834,9 @@ class TestSnapshotComprehensive:
 
         # Create test data in the correct database
         test_db = online_config.get_test_database()
-        test_client.execute(f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
+        test_client.execute(
+            f"CREATE TABLE IF NOT EXISTS {test_db}.snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)"
+        )
         test_client.execute(f"DELETE FROM {test_db}.snapshot_test")
         test_client.execute(f"INSERT INTO {test_db}.snapshot_test VALUES (1, 'log_test1', 100)")
 
@@ -857,10 +868,12 @@ class TestSnapshotComprehensive:
         """Test ORM snapshot functionality - from test_matrixone_query_orm.py"""
         # This test requires ORM setup which may not be available in all environments
         # We'll create a simplified version that tests the basic snapshot query functionality
-        
+
         # Create test table for ORM-like testing in the correct database
         test_db = online_config.get_test_database()
-        test_client.execute(f"CREATE TABLE IF NOT EXISTS {test_db}.test_users (id INT PRIMARY KEY, name VARCHAR(100), email VARCHAR(100))")
+        test_client.execute(
+            f"CREATE TABLE IF NOT EXISTS {test_db}.test_users (id INT PRIMARY KEY, name VARCHAR(100), email VARCHAR(100))"
+        )
         test_client.execute(f"DELETE FROM {test_db}.test_users")
         test_client.execute(f"INSERT INTO {test_db}.test_users VALUES (1, 'John Doe', 'john@example.com')")
         test_client.execute(f"INSERT INTO {test_db}.test_users VALUES (2, 'Jane Smith', 'jane@example.com')")
@@ -881,7 +894,12 @@ class TestSnapshotComprehensive:
             assert len(rows) == 2
 
             # Query with filter from snapshot
-            result = test_client.query(f"{test_db}.test_users", snapshot="test_users_snapshot").select("*").where("id = ?", 1).execute()
+            result = (
+                test_client.query(f"{test_db}.test_users", snapshot="test_users_snapshot")
+                .select("*")
+                .where("id = ?", 1)
+                .execute()
+            )
             rows = result.fetchall()
             assert len(rows) == 1
             assert rows[0][1] == 'John Doe'
@@ -901,7 +919,9 @@ class TestSnapshotComprehensive:
     async def test_async_orm_snapshot_queries(self, test_async_client):
         """Test async ORM snapshot functionality - from test_matrixone_query_orm.py"""
         # Create test table for ORM-like testing
-        await test_async_client.execute("CREATE TABLE IF NOT EXISTS test_users (id INT PRIMARY KEY, name VARCHAR(100), email VARCHAR(100))")
+        await test_async_client.execute(
+            "CREATE TABLE IF NOT EXISTS test_users (id INT PRIMARY KEY, name VARCHAR(100), email VARCHAR(100))"
+        )
         await test_async_client.execute("DELETE FROM test_users")
         await test_async_client.execute("INSERT INTO test_users VALUES (1, 'John Doe', 'john@example.com')")
         await test_async_client.execute("INSERT INTO test_users VALUES (2, 'Jane Smith', 'jane@example.com')")
@@ -917,12 +937,21 @@ class TestSnapshotComprehensive:
 
             # Query from snapshot using basic query builder
             db_name = online_config.get_connection_params()[4]
-            result = await test_async_client.query(f"{db_name}.test_users", snapshot="test_users_snapshot_async").select("*").execute()
+            result = (
+                await test_async_client.query(f"{db_name}.test_users", snapshot="test_users_snapshot_async")
+                .select("*")
+                .execute()
+            )
             rows = result.fetchall()
             assert len(rows) == 2
 
             # Query with filter from snapshot
-            result = await test_async_client.query(f"{db_name}.test_users", snapshot="test_users_snapshot_async").select("*").where("id = ?", 1).execute()
+            result = (
+                await test_async_client.query(f"{db_name}.test_users", snapshot="test_users_snapshot_async")
+                .select("*")
+                .where("id = ?", 1)
+                .execute()
+            )
             rows = result.fetchall()
             assert len(rows) == 1
             assert rows[0][1] == 'John Doe'

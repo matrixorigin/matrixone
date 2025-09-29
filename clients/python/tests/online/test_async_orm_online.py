@@ -237,7 +237,6 @@ class TestAsyncORMOnline:
         assert user.name == "Diana Prince"
         assert user.age > 25
 
-
     @pytest.mark.asyncio
     async def test_async_orm_query_error_handling(self, test_async_client):
         """Test async ORM query error handling"""

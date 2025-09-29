@@ -154,7 +154,6 @@ class TestAsyncClientOnline:
         # Clean up
         await test_async_client.execute(f"DELETE FROM {test_db}.{test_table} WHERE id = 5")
 
-
     @pytest.mark.asyncio
     async def test_async_error_handling(self, test_async_client):
         """Test async error handling"""

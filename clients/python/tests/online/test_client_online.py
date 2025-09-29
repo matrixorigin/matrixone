@@ -143,7 +143,6 @@ class TestClientOnline(unittest.TestCase):
         # Clean up
         self.client.execute(f"DELETE FROM {self.test_table} WHERE id = 5")
 
-
     def test_error_handling(self):
         """Test error handling"""
         # Test connection error handling
