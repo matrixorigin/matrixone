@@ -27,7 +27,7 @@ class TestBasicConnection:
         result = test_client.execute("SHOW DATABASES")
         assert result is not None
         assert len(result.rows) > 0
-        
+
         # Test SHOW TABLES
         result = test_client.execute("SHOW TABLES")
         assert result is not None
@@ -35,14 +35,14 @@ class TestBasicConnection:
     def test_connection_with_logging(self, connection_params):
         """Test connection with custom logging"""
         host, port, user, password, database = connection_params
-        
+
         # Create logger
         logger = create_default_logger()
-        
+
         # Create client with logging
         client = Client()
         client.connect(host=host, port=port, user=user, password=password, database=database)
-        
+
         try:
             # Test query with logging
             result = client.execute("SELECT 1 as test_value")
@@ -54,7 +54,7 @@ class TestBasicConnection:
     def test_connection_error_handling(self, connection_params):
         """Test connection error handling"""
         host, port, user, password, database = connection_params
-        
+
         # Test with invalid port
         try:
             client = Client()
@@ -68,7 +68,7 @@ class TestBasicConnection:
     def test_client_context_manager(self, connection_params):
         """Test client context manager"""
         host, port, user, password, database = connection_params
-        
+
         with Client() as client:
             client.connect(host=host, port=port, user=user, password=password, database=database)
             result = client.execute("SELECT 1 as test_value")
@@ -88,14 +88,14 @@ class TestBasicConnection:
     async def test_async_connection_with_logging(self, connection_params):
         """Test async connection with custom logging"""
         host, port, user, password, database = connection_params
-        
+
         # Create logger
         logger = create_default_logger()
-        
+
         # Create async client with logging
         client = AsyncClient()
         await client.connect(host=host, port=port, user=user, password=password, database=database)
-        
+
         try:
             # Test query with logging
             result = await client.execute("SELECT 1 as test_value")
@@ -108,7 +108,7 @@ class TestBasicConnection:
     async def test_async_client_context_manager(self, connection_params):
         """Test async client context manager"""
         host, port, user, password, database = connection_params
-        
+
         async with AsyncClient() as client:
             await client.connect(host=host, port=port, user=user, password=password, database=database)
             result = await client.execute("SELECT 1 as test_value")

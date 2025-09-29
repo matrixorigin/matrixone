@@ -198,7 +198,12 @@ class PineconeCompatibleIndex:
         Returns:
             Dictionary containing index information
         """
-        index_info = {"algorithm": "ivf", "metric": "l2", "dimensions": None, "parameters": {}}  # default  # default
+        index_info = {
+            "algorithm": "ivf",
+            "metric": "l2",
+            "dimensions": None,
+            "parameters": {},
+        }  # default  # default
 
         # Extract vector column definition
         vector_pattern = rf"`?{self.vector_column}`?\s+vec(?:f32|f64)\s*\(\s*(\d+)\s*\)"
@@ -445,9 +450,7 @@ class PineconeCompatibleIndex:
             values = None
             if include_values and self.vector_column in select_columns:
                 # Find vector column index case-insensitively
-                vector_idx = next(
-                    i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower()
-                )
+                vector_idx = next(i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower())
                 if vector_idx < len(row):
                     values = row[vector_idx]
 
@@ -546,9 +549,7 @@ class PineconeCompatibleIndex:
             values = None
             if include_values and self.vector_column in select_columns:
                 # Find vector column index case-insensitively
-                vector_idx = next(
-                    i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower()
-                )
+                vector_idx = next(i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower())
                 if vector_idx < len(row):
                     values = row[vector_idx]
 
@@ -573,8 +574,7 @@ class PineconeCompatibleIndex:
         # Check if index type supports delete operations
         if index_info["algorithm"] == "hnsw":
             raise ValueError(
-                "HNSW index does not support delete operations. "
-                "Only IVF index supports INSERT/UPDATE/DELETE operations."
+                "HNSW index does not support delete operations. " "Only IVF index supports INSERT/UPDATE/DELETE operations."
             )
 
         if ids:
@@ -606,8 +606,7 @@ class PineconeCompatibleIndex:
         # Check if index type supports delete operations
         if index_info["algorithm"] == "hnsw":
             raise ValueError(
-                "HNSW index does not support delete operations. "
-                "Only IVF index supports INSERT/UPDATE/DELETE operations."
+                "HNSW index does not support delete operations. " "Only IVF index supports INSERT/UPDATE/DELETE operations."
             )
 
         if ids:
@@ -727,8 +726,7 @@ class PineconeCompatibleIndex:
 
             # Execute upsert SQL
             sql = (
-                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} "
-                f"ON DUPLICATE KEY UPDATE {update_str}"
+                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} " f"ON DUPLICATE KEY UPDATE {update_str}"
             )
             self.client.execute(sql)
 
@@ -792,8 +790,7 @@ class PineconeCompatibleIndex:
 
             # Execute upsert SQL
             sql = (
-                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} "
-                f"ON DUPLICATE KEY UPDATE {update_str}"
+                f"INSERT INTO {self.table_name} ({columns_str}) VALUES {values_str} " f"ON DUPLICATE KEY UPDATE {update_str}"
             )
             await self.client.execute(sql)
 

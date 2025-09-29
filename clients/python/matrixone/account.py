@@ -95,9 +95,7 @@ class AccountManager:
         self._client = client
 
     # Account Management
-    def create_account(
-        self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None
-    ) -> Account:
+    def create_account(self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None) -> Account:
         """
         Create a new account in MatrixOne
 
@@ -527,9 +525,7 @@ class AccountManager:
         """Revoke role from user"""
         try:
             # MatrixOne syntax: REVOKE role_name FROM user_name
-            sql = (
-                f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
-            )
+            sql = f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
             self._client.execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to revoke role '{role_name}' from user '{from_user}': {e}")
@@ -626,9 +622,7 @@ class TransactionAccountManager(AccountManager):
         return self._transaction.execute(sql)
 
     # Override all methods to use transaction
-    def create_account(
-        self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None
-    ) -> Account:
+    def create_account(self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None) -> Account:
         try:
             sql_parts = [f"CREATE ACCOUNT {self._client._escape_identifier(account_name)}"]
             sql_parts.append(f"ADMIN_NAME {self._client._escape_string(admin_name)}")

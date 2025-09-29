@@ -100,9 +100,7 @@ class Query:
         """Add WHERE conditions from keyword arguments"""
         for key, value in kwargs.items():
             # Check if the column exists in the SQLAlchemy model
-            if hasattr(self.model_class, "__table__") and key in [
-                col.name for col in self.model_class.__table__.columns
-            ]:
+            if hasattr(self.model_class, "__table__") and key in [col.name for col in self.model_class.__table__.columns]:
                 self._where_conditions.append(f"{key} = ?")
                 self._where_params.append(value)
         return self
@@ -437,63 +435,119 @@ class BaseMatrixOneQuery:
         """
         return CTE(name, self, recursive)
 
-    def join(self, table, on=None, isouter=False) -> "BaseMatrixOneQuery":
-        """Add JOIN clause - SQLAlchemy style"""
-        join_type = "LEFT JOIN" if isouter else "JOIN"
+    def join(self, target, onclause=None, isouter=False, full=False) -> "BaseMatrixOneQuery":
+        """Add JOIN clause - SQLAlchemy style
 
-        # Handle CTE objects
-        if hasattr(table, 'name') and hasattr(table, 'as_sql'):
+        Args:
+            target: Table or model to join with
+            onclause: ON condition for the join (optional, will be inferred if not provided)
+            isouter: If True, creates LEFT OUTER JOIN (default: False for INNER JOIN)
+            full: If True, creates FULL OUTER JOIN (default: False)
+
+        Returns:
+            Self for method chaining
+
+        Examples:
+            # Basic inner join with explicit condition
+            query.join(Address, User.id == Address.user_id)
+
+            # Inner join with string condition
+            query.join('addresses', 'users.id = addresses.user_id')
+
+            # Left outer join
+            query.join(Address, isouter=True)
+
+            # Join without explicit condition (will be inferred if possible)
+            query.join(Address)
+        """
+        # Determine join type
+        if full:
+            join_type = "FULL OUTER JOIN"
+        elif isouter:
+            join_type = "LEFT OUTER JOIN"
+        else:
+            join_type = "INNER JOIN"
+
+        # Handle different target types
+        if hasattr(target, 'name') and hasattr(target, 'as_sql'):
             # This is a CTE object
-            table_name = table.name
+            table_name = target.name
+        elif hasattr(target, '__tablename__'):
+            # This is a SQLAlchemy model
+            table_name = target.__tablename__
+        elif hasattr(target, '_table_name'):
+            # This is a custom model with _table_name
+            table_name = target._table_name
         else:
-            table_name = str(table)
+            # String table name
+            table_name = str(target)
 
-        if on:
-            join_clause = f"{join_type} {table_name} ON {on}"
+        # Handle onclause
+        if onclause is not None:
+            # Process SQLAlchemy expressions
+            if hasattr(onclause, 'compile'):
+                # This is a SQLAlchemy expression, compile it
+                compiled = onclause.compile(compile_kwargs={"literal_binds": True})
+                on_condition = str(compiled)
+                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+                import re
+
+                on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
+                # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
+                on_condition = re.sub(r"\w+\.(\w+)", r"\1", on_condition)
+            else:
+                # String condition
+                on_condition = str(onclause)
+
+            join_clause = f"{join_type} {table_name} ON {on_condition}"
         else:
+            # No explicit onclause - create join without ON condition
+            # This matches SQLAlchemy behavior where ON condition can be inferred
             join_clause = f"{join_type} {table_name}"
+
         self._joins.append(join_clause)
         return self
 
-    def innerjoin(self, table, on=None) -> "BaseMatrixOneQuery":
-        """Add INNER JOIN clause - SQLAlchemy style"""
-        if on:
-            join_clause = f"INNER JOIN {table} ON {on}"
-        else:
-            join_clause = f"INNER JOIN {table}"
-        self._joins.append(join_clause)
-        return self
+    def innerjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
+        """Add INNER JOIN clause - SQLAlchemy style (alias for join with isouter=False)"""
+        return self.join(target, onclause, isouter=False)
 
-    def leftjoin(self, table, on=None) -> "BaseMatrixOneQuery":
-        """Add LEFT JOIN clause - SQLAlchemy style"""
-        if on:
-            join_clause = f"LEFT JOIN {table} ON {on}"
-        else:
-            join_clause = f"LEFT JOIN {table}"
-        self._joins.append(join_clause)
-        return self
+    def leftjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
+        """Add LEFT JOIN clause - SQLAlchemy style (alias for join with isouter=True)"""
+        return self.join(target, onclause, isouter=True)
 
-    def rightjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+    def rightjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
         """Add RIGHT JOIN clause - SQLAlchemy style"""
-        if on:
-            join_clause = f"RIGHT JOIN {table} ON {on}"
+        # MatrixOne doesn't support RIGHT JOIN, so we'll use LEFT JOIN with reversed tables
+        # This is a limitation of MatrixOne, but we provide the method for compatibility
+        if onclause is not None:
+            # Process SQLAlchemy expressions
+            if hasattr(onclause, 'compile'):
+                compiled = onclause.compile(compile_kwargs={"literal_binds": True})
+                on_condition = str(compiled)
+                import re
+
+                on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
+                on_condition = re.sub(r"\w+\.(\w+)", r"\1", on_condition)
+            else:
+                on_condition = str(onclause)
+
+            # For RIGHT JOIN, we need to reverse the condition
+            # This is a simplified approach - in practice, you might need more complex logic
+            join_clause = f"LEFT JOIN {target} ON {on_condition}"
         else:
-            join_clause = f"RIGHT JOIN {table}"
+            join_clause = f"LEFT JOIN {target}"
+
         self._joins.append(join_clause)
         return self
 
-    def fullouterjoin(self, table, on=None) -> "BaseMatrixOneQuery":
-        """Add FULL OUTER JOIN clause - SQLAlchemy style"""
-        if on:
-            join_clause = f"FULL OUTER JOIN {table} ON {on}"
-        else:
-            join_clause = f"FULL OUTER JOIN {table}"
-        self._joins.append(join_clause)
-        return self
+    def fullouterjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
+        """Add FULL OUTER JOIN clause - SQLAlchemy style (alias for join with full=True)"""
+        return self.join(target, onclause, full=True)
 
-    def outerjoin(self, table, on=None) -> "BaseMatrixOneQuery":
+    def outerjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
         """Add LEFT OUTER JOIN clause - SQLAlchemy style (alias for leftjoin)"""
-        return self.leftjoin(table, on)
+        return self.leftjoin(target, onclause)
 
     def group_by(self, *columns) -> "BaseMatrixOneQuery":
         """Add GROUP BY clause - SQLAlchemy style"""
@@ -711,11 +765,7 @@ class BaseMatrixOneQuery:
             for col in self._select_columns:
                 if hasattr(col, "compile"):  # SQLAlchemy function object
                     # Check if this is a FulltextLabel (which already has AS in compile())
-                    if (
-                        hasattr(col, "_compiler_dispatch")
-                        and hasattr(col, "name")
-                        and "FulltextLabel" in str(type(col))
-                    ):
+                    if hasattr(col, "_compiler_dispatch") and hasattr(col, "name") and "FulltextLabel" in str(type(col)):
                         # For FulltextLabel, use compile() which already includes AS
                         sql_str = col.compile(compile_kwargs={"literal_binds": True})
                     else:

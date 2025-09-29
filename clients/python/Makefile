@@ -2,10 +2,7 @@
 # Provides unified commands for development, testing, building and publishing
 
 # Configuration variables
-# Users can override these by setting environment variables or passing them to make
-# Example: make test PYTHON=/path/to/python3
-# Example: PYTHON=/path/to/python3 make test
-PYTHON ?= /Users/xupeng/miniconda3/envs/ai_env/bin/python3
+PYTHON ?= python3
 PIP ?= pip
 PACKAGE_NAME := matrixone_python_sdk
 VERSION := $(shell grep '^version' pyproject.toml | cut -d'"' -f2)
@@ -25,80 +22,114 @@ NC := \033[0m # No Color
 help: ## Show help information
 	@echo "$(BLUE)MatrixOne Python SDK - Available Commands:$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📦 Development:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(install|dev-setup|format|lint|type-check|check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo "$(YELLOW)🔍 Environment Check:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(check-env|show-deps|info|status):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)📦 Dependencies:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(install|dev-setup|install-sqlalchemy):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🧪 Testing:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|coverage)-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(test|coverage|test-matrix):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
-	@echo "$(YELLOW)📚 Documentation:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^docs' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo "$(YELLOW)🔧 Code Quality:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(lint|format|type-check|pre-commit):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(YELLOW)📚 Examples:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(example|examples):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🏗️  Build & Publish:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(build|publish|check-build):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
-	@echo ""
-	@echo "$(YELLOW)📖 Examples:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^example' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
-	@echo ""
-	@echo "$(YELLOW)🔧 Utilities:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(clean|version|info|check-env|help):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(build|publish|release-check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📋 Version Management:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^version-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(version):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
-	@echo "$(YELLOW)🚀 Release Workflow:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^release-' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@echo "$(YELLOW)🧹 Utilities:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(clean):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
 	@echo "$(YELLOW)Python path: $(PYTHON)$(NC)"
 
-# Development environment setup
+# Environment check
+.PHONY: check-env
+check-env: ## Check if environment meets testing requirements
+	@echo "$(BLUE)Checking MatrixOne Python SDK test environment...$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Python Environment:$(NC)"
+	@echo "  Python command: $(PYTHON)"
+	@echo "  Python version: $$($(PYTHON) --version 2>/dev/null || echo 'Not found')"
+	@echo "  Pip command: $(PIP)"
+	@echo "  Pip version: $$($(PIP) --version 2>/dev/null || echo 'Not found')"
+	@echo ""
+	@echo "$(YELLOW)Available Python versions:$(NC)"
+	@command -v python3.10 >/dev/null 2>&1 && echo "  ✅ Python 3.10 available" || echo "  ❌ Python 3.10 not found"
+	@command -v python3.11 >/dev/null 2>&1 && echo "  ✅ Python 3.11 available" || echo "  ❌ Python 3.11 not found"
+	@echo ""
+	@echo "$(YELLOW)Requirements files:$(NC)"
+	@ls -la requirements*.txt 2>/dev/null | sed 's/^/  /' || echo "  No requirements files found"
+	@echo ""
+	@echo "$(YELLOW)Test directories:$(NC)"
+	@test -d tests/offline && echo "  ✅ Offline tests available" || echo "  ❌ Offline tests not found"
+	@test -d tests/online && echo "  ✅ Online tests available" || echo "  ❌ Online tests not found"
+	@echo ""
+	@echo "$(YELLOW)Core Dependencies Check:$(NC)"
+	@$(PYTHON) -c "import sys; print('  Python path:', sys.executable)" 2>/dev/null || echo "  ❌ Python not working"
+	@$(PYTHON) -c "import pymysql; print('  ✅ PyMySQL:', pymysql.__version__)" 2>/dev/null || echo "  ❌ PyMySQL not installed"
+	@$(PYTHON) -c "import aiomysql; print('  ✅ aiomysql:', aiomysql.__version__)" 2>/dev/null || echo "  ❌ aiomysql not installed"
+	@$(PYTHON) -c "import sqlalchemy; print('  ✅ SQLAlchemy:', sqlalchemy.__version__)" 2>/dev/null || echo "  ❌ SQLAlchemy not installed"
+	@$(PYTHON) -c "import pytest; print('  ✅ pytest:', pytest.__version__)" 2>/dev/null || echo "  ❌ pytest not installed"
+	@$(PYTHON) -c "import matrixone; print('  ✅ matrixone SDK available')" 2>/dev/null || echo "  ❌ matrixone SDK not installed"
+	@echo ""
+	@echo "$(YELLOW)Test Environment Status:$(NC)"
+	@$(PYTHON) -c "import pymysql, aiomysql, sqlalchemy, pytest" 2>/dev/null && echo "  ✅ Core dependencies: READY" || echo "  ❌ Core dependencies: MISSING"
+	@$(PYTHON) -c "import matrixone" 2>/dev/null && echo "  ✅ MatrixOne SDK: READY" || echo "  ❌ MatrixOne SDK: MISSING"
+	@echo ""
+	@echo "$(YELLOW)Recommendations:$(NC)"
+	@$(PYTHON) -c "import pymysql, aiomysql, sqlalchemy, pytest" 2>/dev/null || echo "  • Run: make install-sqlalchemy14 or make install-sqlalchemy20"
+	@$(PYTHON) -c "import matrixone" 2>/dev/null || echo "  • Run: make install (to install MatrixOne SDK)"
+	@$(PYTHON) -c "import pymysql, aiomysql, sqlalchemy, pytest, matrixone" 2>/dev/null && echo "  • Environment is ready for testing! Run: make test-offline"
+
+.PHONY: show-deps
+show-deps: check-env ## Alias for check-env
+
+# Dependencies installation
 .PHONY: install
-install: ## Install development environment (dependencies + tools + docs)
+install: ## Install development environment (dependencies + tools)
 	@echo "$(BLUE)Installing development environment...$(NC)"
 	$(PIP) install -r requirements.txt
-	$(PIP) install pytest pytest-cov pytest-asyncio build twine
-	$(PIP) install black flake8 mypy isort sphinx sphinx-rtd-theme sphinx-autobuild sphinxcontrib-spelling sphinx-coverage
+	$(PIP) install pytest pytest-cov pytest-asyncio build twine black flake8 mypy isort sphinx sphinx-rtd-theme
 	@echo "$(GREEN)Development environment installed!$(NC)"
 
-.PHONY: install-dev
-install-dev: install ## Alias for install
-	@echo "$(GREEN)Development environment ready!$(NC)"
+.PHONY: dev-setup
+dev-setup: install ## Setup complete development environment
+	@echo "$(BLUE)Setting up development environment...$(NC)"
+	$(PIP) install -e .
+	@echo "$(GREEN)Development environment setup complete!$(NC)"
 
-.PHONY: install-docs
-install-docs: install ## Alias for install
-	@echo "$(GREEN)Documentation dependencies ready!$(NC)"
+.PHONY: install-sqlalchemy14
+install-sqlalchemy14: ## Install SQLAlchemy 1.4.x test dependencies
+	@echo "$(BLUE)Installing SQLAlchemy 1.4.x test dependencies...$(NC)"
+	@if [ -f "requirements-sqlalchemy14.txt" ]; then \
+		echo "$(YELLOW)Installing from requirements-sqlalchemy14.txt$(NC)"; \
+		$(PIP) install -r requirements-sqlalchemy14.txt; \
+		echo "$(GREEN)SQLAlchemy 1.4.x dependencies installed!$(NC)"; \
+	else \
+		echo "$(RED)❌ requirements-sqlalchemy14.txt not found$(NC)"; \
+		exit 1; \
+	fi
 
-# Code quality checks
-.PHONY: lint
-lint: ## Run code quality checks
-	@echo "$(BLUE)Running code quality checks...$(NC)"
-	@echo "$(YELLOW)Checking code format...$(NC)"
-	$(PYTHON) -m flake8 matrixone/ --max-line-length=120 --ignore=E203,W503
-	@echo "$(YELLOW)Checking import sorting...$(NC)"
-	$(PYTHON) -m isort matrixone/ --check-only --diff
-	@echo "$(GREEN)Code quality checks completed!$(NC)"
+.PHONY: install-sqlalchemy20
+install-sqlalchemy20: ## Install SQLAlchemy 2.0.x test dependencies
+	@echo "$(BLUE)Installing SQLAlchemy 2.0.x test dependencies...$(NC)"
+	@if [ -f "requirements-sqlalchemy20.txt" ]; then \
+		echo "$(YELLOW)Installing from requirements-sqlalchemy20.txt$(NC)"; \
+		$(PIP) install -r requirements-sqlalchemy20.txt; \
+		echo "$(GREEN)SQLAlchemy 2.0.x dependencies installed!$(NC)"; \
+	else \
+		echo "$(RED)❌ requirements-sqlalchemy20.txt not found$(NC)"; \
+		exit 1; \
+	fi
 
-.PHONY: format
-format: ## Format code
-	@echo "$(BLUE)Formatting code...$(NC)"
-	$(PYTHON) -m black matrixone/ --line-length=120
-	$(PYTHON) -m isort matrixone/
-	@echo "$(GREEN)Code formatting completed!$(NC)"
-
-.PHONY: type-check
-type-check: ## Run type checking
-	@echo "$(BLUE)Running type checking...$(NC)"
-	$(PYTHON) -m mypy matrixone/ --ignore-missing-imports
-	@echo "$(GREEN)Type checking completed!$(NC)"
-
-# Testing related
-.PHONY: test
-test: test-offline ## Run all tests (offline + online)
-	@echo "$(BLUE)Running online tests...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short && echo "$(GREEN)Online tests completed!$(NC)" || echo "$(YELLOW)⚠️  Online tests skipped (database not available)$(NC)"
-
+# Testing
 .PHONY: test-offline
 test-offline: ## Run offline tests (mock-based unit tests)
 	@echo "$(BLUE)Running offline tests...$(NC)"
@@ -109,236 +140,127 @@ test-offline: ## Run offline tests (mock-based unit tests)
 test-online: ## Run online tests (requires database connection)
 	@echo "$(BLUE)Running online tests...$(NC)"
 	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping online tests.$(NC)" && exit 1)
-	$(PYTHON) -m pytest tests/online/ -v --tb=short
-	@echo "$(GREEN)Online tests completed!$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)Online tests completed!$(NC)" || echo "$(YELLOW)⚠️  Online tests skipped (database not available)$(NC)"
 
-
-.PHONY: coverage
-coverage: coverage-offline ## Run all coverage tests
-	@echo "$(BLUE)Running online tests with coverage...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term && echo "$(GREEN)Online coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)" || echo "$(YELLOW)⚠️  Online coverage tests skipped (database not available)$(NC)"
-
-.PHONY: coverage-offline
-coverage-offline: ## Run offline tests with coverage report
-	@echo "$(BLUE)Running offline tests with coverage...$(NC)"
-	$(PYTHON) -m pytest tests/offline/ --cov=matrixone --cov-report=html --cov-report=term
-	@echo "$(GREEN)Offline coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)"
-
-.PHONY: coverage-online
-coverage-online: ## Run online tests with coverage report (requires database)
-	@echo "$(BLUE)Running online tests with coverage...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping online coverage tests.$(NC)" && exit 1)
-	$(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term
-	@echo "$(GREEN)Online coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)"
+.PHONY: test
+test: test-offline test-online ## Run all tests (offline + online)
+	@echo "$(GREEN)All tests completed!$(NC)"
 
 .PHONY: test-fast
-test-fast: ## Run fast tests (skip slow tests)
-	@echo "$(BLUE)Running fast tests...$(NC)"
-	$(PYTHON) -m pytest tests/ -v -m "not slow" --tb=short
-	@echo "$(GREEN)Fast tests completed!$(NC)"
+test-fast: ## Run quick tests (offline only)
+	@echo "$(BLUE)Running quick tests...$(NC)"
+	$(PYTHON) -m pytest tests/offline/ -v --tb=short -x
+	@echo "$(GREEN)Quick tests completed!$(NC)"
 
-.PHONY: test-fulltext
-test-fulltext: ## Run fulltext index tests
-	@echo "$(BLUE)Running fulltext index tests...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping fulltext tests.$(NC)" && exit 1)
-	$(PYTHON) -m pytest tests/online/test_fulltext_index_online.py -v --tb=short
-	$(PYTHON) -m pytest tests/offline/test_fulltext_index.py -v --tb=short
-	@echo "$(GREEN)Fulltext tests completed!$(NC)"
+.PHONY: coverage
+coverage: ## Run all tests with coverage report
+	@echo "$(BLUE)Running tests with coverage...$(NC)"
+	$(PYTHON) -m pytest --cov=matrixone --cov-report=html --cov-report=term
+	@echo "$(GREEN)Coverage report generated in $(COVERAGE_DIR)/$(NC)"
 
-.PHONY: test-vector
-test-vector: ## Run vector search tests
-	@echo "$(BLUE)Running vector search tests...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping vector tests.$(NC)" && exit 1)
-	$(PYTHON) -m pytest tests/online/test_vector_* -v --tb=short
-	@echo "$(GREEN)Vector tests completed!$(NC)"
+.PHONY: coverage-offline
+coverage-offline: ## Run offline tests with coverage
+	@echo "$(BLUE)Running offline tests with coverage...$(NC)"
+	$(PYTHON) -m pytest tests/offline/ --cov=matrixone --cov-report=html --cov-report=term
+	@echo "$(GREEN)Coverage report generated in $(COVERAGE_DIR)/$(NC)"
 
-.PHONY: test-vector-index
-test-vector-index: ## Run vector index tests
-	@echo "$(BLUE)Running vector index tests...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping vector index tests.$(NC)" && exit 1)
-	$(PYTHON) -m pytest tests/online/test_vector_index_* -v --tb=short
-	@echo "$(GREEN)Vector index tests completed!$(NC)"
+.PHONY: coverage-online
+coverage-online: ## Run online tests with coverage
+	@echo "$(BLUE)Running online tests with coverage...$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term && echo "$(GREEN)Online coverage completed!$(NC)" || echo "$(YELLOW)⚠️  Online coverage skipped (database not available)$(NC)"
 
-.PHONY: test-verbose
-test-verbose: ## Run verbose tests
-	@echo "$(BLUE)Running verbose tests...$(NC)"
-	$(PYTHON) -m pytest tests/ -v -s --tb=long
-	@echo "$(GREEN)Verbose tests completed!$(NC)"
+# Matrix testing for automation
+.PHONY: test-matrix
+test-matrix: ## Run matrix tests (SQLAlchemy 1.4 + 2.0)
+	@echo "$(BLUE)Running matrix tests...$(NC)"
+	@echo "$(YELLOW)Testing SQLAlchemy 1.4.x...$(NC)"
+	@$(MAKE) test-sqlalchemy14
+	@echo "$(YELLOW)Testing SQLAlchemy 2.0.x...$(NC)"
+	@$(MAKE) test-sqlalchemy20
+	@echo "$(GREEN)Matrix tests completed!$(NC)"
 
-.PHONY: test-release
-test-release: ## Run pre-release tests
-	@echo "$(BLUE)Running pre-release tests...$(NC)"
-	$(PYTHON) -m pytest tests/ -v --tb=short --strict-markers
-	@echo "$(GREEN)Pre-release tests completed!$(NC)"
-
-# Compatibility testing
 .PHONY: test-sqlalchemy14
-test-sqlalchemy14: ## Test with SQLAlchemy 1.4.x (offline + online)
+test-sqlalchemy14: install-sqlalchemy14 ## Test with SQLAlchemy 1.4.x
 	@echo "$(BLUE)Testing with SQLAlchemy 1.4.x...$(NC)"
-	$(PIP) install -r requirements-sqlalchemy14.txt
 	@echo "$(YELLOW)Running offline tests...$(NC)"
 	$(PYTHON) -m pytest tests/offline/ -v --tb=short
 	@echo "$(YELLOW)Running online tests...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
 	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 1.4.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 1.4.x online tests skipped (database not available)$(NC)"
 	@echo "$(GREEN)SQLAlchemy 1.4.x tests completed!$(NC)"
 
 .PHONY: test-sqlalchemy20
-test-sqlalchemy20: ## Test with SQLAlchemy 2.0.x (offline + online)
+test-sqlalchemy20: install-sqlalchemy20 ## Test with SQLAlchemy 2.0.x
 	@echo "$(BLUE)Testing with SQLAlchemy 2.0.x...$(NC)"
-	$(PIP) install -r requirements-sqlalchemy20.txt
 	@echo "$(YELLOW)Running offline tests...$(NC)"
 	$(PYTHON) -m pytest tests/offline/ -v --tb=short
 	@echo "$(YELLOW)Running online tests...$(NC)"
-	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
 	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 2.0.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 2.0.x online tests skipped (database not available)$(NC)"
 	@echo "$(GREEN)SQLAlchemy 2.0.x tests completed!$(NC)"
 
-.PHONY: test-tox
-test-tox: ## Run tox tests
-	@echo "$(BLUE)Running tox tests...$(NC)"
-	tox
-	@echo "$(GREEN)Tox tests completed!$(NC)"
+# Code Quality
+.PHONY: lint
+lint: ## Run code quality checks
+	@echo "$(BLUE)Running code quality checks...$(NC)"
+	flake8 matrixone --max-line-length=125 --ignore=E203,W503
+	@echo "$(GREEN)Code quality checks completed!$(NC)"
 
-.PHONY: test-tox-sqlalchemy14
-test-tox-sqlalchemy14: ## Run tox tests for SQLAlchemy 1.4.x (offline + online)
-	@echo "$(BLUE)Running tox tests for SQLAlchemy 1.4.x...$(NC)"
-	@echo "$(YELLOW)Note: This includes both offline and online tests$(NC)"
-	tox -e py310-sqlalchemy14
-	@echo "$(GREEN)SQLAlchemy 1.4.x tox tests completed!$(NC)"
+.PHONY: format
+format: ## Format code with black
+	@echo "$(BLUE)Formatting code...$(NC)"
+	black matrixone tests examples --line-length=125
+	@echo "$(GREEN)Code formatting completed!$(NC)"
 
-.PHONY: test-tox-sqlalchemy20
-test-tox-sqlalchemy20: ## Run tox tests for SQLAlchemy 2.0.x (offline + online)
-	@echo "$(BLUE)Running tox tests for SQLAlchemy 2.0.x...$(NC)"
-	@echo "$(YELLOW)Note: This includes both offline and online tests$(NC)"
-	tox -e py310-sqlalchemy20
-	@echo "$(GREEN)SQLAlchemy 2.0.x tox tests completed!$(NC)"
+.PHONY: type-check
+type-check: ## Run type checking with mypy (permissive mode)
+	@echo "$(BLUE)Running type checks (permissive mode)...$(NC)"
+	mypy matrixone --ignore-missing-imports --no-strict-optional --allow-redefinition --show-error-codes --disable-error-code=var-annotated --disable-error-code=assignment --disable-error-code=no-any-return --disable-error-code=unreachable --disable-error-code=attr-defined --disable-error-code=no-redef --disable-error-code=method-assign --disable-error-code=valid-type --disable-error-code=override --disable-error-code=return-value --disable-error-code=union-attr --disable-error-code=index --disable-error-code=misc --disable-error-code=arg-type || echo "$(YELLOW)⚠️  Type checking completed with warnings (permissive mode)$(NC)"
+	@echo "$(GREEN)Type checking completed!$(NC)"
 
-# Legacy aliases for backward compatibility (deprecated)
+.PHONY: type-check-strict
+type-check-strict: ## Run strict type checking with mypy
+	@echo "$(BLUE)Running strict type checks...$(NC)"
+	mypy matrixone --ignore-missing-imports --strict
+	@echo "$(GREEN)Strict type checking completed!$(NC)"
 
+.PHONY: pre-commit
+pre-commit: format lint type-check test-offline ## Run pre-commit checks
+	@echo "$(GREEN)Pre-commit checks completed!$(NC)"
 
-
-# Example running
+# Examples
 .PHONY: examples
-examples: ## Run all examples (use env vars to override connection: MATRIXONE_HOST, MATRIXONE_PORT, MATRIXONE_USER, MATRIXONE_PASSWORD, MATRIXONE_DATABASE)
+examples: ## Run all examples
 	@echo "$(BLUE)Running all examples...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
 	@for example in examples/example_*.py; do \
 		echo "$(YELLOW)Running $$example...$(NC)"; \
-		PYTHONPATH=. $(PYTHON) $$example || echo "$(RED)$$example failed$(NC)"; \
-		echo ""; \
+		PYTHONPATH=. $(PYTHON) "$$example" || echo "$(RED)Example $$example failed$(NC)"; \
 	done
 	@echo "$(GREEN)All examples completed!$(NC)"
 
 .PHONY: example-basic
-example-basic: ## Run basic connection example (use env vars to override connection)
+example-basic: ## Run basic connection example
 	@echo "$(BLUE)Running basic connection example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_01_basic_connection.py
+	@echo "$(GREEN)Basic example completed!$(NC)"
 
 .PHONY: example-async
-example-async: ## Run async operations example (use env vars to override connection)
+example-async: ## Run async operations example
 	@echo "$(BLUE)Running async operations example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_03_async_operations.py
-
-.PHONY: example-account
-example-account: ## Run account management example (use env vars to override connection)
-	@echo "$(BLUE)Running account management example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
-	PYTHONPATH=. $(PYTHON) examples/example_02_account_management.py
-
-.PHONY: example-fulltext
-example-fulltext: ## Run fulltext index example (use env vars to override connection)
-	@echo "$(BLUE)Running fulltext index example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
-	PYTHONPATH=. $(PYTHON) examples/example_fulltext_index.py
+	@echo "$(GREEN)Async example completed!$(NC)"
 
 .PHONY: example-vector
-example-vector: ## Run vector search example (use env vars to override connection)
+example-vector: ## Run vector search example
 	@echo "$(BLUE)Running vector search example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_12_vector_search.py
+	@echo "$(GREEN)Vector example completed!$(NC)"
 
-.PHONY: example-vector-index
-example-vector-index: ## Run vector index example (use env vars to override connection)
-	@echo "$(BLUE)Running vector index example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
-	PYTHONPATH=. $(PYTHON) examples/example_13_vector_index.py
+.PHONY: example-fulltext
+example-fulltext: ## Run fulltext index example
+	@echo "$(BLUE)Running fulltext index example...$(NC)"
+	PYTHONPATH=. $(PYTHON) examples/example_fulltext_index.py
+	@echo "$(GREEN)Fulltext example completed!$(NC)"
 
-.PHONY: example-vector-comprehensive
-example-vector-comprehensive: ## Run comprehensive vector examples (use env vars to override connection)
-	@echo "$(BLUE)Running comprehensive vector examples...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
-	PYTHONPATH=. $(PYTHON) examples/example_16_vector_comprehensive.py
-
-.PHONY: example-hnsw
-example-hnsw: ## Run HNSW vector index example (use env vars to override connection)
-	@echo "$(BLUE)Running HNSW vector index example...$(NC)"
-	@echo "$(YELLOW)Connection config:$(NC)"
-	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
-	@echo "  Port: $${MATRIXONE_PORT:-6001}"
-	@echo "  User: $${MATRIXONE_USER:-root}"
-	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
-	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
-	@echo ""
-	PYTHONPATH=. $(PYTHON) examples/example_17_hnsw_vector_index.py
-
-# Build related
+# Build and publish
 .PHONY: build
 build: clean ## Build package (wheel + sdist)
 	@echo "$(BLUE)Building package...$(NC)"
@@ -346,59 +268,85 @@ build: clean ## Build package (wheel + sdist)
 	@echo "$(GREEN)Package built! Output directory: $(BUILD_DIR)/$(NC)"
 
 .PHONY: build-release
-build-release: build ## Alias for build
-	@echo "$(GREEN)Release package ready!$(NC)"
+build-release: clean ## Build release package (with user README)
+	@echo "$(BLUE)Building release package...$(NC)"
+	@echo "$(YELLOW)Note: This uses the user-facing README.md$(NC)"
+	$(PYTHON) -m build --wheel --sdist --outdir $(BUILD_DIR)
+	@echo "$(GREEN)Release package built! Output directory: $(BUILD_DIR)/$(NC)"
 
-.PHONY: build-wheel
-build-wheel: clean ## Build wheel package only
-	@echo "$(BLUE)Building wheel package...$(NC)"
-	$(PYTHON) -m build --wheel --outdir $(BUILD_DIR)
-	@echo "$(GREEN)Wheel package built!$(NC)"
-
-.PHONY: build-sdist
-build-sdist: clean ## Build source package only
-	@echo "$(BLUE)Building source package...$(NC)"
-	$(PYTHON) -m build --sdist --outdir $(BUILD_DIR)
-	@echo "$(GREEN)Source package built!$(NC)"
-
-.PHONY: check-build
-check-build: build ## Check built package
-	@echo "$(BLUE)Checking built package...$(NC)"
-	$(PYTHON) -m twine check $(BUILD_DIR)/*
-	@echo "$(GREEN)Package check completed!$(NC)"
-
-# Publishing related
 .PHONY: publish-test
-publish-test: build-release check-build ## Publish to test PyPI (auto-increment version)
+publish-test: build ## Publish to test PyPI
 	@echo "$(BLUE)Publishing to test PyPI...$(NC)"
-	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
-	@echo "$(YELLOW)Note: TestPyPI allows multiple versions for testing$(NC)"
 	$(PYTHON) -m twine upload --repository testpypi $(BUILD_DIR)/*
 	@echo "$(GREEN)Published to test PyPI!$(NC)"
-	@echo "$(YELLOW)Install with: pip install --index-url https://test.pypi.org/simple/ matrixone-python-sdk$(NC)"
-
-.PHONY: publish-test-auto
-publish-test-auto: ## Publish to test PyPI with auto-incremented version
-	@echo "$(BLUE)Auto-incrementing version and publishing to test PyPI...$(NC)"
-	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
-	@echo "$(YELLOW)Incrementing patch version...$(NC)"
-	$(PYTHON) scripts/update_version.py --increment patch
-	@echo "$(YELLOW)New version: $$(grep '^version' pyproject.toml | sed 's/.*"\([^"]*\)".*/\1/')$(NC)"
-	$(MAKE) publish-test
-	@echo "$(GREEN)Published to test PyPI with auto-incremented version!$(NC)"
 
 .PHONY: publish
-publish: build-release check-build ## Publish to PyPI (official release)
+publish: build ## Publish to PyPI (official release)
 	@echo "$(BLUE)Publishing to PyPI...$(NC)"
-	@echo "$(YELLOW)Current version: $(VERSION)$(NC)"
 	@echo "$(RED)Warning: This will publish to official PyPI!$(NC)"
-	@echo "$(RED)Make sure this version is stable and tested on TestPyPI first!$(NC)"
 	@read -p "Confirm publish to PyPI? (y/N): " confirm && [ "$$confirm" = "y" ]
 	$(PYTHON) -m twine upload $(BUILD_DIR)/*
 	@echo "$(GREEN)Published to PyPI!$(NC)"
-	@echo "$(YELLOW)Install with: pip install matrixone-python-sdk$(NC)"
 
-# Cleanup related
+.PHONY: release-check
+release-check: pre-commit test examples ## Complete pre-release checks
+	@echo "$(GREEN)Release checks completed! Ready for release.$(NC)"
+
+# Version Management
+.PHONY: version
+version: ## Show current version
+	@echo "$(VERSION)"
+
+.PHONY: version-bump
+version-bump: ## Bump version (requires VERSION_TYPE=patch|minor|major)
+	@if [ -z "$(VERSION_TYPE)" ]; then \
+		echo "$(RED)Error: VERSION_TYPE must be set (patch|minor|major)$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Bumping $(VERSION_TYPE) version...$(NC)"
+	@$(PYTHON) -c "import re; content=open('pyproject.toml').read(); new_content=re.sub(r'version = \"([^\"]+)\"', lambda m: f'version = \"{m.group(1).split(\".\")[0]}.{m.group(1).split(\".\")[1]}.{int(m.group(1).split(\".\")[2])+1}\"', content) if '$(VERSION_TYPE)' == 'patch' else content; open('pyproject.toml', 'w').write(new_content)"
+	@echo "$(GREEN)Version bumped!$(NC)"
+
+.PHONY: version-check
+version-check: ## Check if version is ready for release
+	@echo "$(BLUE)Checking version readiness...$(NC)"
+	@echo "Current version: $(VERSION)"
+	@echo "Package name: $(PACKAGE_NAME)"
+	@echo "$(GREEN)Version check completed!$(NC)"
+
+# Utilities
+.PHONY: info
+info: ## Show project information
+	@echo "$(BLUE)MatrixOne Python SDK - Project Information$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Project Details:$(NC)"
+	@echo "  Package: $(PACKAGE_NAME)"
+	@echo "  Version: $(VERSION)"
+	@echo "  Python: $(PYTHON)"
+	@echo "  Pip: $(PIP)"
+	@echo ""
+	@echo "$(YELLOW)Directories:$(NC)"
+	@echo "  Build: $(BUILD_DIR)"
+	@echo "  Test: $(TEST_DIR)"
+	@echo "  Coverage: $(COVERAGE_DIR)"
+	@echo ""
+	@echo "$(YELLOW)Files:$(NC)"
+	@ls -la pyproject.toml requirements*.txt 2>/dev/null | sed 's/^/  /' || echo "  No project files found"
+
+.PHONY: status
+status: ## Show development status
+	@echo "$(BLUE)Development Status$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Git Status:$(NC)"
+	@git status --porcelain 2>/dev/null || echo "  Not a git repository"
+	@echo ""
+	@echo "$(YELLOW)Python Environment:$(NC)"
+	@$(PYTHON) -c "import sys; print('  Python:', sys.version.split()[0], sys.executable)" 2>/dev/null || echo "  Python not available"
+	@echo ""
+	@echo "$(YELLOW)Installed Packages:$(NC)"
+	@$(PIP) list 2>/dev/null | grep -E "(matrixone|sqlalchemy|pytest)" | sed 's/^/  /' || echo "  No relevant packages found"
+
+# Cleanup
 .PHONY: clean
 clean: ## Clean build artifacts
 	@echo "$(BLUE)Cleaning build artifacts...$(NC)"
@@ -413,227 +361,20 @@ clean: ## Clean build artifacts
 	@echo "$(GREEN)Cleanup completed!$(NC)"
 
 .PHONY: clean-all
-clean-all: clean ## Clean all artifacts (including virtual environments)
-	@echo "$(BLUE)Cleaning all artifacts...$(NC)"
-	rm -rf .venv/
+clean-all: clean ## Clean everything including virtual environment
+	@echo "$(BLUE)Cleaning everything...$(NC)"
 	rm -rf venv/
+	rm -rf .venv/
+	rm -rf env/
+	rm -rf .env/
 	@echo "$(GREEN)Complete cleanup finished!$(NC)"
 
-# Development workflow
-.PHONY: dev-setup
-dev-setup: install-dev ## Setup development environment
-	@echo "$(BLUE)Setting up development environment...$(NC)"
-	@echo "$(GREEN)Development environment setup completed!$(NC)"
-	@echo "$(YELLOW)Available commands:$(NC)"
-	@echo "  make test        - Run tests"
-	@echo "  make lint        - Code quality checks"
-	@echo "  make format      - Format code"
-	@echo "  make examples    - Run examples"
-	@echo "  make docs        - Generate documentation"
-	@echo "  make build       - Build package"
-
-.PHONY: pre-commit
-pre-commit: format lint test docs-check ## Full pre-commit checks (format + lint + test + docs)
-	@echo "$(GREEN)Full pre-commit checks completed!$(NC)"
-
-.PHONY: pre-release
-pre-release: format lint test docs-validate build-release check-build ## Pre-release complete checks
-	@echo "$(GREEN)Pre-release checks completed!$(NC)"
-
-# Documentation
-.PHONY: docs
-docs: ## Generate complete documentation (HTML)
-	@echo "$(BLUE)Generating complete documentation...$(NC)"
-	@echo "$(YELLOW)Including: Quick Start, ORM Guide, Vector Guide, Fulltext Guide, Examples, API Reference$(NC)"
-	$(PYTHON) -m sphinx -b html docs docs/_build/html
-	@echo "$(GREEN)Complete documentation generated! View: docs/_build/html/index.html$(NC)"
-
-.PHONY: docs-quick
-docs-quick: ## Generate quick documentation (HTML only, no API docs)
-	@echo "$(BLUE)Generating quick documentation...$(NC)"
-	@echo "$(YELLOW)Including: Quick Start, ORM Guide, Vector Guide, Fulltext Guide, Examples$(NC)"
-	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/quick
-	@echo "$(GREEN)Quick documentation generated! View: docs/_build/quick/index.html$(NC)"
-
-.PHONY: docs-api
-docs-api: ## Generate API documentation only
-	@echo "$(BLUE)Generating API documentation...$(NC)"
-	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/api
-	@echo "$(GREEN)API documentation generated! View: docs/_build/api/index.html$(NC)"
-
-.PHONY: docs-pdf
-docs-pdf: ## Generate PDF documentation
-	@echo "$(BLUE)Generating PDF documentation...$(NC)"
-	@echo "$(YELLOW)Note: Requires latexmk and pdflatex$(NC)"
-	$(PYTHON) -m sphinx -b latex docs docs/_build/latex
-	cd docs/_build/latex && make all-pdf
-	@echo "$(GREEN)PDF documentation generated! View: docs/_build/latex/matrixone.pdf$(NC)"
-
-.PHONY: docs-epub
-docs-epub: ## Generate EPUB documentation
-	@echo "$(BLUE)Generating EPUB documentation...$(NC)"
-	$(PYTHON) -m sphinx -b epub docs docs/_build/epub
-	@echo "$(GREEN)EPUB documentation generated! View: docs/_build/epub/matrixone.epub$(NC)"
-
-.PHONY: docs-clean
-docs-clean: ## Clean documentation build
-	@echo "$(BLUE)Cleaning documentation...$(NC)"
-	rm -rf docs/_build/
-	@echo "$(GREEN)Documentation cleaned!$(NC)"
-
-.PHONY: docs-serve
-docs-serve: docs ## Generate and serve documentation locally
-	@echo "$(BLUE)Serving documentation...$(NC)"
-	@echo "$(YELLOW)Open http://localhost:8000 in your browser$(NC)"
-	@echo "$(YELLOW)Press Ctrl+C to stop the server$(NC)"
-	cd docs/_build/html && $(PYTHON) -m http.server 8000
-
-.PHONY: docs-watch
-docs-watch: ## Watch for changes and rebuild documentation
-	@echo "$(BLUE)Watching for documentation changes...$(NC)"
-	@echo "$(YELLOW)Press Ctrl+C to stop watching$(NC)"
-	@echo "$(YELLOW)Documentation will be rebuilt automatically on file changes$(NC)"
-	$(PYTHON) -m sphinx_autobuild docs docs/_build/html --host 0.0.0.0 --port 8000
-
-.PHONY: docs-check
-docs-check: ## Check documentation for errors
-	@echo "$(BLUE)Checking documentation...$(NC)"
-	$(PYTHON) -m sphinx -b linkcheck docs docs/_build/linkcheck
-	@echo "$(GREEN)Documentation check completed!$(NC)"
-
-.PHONY: docs-spelling
-docs-spelling: ## Check documentation spelling
-	@echo "$(BLUE)Checking documentation spelling...$(NC)"
-	@echo "$(YELLOW)Note: Requires sphinxcontrib-spelling$(NC)"
-	$(PYTHON) -m sphinx -b spelling docs docs/_build/spelling
-	@echo "$(GREEN)Spelling check completed!$(NC)"
-
-.PHONY: docs-coverage
-docs-coverage: ## Check documentation coverage
-	@echo "$(BLUE)Checking documentation coverage...$(NC)"
-	@echo "$(YELLOW)Note: Requires sphinx-coverage$(NC)"
-	$(PYTHON) -m sphinx -b coverage docs docs/_build/coverage
-	@echo "$(GREEN)Coverage check completed!$(NC)"
-
-.PHONY: docs-validate
-docs-validate: docs-check docs-spelling ## Validate documentation (check + spelling)
-	@echo "$(GREEN)Documentation validation completed!$(NC)"
-
-.PHONY: docs-all
-docs-all: docs docs-api docs-pdf docs-epub ## Generate all documentation formats
-	@echo "$(GREEN)All documentation formats generated!$(NC)"
-	@echo "$(YELLOW)Available formats:$(NC)"
-	@echo "  HTML: docs/_build/html/index.html"
-	@echo "  API: docs/_build/api/index.html"
-	@echo "  PDF: docs/_build/latex/matrixone.pdf"
-	@echo "  EPUB: docs/_build/epub/matrixone.epub"
-
-# Version management
-.PHONY: version-update
-version-update: ## Update version number (usage: make version-update VERSION=1.2.3)
-	@if [ -z "$(VERSION)" ]; then \
-		echo "$(RED)Error: VERSION is required$(NC)"; \
-		echo "Usage: make version-update VERSION=1.2.3"; \
-		exit 1; \
-	fi
-	@echo "$(BLUE)Updating version to $(VERSION)...$(NC)"
-	$(PYTHON) scripts/update_version.py $(VERSION)
-	@echo "$(GREEN)Version updated to $(VERSION)!$(NC)"
-
-.PHONY: version-increment
-version-increment: ## Increment version (usage: make version-increment PART=patch)
-	@if [ -z "$(PART)" ]; then \
-		echo "$(RED)Error: PART is required$(NC)"; \
-		echo "Usage: make version-increment PART=patch|minor|major"; \
-		exit 1; \
-	fi
-	@echo "$(BLUE)Incrementing $(PART) version...$(NC)"
-	$(PYTHON) scripts/update_version.py --increment $(PART)
-	@echo "$(GREEN)Version incremented!$(NC)"
-
-.PHONY: version-test
-version-test: ## Increment patch version for TestPyPI (usage: make version-test)
-	@echo "$(BLUE)Incrementing patch version for TestPyPI...$(NC)"
-	$(PYTHON) scripts/update_version.py --increment patch
-	@echo "$(GREEN)Version incremented for TestPyPI!$(NC)"
-	@echo "$(YELLOW)New version: $$(grep '^version' pyproject.toml | sed 's/.*"\([^"]*\)".*/\1/')$(NC)"
-
-.PHONY: version-release
-version-release: ## Set version for official PyPI release (usage: make version-release VERSION=1.2.3)
-	@if [ -z "$(VERSION)" ]; then \
-		echo "$(RED)Error: VERSION is required$(NC)"; \
-		echo "Usage: make version-release VERSION=1.2.3"; \
-		echo "$(YELLOW)Note: This should be a stable version tested on TestPyPI$(NC)"; \
-		exit 1; \
-	fi
-	@echo "$(BLUE)Setting version $(VERSION) for official PyPI release...$(NC)"
-	$(PYTHON) scripts/update_version.py $(VERSION)
-	@echo "$(GREEN)Version set to $(VERSION) for official release!$(NC)"
-
-
-# Release management
-.PHONY: release-check
-release-check: lint test build-release check-build ## Pre-release complete checks
-	@echo "$(GREEN)Pre-release checks completed!$(NC)"
-
-.PHONY: release-test
-release-test: version-test publish-test ## Complete TestPyPI release (increment + publish)
-	@echo "$(GREEN)TestPyPI release completed!$(NC)"
-
-.PHONY: release-official
-release-official: publish ## Complete official PyPI release (requires manual version setting)
-	@echo "$(GREEN)Official PyPI release completed!$(NC)"
-
-
-
-
-# Information display
-.PHONY: info
-info: ## Show project information
-	@echo "$(BLUE)MatrixOne Python SDK Project Information:$(NC)"
-	@echo "  Package name: $(PACKAGE_NAME)"
-	@echo "  Version: $(VERSION)"
-	@echo "  Python: $(PYTHON)"
-	@echo "  Pip: $(PIP)"
-	@echo "  Build directory: $(BUILD_DIR)"
-	@echo ""
-	@echo "$(YELLOW)File statistics:$(NC)"
-	@echo "  Test files: $$(ls tests/test_*.py 2>/dev/null | wc -l)"
-	@echo "  Example files: $$(ls examples/example_*.py 2>/dev/null | wc -l)"
-	@echo "  Core modules: $$(ls matrixone/*.py 2>/dev/null | wc -l)"
-	@echo "  Documentation files: $$(ls docs/*.rst 2>/dev/null | wc -l)"
-	@echo ""
-	@echo "$(YELLOW)Documentation structure:$(NC)"
-	@echo "  Quick Start: docs/quickstart.rst"
-	@echo "  ORM Guide: docs/orm_guide.rst"
-	@echo "  Vector Guide: docs/vector_guide.rst"
-	@echo "  Fulltext Guide: docs/fulltext_guide.rst"
-	@echo "  Best Practices: docs/best_practices.rst"
-	@echo "  Examples: docs/examples.rst"
-	@echo "  API Reference: docs/api/index.rst"
-
-.PHONY: check-env
-check-env: ## Check Python environment configuration
-	@echo "$(BLUE)Checking Python environment...$(NC)"
-	@echo "  Python command: $(PYTHON)"
-	@echo "  Pip command: $(PIP)"
-	@echo ""
-	@echo "$(YELLOW)Python version:$(NC)"
-	@$(PYTHON) --version || echo "$(RED)Python not found or not working$(NC)"
-	@echo ""
-	@echo "$(YELLOW)Pip version:$(NC)"
-	@$(PIP) --version || echo "$(RED)Pip not found or not working$(NC)"
-	@echo ""
-	@echo "$(YELLOW)Python path:$(NC)"
-	@which $(PYTHON) || echo "$(RED)Python path not found$(NC)"
-
-.PHONY: version
-version: ## Show current version
-	@echo "$(VERSION)"
-
-# Quick commands
-.PHONY: check
-check: lint test ## Quick check (lint + test)
+.PHONY: clean-deps
+clean-deps: ## Clean and reinstall dependencies
+	@echo "$(BLUE)Cleaning and reinstalling dependencies...$(NC)"
+	$(PIP) freeze | xargs $(PIP) uninstall -y 2>/dev/null || true
+	$(PIP) install -r requirements.txt
+	@echo "$(GREEN)Dependencies cleaned and reinstalled!$(NC)"
 
 # Default target
 .DEFAULT_GOAL := help

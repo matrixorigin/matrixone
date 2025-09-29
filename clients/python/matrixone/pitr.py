@@ -87,10 +87,7 @@ class PitrManager:
         try:
             self._validate_range(range_value, range_unit)
 
-            sql = (
-                f"CREATE PITR {self._client._escape_identifier(name)} "
-                f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
-            )
+            sql = f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
 
             result = self._client.execute(sql)
             if result is None:
@@ -103,7 +100,11 @@ class PitrManager:
             raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
 
     def create_account_pitr(
-        self, name: str, account_name: Optional[str] = None, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        account_name: Optional[str] = None,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """
         Create account-level PITR
@@ -138,8 +139,7 @@ class PitrManager:
                 )
             else:
                 sql = (
-                    f"CREATE PITR {self._client._escape_identifier(name)} "
-                    f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
+                    f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
                 )
 
             result = self._client.execute(sql)
@@ -189,7 +189,12 @@ class PitrManager:
             raise PitrError(f"Failed to create database PITR '{name}': {e}")
 
     def create_table_pitr(
-        self, name: str, database_name: str, table_name: str, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        database_name: str,
+        table_name: str,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """
         Create table-level PITR
@@ -391,7 +396,11 @@ class TransactionPitrManager(PitrManager):
         return self._create_pitr_with_executor("cluster", name, range_value, range_unit)
 
     def create_account_pitr(
-        self, name: str, account_name: Optional[str] = None, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        account_name: Optional[str] = None,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """Create account PITR within transaction"""
         return self._create_pitr_with_executor("account", name, range_value, range_unit, account_name)
@@ -401,7 +410,12 @@ class TransactionPitrManager(PitrManager):
         return self._create_pitr_with_executor("database", name, range_value, range_unit, None, database_name)
 
     def create_table_pitr(
-        self, name: str, database_name: str, table_name: str, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        database_name: str,
+        table_name: str,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """Create table PITR within transaction"""
         return self._create_pitr_with_executor("table", name, range_value, range_unit, None, database_name, table_name)
@@ -422,8 +436,7 @@ class TransactionPitrManager(PitrManager):
 
             if level == "cluster":
                 sql = (
-                    f"CREATE PITR {self._client._escape_identifier(name)} "
-                    f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
+                    f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
                 )
             elif level == "account":
                 if account_name:

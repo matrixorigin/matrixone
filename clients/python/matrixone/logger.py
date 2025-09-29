@@ -108,7 +108,13 @@ class MatrixOneLogger:
         lineno = frame.f_lineno
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
-            self.logger.name, logging.DEBUG, filename, lineno, self._format_message(message, **kwargs), (), None
+            self.logger.name,
+            logging.DEBUG,
+            filename,
+            lineno,
+            self._format_message(message, **kwargs),
+            (),
+            None,
         )
         self.logger.handle(record)
 
@@ -122,7 +128,13 @@ class MatrixOneLogger:
         lineno = frame.f_lineno
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
-            self.logger.name, logging.INFO, filename, lineno, self._format_message(message, **kwargs), (), None
+            self.logger.name,
+            logging.INFO,
+            filename,
+            lineno,
+            self._format_message(message, **kwargs),
+            (),
+            None,
         )
         self.logger.handle(record)
 
@@ -136,7 +148,13 @@ class MatrixOneLogger:
         lineno = frame.f_lineno
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
-            self.logger.name, logging.WARNING, filename, lineno, self._format_message(message, **kwargs), (), None
+            self.logger.name,
+            logging.WARNING,
+            filename,
+            lineno,
+            self._format_message(message, **kwargs),
+            (),
+            None,
         )
         self.logger.handle(record)
 
@@ -150,7 +168,13 @@ class MatrixOneLogger:
         lineno = frame.f_lineno
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
-            self.logger.name, logging.ERROR, filename, lineno, self._format_message(message, **kwargs), (), None
+            self.logger.name,
+            logging.ERROR,
+            filename,
+            lineno,
+            self._format_message(message, **kwargs),
+            (),
+            None,
         )
         self.logger.handle(record)
 
@@ -164,7 +188,13 @@ class MatrixOneLogger:
         lineno = frame.f_lineno
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
-            self.logger.name, logging.CRITICAL, filename, lineno, self._format_message(message, **kwargs), (), None
+            self.logger.name,
+            logging.CRITICAL,
+            filename,
+            lineno,
+            self._format_message(message, **kwargs),
+            (),
+            None,
         )
         self.logger.handle(record)
 
@@ -310,7 +340,13 @@ class MatrixOneLogger:
         lineno = frame.f_lineno
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
-            self.logger.name, logging.INFO, filename, lineno, self._format_message(message, **kwargs), (), None
+            self.logger.name,
+            logging.INFO,
+            filename,
+            lineno,
+            self._format_message(message, **kwargs),
+            (),
+            None,
         )
         self.logger.handle(record)
 
@@ -390,7 +426,11 @@ class MatrixOneLogger:
         self.logger.handle(record)
 
     def log_account_operation(
-        self, operation: str, account_name: Optional[str] = None, user_name: Optional[str] = None, success: bool = True
+        self,
+        operation: str,
+        account_name: Optional[str] = None,
+        user_name: Optional[str] = None,
+        success: bool = True,
     ):
         """Log account management operations"""
         status = "✓ Account operation" if success else "✗ Account operation failed"
@@ -420,7 +460,11 @@ class MatrixOneLogger:
         self.logger.handle(record)
 
     def log_snapshot_operation(
-        self, operation: str, snapshot_name: Optional[str] = None, level: Optional[str] = None, success: bool = True
+        self,
+        operation: str,
+        snapshot_name: Optional[str] = None,
+        level: Optional[str] = None,
+        success: bool = True,
     ):
         """Log snapshot operations"""
         status = "✓ Snapshot operation" if success else "✗ Snapshot operation failed"

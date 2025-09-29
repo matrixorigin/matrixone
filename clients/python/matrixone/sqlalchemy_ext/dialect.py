@@ -186,6 +186,40 @@ if SA_VERSION >= (2, 0):
             mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
             return mysql_compiler.visit_numeric(type_, **kw)
 
+        def visit_DECIMAL(self, type_, **kw):
+            """Handle DECIMAL type compilation for SQLAlchemy 2.0.x."""
+            if (
+                hasattr(type_, 'precision')
+                and hasattr(type_, 'scale')
+                and type_.precision is not None
+                and type_.scale is not None
+            ):
+                return f"DECIMAL({type_.precision}, {type_.scale})"
+            return "DECIMAL"
+
+        def visit_NUMERIC(self, type_, **kw):
+            """Handle NUMERIC type compilation for SQLAlchemy 2.0.x."""
+            if (
+                hasattr(type_, 'precision')
+                and hasattr(type_, 'scale')
+                and type_.precision is not None
+                and type_.scale is not None
+            ):
+                return f"DECIMAL({type_.precision}, {type_.scale})"
+            return "DECIMAL"
+
+        def visit_BIGINT(self, type_, **kw):
+            """Handle BIGINT type compilation for SQLAlchemy 2.0.x."""
+            return "BIGINT"
+
+        def visit_big_integer(self, type_, **kw):
+            """Handle BigInteger type compilation for SQLAlchemy 2.0.x."""
+            return "BIGINT"
+
+        def visit_TIMESTAMP(self, type_, **kw):
+            """Handle TIMESTAMP type compilation for SQLAlchemy 2.0.x."""
+            return "TIMESTAMP"
+
         def visit_date(self, type_, **kw):
             """Handle DATE type compilation."""
             from sqlalchemy.dialects.mysql.base import MySQLDialect
@@ -228,6 +262,105 @@ if SA_VERSION >= (2, 0):
             mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
             return mysql_compiler.visit_type_decorator(type_, **kw)
 
+        # Additional type methods for comprehensive SQLAlchemy 2.0.x support
+        def visit_small_integer(self, type_, **kw):
+            """Handle SMALLINT type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_small_integer(type_, **kw)
+
+        def visit_CHAR(self, type_, **kw):
+            """Handle CHAR type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_CHAR(type_, **kw)
+
+        def visit_VARCHAR(self, type_, **kw):
+            """Handle VARCHAR type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_VARCHAR(type_, **kw)
+
+        def visit_unicode(self, type_, **kw):
+            """Handle Unicode type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_unicode(type_, **kw)
+
+        def visit_unicode_text(self, type_, **kw):
+            """Handle UnicodeText type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_unicode_text(type_, **kw)
+
+        def visit_large_binary(self, type_, **kw):
+            """Handle LargeBinary type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_large_binary(type_, **kw)
+
+        def visit_binary(self, type_, **kw):
+            """Handle Binary type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_BINARY(type_, **kw)
+
+        def visit_BLOB(self, type_, **kw):
+            """Handle BLOB type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_BLOB(type_, **kw)
+
+        def visit_enum(self, type_, **kw):
+            """Handle Enum type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_enum(type_, **kw)
+
+        def visit_pickle(self, type_, **kw):
+            """Handle PickleType compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_pickle(type_, **kw)
+
+        def visit_interval(self, type_, **kw):
+            """Handle Interval type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_interval(type_, **kw)
+
+        def visit_uuid(self, type_, **kw):
+            """Handle UUID type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_uuid(type_, **kw)
+
+        def visit_JSON(self, type_, **kw):
+            """Handle JSON type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_JSON(type_, **kw)
+
+        def visit_arbitrary_type(self, type_, **kw):
+            """Handle arbitrary type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_arbitrary_type(type_, **kw)
+
 else:
     # SQLAlchemy 1.4.x
     class MatrixOneTypeCompiler(MySQLDialect.type_compiler):
@@ -243,6 +376,108 @@ else:
             """Handle TIMESTAMP type compilation for SQLAlchemy 1.4.x."""
             # In SQLAlchemy 1.4.x, we need to handle TIMESTAMP differently
             return "TIMESTAMP"
+
+        def visit_DECIMAL(self, type_, **kw):
+            """Handle DECIMAL type compilation for SQLAlchemy 2.0.x."""
+            if (
+                hasattr(type_, 'precision')
+                and hasattr(type_, 'scale')
+                and type_.precision is not None
+                and type_.scale is not None
+            ):
+                return f"DECIMAL({type_.precision}, {type_.scale})"
+            return "DECIMAL"
+
+        def visit_NUMERIC(self, type_, **kw):
+            """Handle NUMERIC type compilation for SQLAlchemy 2.0.x."""
+            if (
+                hasattr(type_, 'precision')
+                and hasattr(type_, 'scale')
+                and type_.precision is not None
+                and type_.scale is not None
+            ):
+                return f"DECIMAL({type_.precision}, {type_.scale})"
+            return "DECIMAL"
+
+        def visit_BIGINT(self, type_, **kw):
+            """Handle BIGINT type compilation for SQLAlchemy 1.4.x."""
+            return "BIGINT"
+
+        def visit_big_integer(self, type_, **kw):
+            """Handle BigInteger type compilation for SQLAlchemy 1.4.x."""
+            return "BIGINT"
+
+        def visit_TIMESTAMP(self, type_, **kw):
+            """Handle TIMESTAMP type compilation for SQLAlchemy 1.4.x."""
+            return "TIMESTAMP"
+
+        # Additional type methods for comprehensive SQLAlchemy 1.4.x support
+        def visit_small_integer(self, type_, **kw):
+            """Handle SMALLINT type compilation."""
+            return "SMALLINT"
+
+        def visit_CHAR(self, type_, **kw):
+            """Handle CHAR type compilation."""
+            if hasattr(type_, 'length') and type_.length:
+                return f"CHAR({type_.length})"
+            return "CHAR"
+
+        def visit_VARCHAR(self, type_, **kw):
+            """Handle VARCHAR type compilation."""
+            if hasattr(type_, 'length') and type_.length:
+                return f"VARCHAR({type_.length})"
+            return "VARCHAR"
+
+        def visit_unicode(self, type_, **kw):
+            """Handle Unicode type compilation."""
+            if hasattr(type_, 'length') and type_.length:
+                return f"VARCHAR({type_.length})"
+            return "VARCHAR"
+
+        def visit_unicode_text(self, type_, **kw):
+            """Handle UnicodeText type compilation."""
+            return "TEXT"
+
+        def visit_large_binary(self, type_, **kw):
+            """Handle LargeBinary type compilation."""
+            return "BLOB"
+
+        def visit_binary(self, type_, **kw):
+            """Handle Binary type compilation."""
+            if hasattr(type_, 'length') and type_.length:
+                return f"BINARY({type_.length})"
+            return "BINARY"
+
+        def visit_BLOB(self, type_, **kw):
+            """Handle BLOB type compilation."""
+            return "BLOB"
+
+        def visit_enum(self, type_, **kw):
+            """Handle Enum type compilation."""
+            if hasattr(type_, 'enums') and type_.enums:
+                enum_values = "','".join(type_.enums)
+                return f"ENUM('{enum_values}')"
+            return "ENUM"
+
+        def visit_pickle(self, type_, **kw):
+            """Handle PickleType compilation."""
+            return "BLOB"
+
+        def visit_interval(self, type_, **kw):
+            """Handle Interval type compilation."""
+            return "DATETIME"
+
+        def visit_uuid(self, type_, **kw):
+            """Handle UUID type compilation."""
+            return "CHAR(32)"
+
+        def visit_JSON(self, type_, **kw):
+            """Handle JSON type compilation."""
+            return "JSON"
+
+        def visit_arbitrary_type(self, type_, **kw):
+            """Handle arbitrary type compilation."""
+            return "VARCHAR"
 
 
 # Register the dialect

@@ -206,7 +206,11 @@ class AsyncCloneManager:
         self.client = client
 
     async def clone_database(
-        self, target_db: str, source_db: str, snapshot_name: Optional[str] = None, if_not_exists: bool = False
+        self,
+        target_db: str,
+        source_db: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
     ) -> None:
         """Clone database asynchronously"""
         if_not_exists_clause = "IF NOT EXISTS" if if_not_exists else ""
@@ -219,15 +223,18 @@ class AsyncCloneManager:
         await self.client.execute(sql)
 
     async def clone_table(
-        self, target_table: str, source_table: str, snapshot_name: Optional[str] = None, if_not_exists: bool = False
+        self,
+        target_table: str,
+        source_table: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
     ) -> None:
         """Clone table asynchronously"""
         if_not_exists_clause = "IF NOT EXISTS" if if_not_exists else ""
 
         if snapshot_name:
             sql = (
-                f"CREATE TABLE {target_table} {if_not_exists_clause} "
-                f"CLONE {source_table} FOR SNAPSHOT '{snapshot_name}'"
+                f"CREATE TABLE {target_table} {if_not_exists_clause} " f"CLONE {source_table} FOR SNAPSHOT '{snapshot_name}'"
             )
         else:
             sql = f"CREATE TABLE {target_table} {if_not_exists_clause} CLONE {source_table}"
@@ -310,9 +317,7 @@ class AsyncPubSubManager:
         except Exception as e:
             raise PubSubError(f"Failed to get publication '{name}': {e}")
 
-    async def list_publications(
-        self, account: Optional[str] = None, database: Optional[str] = None
-    ) -> List[Publication]:
+    async def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
         """List publications with optional filters asynchronously"""
         try:
             # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
@@ -340,7 +345,11 @@ class AsyncPubSubManager:
             raise PubSubError(f"Failed to list publications: {e}")
 
     async def alter_publication(
-        self, name: str, account: Optional[str] = None, database: Optional[str] = None, table: Optional[str] = None
+        self,
+        name: str,
+        account: Optional[str] = None,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
     ) -> Publication:
         """Alter publication asynchronously"""
         try:
@@ -503,9 +512,7 @@ class AsyncPitrManager:
         try:
             self._validate_range(range_value, range_unit)
 
-            sql = (
-                f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
-            )
+            sql = f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
 
             result = await self.client.execute(sql)
             if result is None:
@@ -517,7 +524,11 @@ class AsyncPitrManager:
             raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
 
     async def create_account_pitr(
-        self, name: str, account_name: Optional[str] = None, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        account_name: Optional[str] = None,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """Create account-level PITR asynchronously"""
         try:
@@ -531,8 +542,7 @@ class AsyncPitrManager:
                 )
             else:
                 sql = (
-                    f"CREATE PITR {self.client._escape_identifier(name)} "
-                    f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
+                    f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
                 )
 
             result = await self.client.execute(sql)
@@ -544,9 +554,7 @@ class AsyncPitrManager:
         except Exception as e:
             raise PitrError(f"Failed to create account PITR '{name}': {e}")
 
-    async def create_database_pitr(
-        self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d"
-    ) -> Pitr:
+    async def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
         """Create database-level PITR asynchronously"""
         try:
             self._validate_range(range_value, range_unit)
@@ -567,7 +575,12 @@ class AsyncPitrManager:
             raise PitrError(f"Failed to create database PITR '{name}': {e}")
 
     async def create_table_pitr(
-        self, name: str, database_name: str, table_name: str, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        database_name: str,
+        table_name: str,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """Create table-level PITR asynchronously"""
         try:
@@ -728,7 +741,11 @@ class AsyncRestoreManager:
             raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
 
     async def restore_database(
-        self, snapshot_name: str, account_name: str, database_name: str, to_account: Optional[str] = None
+        self,
+        snapshot_name: str,
+        account_name: str,
+        database_name: str,
+        to_account: Optional[str] = None,
     ) -> bool:
         """Restore database from snapshot asynchronously"""
         try:
@@ -1746,9 +1763,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         return final_sql
 
-    def _build_login_info(
-        self, user: str, account: Optional[str] = None, role: Optional[str] = None
-    ) -> tuple[str, dict]:
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -1788,9 +1803,7 @@ class AsyncClient(BaseMatrixOneClient):
                 # "account#user#role" format
                 final_account, final_user, final_role = parts[0], parts[1], parts[2]
             else:
-                raise ValueError(
-                    f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'"
-                )
+                raise ValueError(f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'")
 
             final_user_string = user
 
@@ -2116,9 +2129,7 @@ class AsyncClient(BaseMatrixOneClient):
         await self.execute(sql)
         return self
 
-    async def create_table_with_index(
-        self, table_name: str, columns: dict, indexes: list = None, **kwargs
-    ) -> "AsyncClient":
+    async def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "AsyncClient":
         """
         Create a table with indexes asynchronously
 
@@ -2277,7 +2288,11 @@ class AsyncTransactionWrapper:
         """
         if self._sqlalchemy_session is None:
             try:
-                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+                from sqlalchemy.ext.asyncio import (
+                    AsyncSession,
+                    async_sessionmaker,
+                    create_async_engine,
+                )
             except ImportError:
                 # Fallback for older SQLAlchemy versions
                 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -2305,9 +2320,7 @@ class AsyncTransactionWrapper:
             self._sqlalchemy_engine = create_async_engine(connection_string, pool_pre_ping=True, pool_recycle=300)
 
             # Create async session factory
-            AsyncSessionLocal = async_sessionmaker(
-                bind=self._sqlalchemy_engine, class_=AsyncSession, expire_on_commit=False
-            )
+            AsyncSessionLocal = async_sessionmaker(bind=self._sqlalchemy_engine, class_=AsyncSession, expire_on_commit=False)
             self._sqlalchemy_session = AsyncSessionLocal()
 
             # Begin async SQLAlchemy transaction
@@ -2467,9 +2480,7 @@ class AsyncTransactionPubSubManager(AsyncPubSubManager):
         except Exception as e:
             raise PubSubError(f"Failed to get publication '{name}': {e}")
 
-    async def list_publications(
-        self, account: Optional[str] = None, database: Optional[str] = None
-    ) -> List[Publication]:
+    async def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
         """List publications within transaction asynchronously"""
         try:
             # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
@@ -2497,7 +2508,11 @@ class AsyncTransactionPubSubManager(AsyncPubSubManager):
             raise PubSubError(f"Failed to list publications: {e}")
 
     async def alter_publication(
-        self, name: str, account: Optional[str] = None, database: Optional[str] = None, table: Optional[str] = None
+        self,
+        name: str,
+        account: Optional[str] = None,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
     ) -> Publication:
         """Alter publication within transaction asynchronously"""
         try:
@@ -2612,9 +2627,7 @@ class AsyncTransactionPitrManager(AsyncPitrManager):
         try:
             self._validate_range(range_value, range_unit)
 
-            sql = (
-                f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
-            )
+            sql = f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
 
             result = await self.transaction_wrapper.execute(sql)
             if result is None:
@@ -2626,7 +2639,11 @@ class AsyncTransactionPitrManager(AsyncPitrManager):
             raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
 
     async def create_account_pitr(
-        self, name: str, account_name: Optional[str] = None, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        account_name: Optional[str] = None,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """Create account PITR within transaction asynchronously"""
         try:
@@ -2640,8 +2657,7 @@ class AsyncTransactionPitrManager(AsyncPitrManager):
                 )
             else:
                 sql = (
-                    f"CREATE PITR {self.client._escape_identifier(name)} "
-                    f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
+                    f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
                 )
 
             result = await self.transaction_wrapper.execute(sql)
@@ -2653,9 +2669,7 @@ class AsyncTransactionPitrManager(AsyncPitrManager):
         except Exception as e:
             raise PitrError(f"Failed to create account PITR '{name}': {e}")
 
-    async def create_database_pitr(
-        self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d"
-    ) -> Pitr:
+    async def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
         """Create database PITR within transaction asynchronously"""
         try:
             self._validate_range(range_value, range_unit)
@@ -2676,7 +2690,12 @@ class AsyncTransactionPitrManager(AsyncPitrManager):
             raise PitrError(f"Failed to create database PITR '{name}': {e}")
 
     async def create_table_pitr(
-        self, name: str, database_name: str, table_name: str, range_value: int = 1, range_unit: str = "d"
+        self,
+        name: str,
+        database_name: str,
+        table_name: str,
+        range_value: int = 1,
+        range_unit: str = "d",
     ) -> Pitr:
         """Create table PITR within transaction asynchronously"""
         try:
@@ -2813,7 +2832,11 @@ class AsyncTransactionRestoreManager(AsyncRestoreManager):
             raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
 
     async def restore_database(
-        self, snapshot_name: str, account_name: str, database_name: str, to_account: Optional[str] = None
+        self,
+        snapshot_name: str,
+        account_name: str,
+        database_name: str,
+        to_account: Optional[str] = None,
     ) -> bool:
         """Restore database within transaction asynchronously"""
         try:
@@ -2876,13 +2899,21 @@ class AsyncTransactionCloneManager(AsyncCloneManager):
         self.transaction_wrapper = transaction_wrapper
 
     async def clone_database(
-        self, target_db: str, source_db: str, snapshot_name: Optional[str] = None, if_not_exists: bool = False
+        self,
+        target_db: str,
+        source_db: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
     ) -> None:
         """Clone database within transaction asynchronously"""
         return await super().clone_database(target_db, source_db, snapshot_name, if_not_exists)
 
     async def clone_table(
-        self, target_table: str, source_table: str, snapshot_name: Optional[str] = None, if_not_exists: bool = False
+        self,
+        target_table: str,
+        source_table: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
     ) -> None:
         """Clone table within transaction asynchronously"""
         return await super().clone_table(target_table, source_table, snapshot_name, if_not_exists)

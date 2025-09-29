@@ -631,7 +631,9 @@ def build_select_query(
 
 
 def build_insert_query(
-    table_name: str, values: Union[Dict[str, Any], List[Dict[str, Any]]], use_parameter_substitution: bool = False
+    table_name: str,
+    values: Union[Dict[str, Any], List[Dict[str, Any]]],
+    use_parameter_substitution: bool = False,
 ) -> Union[str, Tuple[str, List[Any]]]:
     """
     Build INSERT query using unified SQL builder.

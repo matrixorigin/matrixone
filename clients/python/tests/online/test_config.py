@@ -16,20 +16,20 @@ class OnlineTestConfig:
         self.user = os.getenv('MATRIXONE_USER', 'root')
         self.password = os.getenv('MATRIXONE_PASSWORD', '111')
         self.database = os.getenv('MATRIXONE_DATABASE', 'test')
-        
+
         # Test database names (can be overridden for different test environments)
         self.test_database = os.getenv('MATRIXONE_TEST_DATABASE', self.database)
         self.sys_database = os.getenv('MATRIXONE_SYS_DATABASE', 'sys')
-        
+
         # Test account (for multi-tenant scenarios)
         self.test_account = os.getenv('MATRIXONE_TEST_ACCOUNT', 'sys')
-        
+
         # Test table prefixes (to avoid conflicts)
         self.table_prefix = os.getenv('MATRIXONE_TABLE_PREFIX', 'test_')
-        
+
         # Snapshot and backup settings
         self.snapshot_prefix = os.getenv('MATRIXONE_SNAPSHOT_PREFIX', 'testsnapshot')
-        
+
         # Vector test settings
         self.vector_dimensions = int(os.getenv('MATRIXONE_VECTOR_DIMENSIONS', '64'))
         self.vector_test_data_size = int(os.getenv('MATRIXONE_VECTOR_TEST_SIZE', '100'))

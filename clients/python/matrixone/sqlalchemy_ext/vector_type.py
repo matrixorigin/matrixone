@@ -450,7 +450,10 @@ class VectorColumn(Column):
             return func.inner_product(self, other)
 
     def similarity_search(
-        self, other: Union[List[float], str, Column], distance_type: str = "l2", max_distance: float = None
+        self,
+        other: Union[List[float], str, Column],
+        distance_type: str = "l2",
+        max_distance: Optional[float] = None,
     ) -> func:
         """
         Create a similarity search expression with optional distance filtering.
@@ -722,7 +725,10 @@ def create_vector_column(dimension: int, precision: str = VectorPrecision.F32, *
 
 
 def vector_similarity_search(
-    column: Column, query_vector: Union[List[float], str, Column], distance_type: str = "l2", max_distance: float = None
+    column: Column,
+    query_vector: Union[List[float], str, Column],
+    distance_type: str = "l2",
+    max_distance: Optional[float] = None,
 ) -> func:
     """
     Create a similarity search expression with optional distance filtering.
@@ -764,7 +770,10 @@ def vector_similarity_search(
 
 
 def within_distance(
-    column: Column, query_vector: Union[List[float], str, Column], max_distance: float, distance_type: str = "l2"
+    column: Column,
+    query_vector: Union[List[float], str, Column],
+    max_distance: float,
+    distance_type: str = "l2",
 ) -> func:
     """
     Create a distance threshold filter expression.

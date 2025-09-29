@@ -305,9 +305,7 @@ class CloneManager:
         if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
 
         if snapshot_name:
-            sql = (
-                f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db} {{snapshot = '{snapshot_name}'}}"
-            )
+            sql = f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db} {{snapshot = '{snapshot_name}'}}"
         else:
             sql = f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db}"
 
@@ -362,7 +360,12 @@ class CloneManager:
             raise CloneError(f"Failed to clone table: {e}")
 
     def clone_database_with_snapshot(
-        self, target_db: str, source_db: str, snapshot_name: str, if_not_exists: bool = False, executor=None
+        self,
+        target_db: str,
+        source_db: str,
+        snapshot_name: str,
+        if_not_exists: bool = False,
+        executor=None,
     ) -> None:
         """
         Clone a database using a specific snapshot
@@ -385,7 +388,12 @@ class CloneManager:
         self.clone_database(target_db, source_db, snapshot_name, if_not_exists, executor)
 
     def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False, executor=None
+        self,
+        target_table: str,
+        source_table: str,
+        snapshot_name: str,
+        if_not_exists: bool = False,
+        executor=None,
     ) -> None:
         """
         Clone a table using a specific snapshot

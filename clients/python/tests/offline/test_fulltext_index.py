@@ -9,8 +9,12 @@ functionality without requiring a real MatrixOne database.
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 from matrixone.sqlalchemy_ext import (
-    FulltextIndex, FulltextAlgorithmType, FulltextModeType,
-    FulltextSearchBuilder, create_fulltext_index, fulltext_search_builder
+    FulltextIndex,
+    FulltextAlgorithmType,
+    FulltextModeType,
+    FulltextSearchBuilder,
+    create_fulltext_index,
+    fulltext_search_builder,
 )
 
 
@@ -20,7 +24,7 @@ class TestFulltextIndex:
     def test_fulltext_index_creation(self):
         """Test creating a FulltextIndex instance"""
         index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25)
-        
+
         assert index.name == "ftidx_test"
         assert index.get_columns() == ["title", "content"]
         assert index.algorithm == FulltextAlgorithmType.BM25
@@ -28,7 +32,7 @@ class TestFulltextIndex:
     def test_fulltext_index_single_column(self):
         """Test creating FulltextIndex with single column"""
         index = FulltextIndex("ftidx_single", "title", FulltextAlgorithmType.TF_IDF)
-        
+
         assert index.name == "ftidx_single"
         assert index.get_columns() == ["title"]
         assert index.algorithm == FulltextAlgorithmType.TF_IDF
@@ -37,7 +41,7 @@ class TestFulltextIndex:
         """Test SQL generation for CREATE INDEX"""
         index = FulltextIndex("ftidx_test", ["title", "content"])
         sql = index._create_index_sql("documents")
-        
+
         expected_sql = "CREATE FULLTEXT INDEX ftidx_test ON documents (title, content)"
         assert sql == expected_sql
 
@@ -49,19 +53,19 @@ class TestFulltextIndex:
         mock_connection = Mock()
         mock_engine.begin.return_value.__enter__ = Mock(return_value=mock_connection)
         mock_engine.begin.return_value.__exit__ = Mock(return_value=None)
-        
+
         # Mock text function
         mock_text.return_value = "CREATE FULLTEXT INDEX ftidx_test ON documents (title, content)"
-        
+
         # Test successful creation
         result = FulltextIndex.create_index(
             engine=mock_engine,
             table_name="documents",
             name="ftidx_test",
             columns=["title", "content"],
-            algorithm=FulltextAlgorithmType.BM25
+            algorithm=FulltextAlgorithmType.BM25,
         )
-        
+
         assert result is True
         mock_connection.execute.assert_called_once()
 
@@ -71,15 +75,15 @@ class TestFulltextIndex:
         # Mock engine that raises exception
         mock_engine = Mock()
         mock_engine.begin.side_effect = Exception("Connection failed")
-        
+
         # Test failed creation
         result = FulltextIndex.create_index(
             engine=mock_engine,
             table_name="documents",
             name="ftidx_test",
-            columns=["title", "content"]
+            columns=["title", "content"],
         )
-        
+
         assert result is False
 
     @patch('matrixone.sqlalchemy_ext.fulltext_index.text')
@@ -87,19 +91,19 @@ class TestFulltextIndex:
         """Test FulltextIndex.create_index_in_transaction class method"""
         # Mock connection
         mock_connection = Mock()
-        
+
         # Mock text function
         mock_text.return_value = "CREATE FULLTEXT INDEX ftidx_test ON documents (title, content)"
-        
+
         # Test successful creation in transaction
         result = FulltextIndex.create_index_in_transaction(
             connection=mock_connection,
             table_name="documents",
             name="ftidx_test",
             columns=["title", "content"],
-            algorithm=FulltextAlgorithmType.BM25
+            algorithm=FulltextAlgorithmType.BM25,
         )
-        
+
         assert result is True
         mock_connection.execute.assert_called_once()
 
@@ -111,17 +115,13 @@ class TestFulltextIndex:
         mock_connection = Mock()
         mock_engine.begin.return_value.__enter__ = Mock(return_value=mock_connection)
         mock_engine.begin.return_value.__exit__ = Mock(return_value=None)
-        
+
         # Mock text function
         mock_text.return_value = "DROP INDEX ftidx_test ON documents"
-        
+
         # Test successful drop
-        result = FulltextIndex.drop_index(
-            engine=mock_engine,
-            table_name="documents",
-            name="ftidx_test"
-        )
-        
+        result = FulltextIndex.drop_index(engine=mock_engine, table_name="documents", name="ftidx_test")
+
         assert result is True
         mock_connection.execute.assert_called_once()
 
@@ -133,14 +133,14 @@ class TestFulltextIndex:
         mock_connection = Mock()
         mock_engine.begin.return_value.__enter__ = Mock(return_value=mock_connection)
         mock_engine.begin.return_value.__exit__ = Mock(return_value=None)
-        
+
         # Mock text function
         mock_text.return_value = "CREATE FULLTEXT INDEX ftidx_test ON documents (title, content)"
-        
+
         # Create index instance and test
         index = FulltextIndex("ftidx_test", ["title", "content"])
         result = index.create(mock_engine, "documents")
-        
+
         assert result is True
         mock_connection.execute.assert_called_once()
 
@@ -152,14 +152,14 @@ class TestFulltextIndex:
         mock_connection = Mock()
         mock_engine.begin.return_value.__enter__ = Mock(return_value=mock_connection)
         mock_engine.begin.return_value.__exit__ = Mock(return_value=None)
-        
+
         # Mock text function
         mock_text.return_value = "DROP INDEX ftidx_test ON documents"
-        
+
         # Create index instance and test
         index = FulltextIndex("ftidx_test", ["title", "content"])
         result = index.drop(mock_engine, "documents")
-        
+
         assert result is True
         mock_connection.execute.assert_called_once()
 
@@ -170,7 +170,7 @@ class TestFulltextSearchBuilder:
     def test_search_builder_creation(self):
         """Test creating FulltextSearchBuilder instance"""
         builder = FulltextSearchBuilder("documents", ["title", "content"])
-        
+
         assert builder.table_name == "documents"
         assert builder.columns == ["title", "content"]
         assert builder.search_term is None
@@ -180,21 +180,23 @@ class TestFulltextSearchBuilder:
     def test_search_builder_single_column(self):
         """Test FulltextSearchBuilder with single column"""
         builder = FulltextSearchBuilder("documents", "title")
-        
+
         assert builder.table_name == "documents"
         assert builder.columns == ["title"]
 
     def test_search_builder_method_chaining(self):
         """Test FulltextSearchBuilder method chaining"""
-        builder = (FulltextSearchBuilder("documents", ["title", "content"])
-                  .search("Python programming")
-                  .set_mode(FulltextModeType.BOOLEAN)
-                  .set_with_score(True)
-                  .where("id > 0")
-                  .set_order_by("score", "DESC")
-                  .limit(10)
-                  .offset(5))
-        
+        builder = (
+            FulltextSearchBuilder("documents", ["title", "content"])
+            .search("Python programming")
+            .set_mode(FulltextModeType.BOOLEAN)
+            .set_with_score(True)
+            .where("id > 0")
+            .set_order_by("score", "DESC")
+            .limit(10)
+            .offset(5)
+        )
+
         assert builder.search_term == "Python programming"
         assert builder.mode == FulltextModeType.BOOLEAN
         assert builder.with_score is True
@@ -205,12 +207,10 @@ class TestFulltextSearchBuilder:
 
     def test_build_sql_natural_language(self):
         """Test SQL generation for natural language mode"""
-        builder = (FulltextSearchBuilder("documents", ["title", "content"])
-                  .search("machine learning")
-                  .set_with_score(True))
-        
+        builder = FulltextSearchBuilder("documents", ["title", "content"]).search("machine learning").set_with_score(True)
+
         sql = builder.build_sql()
-        
+
         expected_sql = (
             "SELECT *, MATCH(title, content) AGAINST('machine learning') AS score "
             "FROM documents "
@@ -221,14 +221,16 @@ class TestFulltextSearchBuilder:
 
     def test_build_sql_boolean_mode(self):
         """Test SQL generation for boolean mode"""
-        builder = (FulltextSearchBuilder("documents", ["title", "content"])
-                  .search("+Python +web")
-                  .set_mode(FulltextModeType.BOOLEAN)
-                  .where("author = 'Alice'")
-                  .limit(5))
-        
+        builder = (
+            FulltextSearchBuilder("documents", ["title", "content"])
+            .search("+Python +web")
+            .set_mode(FulltextModeType.BOOLEAN)
+            .where("author = 'Alice'")
+            .limit(5)
+        )
+
         sql = builder.build_sql()
-        
+
         expected_sql = (
             "SELECT * FROM documents "
             "WHERE MATCH(title, content) AGAINST('+Python +web' IN BOOLEAN MODE) "
@@ -238,14 +240,16 @@ class TestFulltextSearchBuilder:
 
     def test_build_sql_with_order_and_offset(self):
         """Test SQL generation with custom order and offset"""
-        builder = (FulltextSearchBuilder("documents", ["title", "content"])
-                  .search("database")
-                  .set_order_by("id", "ASC")
-                  .limit(10)
-                  .offset(20))
-        
+        builder = (
+            FulltextSearchBuilder("documents", ["title", "content"])
+            .search("database")
+            .set_order_by("id", "ASC")
+            .limit(10)
+            .offset(20)
+        )
+
         sql = builder.build_sql()
-        
+
         expected_sql = (
             "SELECT * FROM documents "
             "WHERE MATCH(title, content) AGAINST('database') "
@@ -256,7 +260,7 @@ class TestFulltextSearchBuilder:
     def test_build_sql_no_search_term(self):
         """Test build_sql raises error when no search term is set"""
         builder = FulltextSearchBuilder("documents", ["title", "content"])
-        
+
         with pytest.raises(ValueError, match="Search term is required"):
             builder.build_sql()
 
@@ -266,12 +270,11 @@ class TestFulltextSearchBuilder:
         mock_connection = Mock()
         mock_result = Mock()
         mock_connection.execute.return_value = mock_result
-        
-        builder = (FulltextSearchBuilder("documents", ["title", "content"])
-                  .search("test"))
-        
+
+        builder = FulltextSearchBuilder("documents", ["title", "content"]).search("test")
+
         result = builder.execute(mock_connection)
-        
+
         assert result == mock_result
         mock_connection.execute.assert_called_once()
 
@@ -284,15 +287,15 @@ class TestConvenienceFunctions:
         """Test create_fulltext_index convenience function"""
         mock_engine = Mock()
         mock_fulltext_index.create_index.return_value = True
-        
+
         result = create_fulltext_index(
             engine=mock_engine,
             table_name="documents",
             name="ftidx_test",
             columns=["title", "content"],
-            algorithm=FulltextAlgorithmType.BM25
+            algorithm=FulltextAlgorithmType.BM25,
         )
-        
+
         assert result is True
         mock_fulltext_index.create_index.assert_called_once_with(
             mock_engine, "documents", "ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25
@@ -301,7 +304,7 @@ class TestConvenienceFunctions:
     def test_fulltext_search_builder_function(self):
         """Test fulltext_search_builder convenience function"""
         builder = fulltext_search_builder("documents", ["title", "content"])
-        
+
         assert isinstance(builder, FulltextSearchBuilder)
         assert builder.table_name == "documents"
         assert builder.columns == ["title", "content"]
@@ -309,7 +312,7 @@ class TestConvenienceFunctions:
     def test_fulltext_search_builder_function_single_column(self):
         """Test fulltext_search_builder with single column"""
         builder = fulltext_search_builder("documents", "title")
-        
+
         assert isinstance(builder, FulltextSearchBuilder)
         assert builder.table_name == "documents"
         assert builder.columns == ["title"]

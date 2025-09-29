@@ -114,7 +114,12 @@ class FulltextIndex(Index):
             )
     """
 
-    def __init__(self, name: str, columns: Union[str, List[str]], algorithm: str = FulltextAlgorithmType.TF_IDF):
+    def __init__(
+        self,
+        name: str,
+        columns: Union[str, List[str]],
+        algorithm: str = FulltextAlgorithmType.TF_IDF,
+    ):
         """
         Initialize FulltextIndex.
 
@@ -127,16 +132,16 @@ class FulltextIndex(Index):
             columns = [columns]
 
         self.algorithm = algorithm
-        self._columns = columns  # Store columns for easy access
+        self._column_names = columns.copy()  # Store column names for easy access
         super().__init__(name, *columns)
 
     def get_columns(self):
         """Get column names as a list"""
-        return self._columns
+        return self._column_names.copy()
 
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for fulltext index."""
-        columns_str = ", ".join(self._columns)
+        columns_str = ", ".join(self._column_names)
         return f"CREATE FULLTEXT INDEX {self.name} ON {table_name} ({columns_str})"
 
     @classmethod
@@ -545,7 +550,11 @@ class FulltextSearchBuilder:
 
 # Convenience functions
 def create_fulltext_index(
-    engine, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = FulltextAlgorithmType.TF_IDF
+    engine,
+    table_name: str,
+    name: str,
+    columns: Union[str, List[str]],
+    algorithm: str = FulltextAlgorithmType.TF_IDF,
 ) -> bool:
     """
     Convenience function to create a fulltext index.

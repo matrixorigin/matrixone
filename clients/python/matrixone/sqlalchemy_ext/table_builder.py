@@ -108,7 +108,7 @@ class VectorTableBuilder:
             kwargs["primary_key"] = True
         return self.add_column(name, TINYINT, **kwargs)
 
-    def add_numeric_column(self, name: str, column_type: str, precision: int = None, scale: int = None, **kwargs):
+    def add_numeric_column(self, name: str, column_type: str, precision: Optional[int] = None, scale: Optional[int] = None, **kwargs):
         """Add a numeric column (float, double, decimal, numeric)."""
         if column_type in ("float", "double"):
             from sqlalchemy import Float
@@ -248,9 +248,7 @@ def create_vector_index_table(table_name: str, metadata: MetaData = None) -> Vec
     return builder
 
 
-def create_document_vector_table(
-    table_name: str, metadata: MetaData = None, vector_dim: int = 384
-) -> VectorTableBuilder:
+def create_document_vector_table(table_name: str, metadata: MetaData = None, vector_dim: int = 384) -> VectorTableBuilder:
     """
     Create a table builder for document vector storage.
     """
@@ -270,9 +268,7 @@ def create_document_vector_table(
     return builder
 
 
-def create_product_vector_table(
-    table_name: str, metadata: MetaData = None, vector_dim: int = 512
-) -> VectorTableBuilder:
+def create_product_vector_table(table_name: str, metadata: MetaData = None, vector_dim: int = 512) -> VectorTableBuilder:
     """
     Create a table builder for product vector storage.
     """

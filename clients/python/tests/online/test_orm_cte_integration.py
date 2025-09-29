@@ -50,42 +50,50 @@ class TestORMCTEIntegration:
         self.client.execute(f"USE {self.test_db}")
 
         # Create tables
-        self.client.execute(f"""
+        self.client.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS {self.test_db}.cte_users (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(50),
                 department VARCHAR(50),
                 salary INT
             )
-        """)
+        """
+        )
 
-        self.client.execute(f"""
+        self.client.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS {self.test_db}.cte_articles (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 title VARCHAR(100),
                 author_id INT,
                 views INT
             )
-        """)
+        """
+        )
 
         # Insert test data
-        self.client.execute(f"""
+        self.client.execute(
+            f"""
             INSERT INTO {self.test_db}.cte_users (name, department, salary) VALUES
             ('Alice', 'Engineering', 80000),
             ('Bob', 'Engineering', 90000),
             ('Charlie', 'Marketing', 70000),
             ('Diana', 'Marketing', 75000),
             ('Eve', 'Sales', 60000)
-        """)
+        """
+        )
 
-        self.client.execute(f"""
+        self.client.execute(
+            f"""
             INSERT INTO {self.test_db}.cte_articles (title, author_id, views) VALUES
             ('Python Tutorial', 1, 1000),
             ('Database Design', 1, 800),
             ('Marketing Strategy', 3, 600),
             ('Sales Tips', 5, 400),
             ('Advanced Python', 2, 1200)
-        """)
+        """
+        )
 
         yield
 
@@ -99,11 +107,7 @@ class TestORMCTEIntegration:
     def test_basic_cte_creation(self):
         """Test basic CTE creation from a query"""
         # Create a CTE for high-salary users
-        high_salary_users = (
-            self.client.query(User)
-            .filter(User.salary > 75000)
-            .cte("high_salary_users")
-        )
+        high_salary_users = self.client.query(User).filter(User.salary > 75000).cte("high_salary_users")
 
         # Verify CTE object properties
         assert isinstance(high_salary_users, CTE)
@@ -119,11 +123,7 @@ class TestORMCTEIntegration:
     def test_cte_usage_in_query(self):
         """Test using a CTE in another query"""
         # Create CTE for engineering users
-        engineering_users = (
-            self.client.query(User)
-            .filter(User.department == "Engineering")
-            .cte("engineering_users")
-        )
+        engineering_users = self.client.query(User).filter(User.department == "Engineering").cte("engineering_users")
 
         # Use CTE in another query
         result = self.client.query(engineering_users).all()
@@ -140,24 +140,16 @@ class TestORMCTEIntegration:
     def test_multiple_ctes_in_query(self):
         """Test using multiple CTEs in a single query"""
         # Create first CTE: high-salary users
-        high_salary = (
-            self.client.query(User)
-            .filter(User.salary > 70000)
-            .cte("high_salary")
-        )
+        high_salary = self.client.query(User).filter(User.salary > 70000).cte("high_salary")
 
         # Create second CTE: popular articles
-        popular_articles = (
-            self.client.query(Article)
-            .filter(Article.views > 500)
-            .cte("popular_articles")
-        )
+        popular_articles = self.client.query(Article).filter(Article.views > 500).cte("popular_articles")
 
         # Use both CTEs in a query with with_cte method
         result = (
             self.client.query(high_salary)
             .with_cte(popular_articles)
-            .join(popular_articles, "high_salary.id = popular_articles.author_id")
+            .join(popular_articles, onclause="high_salary.id = popular_articles.author_id")
             .all()
         )
 
@@ -167,16 +159,10 @@ class TestORMCTEIntegration:
     def test_cte_with_aggregation(self):
         """Test CTE with aggregation functions"""
         # Create CTE with department statistics
-        dept_stats = (
-            self.client.query(User.department, User.salary)
-            .cte("dept_stats")
-        )
+        dept_stats = self.client.query(User.department, User.salary).cte("dept_stats")
 
         # Use CTE in aggregation query
-        result = (
-            self.client.query(dept_stats)
-            .all()
-        )
+        result = self.client.query(dept_stats).all()
 
         # Should return all department-salary combinations
         assert len(result) == 5  # 5 users total
@@ -184,11 +170,7 @@ class TestORMCTEIntegration:
     def test_recursive_cte_flag(self):
         """Test recursive CTE flag"""
         # Create a recursive CTE (even though we won't use recursion in this test)
-        recursive_cte = (
-            self.client.query(User)
-            .filter(User.id == 1)
-            .cte("recursive_users", recursive=True)
-        )
+        recursive_cte = self.client.query(User).filter(User.id == 1).cte("recursive_users", recursive=True)
 
         assert recursive_cte.recursive == True
         assert recursive_cte.name == "recursive_users"
@@ -197,11 +179,7 @@ class TestORMCTEIntegration:
         """Test CTE usage within a transaction"""
         with self.client.transaction() as tx:
             # Create CTE within transaction
-            tx_users = (
-                tx.query(User)
-                .filter(User.department == "Marketing")
-                .cte("tx_users")
-            )
+            tx_users = tx.query(User).filter(User.department == "Marketing").cte("tx_users")
 
             # Use CTE within transaction
             result = tx.query(tx_users).all()
@@ -216,7 +194,7 @@ class TestORMCTEIntegration:
         # Create CTE for users with articles - select specific columns to avoid ambiguity
         users_with_articles = (
             self.client.query(User.id, User.name, User.department, User.salary)
-            .join("cte_articles", "cte_users.id = cte_articles.author_id")
+            .join("cte_articles", onclause="cte_users.id = cte_articles.author_id")
             .cte("users_with_articles")
         )
 
@@ -230,11 +208,7 @@ class TestORMCTEIntegration:
     def test_cte_sql_generation(self):
         """Test that CTE generates correct SQL"""
         # Create a simple CTE
-        simple_cte = (
-            self.client.query(User.id, User.name)
-            .filter(User.salary > 80000)
-            .cte("simple_cte")
-        )
+        simple_cte = self.client.query(User.id, User.name).filter(User.salary > 80000).cte("simple_cte")
 
         # Get the SQL
         cte_sql, params = simple_cte.as_sql()
@@ -257,11 +231,7 @@ class TestORMCTEIntegration:
     def test_cte_parameter_handling(self):
         """Test that CTE parameters are handled correctly"""
         # Create CTE with parameterized query
-        param_cte = (
-            self.client.query(User)
-            .filter(User.salary > 75000)  # This should generate a parameter
-            .cte("param_cte")
-        )
+        param_cte = self.client.query(User).filter(User.salary > 75000).cte("param_cte")  # This should generate a parameter
 
         # Use CTE in query
         result = self.client.query(param_cte).all()

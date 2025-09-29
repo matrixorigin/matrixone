@@ -8,8 +8,12 @@ from unittest.mock import Mock
 from sqlalchemy import MetaData, Table, Column, Integer, String, Index
 from sqlalchemy.schema import CreateTable
 from matrixone.sqlalchemy_ext import (
-    VectorType, Vectorf32, Vectorf64, VectorTypeDecorator,
-    MatrixOneDialect, VectorTableBuilder
+    VectorType,
+    Vectorf32,
+    Vectorf64,
+    VectorTypeDecorator,
+    MatrixOneDialect,
+    VectorTableBuilder,
 )
 
 pytestmark = pytest.mark.vector
@@ -23,7 +27,7 @@ class TestSQLAlchemyVectorIntegration:
     def test_vector_type_in_sqlalchemy_table(self):
         """Test using VectorType in SQLAlchemy Table definition."""
         metadata = MetaData()
-        
+
         # Create table with vector columns
         table = Table(
             'vector_test',
@@ -31,13 +35,13 @@ class TestSQLAlchemyVectorIntegration:
             Column('id', Integer, primary_key=True),
             Column('name', String(100)),
             Column('embedding_32', Vectorf32(dimension=128)),
-            Column('embedding_64', Vectorf64(dimension=256))
+            Column('embedding_64', Vectorf64(dimension=256)),
         )
-        
+
         # Verify table structure
         assert table.name == 'vector_test'
         assert len(table.columns) == 4
-        
+
         # Check column types
         column_types = {col.name: type(col.type) for col in table.columns}
         assert column_types['id'] == Integer
@@ -48,18 +52,19 @@ class TestSQLAlchemyVectorIntegration:
     def test_sql_generation_with_vector_types(self):
         """Test SQL generation with vector types."""
         metadata = MetaData()
-        
+
         table = Table(
             'sql_test',
             metadata,
             Column('id', Integer, primary_key=True),
-            Column('vector', Vectorf32(dimension=128))
+            Column('vector', Vectorf32(dimension=128)),
         )
-        
+
         # Generate CREATE TABLE SQL using MatrixOne dialect
         from matrixone.sqlalchemy_ext import MatrixOneDialect
+
         create_sql = str(CreateTable(table).compile(dialect=MatrixOneDialect(), compile_kwargs={"literal_binds": True}))
-        
+
         # Verify SQL contains vector type
         assert "CREATE TABLE sql_test" in create_sql
         assert "vector vecf32(128)" in create_sql
@@ -68,14 +73,14 @@ class TestSQLAlchemyVectorIntegration:
     def test_vector_type_decorator_in_table(self):
         """Test VectorTypeDecorator in table definition."""
         metadata = MetaData()
-        
+
         table = Table(
             'decorator_test',
             metadata,
             Column('id', Integer, primary_key=True),
-            Column('vector', VectorTypeDecorator(dimension=64, precision="f32"))
+            Column('vector', VectorTypeDecorator(dimension=64, precision="f32")),
         )
-        
+
         # Verify table structure
         assert len(table.columns) == 2
         vector_col = table.columns['vector']
@@ -86,7 +91,7 @@ class TestSQLAlchemyVectorIntegration:
     def test_matrixone_dialect_type_handling(self):
         """Test MatrixOneDialect type handling."""
         dialect = MatrixOneDialect()
-        
+
         # Test vector type creation from strings
         test_cases = [
             ("vecf32(128)", "f32", 128),
@@ -94,7 +99,7 @@ class TestSQLAlchemyVectorIntegration:
             ("vecf64(512)", "f64", 512),
             ("VECF64(1024)", "f64", 1024),
         ]
-        
+
         for type_str, precision, expected_dim in test_cases:
             vector_type = dialect._create_vector_type(precision, type_str)
             assert vector_type.precision == precision
@@ -103,21 +108,21 @@ class TestSQLAlchemyVectorIntegration:
     def test_vector_table_builder_integration(self):
         """Test VectorTableBuilder integration with SQLAlchemy."""
         metadata = MetaData()
-        
+
         # Create table using builder
         builder = VectorTableBuilder("builder_test", metadata)
         builder.add_int_column("id", primary_key=True)
         builder.add_string_column("name", length=100)
         builder.add_vecf32_column("embedding", dimension=128)
         builder.add_index("name")
-        
+
         table = builder.build()
-        
+
         # Verify table structure
         assert table.name == "builder_test"
         assert len(table.columns) == 3
         assert len(table.indexes) == 1
-        
+
         # Check column types
         for col in table.columns:
             if col.name == "embedding":
@@ -128,12 +133,12 @@ class TestSQLAlchemyVectorIntegration:
         # Test Vectorf32 serialization
         vec32 = Vectorf32(dimension=128)
         bind_processor = vec32.bind_processor(None)
-        
+
         # Test list to string conversion
         vector_list = [1.0, 2.0, 3.0]
         result = bind_processor(vector_list)
         assert result == "[1.0,2.0,3.0]"
-        
+
         # Test string passthrough
         vector_string = "[4.0,5.0,6.0]"
         result = bind_processor(vector_string)
@@ -144,12 +149,12 @@ class TestSQLAlchemyVectorIntegration:
         # Test Vectorf64 deserialization
         vec64 = Vectorf64(dimension=256)
         result_processor = vec64.result_processor(None, None)
-        
+
         # Test string to list conversion
         vector_string = "[1.0,2.0,3.0]"
         result = result_processor(vector_string)
         assert result == [1.0, 2.0, 3.0]
-        
+
         # Test None handling
         result = result_processor(None)
         assert result is None
@@ -157,7 +162,7 @@ class TestSQLAlchemyVectorIntegration:
     def test_complex_table_with_multiple_vector_columns(self):
         """Test complex table with multiple vector columns."""
         metadata = MetaData()
-        
+
         table = Table(
             'complex_vector_table',
             metadata,
@@ -165,20 +170,19 @@ class TestSQLAlchemyVectorIntegration:
             Column('title', String(200)),
             Column('content_embedding', Vectorf32(dimension=384)),
             Column('title_embedding', Vectorf32(dimension=128)),
-            Column('metadata_embedding', Vectorf64(dimension=512))
+            Column('metadata_embedding', Vectorf64(dimension=512)),
         )
-        
+
         # Verify table structure
         assert table.name == 'complex_vector_table'
         assert len(table.columns) == 5
-        
+
         # Check vector columns
         vector_columns = [
-            col for col in table.columns 
-            if isinstance(col.type, (VectorType, VectorTypeDecorator, Vectorf32, Vectorf64))
+            col for col in table.columns if isinstance(col.type, (VectorType, VectorTypeDecorator, Vectorf32, Vectorf64))
         ]
         assert len(vector_columns) == 3
-        
+
         # Verify dimensions
         dimensions = {col.name: col.type.dimension for col in vector_columns}
         assert dimensions['content_embedding'] == 384
@@ -188,27 +192,28 @@ class TestSQLAlchemyVectorIntegration:
     def test_table_with_indexes_and_vector_columns(self):
         """Test table with indexes and vector columns."""
         metadata = MetaData()
-        
+
         table = Table(
             'indexed_vector_table',
             metadata,
             Column('id', Integer, primary_key=True),
             Column('category', String(50)),
             Column('embedding', Vectorf32(dimension=128)),
-            Column('score', Integer)
+            Column('score', Integer),
         )
-        
+
         # Add indexes
         Index('idx_category', table.c.category)
         Index('idx_score', table.c.score)
-        
+
         # Verify table structure
         assert len(table.indexes) == 2
-        
+
         # Generate SQL to verify structure using MatrixOne dialect
         from matrixone.sqlalchemy_ext import MatrixOneDialect
+
         create_sql = str(CreateTable(table).compile(dialect=MatrixOneDialect(), compile_kwargs={"literal_binds": True}))
-        
+
         # Check SQL contains expected elements
         assert "CREATE TABLE indexed_vector_table" in create_sql
         assert "embedding vecf32(128)" in create_sql
@@ -221,14 +226,14 @@ class TestSQLAlchemyVectorIntegration:
         vec2 = Vectorf32(dimension=128)
         vec3 = Vectorf32(dimension=256)
         vec4 = Vectorf64(dimension=128)
-        
+
         # Test equality by comparing properties
         assert vec1.dimension == vec2.dimension
         assert vec1.precision == vec2.precision
-        
+
         # Different dimension should not be equal
         assert vec1.dimension != vec3.dimension
-        
+
         # Different precision should not be equal
         assert vec1.precision != vec4.precision
 
@@ -237,11 +242,11 @@ class TestSQLAlchemyVectorIntegration:
         # Test very large dimensions
         large_vec = Vectorf32(dimension=65535)
         assert large_vec.dimension == 65535
-        
+
         # Test dimension 1
         small_vec = Vectorf32(dimension=1)
         assert small_vec.dimension == 1
-        
+
         # Test without dimension
         no_dim_vec = VectorType(precision="f32")
         assert no_dim_vec.dimension is None

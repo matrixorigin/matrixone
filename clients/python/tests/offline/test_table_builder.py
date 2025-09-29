@@ -8,8 +8,11 @@ from unittest.mock import Mock
 from sqlalchemy import MetaData
 from sqlalchemy.schema import CreateTable
 from matrixone.sqlalchemy_ext import (
-    VectorTableBuilder, create_vector_table, create_vector_index_table,
-    Vectorf32, Vectorf64
+    VectorTableBuilder,
+    create_vector_table,
+    create_vector_index_table,
+    Vectorf32,
+    Vectorf64,
 )
 
 pytestmark = pytest.mark.vector
@@ -25,16 +28,16 @@ class TestVectorTableBuilder:
         metadata = MetaData()
         builder = create_vector_index_table("vector_index_07", metadata)
         table = builder.build()
-        
+
         assert table.name == "vector_index_07"
         assert len(table.columns) == 3
-        
+
         # Check columns
         column_names = [col.name for col in table.columns]
         assert "a" in column_names
         assert "b" in column_names
         assert "c" in column_names
-        
+
         # Check column types
         for col in table.columns:
             if col.name == "a":
@@ -44,7 +47,7 @@ class TestVectorTableBuilder:
                 assert str(col.type) == "vecf32(128)"
             elif col.name == "c":
                 assert str(col.type) == "INTEGER"
-        
+
         # Check indexes
         assert len(table.indexes) == 1
         index = list(table.indexes)[0]
@@ -56,18 +59,18 @@ class TestVectorTableBuilder:
         """Test manual table building."""
         metadata = MetaData()
         builder = VectorTableBuilder("test_table", metadata)
-        
+
         builder.add_int_column("id", primary_key=True)
         builder.add_string_column("name", length=100)
         builder.add_vecf32_column("embedding", dimension=128)
         builder.add_index("name")
-        
+
         table = builder.build()
-        
+
         assert table.name == "test_table"
         assert len(table.columns) == 3
         assert len(table.indexes) == 1
-        
+
         # Check column types
         for col in table.columns:
             if col.name == "id":
@@ -82,13 +85,13 @@ class TestVectorTableBuilder:
         """Test different vector column types."""
         metadata = MetaData()
         builder = VectorTableBuilder("vector_types_test", metadata)
-        
+
         builder.add_vecf32_column("vec32", dimension=128)
         builder.add_vecf64_column("vec64", dimension=256)
         builder.add_int_column("id", primary_key=True)
-        
+
         table = builder.build()
-        
+
         # Check vector column types
         for col in table.columns:
             if col.name == "vec32":
@@ -100,22 +103,22 @@ class TestVectorTableBuilder:
         """Test table with multiple indexes."""
         metadata = MetaData()
         builder = VectorTableBuilder("multi_index_table", metadata)
-        
+
         builder.add_int_column("id", primary_key=True)
         builder.add_string_column("name", length=100)
         builder.add_string_column("category", length=50)
         builder.add_int_column("version")
         builder.add_vecf32_column("embedding", dimension=128)
-        
+
         # Add multiple indexes
         builder.add_index("name")
         builder.add_index("category")
         builder.add_index(["category", "version"])
-        
+
         table = builder.build()
-        
+
         assert len(table.indexes) == 3
-        
+
         index_names = [idx.name for idx in table.indexes]
         assert any("name" in name for name in index_names)
         assert any("category" in name for name in index_names)
@@ -126,11 +129,12 @@ class TestVectorTableBuilder:
         metadata = MetaData()
         builder = create_vector_index_table("sql_test_table", metadata)
         table = builder.build()
-        
+
         # Generate CREATE TABLE SQL using MatrixOne dialect
         from matrixone.sqlalchemy_ext import MatrixOneDialect
+
         create_sql = str(CreateTable(table).compile(dialect=MatrixOneDialect(), compile_kwargs={"literal_binds": True}))
-        
+
         # Check that SQL contains expected elements
         assert "CREATE TABLE sql_test_table" in create_sql
         assert "a INTEGER NOT NULL" in create_sql
@@ -143,7 +147,7 @@ class TestVectorTableBuilder:
         metadata = MetaData()
         builder = VectorTableBuilder("empty_table", metadata)
         table = builder.build()
-        
+
         assert table.name == "empty_table"
         assert len(table.columns) == 0
         assert len(table.indexes) == 0
@@ -151,15 +155,17 @@ class TestVectorTableBuilder:
     def test_table_builder_fluent_interface(self):
         """Test the fluent interface of table builder."""
         metadata = MetaData()
-        
+
         # Chain method calls
-        table = (VectorTableBuilder("fluent_table", metadata)
-                .add_int_column("id", primary_key=True)
-                .add_string_column("name", length=100)
-                .add_vecf32_column("embedding", dimension=128)
-                .add_index("name")
-                .build())
-        
+        table = (
+            VectorTableBuilder("fluent_table", metadata)
+            .add_int_column("id", primary_key=True)
+            .add_string_column("name", length=100)
+            .add_vecf32_column("embedding", dimension=128)
+            .add_index("name")
+            .build()
+        )
+
         assert table.name == "fluent_table"
         assert len(table.columns) == 3
         assert len(table.indexes) == 1
@@ -168,11 +174,11 @@ class TestVectorTableBuilder:
         """Test create_vector_table convenience function."""
         metadata = MetaData()
         builder = create_vector_table("convenience_table", metadata)
-        
+
         # Should return a builder, not a table
         assert isinstance(builder, VectorTableBuilder)
         assert builder.table_name == "convenience_table"
-        
+
         # Build the table
         table = builder.add_int_column("id", primary_key=True).build()
         assert table.name == "convenience_table"

@@ -21,7 +21,7 @@ class TestVectorType:
         vec_type = VectorType(dimension=128, precision="f32")
         assert vec_type.dimension == 128
         assert vec_type.precision == "f32"
-        
+
         # Test without dimension
         vec_type_no_dim = VectorType(precision="f64")
         assert vec_type_no_dim.dimension is None
@@ -33,7 +33,7 @@ class TestVectorType:
         vec_type = VectorType(dimension=64, precision="f32")
         spec = vec_type.get_col_spec()
         assert spec == "vecf32(64)"
-        
+
         # Test without dimension
         vec_type_no_dim = VectorType(precision="f64")
         spec = vec_type_no_dim.get_col_spec()
@@ -43,15 +43,15 @@ class TestVectorType:
         """Test VectorType bind processor."""
         vec_type = VectorType(dimension=3, precision="f32")
         processor = vec_type.bind_processor(None)
-        
+
         # Test with list
         result = processor([1.0, 2.0, 3.0])
         assert result == "[1.0,2.0,3.0]"
-        
+
         # Test with string
         result = processor("[1.0,2.0,3.0]")
         assert result == "[1.0,2.0,3.0]"
-        
+
         # Test with None
         result = processor(None)
         assert result is None
@@ -60,15 +60,15 @@ class TestVectorType:
         """Test VectorType result processor."""
         vec_type = VectorType(dimension=3, precision="f32")
         processor = vec_type.result_processor(None, None)
-        
+
         # Test with vector string
         result = processor("[1.0,2.0,3.0]")
         assert result == [1.0, 2.0, 3.0]
-        
+
         # Test with empty vector
         result = processor("[]")
         assert result == []
-        
+
         # Test with None
         result = processor(None)
         assert result is None
@@ -78,7 +78,7 @@ class TestVectorType:
         vec32 = Vectorf32(dimension=64)
         assert vec32.dimension == 64
         assert vec32.precision == "f32"
-        
+
         spec = vec32.get_col_spec()
         assert spec == "vecf32(64)"
 
@@ -87,7 +87,7 @@ class TestVectorType:
         vec64 = Vectorf64(dimension=128)
         assert vec64.dimension == 128
         assert vec64.precision == "f64"
-        
+
         spec = vec64.get_col_spec()
         assert spec == "vecf64(128)"
 
@@ -100,15 +100,15 @@ class TestVectorType:
     def test_vector_type_decorator_bind_processing(self):
         """Test VectorTypeDecorator bind parameter processing."""
         decorator = VectorTypeDecorator(dimension=3, precision="f32")
-        
+
         # Test with list
         result = decorator.process_bind_param([1.0, 2.0, 3.0], None)
         assert result == "[1.0,2.0,3.0]"
-        
+
         # Test with string
         result = decorator.process_bind_param("[1.0,2.0,3.0]", None)
         assert result == "[1.0,2.0,3.0]"
-        
+
         # Test with None
         result = decorator.process_bind_param(None, None)
         assert result is None
@@ -116,15 +116,15 @@ class TestVectorType:
     def test_vector_type_decorator_result_processing(self):
         """Test VectorTypeDecorator result processing."""
         decorator = VectorTypeDecorator(dimension=3, precision="f32")
-        
+
         # Test with vector string
         result = decorator.process_result_value("[1.0,2.0,3.0]", None)
         assert result == [1.0, 2.0, 3.0]
-        
+
         # Test with empty vector
         result = decorator.process_result_value("[]", None)
         assert result == []
-        
+
         # Test with None
         result = decorator.process_result_value(None, None)
         assert result is None
@@ -137,7 +137,7 @@ class TestVectorType:
         assert "VectorType" in repr_str
         assert "dimension=128" in repr_str
         assert "precision='f32'" in repr_str
-        
+
         # Test without dimension
         vec_type_no_dim = VectorType(precision="f64")
         repr_str = repr(vec_type_no_dim)
@@ -152,7 +152,7 @@ class TestVectorType:
         assert "VectorTypeDecorator" in repr_str
         assert "dimension=256" in repr_str
         assert "precision='f32'" in repr_str
-        
+
         # Test without dimension
         decorator_no_dim = VectorTypeDecorator(precision="f64")
         repr_str = repr(decorator_no_dim)

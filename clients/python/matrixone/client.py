@@ -5,7 +5,7 @@ MatrixOne Client - Basic implementation
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
@@ -435,9 +435,7 @@ class Client(BaseMatrixOneClient):
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
-    def _build_login_info(
-        self, user: str, account: Optional[str] = None, role: Optional[str] = None
-    ) -> tuple[str, dict]:
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -477,9 +475,7 @@ class Client(BaseMatrixOneClient):
                 # "account#user#role" format
                 final_account, final_user, final_role = parts[0], parts[1], parts[2]
             else:
-                raise ValueError(
-                    f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'"
-                )
+                raise ValueError(f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'")
 
             final_user_string = user
 
@@ -804,7 +800,7 @@ class Client(BaseMatrixOneClient):
                 return query
 
     @contextmanager
-    def snapshot(self, snapshot_name: str):
+    def snapshot(self, snapshot_name: str) -> Generator[SnapshotClient, None, None]:
         """
         Snapshot context manager
 
@@ -820,7 +816,7 @@ class Client(BaseMatrixOneClient):
         yield snapshot_client
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Generator[TransactionWrapper, None, None]:
         """
         Transaction context manager
 
@@ -1295,7 +1291,14 @@ class Client(BaseMatrixOneClient):
                 builder.add_boolean_column(column_name)
             elif column_def in ("json", "jsonb"):
                 builder.add_json_column(column_name)
-            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
                 builder.add_binary_column(column_name, column_def)
             else:
                 raise ValueError(
@@ -1417,7 +1420,14 @@ class Client(BaseMatrixOneClient):
                 builder.add_boolean_column(column_name)
             elif column_def in ("json", "jsonb"):
                 builder.add_json_column(column_name)
-            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
                 builder.add_binary_column(column_name, column_def)
             else:
                 raise ValueError(
@@ -1593,7 +1603,14 @@ class Client(BaseMatrixOneClient):
                 builder.add_boolean_column(column_name)
             elif column_def in ("json", "jsonb"):
                 builder.add_json_column(column_name)
-            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
                 builder.add_binary_column(column_name, column_def)
             else:
                 raise ValueError(
@@ -1744,7 +1761,14 @@ class Client(BaseMatrixOneClient):
                 builder.add_boolean_column(column_name)
             elif column_def in ("json", "jsonb"):
                 builder.add_json_column(column_name)
-            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
                 builder.add_binary_column(column_name, column_def)
             else:
                 raise ValueError(
@@ -1959,19 +1983,19 @@ class Client(BaseMatrixOneClient):
 class ResultSet:
     """Result set wrapper for query results"""
 
-    def __init__(self, columns: List[str], rows: List[Tuple], affected_rows: int = 0):
+    def __init__(self, columns: List[str], rows: List[Tuple[Any, ...]], affected_rows: int = 0):
         self.columns = columns
         self.rows = rows
         self.affected_rows = affected_rows
         self._cursor = 0  # Track current position in result set
 
-    def fetchall(self) -> List[Tuple]:
+    def fetchall(self) -> List[Tuple[Any, ...]]:
         """Fetch all remaining rows"""
         remaining_rows = self.rows[self._cursor :]
         self._cursor = len(self.rows)
         return remaining_rows
 
-    def fetchone(self) -> Optional[Tuple]:
+    def fetchone(self) -> Optional[Tuple[Any, ...]]:
         """Fetch one row"""
         if self._cursor < len(self.rows):
             row = self.rows[self._cursor]
@@ -1979,7 +2003,7 @@ class ResultSet:
             return row
         return None
 
-    def fetchmany(self, size: int = 1) -> List[Tuple]:
+    def fetchmany(self, size: int = 1) -> List[Tuple[Any, ...]]:
         """Fetch many rows"""
         start = self._cursor
         end = min(start + size, len(self.rows))
@@ -2089,23 +2113,23 @@ class TransactionWrapper:
 
         return self._sqlalchemy_session
 
-    def commit_sqlalchemy(self):
+    def commit_sqlalchemy(self) -> None:
         """Commit SQLAlchemy session"""
         if self._sqlalchemy_session:
             self._sqlalchemy_session.commit()
 
-    def rollback_sqlalchemy(self):
+    def rollback_sqlalchemy(self) -> None:
         """Rollback SQLAlchemy session"""
         if self._sqlalchemy_session:
             self._sqlalchemy_session.rollback()
 
-    def close_sqlalchemy(self):
+    def close_sqlalchemy(self) -> None:
         """Close SQLAlchemy session"""
         if self._sqlalchemy_session:
             self._sqlalchemy_session.close()
             self._sqlalchemy_session = None
 
-    def insert(self, table_name: str, data: dict) -> ResultSet:
+    def insert(self, table_name: str, data: dict[str, Any]) -> ResultSet:
         """
         Insert data into a table within transaction.
 
@@ -2119,7 +2143,7 @@ class TransactionWrapper:
         sql = self.client._build_insert_sql(table_name, data)
         return self.execute(sql)
 
-    def batch_insert(self, table_name: str, data_list: list) -> ResultSet:
+    def batch_insert(self, table_name: str, data_list: list[dict[str, Any]]) -> ResultSet:
         """
         Batch insert data into a table within transaction.
 
@@ -2309,7 +2333,14 @@ class TransactionWrapper:
                 builder.add_boolean_column(column_name)
             elif column_def in ("json", "jsonb"):
                 builder.add_json_column(column_name)
-            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
                 builder.add_binary_column(column_name, column_def)
             else:
                 raise ValueError(
@@ -2446,7 +2477,14 @@ class TransactionWrapper:
                 builder.add_boolean_column(column_name)
             elif column_def in ("json", "jsonb"):
                 builder.add_json_column(column_name)
-            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
                 builder.add_binary_column(column_name, column_def)
             else:
                 raise ValueError(
@@ -2570,13 +2608,21 @@ class TransactionCloneManager(CloneManager):
         self.transaction_wrapper = transaction_wrapper
 
     def clone_database(
-        self, target_db: str, source_db: str, snapshot_name: Optional[str] = None, if_not_exists: bool = False
+        self,
+        target_db: str,
+        source_db: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
     ) -> None:
         """Clone database within transaction"""
         return super().clone_database(target_db, source_db, snapshot_name, if_not_exists, self.transaction_wrapper)
 
     def clone_table(
-        self, target_table: str, source_table: str, snapshot_name: Optional[str] = None, if_not_exists: bool = False
+        self,
+        target_table: str,
+        source_table: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
     ) -> None:
         """Clone table within transaction"""
         return super().clone_table(target_table, source_table, snapshot_name, if_not_exists, self.transaction_wrapper)
@@ -3529,9 +3575,7 @@ class SimpleFulltextQueryBuilder:
         if not self._columns:
             raise ValueError("Search columns must be specified. Use .columns('col1', 'col2') to specify columns.")
         if not self._query_text:
-            raise ValueError(
-                "Search query is required. Use .search('query') or .must_have('term') to specify search terms."
-            )
+            raise ValueError("Search query is required. Use .search('query') or .must_have('term') to specify search terms.")
 
         # Build MATCH AGAINST clause
         columns_str = ", ".join(self._columns)
@@ -3621,7 +3665,12 @@ class FulltextIndexManager:
         return self
 
     def create_in_transaction(
-        self, transaction_wrapper, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+        self,
+        transaction_wrapper,
+        table_name: str,
+        name: str,
+        columns: Union[str, List[str]],
+        algorithm: str = "TF-IDF",
     ) -> "FulltextIndexManager":
         """
         Create a fulltext index within an existing transaction.

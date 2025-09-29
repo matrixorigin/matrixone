@@ -115,24 +115,14 @@ class TestPineconeFilterOffline:
 
     def test_filter_parsing_and_operator(self, mock_index):
         """Test filter parsing with $and operator"""
-        filter_dict = {
-            "$and": [
-                {"genre": "action"},
-                {"year": {"$gte": 2000}}
-            ]
-        }
+        filter_dict = {"$and": [{"genre": "action"}, {"year": {"$gte": 2000}}]}
         where_conditions, where_params = mock_index._parse_pinecone_filter(filter_dict)
         assert where_conditions == ["(genre = ? AND year >= ?)"]
         assert where_params == ["action", 2000]
 
     def test_filter_parsing_or_operator(self, mock_index):
         """Test filter parsing with $or operator"""
-        filter_dict = {
-            "$or": [
-                {"genre": "action"},
-                {"genre": "sci-fi"}
-            ]
-        }
+        filter_dict = {"$or": [{"genre": "action"}, {"genre": "sci-fi"}]}
         where_conditions, where_params = mock_index._parse_pinecone_filter(filter_dict)
         assert where_conditions == ["(genre = ? OR genre = ?)"]
         assert where_params == ["action", "sci-fi"]
@@ -141,18 +131,8 @@ class TestPineconeFilterOffline:
         """Test filter parsing with nested $and and $or conditions"""
         filter_dict = {
             "$and": [
-                {
-                    "$or": [
-                        {"genre": "action"},
-                        {"genre": "sci-fi"}
-                    ]
-                },
-                {
-                    "$and": [
-                        {"year": {"$gte": 2000}},
-                        {"rating": {"$gte": 8.0}}
-                    ]
-                }
+                {"$or": [{"genre": "action"}, {"genre": "sci-fi"}]},
+                {"$and": [{"year": {"$gte": 2000}}, {"rating": {"$gte": 8.0}}]},
             ]
         }
         where_conditions, where_params = mock_index._parse_pinecone_filter(filter_dict)
@@ -180,7 +160,7 @@ class TestPineconeFilterOffline:
         large_list.extend(["action", "sci-fi"])
         filter_dict = {"genre": {"$in": large_list}}
         where_conditions, where_params = mock_index._parse_pinecone_filter(filter_dict)
-        
+
         # Check that placeholders are created correctly
         expected_placeholders = ",".join(["?" for _ in range(1002)])
         assert where_conditions == [f"genre IN ({expected_placeholders})"]
@@ -212,27 +192,23 @@ class TestPineconeFilterOffline:
                 id="1",
                 score=0.1,
                 metadata={"title": "Movie 1", "genre": "action"},
-                values=[0.1] * 64
+                values=[0.1] * 64,
             ),
             VectorMatch(
-                id="2", 
+                id="2",
                 score=0.2,
                 metadata={"title": "Movie 2", "genre": "sci-fi"},
-                values=[0.2] * 64
-            )
+                values=[0.2] * 64,
+            ),
         ]
-        
-        response = QueryResponse(
-            matches=matches,
-            namespace="test",
-            usage={"read_units": 2}
-        )
-        
+
+        response = QueryResponse(matches=matches, namespace="test", usage={"read_units": 2})
+
         # Validate structure
         assert len(response.matches) == 2
         assert response.namespace == "test"
         assert response.usage["read_units"] == 2
-        
+
         # Validate match structure
         for match in response.matches:
             assert hasattr(match, 'id')
@@ -244,13 +220,8 @@ class TestPineconeFilterOffline:
 
     def test_vector_match_structure(self):
         """Test VectorMatch structure validation"""
-        match = VectorMatch(
-            id="test_id",
-            score=0.5,
-            metadata={"key": "value"},
-            values=[0.1, 0.2, 0.3]
-        )
-        
+        match = VectorMatch(id="test_id", score=0.5, metadata={"key": "value"}, values=[0.1, 0.2, 0.3])
+
         assert match.id == "test_id"
         assert match.score == 0.5
         assert match.metadata == {"key": "value"}
@@ -262,12 +233,12 @@ class TestPineconeFilterOffline:
         matches = [
             VectorMatch(id="1", score=0.3, metadata={}, values=None),
             VectorMatch(id="2", score=0.1, metadata={}, values=None),
-            VectorMatch(id="3", score=0.2, metadata={}, values=None)
+            VectorMatch(id="3", score=0.2, metadata={}, values=None),
         ]
-        
+
         # Sort by score (ascending for distance)
         sorted_matches = sorted(matches, key=lambda x: x.score)
-        
+
         # Validate ordering
         assert sorted_matches[0].score == 0.1
         assert sorted_matches[1].score == 0.2
@@ -277,12 +248,12 @@ class TestPineconeFilterOffline:
         """Test usage statistics logic validation"""
         # Test various scenarios
         test_cases = [
-            (0, 0),      # top_k=0, expected_read_units=0
-            (1, 1),      # top_k=1, expected_read_units=1
-            (5, 5),      # top_k=5, expected_read_units=5
-            (100, 5),    # top_k=100, but only 5 records available
+            (0, 0),  # top_k=0, expected_read_units=0
+            (1, 1),  # top_k=1, expected_read_units=1
+            (5, 5),  # top_k=5, expected_read_units=5
+            (100, 5),  # top_k=100, but only 5 records available
         ]
-        
+
         for top_k, expected_read_units in test_cases:
             # Simulate the logic
             actual_read_units = min(top_k, 5)  # Assuming 5 records available
@@ -291,7 +262,7 @@ class TestPineconeFilterOffline:
     def test_namespace_consistency_logic(self):
         """Test namespace consistency logic validation"""
         test_namespaces = ["", "default", "test_namespace", "namespace_with_underscores"]
-        
+
         for namespace in test_namespaces:
             # Namespace should be preserved as-is
             assert isinstance(namespace, str)
@@ -303,17 +274,17 @@ class TestPineconeFilterOffline:
         """Test include_metadata and include_values parameter logic"""
         # Test all combinations
         test_cases = [
-            (True, True),   # include both
+            (True, True),  # include both
             (True, False),  # include metadata only
             (False, True),  # include values only
-            (False, False), # include neither
+            (False, False),  # include neither
         ]
-        
+
         for include_metadata, include_values in test_cases:
             # Validate parameter types
             assert isinstance(include_metadata, bool)
             assert isinstance(include_values, bool)
-            
+
             # Test logic combinations
             if include_metadata and include_values:
                 # Both included
@@ -332,18 +303,18 @@ class TestPineconeFilterOffline:
         """Test vector value handling logic"""
         # Test different vector representations
         test_vectors = [
-            [0.1] * 64,                    # List of floats
-            [0.0] * 64,                    # Zero vector
-            [-0.1] * 64,                   # Negative values
-            [100.0] * 64,                  # Large values
-            [0.1, 0.2, 0.3],              # Short vector (should be handled)
+            [0.1] * 64,  # List of floats
+            [0.0] * 64,  # Zero vector
+            [-0.1] * 64,  # Negative values
+            [100.0] * 64,  # Large values
+            [0.1, 0.2, 0.3],  # Short vector (should be handled)
         ]
-        
+
         for vector in test_vectors:
             # Validate vector structure
             assert isinstance(vector, list)
             assert all(isinstance(x, (int, float)) for x in vector)
-            
+
             # Test vector string conversion logic
             vector_str = "[" + ",".join(map(str, vector)) + "]"
             assert vector_str.startswith("[")
@@ -360,13 +331,13 @@ class TestPineconeFilterOffline:
         """Test consistency logic for multiple operations"""
         # Test that same input produces same output
         filter_dict = {"genre": "action", "year": {"$gte": 2000}}
-        
+
         # Parse multiple times
         results = []
         for _ in range(3):
             where_conditions, where_params = mock_index._parse_pinecone_filter(filter_dict)
             results.append((where_conditions, where_params))
-        
+
         # All results should be identical
         for i in range(1, len(results)):
             assert results[i] == results[0]
@@ -379,7 +350,7 @@ class TestPineconeFilterOffline:
         where_conditions, where_params = mock_index._parse_pinecone_filter(filter_dict)
         assert where_conditions == ["id = ?"]
         assert where_params == [large_number]
-        
+
         # Test with very small numbers
         small_number = 0.000001
         filter_dict = {"rating": {"$eq": small_number}}

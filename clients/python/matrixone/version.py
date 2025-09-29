@@ -120,9 +120,7 @@ class VersionManager:
 
         match = self.VERSION_PATTERN.match(version_string.strip())
         if not match:
-            raise ValueError(
-                f"Invalid version format: '{version_string}'. Expected format: major.minor.patch (e.g., 3.0.1)"
-            )
+            raise ValueError(f"Invalid version format: '{version_string}'. Expected format: major.minor.patch (e.g., 3.0.1)")
 
         major, minor, patch = map(int, match.groups())
 
@@ -133,9 +131,7 @@ class VersionManager:
 
         return VersionInfo(major, minor, patch)
 
-    def compare_versions(
-        self, version1: Union[str, VersionInfo], version2: Union[str, VersionInfo]
-    ) -> VersionComparison:
+    def compare_versions(self, version1: Union[str, VersionInfo], version2: Union[str, VersionInfo]) -> VersionComparison:
         """
         Compare two versions
 
@@ -416,11 +412,11 @@ def get_version_manager() -> VersionManager:
 
 
 def requires_version(
-    min_version: str = None,
-    max_version: str = None,
-    feature_name: str = None,
-    description: str = None,
-    alternative: str = None,
+    min_version: Optional[str] = None,
+    max_version: Optional[str] = None,
+    feature_name: Optional[str] = None,
+    description: Optional[str] = None,
+    alternative: Optional[str] = None,
     raise_error: bool = True,
 ) -> Callable:
     """

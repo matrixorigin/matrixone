@@ -240,7 +240,11 @@ class PubSubManager:
             raise PubSubError(f"Failed to list publications: {e}")
 
     def alter_publication(
-        self, name: str, account: Optional[str] = None, database: Optional[str] = None, table: Optional[str] = None
+        self,
+        name: str,
+        account: Optional[str] = None,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
     ) -> Publication:
         """
         Alter publication
@@ -328,9 +332,7 @@ class PubSubManager:
 
     # Subscription Operations
 
-    def create_subscription(
-        self, subscription_name: str, publication_name: str, publisher_account: str
-    ) -> Subscription:
+    def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
         """
         Create subscription from publication
 
@@ -552,7 +554,11 @@ class TransactionPubSubManager(PubSubManager):
             raise PubSubError(f"Failed to list publications: {e}")
 
     def alter_publication(
-        self, name: str, account: Optional[str] = None, database: Optional[str] = None, table: Optional[str] = None
+        self,
+        name: str,
+        account: Optional[str] = None,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
     ) -> Publication:
         """Alter publication within transaction"""
         try:
@@ -586,9 +592,7 @@ class TransactionPubSubManager(PubSubManager):
         except Exception as e:
             raise PubSubError(f"Failed to drop publication '{name}': {e}")
 
-    def create_subscription(
-        self, subscription_name: str, publication_name: str, publisher_account: str
-    ) -> Subscription:
+    def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
         """Create subscription within transaction"""
         try:
             sql = (

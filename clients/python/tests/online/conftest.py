@@ -31,14 +31,14 @@ def pytest_configure(config):
 
 class DatabaseTestHelper:
     """Helper class for database operations in tests"""
-    
+
     def __init__(self):
         self.logger = create_default_logger()
-    
+
     def create_client(self, host: str, port: int, user: str, password: str, database: str) -> Client:
         """Create a synchronous client"""
         return Client()
-    
+
     def connect_client(self, client: Client, host: str, port: int, user: str, password: str, database: str) -> bool:
         """Connect a client and return success status"""
         try:
@@ -47,12 +47,14 @@ class DatabaseTestHelper:
         except Exception as e:
             self.logger.error(f"Failed to connect client: {e}")
             return False
-    
+
     def create_async_client(self, host: str, port: int, user: str, password: str, database: str) -> AsyncClient:
         """Create an asynchronous client"""
         return AsyncClient()
-    
-    async def connect_async_client(self, client: AsyncClient, host: str, port: int, user: str, password: str, database: str) -> bool:
+
+    async def connect_async_client(
+        self, client: AsyncClient, host: str, port: int, user: str, password: str, database: str
+    ) -> bool:
         """Connect an async client and return success status"""
         try:
             await client.connect(host=host, port=port, user=user, password=password, database=database)
@@ -60,7 +62,7 @@ class DatabaseTestHelper:
         except Exception as e:
             self.logger.error(f"Failed to connect async client: {e}")
             return False
-    
+
     def test_connection(self, host: str, port: int, user: str, password: str, database: str) -> bool:
         """Test database connection"""
         try:
@@ -69,7 +71,7 @@ class DatabaseTestHelper:
         except Exception as e:
             self.logger.error(f"Connection test failed: {e}")
             return False
-    
+
     async def test_async_connection(self, host: str, port: int, user: str, password: str, database: str) -> bool:
         """Test async database connection"""
         try:

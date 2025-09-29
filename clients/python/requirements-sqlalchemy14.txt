@@ -5,6 +5,9 @@ aiomysql>=0.1.0
 typing-extensions>=4.0.0
 python-dateutil>=2.8.0
 
+# Vector operations dependencies
+numpy>=1.20.0
+
 # Development dependencies
 pytest>=6.0
 pytest-asyncio>=0.18.0

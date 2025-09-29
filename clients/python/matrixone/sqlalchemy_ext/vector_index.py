@@ -1262,7 +1262,11 @@ def create_vector_index(
 
 
 def create_ivfflat_index(
-    name: str, column: Union[str, Column], lists: int = 256, op_type: str = VectorOpType.VECTOR_L2_OPS, **kwargs
+    name: str,
+    column: Union[str, Column],
+    lists: int = 256,
+    op_type: str = VectorOpType.VECTOR_L2_OPS,
+    **kwargs,
 ) -> VectorIndex:
     """
     Create an IVFFLAT vector index.
@@ -1290,7 +1294,12 @@ def create_ivfflat_index(
         )
     """
     return create_vector_index(
-        name=name, column=column, index_type=VectorIndexType.IVFFLAT, lists=lists, op_type=op_type, **kwargs
+        name=name,
+        column=column,
+        index_type=VectorIndexType.IVFFLAT,
+        lists=lists,
+        op_type=op_type,
+        **kwargs,
     )
 
 

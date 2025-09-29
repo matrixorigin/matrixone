@@ -80,7 +80,13 @@ class MatrixOneConfig:
             Tuple of (host, port, user, password, database)
         """
         config = cls.get_config(**overrides)
-        return (config["host"], config["port"], config["user"], config["password"], config["database"])
+        return (
+            config["host"],
+            config["port"],
+            config["user"],
+            config["password"],
+            config["database"],
+        )
 
     @classmethod
     def get_connection_kwargs(cls, **overrides) -> Dict[str, Any]:

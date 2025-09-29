@@ -573,7 +573,14 @@ class FulltextQueryBuilder:
         offset_clause = f"OFFSET {offset}" if offset else ""
 
         # Combine all clauses
-        sql_parts = [select_clause, from_clause, where_clause, order_clause, limit_clause, offset_clause]
+        sql_parts = [
+            select_clause,
+            from_clause,
+            where_clause,
+            order_clause,
+            limit_clause,
+            offset_clause,
+        ]
         return " ".join(filter(None, sql_parts))
 
     def as_score_sql(self, table: str, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN) -> str:
@@ -1228,7 +1235,11 @@ class FulltextSearchBuilder:
         return self
 
     def add_term(
-        self, term: str, required: bool = False, excluded: bool = False, proximity: Optional[int] = None
+        self,
+        term: str,
+        required: bool = False,
+        excluded: bool = False,
+        proximity: Optional[int] = None,
     ) -> "FulltextSearchBuilder":
         """
         Add a search term to the query.
@@ -1432,7 +1443,14 @@ class FulltextSearchBuilder:
         offset_clause = f"OFFSET {self._offset_value}" if self._offset_value else ""
 
         # Combine all clauses
-        sql_parts = [select_clause, from_clause, where_clause, order_clause, limit_clause, offset_clause]
+        sql_parts = [
+            select_clause,
+            from_clause,
+            where_clause,
+            order_clause,
+            limit_clause,
+            offset_clause,
+        ]
         return " ".join(filter(None, sql_parts))
 
     def execute(self) -> Any:
@@ -1462,7 +1480,11 @@ class FulltextIndexManager:
         self.client = client
 
     def create(
-        self, table_name: str, name: str, columns: List[str], algorithm: str = FulltextSearchAlgorithm.BM25
+        self,
+        table_name: str,
+        name: str,
+        columns: List[str],
+        algorithm: str = FulltextSearchAlgorithm.BM25,
     ) -> bool:
         """
         Create a fulltext index.

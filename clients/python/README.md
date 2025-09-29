@@ -378,343 +378,57 @@ Available environment variables:
 
 ### Testing Overview
 
-The MatrixOne Python SDK includes comprehensive testing with two types of tests:
+The MatrixOne Python SDK includes comprehensive testing with support for multiple Python and SQLAlchemy versions.
 
-#### Offline Tests (Mock-based)
-- **Purpose**: Test SDK functionality without requiring a database connection
-- **Coverage**: 450+ tests covering all core functionality including vector and fulltext features
-- **Speed**: Fast execution (typically 3-5 seconds)
-- **Dependencies**: No external dependencies required
-- **Command**: `make test-offline`
+**📖 For detailed testing documentation, see [TESTING.md](TESTING.md)**
 
-#### Online Tests (Database Integration)
-- **Purpose**: Test real database operations and integration
-- **Coverage**: 100+ tests covering database connectivity, vector search, fulltext search, and operations
-- **Speed**: Slower execution (typically 20-30 seconds)
-- **Dependencies**: Requires running MatrixOne database
-- **Command**: `make test-online`
-
-#### Specialized Test Suites
-- **Vector Tests**: `make test-vector` - Vector search and similarity operations
-- **Vector Index Tests**: `make test-vector-index` - Vector index creation and management
-- **Fulltext Tests**: `make test-fulltext` - Fulltext indexing and search operations
-
-### Online Testing Setup
-
-#### Prerequisites for Online Tests
-
-Before running online tests, ensure you have:
-
-1. **MatrixOne Database Running**
-   ```bash
-   # Start MatrixOne database (example with Docker)
-   docker run -d --name matrixone \
-     -p 6001:6001 \
-     matrixorigin/matrixone:latest
-   ```
-
-2. **Database Access**
-   - Host: `localhost` (default)
-   - Port: `6001` (default)
-   - User: `root` (default)
-   - Password: `111` (default)
-   - Database: `test` (default)
-
-#### Connection Check
-
-The SDK automatically checks database connectivity before running online tests:
+#### Quick Test Commands
 
 ```bash
-# Test connection manually
-make test-online
-# Output: 🔍 Checking MatrixOne database connection...
-#         ✅ MatrixOne database connection successful!
-#         Online tests can proceed.
-```
-
-#### Environment Variables for Online Tests
-
-Customize connection parameters using environment variables:
-
-```bash
-# Set custom connection parameters
-export MATRIXONE_HOST=localhost
-export MATRIXONE_PORT=6001
-export MATRIXONE_USER=root
-export MATRIXONE_PASSWORD=111
-export MATRIXONE_DATABASE=test
-
-# Run online tests with custom parameters
-make test-online
-```
-
-Available environment variables:
-- `MATRIXONE_HOST`: Database host (default: localhost)
-- `MATRIXONE_PORT`: Database port (default: 6001)
-- `MATRIXONE_USER`: Database username (default: root)
-- `MATRIXONE_PASSWORD`: Database password (default: 111)
-- `MATRIXONE_DATABASE`: Database name (default: test)
-
-#### Online Test Behavior
-
-**When Database is Available:**
-```bash
-make test-online
-# ✅ Connection successful → Runs all 67 online tests
-# ✅ All tests pass → Shows success message
-```
-
-**When Database is Unavailable:**
-```bash
-make test-online
-# ❌ Connection failed → Shows error message
-# ❌ Exits with error code → No tests run
-```
-
-**Smart Test Execution:**
-```bash
-make test
-# 1. Runs offline tests (always)
-# 2. Checks database connection
-# 3. If available → Runs online tests
-# 4. If unavailable → Shows warning and continues
-```
-
-#### Online Test Categories
-
-The online tests cover:
-
-1. **Basic Connection Tests** (`test_basic_connection.py`)
-   - Connection establishment
-   - Basic query execution
-   - Connection cleanup
-
-2. **Account Management Tests** (`test_account_management.py`)
-   - User creation and management
-   - Role management
-   - Privilege operations
-
-3. **Advanced Features Tests** (`test_advanced_features.py`)
-   - Snapshot operations
-   - PITR (Point-in-Time Recovery)
-   - Clone operations
-   - MoCTL integration
-
-4. **Pub/Sub Operations Tests** (`test_pubsub_operations.py`)
-   - Publication creation
-   - Subscription management
-   - Data synchronization
-
-5. **Snapshot & Restore Tests** (`test_snapshot_restore.py`)
-   - Snapshot creation and management
-   - Restore operations
-   - Async snapshot operations
-
-6. **SQLAlchemy Integration Tests** (`test_sqlalchemy_integration.py`)
-   - SQLAlchemy engine integration
-   - Session management
-   - Transaction handling
-
-7. **Logger Integration Tests** (`test_logger_integration.py`)
-   - Logging configuration
-   - Performance logging
-   - SQL query logging
-
-8. **Version Management Tests** (`test_version_management.py`)
-   - Version detection
-   - Feature availability checking
-   - Compatibility validation
-
-#### Troubleshooting Online Tests
-
-**Common Issues and Solutions:**
-
-1. **Connection Refused**
-   ```bash
-   # Error: Can't connect to MySQL server on 'localhost'
-   # Solution: Start MatrixOne database
-   docker run -d --name matrixone -p 6001:6001 matrixorigin/matrixone:latest
-   ```
-
-2. **Authentication Failed**
-   ```bash
-   # Error: Access denied for user 'root'
-   # Solution: Check credentials
-   export MATRIXONE_USER=root
-   export MATRIXONE_PASSWORD=111
-   ```
-
-3. **Database Not Found**
-   ```bash
-   # Error: Unknown database 'test'
-   # Solution: Create database or use existing one
-   export MATRIXONE_DATABASE=your_database_name
-   ```
-
-4. **Port Already in Use**
-   ```bash
-   # Error: Address already in use
-   # Solution: Use different port
-   export MATRIXONE_PORT=6002
-   ```
-
-#### Coverage Reports
-
-Generate coverage reports for online tests:
-
-```bash
-# Online tests with coverage
-make coverage-online
-
-# All tests with coverage
-make coverage
-
-# View coverage report
-open htmlcov/index.html
-```
-
-### Python Environment Configuration
-
-#### Configuring Python Path
-
-The Makefile uses `python3` and `pip` by default, but you can override these:
-
-```bash
-# Method 1: Set environment variables
-export PYTHON=/path/to/your/python3
-export PIP=/path/to/your/pip
-make test
-
-# Method 2: Pass variables to make command
-make test PYTHON=/path/to/your/python3 PIP=/path/to/your/pip
-
-# Method 3: Use virtual environment (recommended)
-source venv/bin/activate
-make test  # Will use the activated environment's python/pip
-```
-
-#### Check Your Environment
-
-```bash
-# Check current Python configuration
+# Check environment and dependencies
 make check-env
 
-# Show project information
-make info
-```
-
-### Virtual Environment Best Practices
-
-#### Setting Up Development Environment
-
-```bash
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On macOS/Linux
-# venv\Scripts\activate   # On Windows
-
-# Install development dependencies
-make dev-setup
-
-# Verify installation
-python -c "import matrixone; print('MatrixOne SDK installed successfully')"
-```
-
-#### Working with Virtual Environment
-
-```bash
-# Activate virtual environment before development
-source venv/bin/activate
+# Install test dependencies
+make install-sqlalchemy14  # For SQLAlchemy 1.4.x
+make install-sqlalchemy20  # For SQLAlchemy 2.0.x
 
 # Run tests
-make test
-
-# Run examples
-make example-basic
-
-# Deactivate when done
-deactivate
+make test-offline          # Fast mock-based tests
+make test-online           # Database integration tests (requires MatrixOne)
+make test-sqlalchemy14     # Full test suite with SQLAlchemy 1.4.x
+make test-sqlalchemy20     # Full test suite with SQLAlchemy 2.0.x
+make test-matrix           # Test both SQLAlchemy versions
 ```
 
-#### Virtual Environment Management
+#### Test Types
+
+- **Offline Tests**: Mock-based unit tests (450+ tests, ~3-5 seconds)
+- **Online Tests**: Database integration tests (100+ tests, ~20-30 seconds)
+- **Matrix Tests**: Cross-version compatibility testing (Python 3.10/3.11 + SQLAlchemy 1.4/2.0)
+
+### Development Setup
 
 ```bash
-# Check virtual environment status
-which python  # Should show venv path
-
-# List installed packages
-pip list
-
-# Update dependencies
-pip install -r requirements.txt --upgrade
-
-# Clean virtual environment
-make clean-all  # Removes venv/ directory
-```
-
-### Quick Commands (Makefile)
-
-```bash
-# View all available commands
-make help
+# Check environment requirements
+make check-env
 
 # Setup development environment
 make dev-setup
 
-# Run tests
-make test                    # All tests (offline + online)
-make test-offline           # Offline tests only (mock-based)
-make test-online            # Online tests only (requires database)
-make test-fast              # Quick tests
-make coverage               # All tests with coverage report
-make coverage-offline       # Offline tests with coverage
-make coverage-online        # Online tests with coverage
-
-# Code quality
-make lint                   # Code quality check
-make format                 # Format code
-make type-check             # Type checking
-
-# Examples
-make examples               # Run all examples
-make example-basic          # Basic connection example
-
-# Build & Release
-make build                  # Build package
-make build-release          # Build release package (user README)
-make publish-test           # Publish to test PyPI
-make publish                # Publish to PyPI
-
-# Cleanup
-make clean                  # Clean build artifacts
-```
-
-### Manual Commands
-
-```bash
 # Run all tests
-python -m pytest
+make test
 
-# Run with coverage
-python -m pytest --cov=matrixone --cov-report=html
-
-# Format code
-black matrixone tests examples
-
-# Lint code
-flake8 matrixone tests examples
-
-# Type checking
-mypy matrixone
-
-# Build package
-python -m build
+# Run examples
+make examples
 ```
+
+For detailed testing instructions, environment setup, and troubleshooting, see [TESTING.md](TESTING.md).
 
 
 ## 📚 Documentation
 
 - **Examples**: See `example_*.py` files for comprehensive usage examples
+- **Testing Guide**: See [TESTING.md](TESTING.md) for detailed testing instructions and environment setup
 - **API Reference**: All classes and methods are fully documented with type hints
 - **Version Management**: Automatic backend version detection and compatibility checking
 

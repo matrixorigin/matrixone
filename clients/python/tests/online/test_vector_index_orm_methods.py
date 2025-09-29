@@ -31,23 +31,23 @@ class TestVectorIndexORMMethods:
         """Create and connect MatrixOne client."""
         from matrixone.config import get_connection_params
         from matrixone.logger import create_default_logger
-        
+
         # Get connection parameters
         host, port, user, password, database = get_connection_params()
-        
+
         # Create logger
         logger = create_default_logger()
-        
+
         # Create client and connect
         client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect(host=host, port=port, user=user, password=password, database=database)
-        
+
         yield client
-        
+
         # Cleanup
         if hasattr(client, 'disconnect'):
             client.disconnect()
-    
+
     @pytest.fixture(scope="class")
     def engine(self, client):
         """Get SQLAlchemy engine from client."""
@@ -73,12 +73,12 @@ class TestVectorIndexORMMethods:
         ivf_config = create_ivf_config(engine)
         if not ivf_config.is_ivf_supported():
             pytest.skip("IVF indexing is not supported in this MatrixOne version")
-        
+
         # Try to enable IVF indexing
         enable_result = ivf_config.enable_ivf_indexing()
         if not enable_result:
             pytest.skip("Failed to enable IVF indexing")
-        
+
         # Set probe limit
         ivf_config.set_probe_limit(1)
 
@@ -94,7 +94,7 @@ class TestVectorIndexORMMethods:
                     'embedding',
                     index_type=VectorIndexType.IVFFLAT,
                     lists=32,
-                    op_type=VectorOpType.VECTOR_L2_OPS
+                    op_type=VectorOpType.VECTOR_L2_OPS,
                 ),
             )
 
@@ -110,11 +110,7 @@ class TestVectorIndexORMMethods:
             assert "idx_embedding_orm_01" in index_names
 
         # Test 2: Class method drop_index
-        success = VectorIndex.drop_index(
-            engine=engine,
-            table_name="test_vector_orm_methods",
-            name="idx_embedding_orm_01"
-        )
+        success = VectorIndex.drop_index(engine=engine, table_name="test_vector_orm_methods", name="idx_embedding_orm_01")
         assert success, "Class method drop_index should succeed"
 
         # Verify index was dropped
@@ -130,9 +126,9 @@ class TestVectorIndexORMMethods:
             name="idx_embedding_orm_02",
             column="embedding",
             lists=64,
-            op_type="vector_l2_ops"
+            op_type="vector_l2_ops",
         )
-        
+
         assert True, "Instance method create should succeed"
 
         # Verify index was created
@@ -143,10 +139,7 @@ class TestVectorIndexORMMethods:
             assert "idx_embedding_orm_02" in index_names
 
         # Test 4: Instance method drop
-        client.vector_ops.drop(
-            table_name="test_vector_orm_methods",
-            name="idx_embedding_orm_02"
-        )
+        client.vector_ops.drop(table_name="test_vector_orm_methods", name="idx_embedding_orm_02")
         assert True, "Instance method drop should succeed"
 
         # Verify index was dropped
@@ -170,12 +163,12 @@ class TestVectorIndexORMMethods:
         ivf_config = create_ivf_config(engine)
         if not ivf_config.is_ivf_supported():
             pytest.skip("IVF indexing is not supported in this MatrixOne version")
-        
+
         # Try to enable IVF indexing
         enable_result = ivf_config.enable_ivf_indexing()
         if not enable_result:
             pytest.skip("Failed to enable IVF indexing")
-        
+
         # Set probe limit
         ivf_config.set_probe_limit(1)
 
@@ -196,7 +189,7 @@ class TestVectorIndexORMMethods:
                 name="idx_embedding_transaction_01",
                 column="embedding",
                 lists=32,
-                op_type="vector_l2_ops"
+                op_type="vector_l2_ops",
             )
             success = True
         assert success, "Index creation in transaction should succeed"
@@ -211,10 +204,7 @@ class TestVectorIndexORMMethods:
         # Test 2: Drop index in transaction
         # Drop index using transaction wrapper
         with client.transaction() as tx:
-            tx.vector_ops.drop(
-                table_name="test_vector_orm_transaction_2",
-                name="idx_embedding_transaction_01"
-            )
+            tx.vector_ops.drop(table_name="test_vector_orm_transaction_2", name="idx_embedding_transaction_01")
             success = True
         assert success, "Index drop in transaction should succeed"
 
@@ -238,7 +228,7 @@ class TestVectorIndexORMMethods:
                     column="embedding",
                     index_type=VectorIndexType.IVFFLAT,
                     lists=32,
-                    op_type=VectorOpType.VECTOR_L2_OPS
+                    op_type=VectorOpType.VECTOR_L2_OPS,
                 )
                 assert not success, "Should fail for non-existent table"
         except Exception:
@@ -257,8 +247,9 @@ class TestVectorIndexORMMethods:
 
         # Create table with separate Base to avoid conflicts
         from sqlalchemy.orm import declarative_base
+
         IVFBase = declarative_base()
-        
+
         class TestDocumentIVF(IVFBase):
             __tablename__ = 'test_vector_orm_ivf_2'
             id = Column(Integer, primary_key=True)
@@ -280,10 +271,10 @@ class TestVectorIndexORMMethods:
             name="idx_embedding_orm_ivf",
             column="embedding",
             lists=16,
-            op_type="vector_l2_ops"
+            op_type="vector_l2_ops",
         )
         success = True
-        
+
         if ivf_config.is_ivf_supported() and enable_result:
             assert success, "ORM create with IVF should succeed"
         else:
@@ -302,8 +293,9 @@ class TestVectorIndexORMMethods:
 
         # Create table with separate Base to avoid conflicts
         from sqlalchemy.orm import declarative_base
+
         ChainBase = declarative_base()
-        
+
         class TestDocumentChain(ChainBase):
             __tablename__ = 'test_vector_chain_2'
             id = Column(Integer, primary_key=True)
@@ -320,9 +312,9 @@ class TestVectorIndexORMMethods:
                 name="idx_embedding_chain_01",
                 column="embedding",
                 lists=32,
-                op_type="vector_l2_ops"
+                op_type="vector_l2_ops",
             )
-            
+
             # Verify index was created
             with engine.begin() as conn:
                 result = conn.execute(text("SHOW INDEX FROM test_vector_chain_2"))
@@ -331,11 +323,8 @@ class TestVectorIndexORMMethods:
                 assert "idx_embedding_chain_01" in index_names
 
             # Drop index using chain
-            client.vector_ops.drop(
-                table_name="test_vector_chain_2",
-                name="idx_embedding_chain_01"
-            )
-            
+            client.vector_ops.drop(table_name="test_vector_chain_2", name="idx_embedding_chain_01")
+
             # Verify index was dropped
             with engine.begin() as conn:
                 result = conn.execute(text("SHOW INDEX FROM test_vector_chain_2"))
@@ -359,9 +348,9 @@ class TestVectorIndexORMMethods:
                     name="idx_embedding_chain_tx_01",
                     column="embedding",
                     lists=32,
-                    op_type="vector_l2_ops"
+                    op_type="vector_l2_ops",
                 )
-            
+
             # Verify index was created
             with engine.begin() as conn:
                 result = conn.execute(text("SHOW INDEX FROM test_vector_chain_2"))
@@ -371,11 +360,8 @@ class TestVectorIndexORMMethods:
 
             # Drop index in transaction using chain
             with client.transaction() as tx:
-                tx.vector_ops.drop(
-                    table_name="test_vector_chain_2",
-                    name="idx_embedding_chain_tx_01"
-                )
-            
+                tx.vector_ops.drop(table_name="test_vector_chain_2", name="idx_embedding_chain_tx_01")
+
             # Verify index was dropped
             with engine.begin() as conn:
                 result = conn.execute(text("SHOW INDEX FROM test_vector_chain_2"))
@@ -398,10 +384,7 @@ class TestVectorIndexORMMethods:
         """Test ORM methods error handling."""
         # Test dropping non-existent index
         try:
-            client.vector_ops.drop(
-                table_name="non_existent_table",
-                name="non_existent_index"
-            )
+            client.vector_ops.drop(table_name="non_existent_table", name="non_existent_index")
             success = False  # Should not reach here
         except Exception:
             success = True  # Expected to fail
@@ -414,7 +397,7 @@ class TestVectorIndexORMMethods:
                 name="idx_test",
                 column="embedding",
                 lists=32,
-                op_type="vector_l2_ops"
+                op_type="vector_l2_ops",
             )
             success = False  # Should not reach here
         except Exception:

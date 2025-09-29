@@ -28,7 +28,13 @@ from .fulltext_search import (
     group,
     natural_match,
 )
-from .hnsw_config import HNSWConfig, create_hnsw_config, disable_hnsw_indexing, enable_hnsw_indexing, get_hnsw_status
+from .hnsw_config import (
+    HNSWConfig,
+    create_hnsw_config,
+    disable_hnsw_indexing,
+    enable_hnsw_indexing,
+    get_hnsw_status,
+)
 from .ivf_config import (
     IVFConfig,
     create_ivf_config,

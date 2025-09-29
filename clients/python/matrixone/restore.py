@@ -83,7 +83,11 @@ class RestoreManager:
             raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
 
     def restore_database(
-        self, snapshot_name: str, account_name: str, database_name: str, to_account: Optional[str] = None
+        self,
+        snapshot_name: str,
+        account_name: str,
+        database_name: str,
+        to_account: Optional[str] = None,
     ) -> bool:
         """
         Restore database from snapshot
@@ -280,11 +284,19 @@ class TransactionRestoreManager(RestoreManager):
     def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
         """Restore tenant within transaction"""
         return self.restore_with_executor(
-            "tenant", snapshot_name, account_name, to_account=to_account, executor=self._transaction_wrapper
+            "tenant",
+            snapshot_name,
+            account_name,
+            to_account=to_account,
+            executor=self._transaction_wrapper,
         )
 
     def restore_database(
-        self, snapshot_name: str, account_name: str, database_name: str, to_account: Optional[str] = None
+        self,
+        snapshot_name: str,
+        account_name: str,
+        database_name: str,
+        to_account: Optional[str] = None,
     ) -> bool:
         """Restore database within transaction"""
         return self.restore_with_executor(

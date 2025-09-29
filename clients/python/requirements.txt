@@ -15,6 +15,9 @@ typing-extensions>=4.0.0
 # Date and time utilities
 python-dateutil>=2.8.0
 
+# Vector operations dependencies
+numpy>=1.20.0
+
 # Optional: Enhanced JSON support
 # ujson>=4.0.0
 
