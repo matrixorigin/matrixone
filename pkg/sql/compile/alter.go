@@ -632,9 +632,22 @@ func cloneUnaffectedIndexes(
 
 	for _, idxTbl := range oriTblDef.Indexes {
 
-		// If affectedPk == true, SkipIndexesCopy[indexname] always false and nothing being cloned.
+		// NOTE: The index name of regular, maste, unqiue index is same as affected column name.
+		// SkipIndexesCopy means UnaffectedIndexes[string][bool].
+		// Affected indexes are processed in bind_insert when SkipIndexesCopy = false (UnaffectedIndexes = false)
+		// Unaffected indexes is cloned here.
+		//
+		// 1. If affectedPk == true, SkipIndexesCopy[indexname] always false (empty) and nothing being cloned. All indexes are affected.
+		// 2. If affectedPK == false, SkipIndexesCopy[indexname] will set to true when index is affected with affected column.
+		// The condition is (indexname NOT IN affected_columns) wil set SkipIndexesCopy to true (UnAffectedIndexes == true)
+		//
+		// NOTE for Fulltext/HNSW/Ivfflat Index:
+		// However, fulltext/hnsw/ivfflat index name is user-defined which is not related to column name so
+		// SkipIndexesCopy will always be true in these cases (UnAffectedIndex==true).
+		// Even SkipIndexesCopy is true, it does not mean it is really unaffected Index for fulltext/hnsw/ivfflat index.
+		// check the Parts to determine affected or not.  If unaffected index, try clone.  Otherwise, re-build the index
 		if !skipIndexesCopy[idxTbl.IndexName] {
-			//  index does NOT skip in bind_insert so index already processed by bind_insert
+			// This index is affected index, skip it
 			continue
 		}
 
