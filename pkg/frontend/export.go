@@ -318,6 +318,8 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	terminated := ep.userConfig.Fields.Terminated.Value
 	flag := ep.ColumnFlag
 
+	escape = closeby
+
 	buffer := &bytes.Buffer{}
 
 	for i := 0; i < bat.RowCount(); i++ {
