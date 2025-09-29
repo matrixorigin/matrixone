@@ -832,7 +832,7 @@ class PineconeCompatibleIndex:
             batch_data.append(row_data)
 
         # Use client's batch_insert method
-        self.client.batch_insert(table_name=self.table_name, data_list=batch_data)
+        self.client.batch_insert(self.table_name, batch_data)
 
         return {"inserted_count": len(vectors)}
 
@@ -872,6 +872,6 @@ class PineconeCompatibleIndex:
             batch_data.append(row_data)
 
         # Use client's batch_insert_async method
-        await self.client.batch_insert_async(table_name=self.table_name, data_list=batch_data)
+        await self.client.batch_insert_async(self.table_name, batch_data)
 
         return {"inserted_count": len(vectors)}
