@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -920,9 +919,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if err != nil {
 					return err
 				}
-
-				os.Stderr.WriteString(fmt.Sprintf("Rename Table did %d tid %d, old %s, new %s\n",
-					req.DbId, req.TableId, op.RenameTable.OldName, op.RenameTable.NewName))
 			}
 		}
 	}
