@@ -4190,12 +4190,24 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	if stmt.PartitionOption != nil {
-		// TODO: reimplement partition
-		return nil, moerr.NewNotSupportedf(
-			ctx.GetContext(),
-			unsupportedErrFmt,
-			formatTreeNode(stmt.PartitionOption),
-		)
+		alterTable.AlterPartition = &plan.AlterPartitionOption{}
+
+		switch stmt.PartitionOption.(type) {
+		case *tree.AlterPartitionAddPartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_AddPartitionTables
+		case *tree.AlterPartitionDropPartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_DropPartitionTables
+		case *tree.AlterPartitionTruncatePartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_TruncatePartitionTables
+		case *tree.AlterPartitionRedefinePartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_RedefinePartitionTables
+		default:
+			return nil, moerr.NewNotSupportedf(
+				ctx.GetContext(),
+				unsupportedErrFmt,
+				formatTreeNode(stmt.PartitionOption),
+			)
+		}
 	}
 
 	// check Constraint Name (include index/ unique)

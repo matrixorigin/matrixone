@@ -41,14 +41,6 @@ func (s *Service) getMetadataByListType(
 		def,
 		desc,
 		partition.PartitionMethod_List,
-		func(p *tree.Partition) string {
-			ctx := tree.NewFmtCtx(
-				dialect.MYSQL,
-				tree.WithQuoteIdentifier(),
-				tree.WithSingleQuoteString(),
-			)
-			p.Values.Format(ctx)
-			return ctx.String()
-		},
+		getExpr,
 	)
 }
