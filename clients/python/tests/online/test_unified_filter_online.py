@@ -8,7 +8,7 @@ Test filter functionality against real MatrixOne database with actual data
 import unittest
 import sys
 import os
-from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, and_, or_, not_, desc, asc
+from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, and_, or_, not_, desc, asc, func
 from matrixone.orm import declarative_base
 
 # Import the MatrixOne client
@@ -455,7 +455,7 @@ class TestUnifiedFilterOnline(unittest.TestCase):
             .select("category", "COUNT(*) as count")
             .filter(Product.price > 100)
             .group_by("category")
-            .having("COUNT(*) > 1")
+            .having(func.count("*") > 1)
             .all()
         )
 

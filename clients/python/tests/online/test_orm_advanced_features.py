@@ -215,12 +215,12 @@ class TestORMAdvancedFeatures:
         """Test HAVING operations"""
         # Find categories with more than 1 product
         query = (
-            test_client.query(Product).select("category", func.count("id")).group_by("category").having("COUNT(id) > ?", 1)
+            test_client.query(Product).select("category", func.count("id")).group_by("category").having(func.count("id") > 1)
         )
 
         sql, params = query._build_sql()
         assert "HAVING" in sql
-        assert "COUNT(id) > 1" in sql
+        assert "count(id) > 1" in sql
 
     def test_aggregate_functions(self, test_client, test_database):
         """Test aggregate functions"""
@@ -256,7 +256,7 @@ class TestORMAdvancedFeatures:
             test_client.query(User)
             .select("department_id", func.avg("age"))
             .group_by("department_id")
-            .having("AVG(age) > ?", 30)
+            .having(func.avg("age") > 30)
             .order_by("avg(age) DESC")
             .limit(5)
         )
@@ -306,7 +306,7 @@ class TestORMAdvancedFeatures:
 
         # Test with group by and having
         query4 = (
-            test_client.query(Product).select("category", func.count("id")).group_by("category").having("COUNT(id) > ?", 1)
+            test_client.query(Product).select("category", func.count("id")).group_by("category").having(func.count("id") > 1)
         )
         sql4, _ = query4._build_sql()
         assert "GROUP BY" in sql4
@@ -404,7 +404,7 @@ class TestORMAdvancedFeatures:
                 func.avg("age").label("avg_age"),
             )
             .group_by("department_id")
-            .having("COUNT(id) > ?", 1)
+            .having(func.count("id") > 1)
             .order_by("user_count DESC")
         )
 
@@ -737,14 +737,14 @@ class TestORMAdvancedFeatures:
             .select('d.name as dept_name', func.count('u.id').label('user_count'))
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('d.name')
-            .having('COUNT(u.id) > ?', 1)
+            .having(func.count('u.id') > 1)
         )
         sql, _ = query._build_sql()
         assert "FROM test_users_advanced AS u" in sql
         assert "JOIN test_departments_advanced d" in sql
         assert "GROUP BY d.name" in sql
         assert "HAVING" in sql
-        assert "COUNT(u.id) > 1" in sql
+        assert "count(id) > 1" in sql
 
     def test_self_join_operations(self, test_client, test_database):
         """Test self-join operations"""
@@ -969,7 +969,7 @@ class TestORMAdvancedFeatures:
             test_client.query(User)
             .select('department_id', func.count('id').label('user_count'))
             .group_by('department_id')
-            .having('COUNT(id) > ?', 2)
+            .having(func.count('id') > 2)
         )
 
         query = test_client.query(Department).alias('d').select('d.name').filter('d.id IN', subquery)
@@ -981,7 +981,7 @@ class TestORMAdvancedFeatures:
         # We'll test the subquery separately
         subquery_sql, _ = subquery._build_sql()
         assert "GROUP BY department_id" in subquery_sql
-        assert "HAVING COUNT(id) > 2" in subquery_sql
+        assert "HAVING count(id) > 2" in subquery_sql
 
     def test_nested_subqueries(self, test_client, test_database):
         """Test nested subqueries"""
@@ -1354,8 +1354,8 @@ class TestORMAdvancedFeatures:
                 func.stddev('u.salary').label('salary_stddev'),
             )
             .group_by('u.department_id')
-            .having('COUNT(u.id) > ?', 1)
-            .having('AVG(u.salary) > ?', 70000)
+            .having(func.count('u.id') > 1)
+            .having(func.avg('u.salary') > 70000)
             .order_by('avg_salary DESC')
         )
 
@@ -1369,8 +1369,8 @@ class TestORMAdvancedFeatures:
         assert "stddev(u.salary) as salary_stddev" in sql.lower()
         assert "GROUP BY u.department_id" in sql
         assert "HAVING" in sql
-        assert "COUNT(u.id) > 1" in sql
-        assert "AVG(u.salary) > 70000" in sql
+        assert "count(id) > 1" in sql
+        assert "avg(salary) > 70000" in sql
         assert "ORDER BY avg_salary DESC" in sql
 
     def test_complex_subquery_with_joins(self, test_client, test_database):
@@ -1382,7 +1382,7 @@ class TestORMAdvancedFeatures:
             .select('u.department_id', func.avg('u.salary').label('dept_avg_salary'))
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('u.department_id')
-            .having('AVG(u.salary) > ?', 75000)
+            .having(func.avg('u.salary') > 75000)
         )
 
         query = (
@@ -1404,7 +1404,7 @@ class TestORMAdvancedFeatures:
         subquery_sql, _ = subquery._build_sql()
         assert "avg(u.salary) as dept_avg_salary" in subquery_sql.lower()
         assert "GROUP BY u.department_id" in subquery_sql
-        assert "HAVING AVG(u.salary) > 75000" in subquery_sql
+        assert "HAVING avg(salary) > 75000" in subquery_sql
         assert "ORDER BY u2.salary DESC" in sql
 
     def test_complex_window_function_with_joins(self, test_client, test_database):
@@ -1555,7 +1555,7 @@ class TestORMAdvancedFeatures:
             )
             .join('test_departments_advanced d', 'u.department_id = d.id')
             .group_by('u.department_id', 'd.name')
-            .having('COUNT(u.id) > ?', 1)
+            .having(func.count('u.id') > 1)
             .order_by('avg_salary DESC')
         )
 
@@ -1569,7 +1569,7 @@ class TestORMAdvancedFeatures:
         assert "count(case when u.salary > 80000 then 1 end) as high_earners" in sql.lower()
         assert "avg(u.age) as avg_age" in sql.lower()
         assert "GROUP BY u.department_id, d.name" in sql
-        assert "HAVING COUNT(u.id) > 1" in sql
+        assert "HAVING count(id) > 1" in sql
         assert "ORDER BY avg_salary DESC" in sql
 
     def test_real_database_subquery_execution(self, test_client, test_database):
@@ -1923,7 +1923,7 @@ class TestORMAdvancedFeatures:
                 "test_departments_advanced.name",
                 "test_departments_advanced.budget",
             )
-            .having("AVG(test_users_advanced.salary) > 65000")
+            .having(func.avg("test_users_advanced.salary") > 65000)
             .order_by("AVG(test_users_advanced.salary) DESC")
             .all()
         )

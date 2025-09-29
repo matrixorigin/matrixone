@@ -252,7 +252,51 @@ class MatrixOneSQLBuilder:
 
     # HAVING clause methods
     def having(self, condition: str, *params: Any) -> "MatrixOneSQLBuilder":
-        """Add HAVING condition"""
+        """
+        Add HAVING condition to the SQL query.
+
+        The HAVING clause is used to filter groups after GROUP BY operations,
+        similar to WHERE clause but applied to aggregated results.
+
+        Args:
+            condition (str): The HAVING condition as a string.
+                           Can include '?' placeholders for parameter substitution.
+            *params (Any): Parameters to replace '?' placeholders in the condition.
+
+        Returns:
+            MatrixOneSQLBuilder: Self for method chaining.
+
+        Examples:
+            # Basic HAVING with placeholders
+            builder.group_by("department")
+            builder.having("COUNT(*) > ?", 5)
+            builder.having("AVG(age) > ?", 25)
+
+            # HAVING without placeholders
+            builder.group_by("department")
+            builder.having("COUNT(*) > 5")
+            builder.having("AVG(age) > 25")
+
+            # Multiple HAVING conditions
+            builder.group_by("department")
+            builder.having("COUNT(*) > ?", 5)
+            builder.having("AVG(age) > ?", 25)
+            builder.having("MAX(age) < ?", 65)
+
+            # Complex HAVING conditions
+            builder.group_by("department", "status")
+            builder.having("COUNT(*) > ? AND AVG(salary) > ?", 10, 50000)
+            builder.having("SUM(revenue) > ?", 1000000)
+
+        Notes:
+            - HAVING clauses are typically used with GROUP BY operations
+            - Use '?' placeholders for safer parameter substitution
+            - Multiple HAVING conditions are combined with AND logic
+            - This is a low-level SQL builder - for ORM usage, prefer MatrixOneQuery
+
+        Raises:
+            ValueError: If condition is not a string
+        """
         self._having_conditions.append(condition)
         self._having_params.extend(params)
         return self

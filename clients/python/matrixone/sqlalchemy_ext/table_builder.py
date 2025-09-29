@@ -108,7 +108,9 @@ class VectorTableBuilder:
             kwargs["primary_key"] = True
         return self.add_column(name, TINYINT, **kwargs)
 
-    def add_numeric_column(self, name: str, column_type: str, precision: Optional[int] = None, scale: Optional[int] = None, **kwargs):
+    def add_numeric_column(
+        self, name: str, column_type: str, precision: Optional[int] = None, scale: Optional[int] = None, **kwargs
+    ):
         """Add a numeric column (float, double, decimal, numeric)."""
         if column_type in ("float", "double"):
             from sqlalchemy import Float

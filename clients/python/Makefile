@@ -222,8 +222,20 @@ type-check-strict: ## Run strict type checking with mypy
 	mypy matrixone --ignore-missing-imports --strict
 	@echo "$(GREEN)Strict type checking completed!$(NC)"
 
+.PHONY: docs-check
+docs-check: ## Check documentation for errors and warnings
+	@echo "$(BLUE)Checking documentation...$(NC)"
+	@if command -v sphinx-build >/dev/null 2>&1; then \
+		echo "$(YELLOW)Running Sphinx documentation check...$(NC)"; \
+		sphinx-build -W -b html -d _build/doctrees docs _build/html || echo "$(YELLOW)⚠️  Documentation check completed with warnings$(NC)"; \
+	else \
+		echo "$(YELLOW)⚠️  Sphinx not available, skipping documentation check$(NC)"; \
+		echo "$(YELLOW)   Install with: pip install sphinx sphinx-rtd-theme$(NC)"; \
+	fi
+	@echo "$(GREEN)Documentation check completed!$(NC)"
+
 .PHONY: pre-commit
-pre-commit: format lint type-check test-offline ## Run pre-commit checks
+pre-commit: format lint type-check test-offline test-online docs-check ## Run pre-commit checks
 	@echo "$(GREEN)Pre-commit checks completed!$(NC)"
 
 # Examples

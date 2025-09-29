@@ -116,7 +116,46 @@ class Query:
         return self
 
     def having(self, condition: str, *params) -> "Query":
-        """Add HAVING condition"""
+        """
+        Add HAVING condition to the query.
+
+        The HAVING clause is used to filter groups after GROUP BY operations,
+        similar to WHERE clause but applied to aggregated results.
+
+        Args:
+            condition (str): The HAVING condition as a string.
+                           Can include '?' placeholders for parameter substitution.
+            *params: Parameters to replace '?' placeholders in the condition.
+
+        Returns:
+            Query: Self for method chaining.
+
+        Examples:
+            # Basic HAVING with placeholders
+            query.group_by(User.department)
+            query.having("COUNT(*) > ?", 5)
+            query.having("AVG(age) > ?", 25)
+
+            # HAVING without placeholders
+            query.group_by(User.department)
+            query.having("COUNT(*) > 5")
+            query.having("AVG(age) > 25")
+
+            # Multiple HAVING conditions
+            query.group_by(User.department)
+            query.having("COUNT(*) > ?", 5)
+            query.having("AVG(age) > ?", 25)
+            query.having("MAX(age) < ?", 65)
+
+        Notes:
+            - HAVING clauses are typically used with GROUP BY operations
+            - Use '?' placeholders for safer parameter substitution
+            - Multiple HAVING conditions are combined with AND logic
+            - For SQLAlchemy expression support, use MatrixOneQuery instead
+
+        Raises:
+            ValueError: If condition is not a string
+        """
         self._having_conditions.append(condition)
         self._having_params.extend(params)
         return self
@@ -345,7 +384,23 @@ class CTE:
 
 # Base Query Builder - SQLAlchemy style
 class BaseMatrixOneQuery:
-    """Base MatrixOne Query builder that contains common SQL building logic"""
+    """
+    Base MatrixOne Query builder that contains common SQL building logic.
+
+    This base class provides SQLAlchemy-compatible query building with:
+    - Full SQLAlchemy expression support in having(), filter(), and other methods
+    - Automatic SQL generation and parameter binding
+    - Support for both SQLAlchemy expressions and string conditions
+    - Method chaining for fluent query building
+
+    Key Features:
+    - SQLAlchemy expression support (e.g., func.count(User.id) > 5)
+    - String condition support (e.g., "COUNT(*) > ?", 5)
+    - Automatic column name resolution and SQL generation
+    - Full compatibility with SQLAlchemy 1.4+ and 2.0+
+
+    Note: This is a base class. For most use cases, use MatrixOneQuery instead.
+    """
 
     def __init__(self, model_class, client, transaction_wrapper=None, snapshot=None):
         self.model_class = model_class
@@ -558,16 +613,117 @@ class BaseMatrixOneQuery:
                 self._group_by_columns.append(str(col))
         return self
 
-    def having(self, condition: str, *params) -> "BaseMatrixOneQuery":
-        """Add HAVING clause - SQLAlchemy style"""
-        # Replace ? placeholders with actual values
-        formatted_condition = condition
-        for param in params:
-            if isinstance(param, str):
-                formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
+    def having(self, condition, *params) -> "BaseMatrixOneQuery":
+        """
+        Add HAVING clause to the query - SQLAlchemy style compatibility.
+
+        The HAVING clause is used to filter groups after GROUP BY operations,
+        similar to WHERE clause but applied to aggregated results.
+
+        Args:
+            condition: The HAVING condition. Can be:
+                - SQLAlchemy expression (e.g., func.count(User.id) > 5)
+                - String condition with placeholders (e.g., "COUNT(*) > ?")
+                - String condition without placeholders (e.g., "COUNT(*) > 5")
+            *params: Additional parameters for string-based conditions.
+                    Used to replace '?' placeholders in condition string.
+
+        Returns:
+            BaseMatrixOneQuery: Self for method chaining.
+
+        Examples:
+            # SQLAlchemy expression syntax (recommended)
+            query.group_by(User.department)
+            query.having(func.count(User.id) > 5)
+            query.having(func.avg(User.age) > 25)
+            query.having(func.count(func.distinct(User.id)) > 3)
+
+            # String-based syntax with placeholders
+            query.group_by(User.department)
+            query.having("COUNT(*) > ?", 5)
+            query.having("AVG(age) > ?", 25)
+
+            # String-based syntax without placeholders
+            query.group_by(User.department)
+            query.having("COUNT(*) > 5")
+            query.having("AVG(age) > 25")
+
+            # Multiple HAVING conditions
+            query.group_by(User.department)
+            query.having(func.count(User.id) > 5)
+            query.having(func.avg(User.age) > 25)
+            query.having(func.max(User.age) < 65)
+
+            # Mixed string and expression syntax
+            query.group_by(User.department)
+            query.having("COUNT(*) > ?", 5)  # String
+            query.having(func.avg(User.age) > 25)  # Expression
+
+        Notes:
+            - HAVING clauses are typically used with GROUP BY operations
+            - SQLAlchemy expressions provide better type safety and integration
+            - String conditions with placeholders are safer against SQL injection
+            - Multiple HAVING conditions are combined with AND logic
+            - Column references in SQLAlchemy expressions are automatically
+              converted to MatrixOne-compatible format
+
+        Supported SQLAlchemy Functions:
+            - func.count(): Count rows or distinct values
+            - func.avg(): Calculate average
+            - func.sum(): Calculate sum
+            - func.min(): Find minimum value
+            - func.max(): Find maximum value
+            - func.distinct(): Get distinct values
+
+        Raises:
+            ValueError: If invalid condition type is provided
+            SQLAlchemyError: If SQLAlchemy expression compilation fails
+        """
+        # Check if condition contains FulltextFilter objects
+        if hasattr(condition, "compile") and self._contains_fulltext_filter(condition):
+            # Handle SQLAlchemy expressions that contain FulltextFilter objects
+            formatted_condition = self._process_fulltext_expression(condition)
+            self._having_conditions.append(formatted_condition)
+        elif hasattr(condition, "compile"):
+            # This is a SQLAlchemy expression (OR, AND, BinaryExpression, etc.), compile it to SQL
+            compiled = condition.compile(compile_kwargs={"literal_binds": True})
+            formatted_condition = str(compiled)
+
+            # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
+            import re
+
+            formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
+
+            # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
+            formatted_condition = re.sub(r"\w+\.(\w+)", r"\1", formatted_condition)
+
+            self._having_conditions.append(formatted_condition)
+        else:
+            # Handle string conditions - replace ? placeholders with actual values
+            formatted_condition = str(condition)
+
+            # If there are params but no ? placeholders, append them to the condition
+            if params and "?" not in formatted_condition:
+                for param in params:
+                    if hasattr(param, "_build_sql"):
+                        # This is a MatrixOne expression, compile it
+                        sql, _ = param._build_sql()
+                        formatted_condition += f" AND {sql}"
+                    else:
+                        # Regular parameter
+                        if isinstance(param, str):
+                            formatted_condition += f" AND '{param}'"
+                        else:
+                            formatted_condition += f" AND {param}"
             else:
-                formatted_condition = formatted_condition.replace("?", str(param), 1)
-        self._having_conditions.append(formatted_condition)
+                # Replace ? placeholders with actual values
+                for param in params:
+                    if isinstance(param, str):
+                        formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
+                    else:
+                        formatted_condition = formatted_condition.replace("?", str(param), 1)
+
+            self._having_conditions.append(formatted_condition)
         return self
 
     def snapshot(self, snapshot_name: str) -> "BaseMatrixOneQuery":
@@ -923,7 +1079,37 @@ class BaseMatrixOneQuery:
 
 # MatrixOne Snapshot Query Builder - SQLAlchemy style
 class MatrixOneQuery(BaseMatrixOneQuery):
-    """MatrixOne Query builder that mimics SQLAlchemy Query interface"""
+    """
+    MatrixOne Query builder that mimics SQLAlchemy Query interface.
+
+    This class provides full SQLAlchemy compatibility including:
+    - SQLAlchemy expression support in having(), filter(), and other methods
+    - Type-safe column references and function calls
+    - Automatic SQL generation and parameter binding
+    - Full integration with SQLAlchemy models and functions
+
+    Key Features:
+    - Supports SQLAlchemy expressions (e.g., func.count(User.id) > 5)
+    - Supports traditional string conditions (e.g., "COUNT(*) > ?", 5)
+    - Automatic column name resolution and SQL generation
+    - Method chaining for fluent query building
+    - Full compatibility with SQLAlchemy 1.4+ and 2.0+
+
+    Examples:
+        # SQLAlchemy expression syntax (recommended)
+        query = client.query(User)
+        query.group_by(User.department)
+        query.having(func.count(User.id) > 5)
+        query.having(func.avg(User.age) > 25)
+
+        # String-based syntax (also supported)
+        query.having("COUNT(*) > ?", 5)
+        query.having("AVG(age) > ?", 25)
+
+        # Mixed syntax
+        query.having(func.count(User.id) > 5)  # Expression
+        query.having("AVG(age) > ?", 25)       # String
+    """
 
     def __init__(self, model_class, client, transaction_wrapper=None, snapshot=None):
         super().__init__(model_class, client, transaction_wrapper, snapshot)

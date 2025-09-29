@@ -7,7 +7,7 @@ Test SQL generation for various filter conditions without database connection
 
 import unittest
 from unittest.mock import Mock, MagicMock
-from sqlalchemy import Column, Integer, String, DECIMAL, and_, or_, not_
+from sqlalchemy import Column, Integer, String, DECIMAL, and_, or_, not_, func
 from matrixone.orm import declarative_base
 
 # Import the ORM classes
@@ -368,12 +368,12 @@ class TestUnifiedFilter(unittest.TestCase):
             self.product_query.select("category", "COUNT(*) as count")
             .filter(Product.price > 100)
             .group_by("category")
-            .having("COUNT(*) > 1")
+            .having(func.count("*") > 1)
         )
         sql, params = query._build_sql()
 
         expected_sql = (
-            "SELECT category, COUNT(*) as count FROM products WHERE price > 100 GROUP BY category HAVING COUNT(*) > 1"
+            "SELECT category, COUNT(*) as count FROM products WHERE price > 100 GROUP BY category HAVING count(*) > 1"
         )
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
