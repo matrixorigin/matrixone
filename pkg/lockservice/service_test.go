@@ -4189,6 +4189,87 @@ func TestIssue2128(t *testing.T) {
 	)
 }
 
+func TestLeakWaiterForErr(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			_ = os.Setenv("mo_reuse_enable_checker", "true")
+
+			tableID := uint64(20)
+			row8 := [][]byte{{8}}
+			row5 := [][]byte{{5}}
+			row2 := [][]byte{{2}}
+			rng19 := newTestRows(1, 9)
+
+			txn1 := []byte("rt1")
+			txn2 := []byte("rt2")
+			txn3 := []byte("rt3")
+			txn4 := []byte("rt4")
+
+			ll, err := l1.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			lt := ll.(*localLockTable)
+			lt.options.afterWait = func(c *lockContext) func() {
+				if c.opts.Granularity == pb.Granularity_Range {
+					time.Sleep(time.Second)
+				}
+				return func() {}
+			}
+			txn := lt.txnHolder.getActiveTxn(txn4, true, "")
+			txn.Lock()
+			txn.beforeLockAdded = func(id []byte, locks [][]byte) error {
+				return ErrTxnNotFound
+			}
+			txn.Unlock()
+
+			_, err = l1.Lock(ctx, tableID, row8, txn1, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, _ = l1.Lock(ctx, tableID, rng19, txn4, newTestRangeExclusiveOptions())
+			}()
+
+			require.NoError(t, WaitWaiters(l1, 0, tableID, row8[0], 1))
+
+			var wt *waiter
+			lt.mu.Lock()
+			lock, _ := lt.mu.store.Get(row8[0])
+			lock.waiters.iter(func(w *waiter) bool {
+				wt = w
+				return false
+			})
+			lt.mu.Unlock()
+
+			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+
+			_, err = l1.Lock(ctx, tableID, row5, txn2, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, WaitWaiters(l1, 0, tableID, row5[0], 1))
+			require.NoError(t, l1.Unlock(ctx, txn2, timestamp.Timestamp{}))
+
+			_, err = l1.Lock(ctx, tableID, row2, txn3, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, WaitWaiters(l1, 0, tableID, row2[0], 1))
+			require.NoError(t, l1.Unlock(ctx, txn3, timestamp.Timestamp{}))
+
+			wg.Wait()
+			require.NoError(t, l1.Unlock(ctx, txn4, timestamp.Timestamp{}))
+
+			time.Sleep(500 * time.Millisecond)
+			require.NotEqual(t, int32(1), wt.refCount.Load())
+		},
+	)
+
+}
+
 func TestIssue14008(t *testing.T) {
 	runLockServiceTests(
 		t,

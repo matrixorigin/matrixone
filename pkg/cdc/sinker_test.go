@@ -19,11 +19,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +38,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/btree"
 )
+
+func mockTableDef() *plan.TableDef {
+	return &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{
+				Name: "pk",
+				Typ:  plan.Type{Id: int32(types.T_uint64)},
+				Default: &plan.Default{
+					NullAbility: false,
+				},
+			},
+		},
+	}
+}
+
+func mockClusterTableDef() *plan.TableDef {
+	return &plan.TableDef{
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{
+				Name: "pk",
+				Typ:  plan.Type{Id: int32(types.T_uint64)},
+				Default: &plan.Default{
+					NullAbility: false,
+				},
+			},
+		},
+	}
+}
 
 func TestNewSinker(t *testing.T) {
 	type args struct {
@@ -62,7 +93,7 @@ func TestNewSinker(t *testing.T) {
 				},
 				dbTblInfo:        &DbTableInfo{},
 				watermarkUpdater: nil,
-				tableDef:         nil,
+				tableDef:         mockTableDef(),
 				retryTimes:       0,
 				retryDuration:    0,
 				ar:               NewCdcActiveRoutine(),
@@ -82,7 +113,7 @@ func TestNewSinker(t *testing.T) {
 					SourceCreateSql: "create table t1 (a int, b int, c int)",
 				},
 				watermarkUpdater: nil,
-				tableDef:         nil,
+				tableDef:         mockTableDef(),
 				retryTimes:       0,
 				retryDuration:    0,
 				ar:               NewCdcActiveRoutine(),
@@ -100,13 +131,31 @@ func TestNewSinker(t *testing.T) {
 					IdChanged:       true,
 				},
 				watermarkUpdater: nil,
-				tableDef:         nil,
+				tableDef:         mockTableDef(),
 				retryTimes:       0,
 				retryDuration:    0,
 				ar:               NewCdcActiveRoutine(),
 			},
 			want:    nil,
 			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				sinkUri: UriInfo{
+					SinkTyp: CDCSinkType_MySQL,
+				},
+				dbTblInfo: &DbTableInfo{
+					SourceCreateSql: "create table t1 (a int, b int, c int)",
+					IdChanged:       true,
+				},
+				watermarkUpdater: nil,
+				tableDef:         mockClusterTableDef(),
+				retryTimes:       0,
+				retryDuration:    0,
+				ar:               NewCdcActiveRoutine(),
+			},
+			want:    nil,
+			wantErr: assert.Error,
 		},
 	}
 

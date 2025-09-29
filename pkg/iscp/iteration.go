@@ -123,6 +123,9 @@ func ExecuteIteration(
 		statuses[i].StartAt = startAt
 	}
 	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	if err != nil {
+		return
+	}
 	if changes != nil {
 		defer changes.Close()
 	}
@@ -211,10 +214,10 @@ func ExecuteIteration(
 
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	changeHandelWg := sync.WaitGroup{}
+	changeHandelWg.Add(1)
 	go func() {
 		defer cancel()
 		defer changeHandelWg.Done()
-		changeHandelWg.Add(1)
 		for {
 			select {
 			case <-ctxWithCancel.Done():
@@ -291,7 +294,8 @@ func ExecuteIteration(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			err := consumerEntry.Consume(context.Background(), dataRetrievers[i])
+			ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+			err := consumerEntry.Consume(ctx, dataRetrievers[i])
 			if err != nil {
 				logutil.Error(
 					"ISCP-Task sink consume failed",

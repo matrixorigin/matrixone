@@ -157,6 +157,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}
+		u.idxcfg.OpType = u.param.OpType
 		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 
 		// IndexTableConfig
@@ -190,7 +191,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		// dimension
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
-		u.idxcfg.Type = "ivfflat"
+		u.idxcfg.Type = vectorindex.IVFFLAT
 
 		// get version
 		version, err := getVersion(proc, u.tblcfg)
