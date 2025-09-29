@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -49,4 +50,52 @@ func Test_runSql(t *testing.T) {
 
 	_, err := runSql(compilerContext, "")
 	require.Error(t, err, "internal error: no account id in context")
+}
+
+func Test_buildPostDmlFullTextIndexAsync(t *testing.T) {
+	{
+		//invalid json
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":1}`,
+		}
+
+		err := buildPostDmlFullTextIndex(nil, nil, nil, nil, nil, nil, 0, idxdef, 0, false, false, false)
+		require.NotNil(t, err)
+	}
+
+	{
+
+		// async true
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":"true"}`,
+		}
+
+		err := buildPostDmlFullTextIndex(nil, nil, nil, nil, nil, nil, 0, idxdef, 0, false, false, false)
+		require.Nil(t, err)
+	}
+
+}
+
+func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
+	{
+		//invalid json
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":1}`,
+		}
+
+		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
+		require.NotNil(t, err)
+	}
+
+	{
+
+		// async true
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":"true"}`,
+		}
+
+		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
+		require.Nil(t, err)
+	}
+
 }
