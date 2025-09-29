@@ -2176,6 +2176,10 @@ class AsyncClient(BaseMatrixOneClient):
         # Build CREATE TABLE SQL
         column_definitions = []
         for column_name, column_def in columns.items():
+            # Ensure vecf32/vecf64 format is lowercase for consistency
+            if column_def.lower().startswith("vecf32(") or column_def.lower().startswith("vecf64("):
+                column_def = column_def.lower()
+
             column_definitions.append(f"{column_name} {column_def}")
 
         sql = f"CREATE TABLE {table_name} ({', '.join(column_definitions)})"

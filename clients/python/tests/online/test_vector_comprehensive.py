@@ -110,26 +110,24 @@ class TestVectorComprehensive:
         try:
             test_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
             test_client.execute(f"USE {test_db}")
-            test_client.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {test_table} (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    embedding VECF32(64)
-                )
-            """
+            # Create table using create_table API
+            test_client.create_table(
+                test_table,
+                columns={'id': 'int', 'name': 'varchar(100)', 'embedding': 'vecf32(64)'},
+                primary_key='id',
+                if_not_exists=True,
             )
-            # Clear existing data and insert test data
+            # Clear existing data and insert test data using client insert interface
             test_client.execute(f"DELETE FROM {test_table}")
-            test_client.execute(
-                f"INSERT INTO {test_table} VALUES (1, 'test1', '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4]')"
-            )
-            test_client.execute(
-                f"INSERT INTO {test_table} VALUES (2, 'test2', '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5]')"
-            )
-            test_client.execute(
-                f"INSERT INTO {test_table} VALUES (3, 'test3', '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6]')"
-            )
+
+            # Insert test data using client insert interface
+            test_vector1 = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 6 + [0.1, 0.2, 0.3, 0.4]
+            test_vector2 = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1] * 6 + [0.2, 0.3, 0.4, 0.5]
+            test_vector3 = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2] * 6 + [0.3, 0.4, 0.5, 0.6]
+
+            test_client.insert(table_name=test_table, data={"id": 1, "name": "test1", "embedding": test_vector1})
+            test_client.insert(table_name=test_table, data={"id": 2, "name": "test2", "embedding": test_vector2})
+            test_client.insert(table_name=test_table, data={"id": 3, "name": "test3", "embedding": test_vector3})
 
             yield test_db, test_table
 
@@ -149,25 +147,29 @@ class TestVectorComprehensive:
         try:
             await test_async_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
             await test_async_client.execute(f"USE {test_db}")
-            await test_async_client.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {test_table} (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    embedding VECF32(64)
-                )
-            """
+            # Create table using create_table API
+            await test_async_client.create_table(
+                table_name=test_table,
+                columns={'id': 'int', 'name': 'varchar(100)', 'embedding': 'vecf32(64)'},
+                primary_key='id',
+                if_not_exists=True,
             )
-            # Clear existing data and insert test data
+            # Clear existing data and insert test data using async_client insert interface
             await test_async_client.execute(f"DELETE FROM {test_table}")
-            await test_async_client.execute(
-                f"INSERT INTO {test_table} VALUES (1, 'async_test1', '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4]')"
+
+            # Insert test data using async_client insert interface
+            test_vector1 = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 6 + [0.1, 0.2, 0.3, 0.4]
+            test_vector2 = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1] * 6 + [0.2, 0.3, 0.4, 0.5]
+            test_vector3 = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2] * 6 + [0.3, 0.4, 0.5, 0.6]
+
+            await test_async_client.insert(
+                table_name=test_table, data={"id": 1, "name": "async_test1", "embedding": test_vector1}
             )
-            await test_async_client.execute(
-                f"INSERT INTO {test_table} VALUES (2, 'async_test2', '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5]')"
+            await test_async_client.insert(
+                table_name=test_table, data={"id": 2, "name": "async_test2", "embedding": test_vector2}
             )
-            await test_async_client.execute(
-                f"INSERT INTO {test_table} VALUES (3, 'async_test3', '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6]')"
+            await test_async_client.insert(
+                table_name=test_table, data={"id": 3, "name": "async_test3", "embedding": test_vector3}
             )
 
             yield test_db, test_table
@@ -245,45 +247,43 @@ class TestVectorComprehensive:
             __tablename__ = f'vector_search_{int(time.time())}'
             id = Column(Integer, primary_key=True)
             name = Column(String(100))
-            embedding = Column(Vectorf32(dimension=64))
+            embedding = create_vector_column(64, "f32")
 
         # Create table
-        Base.metadata.create_all(test_client.get_sqlalchemy_engine())
+        test_client.create_table(VectorSearch)
 
         # Insert test data
-        session = Session()
         try:
             # Insert multiple vectors
             vectors = [
-                ([0.1] * 64, "vector_1"),
-                ([0.2] * 64, "vector_2"),
-                ([0.3] * 64, "vector_3"),
+                {"id": 1, "name": "vector_1", "embedding": [0.1] * 64},
+                {"id": 2, "name": "vector_2", "embedding": [0.2] * 64},
+                {"id": 3, "name": "vector_3", "embedding": [0.3] * 64},
             ]
 
-            for i, (vector, name) in enumerate(vectors, 1):
-                vector_data = VectorSearch(id=i, name=name, embedding=vector)
-                session.add(vector_data)
-            session.commit()
+            test_client.batch_insert(VectorSearch, vectors)
 
             # Search for similar vectors using L2 distance
             query_vector = [0.15] * 64
-            # Use raw SQL for vector distance functions
-            query_sql = text(
-                f"""
-                SELECT * FROM {VectorSearch.__tablename__}
-                ORDER BY l2_distance(embedding, :query_vector)
-                LIMIT 2
-            """
+            # Use query interface for vector distance functions
+            result = (
+                test_client.query(
+                    VectorSearch,
+                    VectorSearch.id,
+                    VectorSearch.name,
+                    VectorSearch.embedding.l2_distance(query_vector).label('distance'),
+                )
+                .order_by('distance')
+                .limit(2)
+                .all()
             )
-            result = session.execute(query_sql, {"query_vector": str(query_vector)}).fetchall()
 
             assert len(result) == 2
             # Should return closest vectors first
             assert result[0].name in ["vector_1", "vector_2"]
 
         finally:
-            session.close()
-            Base.metadata.drop_all(test_client.get_sqlalchemy_engine())
+            test_client.drop_table(VectorSearch)
 
     def test_vector_search_cosine_distance(self, test_client, Base, Session):
         """Test vector search using cosine distance - from test_vector_operations_online.py"""
@@ -296,42 +296,37 @@ class TestVectorComprehensive:
             embedding = Column(Vectorf32(dimension=64))
 
         # Create table
-        Base.metadata.create_all(test_client.get_sqlalchemy_engine())
+
+        test_client.create_table(VectorCosine)
 
         # Insert test data
-        session = Session()
         try:
             # Insert vectors with different directions
             vectors = [
-                ([1.0] + [0.0] * 63, "unit_x"),
-                ([0.0] + [1.0] + [0.0] * 62, "unit_y"),
-                ([0.5] + [0.5] + [0.0] * 62, "diagonal"),
+                {"id": 1, "name": "unit_x", "embedding": [1.0] + [0.0] * 63},
+                {"id": 2, "name": "unit_y", "embedding": [0.0] + [1.0] + [0.0] * 62},
+                {"id": 3, "name": "diagonal", "embedding": [0.5] + [0.5] + [0.0] * 62},
             ]
 
-            for i, (vector, name) in enumerate(vectors, 1):
-                vector_data = VectorCosine(id=i, name=name, embedding=vector)
-                session.add(vector_data)
-            session.commit()
+            test_client.batch_insert(VectorCosine, vectors)
 
             # Search using cosine distance
             query_vector = [1.0] + [0.0] * 63
-            # Use raw SQL for vector distance functions
-            query_sql = text(
-                f"""
-                SELECT * FROM {VectorCosine.__tablename__}
-                ORDER BY cosine_distance(embedding, :query_vector)
-                LIMIT 2
-            """
+            # Use query interface for vector distance functions
+            result = test_client.vector_query.similarity_search(
+                table_name=VectorCosine.__tablename__,
+                vector_column="embedding",
+                query_vector=query_vector,
+                limit=2,
+                distance_type="cosine",
             )
-            result = session.execute(query_sql, {"query_vector": str(query_vector)}).fetchall()
 
             assert len(result) == 2
             # Should return most similar vectors first
             assert result[0].name == "unit_x"  # Should be most similar
 
         finally:
-            session.close()
-            Base.metadata.drop_all(test_client.get_sqlalchemy_engine())
+            test_client.drop_table(VectorCosine)
 
     def test_vector_search_with_limit_and_offset(self, test_client, Base, Session):
         """Test vector search with limit and offset - from test_vector_operations_online.py"""
@@ -341,51 +336,56 @@ class TestVectorComprehensive:
             __tablename__ = f'vector_limit_{int(time.time())}'
             id = Column(Integer, primary_key=True)
             name = Column(String(100))
-            embedding = Column(Vectorf32(dimension=64))
+            embedding = create_vector_column(64, "f32")
 
         # Create table
-        Base.metadata.create_all(test_client.get_sqlalchemy_engine())
+        test_client.create_table(VectorLimit)
 
         # Insert test data
-        session = Session()
         try:
             # Insert multiple vectors
             for i in range(10):
-                vector_data = VectorLimit(id=i + 1, name=f"vector_{i + 1}", embedding=[float(i) / 10.0] * 64)
-                session.add(vector_data)
-            session.commit()
+                test_client.insert(
+                    VectorLimit.__tablename__,
+                    data={"id": i + 1, "name": f"vector_{i + 1}", "embedding": [float(i) / 10.0] * 64},
+                )
 
             # Search with limit
             query_vector = [0.5] * 64
-            # Use raw SQL for vector distance functions
-            query_sql = text(
-                f"""
-                SELECT * FROM {VectorLimit.__tablename__}
-                ORDER BY l2_distance(embedding, :query_vector)
-                LIMIT 3
-            """
+            result = (
+                test_client.query(
+                    VectorLimit,
+                    VectorLimit.id,
+                    VectorLimit.name,
+                    VectorLimit.embedding.l2_distance(query_vector).label('distance'),
+                )
+                .order_by('distance')
+                .limit(3)
+                .all()
             )
-            result = session.execute(query_sql, {"query_vector": str(query_vector)}).fetchall()
 
             assert len(result) == 3
 
-            # Search with offset
-            query_sql_offset = text(
-                f"""
-                SELECT * FROM {VectorLimit.__tablename__}
-                ORDER BY l2_distance(embedding, :query_vector)
-                LIMIT 3 OFFSET 2
-            """
+            # Search with offset using query interface
+            result_offset = (
+                test_client.query(
+                    VectorLimit,
+                    VectorLimit.id,
+                    VectorLimit.name,
+                    VectorLimit.embedding.l2_distance(query_vector).label('distance'),
+                )
+                .order_by('distance')
+                .offset(2)
+                .limit(3)
+                .all()
             )
-            result_offset = session.execute(query_sql_offset, {"query_vector": str(query_vector)}).fetchall()
 
             assert len(result_offset) == 3
             # Results should be different due to offset
             assert result[0].id != result_offset[0].id
 
         finally:
-            session.close()
-            Base.metadata.drop_all(test_client.get_sqlalchemy_engine())
+            test_client.drop_table(VectorLimit)
 
     # ==================== VECTOR TABLE OPERATIONS ====================
 
@@ -450,13 +450,13 @@ class TestVectorComprehensive:
 
             conn.execute(insert_sql, {"id": 1, "name": "test_vector", "embedding": vector_str})
 
-            # Verify insertion
-            result = conn.execute(text(f"SELECT * FROM {table.name} WHERE id = 1"))
+            # Verify insertion using query interface
+            stmt = select(table).where(table.c.id == 1)
+            result = conn.execute(stmt)
             rows = result.fetchall()
             assert len(rows) == 1
             assert rows[0][1] == "test_vector"
-            assert rows[0][2].startswith('[')
-            assert rows[0][2].endswith(']')
+            assert rows[0][2] == list(map(float, test_vector))
 
             # Clean up
             conn.execute(DropTable(table, if_exists=True))
@@ -504,10 +504,6 @@ class TestVectorComprehensive:
         Base.metadata.create_all(test_client.get_sqlalchemy_engine())
 
         try:
-            # Check if vector_ops is available
-            if not hasattr(test_client, 'vector_ops') or test_client.vector_ops is None:
-                pytest.skip("Vector operations not available")
-
             # Enable IVF indexing
             test_client.vector_ops.enable_ivf()
 
@@ -548,48 +544,28 @@ class TestVectorComprehensive:
         except Exception as e:
             pytest.skip(f"IVF config creation failed: {e}")
 
-    def test_ivf_support_check(self, test_client):
-        """Test IVF support check - from test_vector_index_online.py"""
-        # Test IVF support check
-        try:
-            result = test_client.execute("SELECT @@version")
-            # If we can execute this, IVF support check passes
-            assert result is not None
-        except Exception as e:
-            pytest.skip(f"IVF support check failed: {e}")
-
     def test_ivf_status_retrieval(self, engine):
         """Test IVF status retrieval - from test_vector_index_online.py"""
-        try:
-            status = get_ivf_status(engine)
-            assert status is not None
-        except Exception as e:
-            pytest.skip(f"IVF status retrieval failed: {e}")
+        status = get_ivf_status(engine)
+        assert status is not None
 
     def test_ivf_enable_disable(self, engine):
         """Test IVF enable/disable - from test_vector_index_online.py"""
-        try:
-            # Test enable
-            enable_ivf_indexing(engine)
+        # Test enable
+        enable_ivf_indexing(engine)
 
-            # Test disable
-            disable_ivf_indexing(engine)
+        # Test disable
+        disable_ivf_indexing(engine)
 
-            # If we get here without exception, test passes
-            assert True
-        except Exception as e:
-            pytest.skip(f"IVF enable/disable failed: {e}")
+        # If we get here without exception, test passes
+        assert True
 
     def test_probe_limit_setting(self, engine):
-        """Test probe limit setting - from test_vector_index_online.py"""
-        try:
-            # Test setting probe limit
-            set_probe_limit(engine, 5)
+        # Test setting probe limit
+        set_probe_limit(engine, 5)
 
-            # If we get here without exception, test passes
-            assert True
-        except Exception as e:
-            pytest.skip(f"Probe limit setting failed: {e}")
+        # If we get here without exception, test passes
+        assert True
 
     # ==================== ASYNC VECTOR OPERATIONS ====================
 
@@ -599,15 +575,9 @@ class TestVectorComprehensive:
         table_name = f"async_vector_table_{int(time.time())}"
 
         try:
-            # Create table
-            await test_async_client.execute(
-                f"""
-                CREATE TABLE {table_name} (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    embedding VECF32(64)
-                )
-            """
+            # Create table using create_table API
+            await test_async_client.create_table(
+                table_name, columns={'id': 'int', 'name': 'varchar(100)', 'embedding': 'vecf32(64)'}, primary_key='id'
             )
 
             # Verify table exists
@@ -615,9 +585,9 @@ class TestVectorComprehensive:
             assert len(result.rows) > 0
 
         finally:
-            # Clean up
+            # Clean up using drop_table API
             try:
-                await test_async_client.execute(f"DROP TABLE IF EXISTS {table_name}")
+                await test_async_client.drop_table(table_name)
             except Exception as e:
                 print(f"Async cleanup failed: {e}")
 
@@ -627,35 +597,27 @@ class TestVectorComprehensive:
         table_name = f"async_vector_insert_{int(time.time())}"
 
         try:
-            # Create table
-            await test_async_client.execute(
-                f"""
-                CREATE TABLE {table_name} (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    embedding VECF32(64)
-                )
-            """
+            # Create table using create_table API
+            await test_async_client.create_table(
+                table_name, columns={'id': 'int', 'name': 'varchar(100)', 'embedding': 'vecf32(64)'}, primary_key='id'
             )
 
-            # Insert data
-            test_vector = '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4]'
-            await test_async_client.execute(
-                f"""
-                INSERT INTO {table_name} (id, name, embedding)
-                VALUES (1, 'async_test', '{test_vector}')
-            """
+            # Insert data using async_client insert interface
+            test_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 6 + [0.1, 0.2, 0.3, 0.4]
+            await test_async_client.insert(
+                table_name=table_name, data={"id": 1, "name": "async_test", "embedding": test_vector}
             )
 
-            # Verify insertion
-            result = await test_async_client.execute(f"SELECT * FROM {table_name} WHERE id = 1")
-            assert len(result.rows) == 1
-            assert result.rows[0][1] == "async_test"
+            # Verify insertion using query interface
+            result = await test_async_client.query(table_name).select("*").where("id = ?", 1).execute()
+            rows = result.fetchall()
+            assert len(rows) == 1
+            assert rows[0][1] == "async_test"
 
         finally:
-            # Clean up
+            # Clean up using drop_table API
             try:
-                await test_async_client.execute(f"DROP TABLE IF EXISTS {table_name}")
+                await test_async_client.drop_table(table_name)
             except Exception as e:
                 print(f"Async cleanup failed: {e}")
 
@@ -669,7 +631,7 @@ class TestVectorComprehensive:
                 """
                 CREATE TABLE test_invalid_vector (
                     id INT PRIMARY KEY,
-                    embedding VECF32(0)
+                    embedding vecf32(0)
                 )
             """
             )
@@ -684,36 +646,26 @@ class TestVectorComprehensive:
         table_name = f"test_missing_vector_{int(time.time())}"
 
         try:
-            # Create table
-            test_client.execute(
-                f"""
-                CREATE TABLE {table_name} (
-                    id INT PRIMARY KEY,
-                    name VARCHAR(100),
-                    embedding VECF32(64)
-                )
-            """
+            # Create table using create_table API
+            test_client.create_table(
+                table_name, columns={'id': 'int', 'name': 'varchar(100)', 'embedding': 'vecf32(64)'}, primary_key='id'
             )
 
-            # Try to insert without vector data
+            # Try to insert without vector data using insert API
             try:
-                test_client.execute(
-                    f"""
-                    INSERT INTO {table_name} (id, name)
-                    VALUES (1, 'test')
-                """
-                )
+                test_client.insert(table_name=table_name, data={"id": 1, "name": "test"})
                 # If we get here, check if embedding is NULL
-                result = test_client.execute(f"SELECT embedding FROM {table_name} WHERE id = 1")
-                assert result.rows[0][0] is None
+                result = test_client.query(table_name).select("embedding").where("id = ?", 1).execute()
+                rows = result.fetchall()
+                assert rows[0][0] is None
             except Exception as e:
                 # Expected to fail if embedding is required
                 assert "embedding" in str(e).lower() or "null" in str(e).lower()
 
         finally:
-            # Clean up
+            # Clean up using drop_table API
             try:
-                test_client.execute(f"DROP TABLE IF EXISTS {table_name}")
+                test_client.drop_table(table_name)
             except Exception as e:
                 print(f"Cleanup failed: {e}")
 
@@ -727,10 +679,10 @@ class TestVectorComprehensive:
             result = test_client.execute("SHOW TABLES")
             test_tables = [row[0] for row in result.rows if 'test_' in row[0] or 'vector_' in row[0]]
 
-            # Drop test tables
+            # Drop test tables using drop_table API
             for table in test_tables:
                 try:
-                    test_client.execute(f"DROP TABLE IF EXISTS {table}")
+                    test_client.drop_table(table)
                 except Exception as e:
                     print(f"Failed to drop table {table}: {e}")
 

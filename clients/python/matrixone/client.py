@@ -1322,7 +1322,7 @@ class Client(BaseMatrixOneClient):
                     Supported formats:
                     - 'id': 'bigint' (with primary_key=True if needed)
                     - 'name': 'varchar(100)'
-                    - 'embedding': 'vector(128,f32)'
+                    - 'embedding': 'vecf32(128)' or 'vecf64(128)'
                     - 'score': 'float'
                     - 'created_at': 'datetime'
                     - 'is_active': 'boolean'
@@ -1337,7 +1337,7 @@ class Client(BaseMatrixOneClient):
                 'id': 'bigint',
                 'name': 'varchar(100)',
                 'email': 'varchar(255)',
-                'embedding': 'vector(128,f32)',
+                'embedding': 'vecf32(128)',
                 'score': 'float',
                 'created_at': 'datetime',
                 'is_active': 'boolean'
@@ -1369,17 +1369,17 @@ class Client(BaseMatrixOneClient):
         for column_name, column_def in columns.items():
             is_primary = primary_key == column_name
 
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
+            if column_def.lower().startswith("vecf32(") or column_def.lower().startswith("vecf64("):
+                # Parse vecf32(64) or vecf64(64) format (case insensitive)
                 import re
 
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                match = re.match(r"vecf(\d+)\((\d+)\)", column_def.lower())
                 if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
+                    precision = f"f{match.group(1)}"
+                    dimension = int(match.group(2))
                     builder.add_vector_column(column_name, dimension, precision)
                 else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
+                    raise ValueError(f"Invalid vecf format: {column_def}")
 
             elif column_def.startswith("varchar("):
                 # Parse varchar type: varchar(100)
@@ -1459,7 +1459,7 @@ class Client(BaseMatrixOneClient):
                     f"Unsupported column type '{column_def}' for column '{column_name}'. "
                     f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
                     f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vector(n,precision)"
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
                 )
 
         # Create table
@@ -1588,7 +1588,7 @@ class Client(BaseMatrixOneClient):
                     f"Unsupported column type '{column_def}' for column '{column_name}'. "
                     f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
                     f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vector(n,precision)"
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
                 )
 
         # Create table using the provided connection
@@ -1779,7 +1779,7 @@ class Client(BaseMatrixOneClient):
                     f"Unsupported column type '{column_def}' for column '{column_name}'. "
                     f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
                     f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vector(n,precision)"
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
                 )
 
         # Create table
@@ -1937,7 +1937,7 @@ class Client(BaseMatrixOneClient):
                     f"Unsupported column type '{column_def}' for column '{column_name}'. "
                     f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
                     f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vector(n,precision)"
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
                 )
 
         # Create table using the provided connection
@@ -2602,7 +2602,7 @@ class TransactionWrapper:
                     f"Unsupported column type '{column_def}' for column '{column_name}'. "
                     f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
                     f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vector(n,precision)"
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
                 )
 
         # Create table using transaction wrapper's execute method
@@ -2746,7 +2746,7 @@ class TransactionWrapper:
                     f"Unsupported column type '{column_def}' for column '{column_name}'. "
                     f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
                     f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vector(n,precision)"
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
                 )
 
         # Create table using transaction wrapper's execute method
