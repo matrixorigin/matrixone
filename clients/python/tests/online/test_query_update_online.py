@@ -100,11 +100,11 @@ class TestQueryUpdateOnline:
 
         # Clear existing data (ignore errors if tables don't exist)
         try:
-            test_client.execute("DELETE FROM test_users_update")
+            test_client.query(User).delete()
         except Exception:
             pass
         try:
-            test_client.execute("DELETE FROM test_products_update")
+            test_client.query(Product).delete()
         except Exception:
             pass
 
@@ -232,7 +232,7 @@ class TestQueryUpdateOnline:
         assert user2.status == "active"
 
         # Clean up
-        test_client.execute("DELETE FROM test_users_update WHERE id IN (200, 201, 202)")
+        test_client.query(User).filter(User.id.in_([200, 201, 202])).delete()
 
     def test_update_with_none_values(self, test_client):
         """Test updating with None values"""
@@ -330,7 +330,7 @@ class TestQueryUpdateOnline:
         assert updated_user.status == "transaction_committed"
 
         # Clean up
-        test_client.execute("DELETE FROM test_users_update WHERE id = 100")
+        test_client.query(User).filter(User.id == 100).delete()
 
     def test_update_with_rollback(self, test_client, test_database):
         """Test updating with transaction rollback"""
@@ -374,7 +374,7 @@ class TestQueryUpdateOnline:
         assert user.status == "original_status"
 
         # Clean up
-        test_client.execute("DELETE FROM test_users_update WHERE id = 101")
+        test_client.query(User).filter(User.id == 101).delete()
 
     def test_update_with_explain(self, test_client):
         """Test explaining an update query"""

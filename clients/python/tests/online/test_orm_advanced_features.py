@@ -1578,8 +1578,8 @@ class TestORMAdvancedFeatures:
     def test_real_database_subquery_execution(self, test_client, test_database):
         """Test real database execution of subquery"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
-        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        test_client.query(User).filter(User.id.in_([1, 2, 3, 4, 5])).delete()
+        test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(
@@ -1623,8 +1623,8 @@ class TestORMAdvancedFeatures:
     def test_real_database_join_execution(self, test_client, test_database):
         """Test real database execution of JOIN query"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
-        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        test_client.query(User).filter(User.id.in_([1, 2, 3, 4, 5])).delete()
+        test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(
@@ -1675,8 +1675,8 @@ class TestORMAdvancedFeatures:
     def test_real_database_cte_execution(self, test_client, test_database):
         """Test real database execution of CTE using CTE ORM"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
-        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        test_client.query(User).filter(User.id.in_([1, 2, 3, 4, 5])).delete()
+        test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(
@@ -1739,8 +1739,8 @@ class TestORMAdvancedFeatures:
     def test_cte_query_builder_basic(self, test_client, test_database):
         """Test the new CTEQuery builder with basic functionality"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
-        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        test_client.query(User).filter(User.id.in_([1, 2, 3, 4, 5])).delete()
+        test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(
@@ -1810,8 +1810,8 @@ class TestORMAdvancedFeatures:
     def test_cte_query_builder_with_joins(self, test_client, test_database):
         """Test CTEQuery builder with JOINs"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
-        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        test_client.query(User).filter(User.id.in_([1, 2, 3, 4, 5])).delete()
+        test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(
@@ -1866,8 +1866,8 @@ class TestORMAdvancedFeatures:
     def test_cte_query_builder_multiple_ctes(self, test_client, test_database):
         """Test CTEQuery builder with multiple CTEs"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_users_advanced WHERE id IN (1, 2, 3, 4, 5)")
-        test_client.execute("DELETE FROM test_departments_advanced WHERE id IN (1, 2, 3, 4)")
+        test_client.query(User).filter(User.id.in_([1, 2, 3, 4, 5])).delete()
+        test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(
@@ -1946,7 +1946,7 @@ class TestORMAdvancedFeatures:
     def test_vector_similarity_search_with_cte(self, test_client, test_database):
         """Test vector similarity search using CTE with L2 distance"""
         # Clean up existing data first
-        test_client.execute("DELETE FROM test_ai_dataset WHERE id IN (1, 2, 3, 4)")
+        test_client.query(AIDataset).filter(AIDataset.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
         test_client.execute(

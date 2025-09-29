@@ -412,10 +412,11 @@ class Query:
             where_params=self._where_params,
         )
 
-    def delete(self) -> "Query":
-        """Start DELETE operation"""
+    def delete(self) -> Any:
+        """Execute DELETE operation"""
         self._query_type = "DELETE"
-        return self
+        sql, params = self._build_delete_sql()
+        return self._execute(sql, params)
 
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
@@ -1496,6 +1497,22 @@ class BaseMatrixOneQuery:
         sql = f"UPDATE {self._table_name} SET {', '.join(set_clauses)}{where_clause}"
 
         return sql, params
+
+    def delete(self) -> Any:
+        """Execute DELETE operation"""
+        self._query_type = "DELETE"
+        sql, params = self._build_delete_sql()
+        return self._execute(sql, params)
+
+    def _build_delete_sql(self) -> tuple[str, List[Any]]:
+        """Build DELETE SQL query using unified SQL builder"""
+        from .sql_builder import build_delete_query
+
+        return build_delete_query(
+            table_name=self._table_name,
+            where_conditions=self._where_conditions,
+            where_params=self._where_params,
+        )
 
 
 # MatrixOne Snapshot Query Builder - SQLAlchemy style
