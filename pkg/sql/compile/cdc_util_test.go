@@ -88,7 +88,7 @@ func TestISCPCheckValidIndexCdc(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -106,7 +106,7 @@ func TestISCPCheckValidIndexCdc(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -137,7 +137,7 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -155,7 +155,7 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -188,7 +188,7 @@ func TestISCPDropAllIndexCdcTasks(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -206,7 +206,7 @@ func TestISCPDropAllIndexCdcTasks(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -239,7 +239,7 @@ func TestISCPDropIndexCdcTask(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
@@ -257,7 +257,7 @@ func TestISCPDropIndexCdcTask(t *testing.T) {
 	{
 		tbldef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{
-				&plan.IndexDef{
+				{
 					TableExist:      true,
 					IndexName:       "a",
 					IndexAlgo:       "ivfflat",
