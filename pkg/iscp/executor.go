@@ -310,6 +310,12 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			from := exec.iscpLogWm.Next()
 			to := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
 			err := exec.applyISCPLog(exec.ctx, from, to)
+			if err == nil {
+				exec.iscpLogWm = to
+			}
+			if err != nil && moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+				err = exec.replay(exec.ctx)
+			}
 			if err != nil {
 				logutil.Error(
 					"ISCP-Task apply iscp log failed",
@@ -319,7 +325,6 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				)
 				continue
 			}
-			exec.iscpLogWm = to
 			// get candidate iterations and tables
 			iterations, candidateTables, fromTSs := exec.getCandidateTables()
 			if len(iterations) == 0 {
@@ -439,6 +444,10 @@ func (exec *ISCPTaskExecutor) GetJobType(accountID uint32, srcTableID uint64, jo
 }
 
 func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.TS) (err error) {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "stale read" {
+		err = moerr.NewErrStaleReadNoCtx("0-0", "0-0")
+		return
+	}
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -619,10 +628,11 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 		dropAtVector := cols[9]
 		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
 		for i := 0; i < rows; i++ {
-			if !dropAtVector.IsNull(uint64(i)) {
-				continue
-			}
 			jobCount++
+			var dropAt types.Timestamp
+			if !dropAtVector.IsNull(uint64(i)) {
+				dropAt = dropAts[i]
+			}
 			exec.addOrUpdateJob(
 				accountIDs[i],
 				tableIDs[i],
@@ -632,7 +642,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 				watermarkVector.GetStringAt(i),
 				[]byte(jobSpecVector.GetStringAt(i)),
 				[]byte(jobStatusVector.GetStringAt(i)),
-				dropAts[i],
+				dropAt,
 				true,
 			)
 		}

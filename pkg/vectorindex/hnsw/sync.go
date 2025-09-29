@@ -253,23 +253,22 @@ func (s *HnswSync[T]) checkContains(proc *process.Process) (maxcap uint, midx []
 						continue
 					}
 
-					switch row.Type {
-					case vectorindex.CDC_UPSERT, vectorindex.CDC_DELETE:
-						if midx[j] == -1 {
-							found, err := m.Contains(row.PKey)
-							if err != nil {
-								err_chan <- err
-								return
-							}
-							if found {
-								//os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
-								midx[j] = i
+					// IMPORTANT: always check key exists even with INSERT.  Even it is INSERT, key may exist in model
+					if midx[j] == -1 {
+						found, err := m.Contains(row.PKey)
+						if err != nil {
+							err_chan <- err
+							return
+						}
+						if found {
+							//os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
+							midx[j] = i
 
-								if row.Type == vectorindex.CDC_UPSERT {
-									s.nupdate.Add(1)
-								} else {
-									s.ndelete.Add(1)
-								}
+							switch row.Type {
+							case vectorindex.CDC_UPSERT:
+								s.nupdate.Add(1)
+							case vectorindex.CDC_DELETE:
+								s.ndelete.Add(1)
 							}
 						}
 					}
@@ -289,7 +288,7 @@ func (s *HnswSync[T]) checkContains(proc *process.Process) (maxcap uint, midx []
 	return maxcap, midx, nil
 }
 
-func (s *HnswSync[T]) insertAllInParallel(proc *process.Process, maxcap uint) error {
+func (s *HnswSync[T]) insertAllInParallel(proc *process.Process, maxcap uint, midx []int) error {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
@@ -308,6 +307,12 @@ func (s *HnswSync[T]) insertAllInParallel(proc *process.Process, maxcap uint) er
 
 				// skip delete with key not found in model
 				if row.Type == vectorindex.CDC_DELETE {
+					continue
+				}
+
+				// Only INSERT or UPSERT with midx[i] == -1 need to add to model
+				if midx[i] != -1 {
+					// key exists and ignore
 					continue
 				}
 
@@ -475,7 +480,7 @@ func (s *HnswSync[T]) run(proc *process.Process) error {
 
 	if len(s.cdc.Data) == int(s.ninsert.Load()) {
 		// pure insert and insert into parallel
-		err = s.insertAllInParallel(proc, maxcap)
+		err = s.insertAllInParallel(proc, maxcap, midx)
 		if err != nil {
 			return err
 		}
