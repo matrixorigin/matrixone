@@ -1435,9 +1435,6 @@ class AsyncClient(BaseMatrixOneClient):
         self._pitr = AsyncPitrManager(self)
         self._pubsub = AsyncPubSubManager(self)
         self._account = AsyncAccountManager(self)
-        self._vector_index = None
-        self._vector_query = None
-        self._vector_data = None
         self._fulltext_index = None
 
     async def connect(
@@ -1611,15 +1608,11 @@ class AsyncClient(BaseMatrixOneClient):
         """Initialize vector managers after successful connection"""
         try:
             from .async_vector_index_manager import AsyncVectorManager
-            from .client import VectorQueryManager
-
             self._vector = AsyncVectorManager(self)
-            self._vector_query = VectorQueryManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)
         except ImportError:
             # Vector managers not available
             self._vector = None
-            self._vector_query = None
             self._fulltext_index = None
 
     async def disconnect(self):
@@ -1650,9 +1643,6 @@ class AsyncClient(BaseMatrixOneClient):
                 self._engine = None
                 self._connection = None
                 # Clear any cached managers
-                self._vector_index = None
-                self._vector_query = None
-                self._vector_data = None
                 self._fulltext_index = None
 
     def disconnect_sync(self):
@@ -1680,9 +1670,6 @@ class AsyncClient(BaseMatrixOneClient):
                 self._engine = None
                 self._connection = None
                 # Clear any cached managers
-                self._vector_index = None
-                self._vector_query = None
-                self._vector_data = None
                 self._fulltext_index = None
 
     def __del__(self):
@@ -2064,10 +2051,6 @@ class AsyncClient(BaseMatrixOneClient):
         """Get fulltext index manager for fulltext index operations"""
         return self._fulltext_index
 
-    @property
-    def vector_query(self):
-        """Get vector query manager for vector query operations"""
-        return self._vector_query
 
     async def version(self) -> str:
         """
@@ -2307,18 +2290,6 @@ class AsyncTransactionVectorIndexManager(AsyncVectorManager):
         return await self.transaction_wrapper.execute(sql, params)
 
 
-class AsyncTransactionVectorQueryManager:
-    """Async transaction-aware vector query manager"""
-
-    def __init__(self, client, transaction_wrapper):
-        self.client = client
-        self.transaction_wrapper = transaction_wrapper
-
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """Execute SQL within transaction"""
-        return await self.transaction_wrapper.execute(sql, params)
-
-
 class AsyncTransactionWrapper:
     """Async transaction wrapper for executing queries within a transaction"""
 
@@ -2333,7 +2304,6 @@ class AsyncTransactionWrapper:
         self.pubsub = AsyncTransactionPubSubManager(client, self)
         self.account = AsyncTransactionAccountManager(self)
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
-        self.vector_query = AsyncTransactionVectorQueryManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None

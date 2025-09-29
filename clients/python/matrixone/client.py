@@ -171,7 +171,7 @@ class Client(BaseMatrixOneClient):
         self._pubsub = None
         self._account = None
         self._vector_index = None
-        self._vector_query = None
+        # self._vector_query = None  # Removed - functionality moved to vector_ops
         self._vector_data = None
         self._fulltext_index = None
 
@@ -408,7 +408,7 @@ class Client(BaseMatrixOneClient):
         self._pubsub = PubSubManager(self)
         self._account = AccountManager(self)
         self._vector = VectorManager(self)
-        self._vector_query = VectorQueryManager(self)
+        # self._vector_query = VectorQueryManager(self)  # Removed - functionality moved to vector_ops
         self._fulltext_index = FulltextIndexManager(self)
 
     def disconnect(self) -> None:
@@ -1074,10 +1074,11 @@ class Client(BaseMatrixOneClient):
         """Get fulltext index manager for fulltext index operations"""
         return self._fulltext_index
 
-    @property
-    def vector_query(self) -> Optional["VectorQueryManager"]:
-        """Get vector query manager for vector query operations"""
-        return self._vector_query
+    # @property
+    # def vector_query(self) -> Optional["VectorQueryManager"]:
+    #     """Get vector query manager for vector query operations"""
+    #     return self._vector_query
+    # Removed - functionality moved to vector_ops
 
     @property
     def connected(self) -> bool:
@@ -2323,7 +2324,7 @@ class TransactionWrapper:
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
-        self.vector_query = TransactionVectorQueryManager(client, self)
+        # self.vector_query = TransactionVectorQueryManager(client, self)  # Removed - functionality moved to vector_ops
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
@@ -3323,6 +3324,138 @@ class VectorManager:
         self.client.batch_insert(table_name, data_list)
         return self
 
+    def similarity_search(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        limit: int = 10,
+        distance_type: str = "l2",
+        select_columns: list = None,
+        where_conditions: list = None,
+        where_params: list = None,
+        connection=None,
+    ) -> list:
+        """
+        Perform similarity search using chain operations.
+
+        Args:
+            table_name: Name of the table
+            vector_column: Name of the vector column
+            query_vector: Query vector as list
+            limit: Number of results to return
+            distance_type: Type of distance calculation (l2, cosine, inner_product)
+            select_columns: List of columns to select (None means all columns)
+            where_conditions: List of WHERE conditions
+            where_params: List of parameters for WHERE conditions
+            connection: Optional existing database connection (for transaction support)
+
+        Returns:
+            List of search results
+        """
+        from sqlalchemy import text
+        from .sql_builder import DistanceFunction, build_vector_similarity_query
+
+        # Convert distance type to enum
+        if distance_type == "l2":
+            distance_func = DistanceFunction.L2_SQ
+        elif distance_type == "cosine":
+            distance_func = DistanceFunction.COSINE
+        elif distance_type == "inner_product":
+            distance_func = DistanceFunction.INNER_PRODUCT
+        else:
+            raise ValueError(f"Unsupported distance type: {distance_type}")
+
+        # Build query using unified SQL builder
+        sql = build_vector_similarity_query(
+            table_name=table_name,
+            vector_column=vector_column,
+            query_vector=query_vector,
+            distance_func=distance_func,
+            limit=limit,
+            select_columns=select_columns,
+            where_conditions=where_conditions,
+            where_params=where_params,
+        )
+
+        if connection is not None:
+            # Use existing connection (for transaction support)
+            result = connection.execute(text(sql))
+            return result.fetchall()
+        else:
+            # Create new connection
+            with self.client.get_sqlalchemy_engine().begin() as conn:
+                result = conn.execute(text(sql))
+                return result.fetchall()
+
+    def range_search(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        max_distance: float,
+        distance_type: str = "l2",
+        select_columns: list = None,
+        connection=None,
+    ) -> list:
+        """
+        Perform range search using chain operations.
+
+        Args:
+            table_name: Name of the table
+            vector_column: Name of the vector column
+            query_vector: Query vector as list
+            max_distance: Maximum distance threshold
+            distance_type: Type of distance calculation
+            select_columns: List of columns to select (None means all columns)
+            connection: Optional existing database connection (for transaction support)
+
+        Returns:
+            List of search results within range
+        """
+        from sqlalchemy import text
+
+        # Convert vector to string format
+        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
+
+        # Build distance function based on type
+        if distance_type == "l2":
+            distance_func = "l2_distance"
+        elif distance_type == "cosine":
+            distance_func = "cosine_distance"
+        elif distance_type == "inner_product":
+            distance_func = "inner_product"
+        else:
+            raise ValueError(f"Unsupported distance type: {distance_type}")
+
+        # Build SELECT clause
+        if select_columns is None:
+            select_clause = "*"
+        else:
+            # Ensure vector_column is included for distance calculation
+            columns_to_select = list(select_columns)
+            if vector_column not in columns_to_select:
+                columns_to_select.append(vector_column)
+            select_clause = ", ".join(columns_to_select)
+
+        # Build SQL query
+        sql = f"""
+        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
+        FROM {table_name}
+        WHERE {distance_func}({vector_column}, '{vector_str}') <= {max_distance}
+        ORDER BY distance
+        """
+
+        if connection is not None:
+            # Use existing connection (for transaction support)
+            result = connection.execute(text(sql))
+            return result.fetchall()
+        else:
+            # Create new connection
+            with self.client.get_sqlalchemy_engine().begin() as conn:
+                result = conn.execute(text(sql))
+                return result.fetchall()
+
 
 class TransactionVectorIndexManager(VectorManager):
     """Vector index manager that executes operations within a transaction"""
@@ -3408,357 +3541,7 @@ class TransactionVectorIndexManager(VectorManager):
             raise Exception(f"Failed to drop vector index {name} from table {table_name} in transaction: {e}")
 
 
-class VectorQueryManager:
-    """
-    Vector query manager for MatrixOne vector similarity search operations.
-
-    This class provides comprehensive vector query functionality including
-    similarity search, distance calculations, and vector-based filtering.
-    It supports various distance metrics and provides efficient vector
-    search capabilities using MatrixOne's vector indexing.
-
-    Key Features:
-    - Vector similarity search with configurable distance metrics
-    - Support for multiple distance functions (L2, cosine, inner product)
-    - Vector-based filtering and querying
-    - Integration with vector indexes for optimal performance
-    - Support for both f32 and f64 vector precision
-    - Chain operations for complex vector queries
-
-    Supported Distance Metrics:
-    - L2 (Euclidean) distance: Standard Euclidean distance
-    - Cosine similarity: Cosine of the angle between vectors
-    - Inner product: Dot product of vectors
-    - Negative inner product: Negative dot product for similarity
-
-    Supported Operations:
-    - Vector similarity search with ranking
-    - Vector distance calculations
-    - Vector-based filtering in queries
-    - Integration with fulltext and other search capabilities
-    - Vector query optimization and performance tuning
-
-    Usage Examples:
-        # Initialize vector query manager
-        vector_query = client.vector_query
-
-        # Similarity search with L2 distance
-        results = vector_query.similarity_search(
-            table_name="documents",
-            vector_column="embedding",
-            query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
-            limit=10,
-            distance_function="l2"
-        )
-
-        # Similarity search with cosine similarity
-        results = vector_query.similarity_search(
-            table_name="products",
-            vector_column="features",
-            query_vector=[0.5, 0.6, 0.7, ...],
-            limit=5,
-            distance_function="cosine"
-        )
-
-        # Vector-based filtering in queries
-        query = client.query(Document)
-        results = (query
-                  .filter(vector_query.within_distance(
-                      "embedding", [0.1, 0.2, 0.3, ...], 0.5, "l2"
-                  ))
-                  .limit(20)
-                  .all())
-
-        # Get vector distance between two vectors
-        distance = vector_query.calculate_distance(
-            vector1=[0.1, 0.2, 0.3, ...],
-            vector2=[0.4, 0.5, 0.6, ...],
-            distance_function="cosine"
-        )
-
-    Note: Vector queries require appropriate vector indexes for optimal
-    performance. Choose distance metrics based on your similarity
-    requirements and data characteristics.
-    """
-
-    def __init__(self, client):
-        self.client = client
-
-    def similarity_search(
-        self,
-        table_name: str,
-        vector_column: str,
-        query_vector: list,
-        limit: int = 10,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        where_conditions: list = None,
-        where_params: list = None,
-        connection=None,
-    ) -> list:
-        """
-        Perform similarity search using chain operations.
-
-        Args:
-            table_name: Name of the table
-            vector_column: Name of the vector column
-            query_vector: Query vector as list
-            limit: Number of results to return
-            distance_type: Type of distance calculation (l2, cosine, inner_product)
-            select_columns: List of columns to select (None means all columns)
-            where_conditions: List of WHERE conditions
-            where_params: List of parameters for WHERE conditions
-            connection: Optional existing database connection (for transaction support)
-
-        Returns:
-            List of search results
-        """
-        from sqlalchemy import text
-
-        from .sql_builder import DistanceFunction, build_vector_similarity_query
-
-        # Convert distance type to enum
-        if distance_type == "l2":
-            distance_func = DistanceFunction.L2_SQ
-        elif distance_type == "cosine":
-            distance_func = DistanceFunction.COSINE
-        elif distance_type == "inner_product":
-            distance_func = DistanceFunction.INNER_PRODUCT
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
-
-        # Build query using unified SQL builder
-        sql = build_vector_similarity_query(
-            table_name=table_name,
-            vector_column=vector_column,
-            query_vector=query_vector,
-            distance_func=distance_func,
-            limit=limit,
-            select_columns=select_columns,
-            where_conditions=where_conditions,
-            where_params=where_params,
-        )
-
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = connection.execute(text(sql))
-            return result.fetchall()
-        else:
-            # Create new connection
-            with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = conn.execute(text(sql))
-                return result.fetchall()
-
-    def similarity_search_in_transaction(
-        self,
-        table_name: str,
-        vector_column: str,
-        query_vector: list,
-        limit: int = 10,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        where_conditions: list = None,
-        where_params: list = None,
-        connection=None,
-    ) -> list:
-        """
-        Perform similarity search within a transaction.
-
-        Args:
-            table_name: Name of the table
-            vector_column: Name of the vector column
-            query_vector: Query vector as list
-            limit: Number of results to return
-            distance_type: Type of distance calculation (l2, cosine, inner_product)
-            select_columns: List of columns to select (None means all columns)
-            where_conditions: List of WHERE conditions
-            where_params: List of parameters for WHERE conditions
-            connection: Database connection (required for transaction support)
-
-        Returns:
-            List of search results
-
-        Raises:
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        return self.similarity_search(
-            table_name=table_name,
-            vector_column=vector_column,
-            query_vector=query_vector,
-            limit=limit,
-            distance_type=distance_type,
-            select_columns=select_columns,
-            where_conditions=where_conditions,
-            where_params=where_params,
-            connection=connection,
-        )
-
-    def range_search(
-        self,
-        table_name: str,
-        vector_column: str,
-        query_vector: list,
-        max_distance: float,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        connection=None,
-    ) -> list:
-        """
-        Perform range search using chain operations.
-
-        Args:
-            table_name: Name of the table
-            vector_column: Name of the vector column
-            query_vector: Query vector as list
-            max_distance: Maximum distance threshold
-            distance_type: Type of distance calculation
-            select_columns: List of columns to select (None means all columns)
-            connection: Optional existing database connection (for transaction support)
-
-        Returns:
-            List of search results within range
-        """
-        from sqlalchemy import text
-
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
-
-        # Build distance function based on type
-        if distance_type == "l2":
-            distance_func = "l2_distance"
-        elif distance_type == "cosine":
-            distance_func = "cosine_distance"
-        elif distance_type == "inner_product":
-            distance_func = "inner_product"
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
-
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if vector_column not in columns_to_select:
-                columns_to_select.append(vector_column)
-            select_clause = ", ".join(columns_to_select)
-
-        # Build query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
-        FROM {table_name}
-        WHERE {distance_func}({vector_column}, '{vector_str}') <= {max_distance}
-        ORDER BY distance
-        """
-
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = connection.execute(text(sql))
-            return result.fetchall()
-        else:
-            # Create new connection
-            with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = conn.execute(text(sql))
-                return result.fetchall()
-
-    def range_search_in_transaction(
-        self,
-        table_name: str,
-        vector_column: str,
-        query_vector: list,
-        max_distance: float,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        connection=None,
-    ) -> list:
-        """
-        Perform range search within a transaction.
-
-        Args:
-            table_name: Name of the table
-            vector_column: Name of the vector column
-            query_vector: Query vector as list
-            max_distance: Maximum distance threshold
-            distance_type: Type of distance calculation
-            select_columns: List of columns to select (None means all columns)
-            connection: Database connection (required for transaction support)
-
-        Returns:
-            List of search results within range
-
-        Raises:
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        return self.range_search(
-            table_name=table_name,
-            vector_column=vector_column,
-            query_vector=query_vector,
-            max_distance=max_distance,
-            distance_type=distance_type,
-            select_columns=select_columns,
-            connection=connection,
-        )
-
-
-class TransactionVectorQueryManager:
-    """Vector query manager for transaction chain operations"""
-
-    def __init__(self, client, transaction_wrapper):
-        self.client = client
-        self.transaction_wrapper = transaction_wrapper
-
-    def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
-        """Execute SQL within transaction"""
-        return self.transaction_wrapper.execute(sql, params)
-
-    def similarity_search(
-        self,
-        table_name: str,
-        vector_column: str,
-        query_vector: list,
-        limit: int = 10,
-        distance_type: str = "l2",
-        select_columns: list = None,
-    ) -> list:
-        """Perform similarity search within transaction"""
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
-
-        # Build distance function based on type
-        if distance_type == "l2":
-            distance_func = "l2_distance"
-        elif distance_type == "cosine":
-            distance_func = "cosine_distance"
-        elif distance_type == "inner_product":
-            distance_func = "inner_product"
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
-
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if vector_column not in columns_to_select:
-                columns_to_select.append(vector_column)
-            select_clause = ", ".join(columns_to_select)
-
-        # Build query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
-        FROM {table_name}
-        ORDER BY distance
-        LIMIT {limit}
-        """
-
-        return self.transaction_wrapper.execute(sql)
+# VectorQueryManager and TransactionVectorQueryManager classes removed - functionality moved to VectorManager
 
 
 class SimpleFulltextQueryBuilder:

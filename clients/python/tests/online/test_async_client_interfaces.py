@@ -57,7 +57,6 @@ class TestAsyncClientMissingInterfaces:
         """Test vector manager properties"""
         # These should be available after connection
         assert client.vector_ops is not None
-        assert client.vector_query is not None
 
     @pytest.mark.asyncio
     async def test_create_table(self, client):
@@ -211,7 +210,7 @@ class TestAsyncClientMissingInterfaces:
 
     @pytest.mark.asyncio
     async def test_vector_query_operations(self, client):
-        """Test vector query operations through vector_query manager"""
+        """Test vector query operations through vector_ops manager"""
         table_name = "test_vector_query_async"
 
         try:
@@ -236,7 +235,7 @@ class TestAsyncClientMissingInterfaces:
             try:
                 query_vector = [0.1] * 128  # 128 dimensions
 
-                result = client.vector_query.similarity_search(
+                result = client.vector_ops.similarity_search(
                     table_name=table_name, column="embedding", query_vector=query_vector, top_k=5
                 )
 
@@ -246,7 +245,7 @@ class TestAsyncClientMissingInterfaces:
             except Exception as e:
                 # Vector operations might not be supported in this environment
                 # Instead of skipping, just verify the interface exists
-                assert hasattr(client.vector_query, 'similarity_search')
+                assert hasattr(client.vector_ops, 'similarity_search')
                 print(f"Vector query operations not supported in this environment: {e}")
 
         finally:
@@ -310,7 +309,7 @@ class TestAsyncClientMissingInterfaces:
             assert hasattr(client, method_name), f"AsyncClient missing method: {method_name}"
 
         # Test that all expected properties exist
-        expected_properties = ['vector_ops', 'vector_query']
+        expected_properties = ['vector_ops']
 
         for prop_name in expected_properties:
             assert hasattr(client, prop_name), f"AsyncClient missing property: {prop_name}"

@@ -1,10 +1,10 @@
 Quick Start
 ===========
 
-This guide will help you get started with the MatrixOne Python SDK quickly using modern ORM patterns, vector search, fulltext search, and enhanced query building capabilities.
+This guide will help you get started with the MatrixOne Python SDK quickly using modern API patterns, vector search, fulltext search, and enhanced query building capabilities.
 
-Basic Usage with Configuration Helper
---------------------------------------
+Basic Usage with Modern API
+----------------------------
 
 .. code-block:: python
 
@@ -21,72 +21,94 @@ Basic Usage with Configuration Helper
    client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Execute queries
-   result = client.execute("SELECT 1 as test, USER() as user_info")
+   # Create table using modern API
+   client.create_table("users", {
+       "id": "int",
+       "name": "varchar(100)",
+       "email": "varchar(200)",
+       "created_at": "datetime"
+   }, primary_key="id")
+
+   # Insert data using insert API
+   client.insert("users", {
+       "id": 1,
+       "name": "John Doe",
+       "email": "john@example.com",
+       "created_at": "2024-01-01 10:00:00"
+   })
+
+   # Query data using query API
+   result = client.query("users").select("*").where("id = ?", 1).execute()
    print(result.fetchall())
 
-   # Get backend version (auto-detected)
-   version = client.version()
-   print(f"MatrixOne version: {version}")
+   # Update data using query API
+   client.query("users").update({"name": "Jane Doe"}).where("id = ?", 1).execute()
+
+   # Delete data using query API
+   client.query("users").where("id = ?", 1).delete()
+
+   # Drop table using drop_table API
+   client.drop_table("users")
 
    client.disconnect()
 
-Async Usage with ORM
----------------------
+Async Usage with Modern API
+---------------------------
 
 .. code-block:: python
 
    import asyncio
-   from sqlalchemy import Column, Integer, String
-   from sqlalchemy.ext.declarative import declarative_base
    from matrixone import AsyncClient
    from matrixone.config import get_connection_params
 
-   # Define ORM model
-   Base = declarative_base()
-
-   class QuickUser(Base):
-       __tablename__ = 'quick_users'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       name = Column(String(100), nullable=False)
-       email = Column(String(200), unique=True, nullable=False)
-
-   async def async_orm_quickstart():
+   async def async_quickstart():
        # Get connection parameters
        host, port, user, password, database = get_connection_params()
        
        client = AsyncClient()
        await client.connect(host=host, port=port, user=user, password=password, database=database)
        
-       # Create table using ORM
-       await client.create_all(Base)
+       # Create table using async create_table API
+       await client.create_table("products", {
+           "id": "int",
+           "name": "varchar(200)",
+           "price": "decimal(10,2)",
+           "category": "varchar(50)"
+       }, primary_key="id")
        
-       # Insert data using async transaction
-       async with client.transaction() as tx:
-           await tx.execute(
-               "INSERT INTO quick_users (name, email) VALUES (%s, %s)",
-               ('Quick User', 'quick@example.com')
-           )
+       # Insert data using async insert API
+       await client.insert("products", {
+           "id": 1,
+           "name": "Laptop",
+           "price": 999.99,
+           "category": "Electronics"
+       })
        
-       # Query data
-       result = await client.execute("SELECT * FROM quick_users")
-       rows = await result.fetchall()
+       # Query data using async query API
+       result = await client.query("products").select("*").where("category = ?", "Electronics").execute()
+       rows = result.fetchall()
        for row in rows:
-           print(f"User: {row[1]}, Email: {row[2]}")
+           print(f"Product: {row[1]}, Price: ${row[2]}")
        
-       # Clean up
-       await client.drop_all(Base)
+       # Batch insert using async batch_insert API
+       products = [
+           {"id": 2, "name": "Phone", "price": 699.99, "category": "Electronics"},
+           {"id": 3, "name": "Book", "price": 29.99, "category": "Education"}
+       ]
+       await client.batch_insert("products", products)
+       
+       # Clean up using async drop_table API
+       await client.drop_table("products")
        await client.disconnect()
 
-   asyncio.run(async_orm_quickstart())
+   asyncio.run(async_quickstart())
 
-ORM with Transaction Management
---------------------------------
+ORM with Modern Patterns
+------------------------
 
 .. code-block:: python
 
-   from sqlalchemy import Column, Integer, String, DECIMAL
+   from sqlalchemy import Column, Integer, String, DECIMAL, DateTime
    from sqlalchemy.ext.declarative import declarative_base
    from matrixone import Client
    from matrixone.config import get_connection_params
@@ -95,167 +117,238 @@ ORM with Transaction Management
    Base = declarative_base()
 
    class Account(Base):
-       __tablename__ = 'quick_accounts'
+       __tablename__ = 'accounts'
        
        id = Column(Integer, primary_key=True, autoincrement=True)
        name = Column(String(100), nullable=False)
        balance = Column(DECIMAL(10, 2), nullable=False)
+       created_at = Column(DateTime, nullable=False)
 
    # Get connection and create client
    host, port, user, password, database = get_connection_params()
    client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create table using ORM
-   client.create_all(Base)
+   # Create table using ORM model
+   client.create_table(Account)
 
-   # Insert initial data
-   with client.transaction() as tx:
-       tx.execute("INSERT INTO quick_accounts (name, balance) VALUES (%s, %s)", ('Alice', 1000.00))
-       tx.execute("INSERT INTO quick_accounts (name, balance) VALUES (%s, %s)", ('Bob', 500.00))
-
-   # Transfer money using transaction
-   with client.transaction() as tx:
-       tx.execute("UPDATE quick_accounts SET balance = balance - %s WHERE name = %s", (100.00, 'Alice'))
-       tx.execute("UPDATE quick_accounts SET balance = balance + %s WHERE name = %s", (100.00, 'Bob'))
-
-   # Verify the transfer
-   result = client.execute("SELECT name, balance FROM quick_accounts ORDER BY name")
-   for row in result.fetchall():
-       print(f"{row[0]}: ${row[1]}")
-
-   # Clean up
-   client.drop_all(Base)
-   client.disconnect()
-
-Vector Search Quick Start
---------------------------
-
-.. code-block:: python
-
-   from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
-   from matrixone import Client
-   from matrixone.config import get_connection_params
-   from matrixone.sqlalchemy_ext import create_vector_column
-
-   # Define vector model
-   VectorBase = declarative_base()
-
-   class QuickDocument(VectorBase):
-       __tablename__ = 'quick_documents'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       title = Column(String(200), nullable=False)
-       content = Column(Text)
-       embedding = create_vector_column(128, "f32")  # 128-dimensional vector
-
-   # Connect and setup
-   host, port, user, password, database = get_connection_params()
-   client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
-
-   # Create table and index
-   client.create_all(VectorBase)
-   client.vector_index.enable_ivf()
-   client.vector_index.create_ivf(
-       table_name='quick_documents',
-       name='idx_quick_embedding',
-       column='embedding',
-       lists=50,
-       op_type='vector_l2_ops'
-   )
-
-   # Insert sample documents
-   # Insert documents using ORM
+   # Insert data using ORM
    from sqlalchemy.orm import sessionmaker
-   
    Session = sessionmaker(bind=client.get_sqlalchemy_engine())
    session = Session()
+
+   account1 = Account(name="Alice", balance=1000.00, created_at="2024-01-01 10:00:00")
+   account2 = Account(name="Bob", balance=500.00, created_at="2024-01-01 10:00:00")
    
-   docs = [
-       QuickDocument(
-           title='AI Research',
-           content='Artificial intelligence research paper',
-           embedding=[0.1] * 128
-       ),
-       QuickDocument(
-           title='ML Guide',
-           content='Machine learning tutorial',
-           embedding=[0.2] * 128
-       )
-   ]
-   
-   session.add_all(docs)
+   session.add_all([account1, account2])
    session.commit()
+
+   # Query using ORM
+   accounts = session.query(Account).filter(Account.balance > 600).all()
+   for account in accounts:
+       print(f"{account.name}: ${account.balance}")
+
+   # Update using ORM
+   session.query(Account).filter(Account.name == "Alice").update({"balance": 1200.00})
+   session.commit()
+
+   # Clean up using ORM
+   client.drop_table(Account)
    session.close()
-
-   # Vector similarity search
-   query_vector = [0.15] * 128
-   results = client.vector_query.similarity_search(
-       table_name='quick_documents',
-       vector_column='embedding',
-       query_vector=query_vector,
-       limit=5,
-       distance_type='l2'
-   )
-
-   print("Vector Search Results:")
-   for result in results:
-       print(f"Document: {result[1]} (Distance: {result[-1]:.4f})")
-
-   # Clean up
-   client.drop_all(VectorBase)
    client.disconnect()
 
-Configuration Best Practices
+Vector Search with Modern API
 -----------------------------
 
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.config import get_connection_params, print_config
+   from matrixone.config import get_connection_params
+   from matrixone.sqlalchemy_ext import create_vector_column
+   import numpy as np
 
-   # Use environment variables for configuration
-   # Set these in your environment:
-   # export MATRIXONE_HOST=127.0.0.1
-   # export MATRIXONE_PORT=6001
-   # export MATRIXONE_USER=root
-   # export MATRIXONE_PASSWORD=111
-   # export MATRIXONE_DATABASE=test
-
-   # Print current configuration
-   print_config()
-
-   # Get connection parameters from environment
+   # Get connection parameters
    host, port, user, password, database = get_connection_params()
-
-   # Create client with optimized settings
-   client = Client(
-       connection_timeout=30,        # Connection timeout in seconds
-       query_timeout=300,           # Query timeout in seconds
-       auto_commit=True,            # Enable auto-commit for better performance
-       charset='utf8mb4',           # Support for international characters
-       enable_performance_logging=True,  # Monitor query performance
-       enable_sql_logging=False     # Disable SQL logging in production
-   )
-
+   client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Check backend capabilities
-   version = client.get_backend_version()
-   print(f"✓ Connected to MatrixOne {version}")
+   # Create vector table using create_table API
+   client.create_table("documents", {
+       "id": "int",
+       "title": "varchar(200)",
+       "content": "text",
+       "embedding": "vecf32(384)"  # 384-dimensional f32 vector
+   }, primary_key="id")
 
-   if client.is_feature_available('vector_search'):
-       print("✓ Vector search is available")
-   
-   if client.is_feature_available('fulltext_search'):
-       print("✓ Fulltext search is available")
+   # Create vector index using vector_ops API
+   client.vector_ops.enable_ivf()
+   client.vector_ops.create_ivf(
+       table_name="documents",
+       name="idx_embedding",
+       column="embedding",
+       lists=50,
+       op_type="vector_l2_ops"
+   )
 
+   # Insert documents with embeddings using insert API
+   documents = [
+       {
+           "id": 1,
+           "title": "AI Research",
+           "content": "Artificial intelligence research paper",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
+       },
+       {
+           "id": 2,
+           "title": "ML Guide",
+           "content": "Machine learning tutorial",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
+       }
+   ]
+
+   for doc in documents:
+       client.insert("documents", doc)
+
+   # Vector similarity search using vector_query API
+   query_vector = np.random.rand(384).astype(np.float32).tolist()
+   results = client.vector_ops.similarity_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=5,
+       distance_type="l2"
+   )
+
+   print("Vector Search Results:")
+   for result in results.rows:
+       print(f"Document: {result[1]} (Distance: {result[-1]:.4f})")
+
+   # Clean up using drop_table API
+   client.drop_table("documents")
    client.disconnect()
 
-Error Handling
---------------
+Async Vector Operations
+-----------------------
+
+.. code-block:: python
+
+   import asyncio
+   from matrixone import AsyncClient
+   from matrixone.config import get_connection_params
+   import numpy as np
+
+   async def async_vector_example():
+       # Get connection parameters
+       host, port, user, password, database = get_connection_params()
+       
+       client = AsyncClient()
+       await client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Create vector table using async create_table API
+       await client.create_table("products", {
+           "id": "int",
+           "name": "varchar(200)",
+           "description": "text",
+           "features": "vecf64(512)"  # 512-dimensional f64 vector
+       }, primary_key="id")
+
+       # Create vector index using async vector_ops API
+       await client.vector_ops.enable_ivf()
+       await client.vector_ops.create_ivf(
+           table_name="products",
+           name="idx_features",
+           column="features",
+           lists=100,
+           op_type="vector_cosine_ops"
+       )
+
+       # Insert products with feature vectors using async insert API
+       products = [
+           {
+               "id": 1,
+               "name": "Smartphone",
+               "description": "Latest smartphone with AI features",
+               "features": np.random.rand(512).astype(np.float64).tolist()
+           },
+           {
+               "id": 2,
+               "name": "Laptop",
+               "description": "High-performance laptop for professionals",
+               "features": np.random.rand(512).astype(np.float64).tolist()
+           }
+       ]
+
+       for product in products:
+           await client.insert("products", product)
+
+       # Vector similarity search using async vector_query API
+       query_vector = np.random.rand(512).astype(np.float64).tolist()
+       results = await client.vector_ops.similarity_search(
+           table_name="products",
+           vector_column="features",
+           query_vector=query_vector,
+           limit=3,
+           distance_type="cosine"
+       )
+
+       print("Async Vector Search Results:")
+       for result in results.rows:
+           print(f"Product: {result[1]} (Similarity: {1 - result[-1]:.4f})")
+
+       # Clean up using async drop_table API
+       await client.drop_table("products")
+       await client.disconnect()
+
+   asyncio.run(async_vector_example())
+
+Transaction Management
+----------------------
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+
+   def transaction_example():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Create table using create_table API
+       client.create_table("orders", {
+           "id": "int",
+           "customer_id": "int",
+           "amount": "decimal(10,2)",
+           "status": "varchar(20)"
+       }, primary_key="id")
+
+       # Use transaction for atomic operations
+       with client.transaction() as tx:
+           # Insert order
+           tx.insert("orders", {
+               "id": 1,
+               "customer_id": 100,
+               "amount": 99.99,
+               "status": "pending"
+           })
+           
+           # Update order status
+           tx.query("orders").update({"status": "confirmed"}).where("id = ?", 1).execute()
+           
+           # If any operation fails, the entire transaction is rolled back
+
+       # Verify the transaction
+       result = client.query("orders").select("*").where("id = ?", 1).execute()
+       print("Order after transaction:", result.fetchall())
+
+       # Clean up
+       client.drop_table("orders")
+       client.disconnect()
+
+   transaction_example()
+
+Error Handling with Modern API
+------------------------------
 
 .. code-block:: python
 
@@ -263,7 +356,7 @@ Error Handling
    from matrixone.exceptions import ConnectionError, QueryError
    from matrixone.config import get_connection_params
 
-   def robust_connection_example():
+   def robust_example():
        client = None
        try:
            host, port, user, password, database = get_connection_params()
@@ -272,9 +365,26 @@ Error Handling
            client = Client()
            client.connect(host=host, port=port, user=user, password=password, database=database)
            
-           # Execute query with error handling
+           # Create table with error handling
            try:
-               result = client.execute("SELECT 1 as test")
+               client.create_table("test_table", {
+                   "id": "int",
+                   "name": "varchar(100)"
+               }, primary_key="id")
+               print("✓ Table created successfully")
+           except QueryError as e:
+               print(f"❌ Table creation failed: {e}")
+               
+           # Insert data with error handling
+           try:
+               client.insert("test_table", {"id": 1, "name": "Test"})
+               print("✓ Data inserted successfully")
+           except QueryError as e:
+               print(f"❌ Data insertion failed: {e}")
+               
+           # Query data with error handling
+           try:
+               result = client.query("test_table").select("*").execute()
                print(f"✓ Query successful: {result.fetchall()}")
            except QueryError as e:
                print(f"❌ Query failed: {e}")
@@ -286,154 +396,71 @@ Error Handling
        finally:
            # Always clean up
            if client:
-               client.disconnect()
-               print("✓ Connection closed")
+               try:
+                   client.drop_table("test_table")
+                   client.disconnect()
+                   print("✓ Cleanup completed")
+               except Exception as e:
+                   print(f"⚠️ Cleanup warning: {e}")
 
-   robust_connection_example()
+   robust_example()
 
-Enhanced Query Building with logical_in
----------------------------------------
+Configuration Best Practices
+----------------------------
 
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.orm import logical_in
-   from matrixone.sqlalchemy_ext import boolean_match
-   from sqlalchemy import func
-   from matrixone.config import get_connection_params
+   from matrixone.config import get_connection_params, print_config
 
-   def enhanced_query_example():
+   def configuration_example():
+       # Use environment variables for configuration
+       # Set these in your environment:
+       # export MATRIXONE_HOST=127.0.0.1
+       # export MATRIXONE_PORT=6001
+       # export MATRIXONE_USER=root
+       # export MATRIXONE_PASSWORD=111
+       # export MATRIXONE_DATABASE=test
+
+       # Print current configuration
+       print_config()
+
+       # Get connection parameters from environment
        host, port, user, password, database = get_connection_params()
-       client = Client()
+
+       # Create client with optimized settings
+       client = Client(
+           connection_timeout=30,        # Connection timeout in seconds
+           query_timeout=300,           # Query timeout in seconds
+           auto_commit=True,            # Enable auto-commit for better performance
+           charset='utf8mb4',           # Support for international characters
+           enable_performance_logging=True,  # Monitor query performance
+           enable_sql_logging=False     # Disable SQL logging in production
+       )
+
        client.connect(host=host, port=port, user=user, password=password, database=database)
 
-       # Create a sample table
-       client.create_table("products", {
-           "id": "int",
-           "name": "varchar(100)",
-           "category": "varchar(50)",
-           "price": "decimal(10,2)",
-           "description": "text"
-       }, primary_key="id")
+       # Check backend capabilities
+       version = client.get_backend_version()
+       print(f"✓ Connected to MatrixOne {version}")
 
-       # Insert sample data
-       products = [
-           {"id": 1, "name": "Laptop", "category": "Electronics", "price": 999.99, "description": "High-performance laptop"},
-           {"id": 2, "name": "Phone", "category": "Electronics", "price": 699.99, "description": "Smartphone with AI features"},
-           {"id": 3, "name": "Book", "category": "Education", "price": 29.99, "description": "Programming guide"},
-           {"id": 4, "name": "Tablet", "category": "Electronics", "price": 499.99, "description": "Portable tablet device"}
-       ]
-       client.batch_insert("products", products)
-
-       # Enhanced query building with logical_in
-       query = client.query("products")
+       if client.is_feature_available('vector_search'):
+           print("✓ Vector search is available")
        
-       # Filter by multiple categories
-       results = query.filter(logical_in("category", ["Electronics", "Education"])).all()
-       print("Products in Electronics or Education:")
-       for row in results:
-           print(f"  {row[1]} - {row[2]} - ${row[3]}")
-
-       # Filter by price range using logical_in with subquery
-       price_range_query = client.query("products").select(func.min("price"), func.max("price"))
-       results = query.filter(logical_in("price", price_range_query)).all()
-       print("Products in price range:")
-       for row in results:
-           print(f"  {row[1]} - ${row[3]}")
-
-       # Create fulltext index for advanced search
-       client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
-
-       # Use logical_in with fulltext search
-       fulltext_filter = boolean_match("description").must("laptop OR phone")
-       results = query.filter(logical_in("id", fulltext_filter)).all()
-       print("Products matching fulltext search:")
-       for row in results:
-           print(f"  {row[1]} - {row[4]}")
+       if client.is_feature_available('fulltext_search'):
+           print("✓ Fulltext search is available")
 
        client.disconnect()
 
-   enhanced_query_example()
-
-Vector Search with Enhanced Features
-------------------------------------
-
-.. code-block:: python
-
-   from matrixone import Client
-   from matrixone.config import get_connection_params
-   import numpy as np
-
-   def vector_search_example():
-       host, port, user, password, database = get_connection_params()
-       client = Client()
-       client.connect(host=host, port=port, user=user, password=password, database=database)
-
-       # Create vector table
-       client.create_table("documents", {
-           "id": "int",
-           "title": "varchar(200)",
-           "content": "text",
-           "embedding": "vector(384,f32)"
-       }, primary_key="id")
-
-       # Create HNSW index for fast vector search
-       client.vector.create_hnsw(
-           table_name="documents",
-           name="idx_embedding_hnsw",
-           column="embedding",
-           m=16,
-           ef_construction=200
-       )
-
-       # Insert documents with embeddings
-       documents = [
-           {
-               "id": 1,
-               "title": "AI Research Paper",
-               "content": "Advanced artificial intelligence research",
-               "embedding": np.random.rand(384).astype(np.float32).tolist()
-           },
-           {
-               "id": 2,
-               "title": "Machine Learning Guide",
-               "content": "Comprehensive machine learning tutorial",
-               "embedding": np.random.rand(384).astype(np.float32).tolist()
-           },
-           {
-               "id": 3,
-               "title": "Data Science Handbook",
-               "content": "Complete data science reference",
-               "embedding": np.random.rand(384).astype(np.float32).tolist()
-           }
-       ]
-       client.batch_insert("documents", documents)
-
-       # Perform vector similarity search
-       query_vector = np.random.rand(384).astype(np.float32).tolist()
-       results = client.vector_query.similarity_search(
-           table_name="documents",
-           vector_column="embedding",
-           query_vector=query_vector,
-           limit=3,
-           distance_function="cosine"
-       )
-
-       print("Vector Search Results:")
-       for result in results:
-           print(f"  {result[1]} (Similarity: {1 - result[-1]:.4f})")
-
-       client.disconnect()
-
-   vector_search_example()
+   configuration_example()
 
 Next Steps
 ----------
 
 * Read the :doc:`api/index` for detailed API documentation
-* Check out the :doc:`logical_in_guide` for advanced query building
-* Explore :doc:`vector_guide` for comprehensive vector operations
-* Learn about :doc:`fulltext_guide` for text search capabilities
+* Check out the :doc:`vector_guide` for comprehensive vector operations
+* Explore :doc:`fulltext_guide` for text search capabilities
+* Learn about :doc:`orm_guide` for ORM patterns
 * Check out the :doc:`examples` for comprehensive usage examples
 * Learn about :doc:`contributing` to contribute to the project
 * Run ``make examples`` to test all examples with your MatrixOne setup

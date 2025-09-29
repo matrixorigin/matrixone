@@ -50,913 +50,600 @@ Basic Query Building
    users_data = [
        {"id": 1, "username": "alice", "email": "alice@example.com", "age": 25, "department_id": 1, "salary": 50000.00},
        {"id": 2, "username": "bob", "email": "bob@example.com", "age": 30, "department_id": 1, "salary": 60000.00},
-       {"id": 3, "username": "charlie", "email": "charlie@example.com", "age": 35, "department_id": 2, "salary": 70000.00}
+       {"id": 3, "username": "charlie", "email": "charlie@example.com", "age": 35, "department_id": 2, "salary": 70000.00},
+       {"id": 4, "username": "diana", "email": "diana@example.com", "age": 28, "department_id": 2, "salary": 55000.00}
    ]
    client.batch_insert("users", users_data)
 
-   # Modern query building with enhanced features
-   query = client.query("users")
-   
-   # Basic filtering
-   results = query.filter("age > 25").all()
-   print("Users over 25:", results)
+   # Basic query using query API
+   result = client.query("users").select("*").where("age > ?", 25).execute()
+   print("Users over 25:")
+   for row in result.fetchall():
+       print(f"  {row[1]} - {row[2]} - Age: {row[3]}")
 
-   # Using logical_in for flexible IN conditions
-   results = query.filter(logical_in("department_id", [1, 2])).all()
-   print("Users in departments 1 or 2:", results)
+   # Query with multiple conditions
+   result = client.query("users").select("username", "salary").where("department_id = ? AND salary > ?", 1, 55000).execute()
+   print("High earners in department 1:")
+   for row in result.fetchall():
+       print(f"  {row[0]} - ${row[1]}")
 
-   # Complex queries with expressions
-   results = query.filter(logical_in("id", [1, 2, 3])).filter("salary > 55000").all()
-   print("High-earning users:", results)
+   # Clean up
+   client.drop_table("users")
+   client.disconnect()
 
-SQLAlchemy Integration
-~~~~~~~~~~~~~~~~~~~~~~
-
-For more complex scenarios, you can use full SQLAlchemy integration:
-
-.. code-block:: python
-
-   from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, func
-   from sqlalchemy.ext.declarative import declarative_base
-   from matrixone import Client
-
-   # Create declarative base
-   Base = declarative_base()
-
-   class User(Base):
-       __tablename__ = 'users'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       username = Column(String(50), unique=True, nullable=False)
-       email = Column(String(100), unique=True, nullable=False)
-       full_name = Column(String(200))
-       bio = Column(Text)
-       balance = Column(DECIMAL(10, 2), default=0.00)
-       created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-       updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), 
-                          onupdate=func.current_timestamp())
-
-       def to_dict(self):
-           """Convert model instance to dictionary"""
-           return {c.name: getattr(self, c.name) for c in self.__table__.columns}
-
-       @classmethod
-       def from_dict(cls, data):
-           """Create model instance from dictionary"""
-           return cls(**{k: v for k, v in data.items() if hasattr(cls, k)})
-
-       def __repr__(self):
-           return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
-
-Advanced Query Features
-~~~~~~~~~~~~~~~~~~~~~~~
-
-The MatrixOne query builder supports advanced features that go beyond basic SQLAlchemy:
-
-.. code-block:: python
-
-   from matrixone import Client
-   from matrixone.orm import logical_in
-   from sqlalchemy import func
-   from matrixone.sqlalchemy_ext import boolean_match
-
-   # Advanced filtering with logical_in
-   query = client.query("users")
-   
-   # Filter by multiple values
-   results = query.filter(logical_in("department_id", [1, 2, 3])).all()
-   
-   # Filter with fulltext search integration
-   fulltext_filter = boolean_match("bio").must("python developer")
-   results = query.filter(logical_in("id", fulltext_filter)).all()
-   
-   # Complex expressions with group_by and having
-   results = (query
-              .select("department_id", func.count("id").label("user_count"))
-              .group_by("department_id")
-              .having(func.count("id") > 1)
-              .all())
-   
-   # Order by with expressions
-   results = (query
-              .select("username", "salary")
-              .order_by(func.upper("username"))
-              .all())
-
-   # Explain queries for optimization
-   explain_result = query.filter("age > 25").explain(verbose=True)
-   print("Query execution plan:", explain_result)
-
-   # Generate SQL without executing
-   sql = query.filter(logical_in("id", [1, 2, 3])).to_sql()
-   print("Generated SQL:", sql)
-
-Table Management with Client Interface
+Advanced Query Building with ORM Models
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The MatrixOne client provides powerful table management capabilities:
-
 .. code-block:: python
 
-   from matrixone import Client
-   from matrixone.config import get_connection_params
-
-   # Get connection parameters
-   host, port, user, password, database = get_connection_params()
-   client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
-
-   # Create tables with various column types
-   client.create_table("products", {
-       "id": "int",
-       "name": "varchar(200)",
-       "description": "text",
-       "price": "decimal(10,2)",
-       "category": "varchar(50)",
-       "in_stock": "boolean",
-       "created_at": "timestamp"
-   }, primary_key="id")
-
-   # Create vector table for AI applications
-   client.create_table("documents", {
-       "id": "int",
-       "title": "varchar(200)",
-       "content": "text",
-       "embedding": "vector(384,f32)"
-   }, primary_key="id")
-
-   # Insert data efficiently
-   products_data = [
-       {"id": 1, "name": "Laptop", "description": "High-performance laptop", "price": 999.99, "category": "Electronics", "in_stock": True},
-       {"id": 2, "name": "Phone", "description": "Smartphone with AI features", "price": 699.99, "category": "Electronics", "in_stock": True},
-       {"id": 3, "name": "Book", "description": "Programming guide", "price": 29.99, "category": "Education", "in_stock": False}
-   ]
-   client.batch_insert("products", products_data)
-
-   # Create indexes for better performance
-   client.create_index("products", "idx_category", "category")
-   client.create_index("products", "idx_price", "price")
-
-   # Create vector index for similarity search
-   client.vector.create_hnsw(
-       table_name="documents",
-       name="idx_embedding",
-       column="embedding",
-       m=16,
-       ef_construction=200
-   )
-
-   # Create fulltext index for text search
-   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
-
-Vector Operations Integration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-MatrixOne provides powerful vector operations for AI applications:
-
-.. code-block:: python
-
-   import numpy as np
-
-   # Insert documents with embeddings
-   documents_data = [
-       {
-           "id": 1,
-           "title": "AI Research Paper",
-           "content": "Advanced artificial intelligence research",
-           "embedding": np.random.rand(384).astype(np.float32).tolist()
-       },
-       {
-           "id": 2,
-           "title": "Machine Learning Guide",
-           "content": "Comprehensive machine learning tutorial",
-           "embedding": np.random.rand(384).astype(np.float32).tolist()
-       }
-   ]
-   client.batch_insert("documents", documents_data)
-
-   # Vector similarity search
-   query_vector = np.random.rand(384).astype(np.float32).tolist()
-   results = client.vector_query.similarity_search(
-       table_name="documents",
-       vector_column="embedding",
-       query_vector=query_vector,
-       limit=5,
-       distance_function="cosine"
-   )
-
-   print("Similar documents:", results)
-
-Fulltext Search Integration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-MatrixOne provides powerful fulltext search capabilities:
-
-.. code-block:: python
-
-   from matrixone.sqlalchemy_ext import boolean_match
-
-   # Create fulltext index
-   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
-
-   # Simple fulltext search
-   results = client.fulltext_index.simple_query(
-       table_name="products",
-       columns=["description"],
-       query="laptop OR phone",
-       limit=10
-   )
-
-   # Advanced fulltext search with boolean expressions
-   fulltext_filter = boolean_match("description").must("laptop").should("phone").must_not("broken")
-   results = client.query("products").filter(logical_in("id", fulltext_filter)).all()
-
-   print("Fulltext search results:", results)
-
-Transaction Management
-~~~~~~~~~~~~~~~~~~~~~~
-
-MatrixOne provides comprehensive transaction support:
-
-.. code-block:: python
-
-   from matrixone import Client
-   from matrixone.config import get_connection_params
-
-   # Get connection parameters
-   host, port, user, password, database = get_connection_params()
-   client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
-
-   # Transaction with automatic rollback on error
-   try:
-       with client.transaction() as tx:
-           # Insert multiple records
-           tx.insert("users", {"username": "alice", "email": "alice@example.com"})
-           tx.insert("users", {"username": "bob", "email": "bob@example.com"})
-           
-           # Update records
-           tx.execute("UPDATE users SET email = %s WHERE username = %s", 
-                     ("alice.new@example.com", "alice"))
-           
-           # Transaction will be committed automatically
-           print("Transaction completed successfully")
-   except Exception as e:
-       print(f"Transaction failed and was rolled back: {e}")
-
-   # Manual transaction control
-   tx = client.transaction()
-   try:
-       tx.insert("users", {"username": "charlie", "email": "charlie@example.com"})
-       tx.execute("UPDATE users SET email = %s WHERE username = %s", 
-                 ("charlie.new@example.com", "charlie"))
-       tx.commit()
-       print("Manual transaction committed")
-   except Exception as e:
-       tx.rollback()
-       print(f"Manual transaction rolled back: {e}")
-
-Async Operations
-~~~~~~~~~~~~~~~~
-
-MatrixOne provides full async support for modern Python applications:
-
-.. code-block:: python
-
-   import asyncio
-   from matrixone import AsyncClient
-   from matrixone.config import get_connection_params
-
-   async def async_operations():
-       # Get connection parameters
-       host, port, user, password, database = get_connection_params()
-       client = AsyncClient()
-       await client.connect(host=host, port=port, user=user, password=password, database=database)
-
-       try:
-           # Async query execution
-           result = await client.execute("SELECT COUNT(*) as user_count FROM users")
-           print(f"User count: {result.rows[0][0]}")
-
-           # Async transaction
-           async with client.transaction() as tx:
-               await tx.insert("users", {"username": "async_user", "email": "async@example.com"})
-               await tx.execute("UPDATE users SET email = %s WHERE username = %s", 
-                               ("async.new@example.com", "async_user"))
-
-           # Async query building
-           query = client.query("users")
-           results = await query.filter("username LIKE %s", "async%").all()
-           print("Async query results:", results)
-
-       finally:
-           await client.disconnect()
-
-   # Run async operations
-   asyncio.run(async_operations())
-
-Working with SQLAlchemy Sessions
----------------------------------
-
-Session Management
-~~~~~~~~~~~~~~~~~~
-
-MatrixOne provides seamless SQLAlchemy session integration:
-
-.. code-block:: python
-
-   from sqlalchemy.orm import sessionmaker
-   from matrixone import Client
-   from matrixone.config import get_connection_params
-
-   # Get connection parameters
-   host, port, user, password, database = get_connection_params()
-   client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
-
-   # Create tables using ORM
-   client.create_all(Base)
-
-   # Get SQLAlchemy engine from client
-   engine = client.get_sqlalchemy_engine()
-
-   # Create session factory
-   Session = sessionmaker(bind=engine)
-
-   # Use session for ORM operations
-   session = Session()
-
-   try:
-       # Create new users
-       user1 = User(
-           username='alice',
-           email='alice@example.com',
-           full_name='Alice Johnson',
-           bio='Software Engineer',
-           balance=1500.00
-       )
-       
-       user2 = User(
-           username='bob',
-           email='bob@example.com',
-           full_name='Bob Smith',
-           bio='Data Scientist',
-           balance=2000.00
-       )
-
-       # Add users to session
-       session.add_all([user1, user2])
-       session.commit()
-       print("✓ Users created successfully")
-
-       # Query users
-       users = session.query(User).filter(User.balance > 1000).all()
-       print(f"✓ Found {len(users)} users with balance > $1000:")
-       for user in users:
-           print(f"  - {user.username}: ${user.balance}")
-
-       # Update user
-       alice = session.query(User).filter(User.username == 'alice').first()
-       if alice:
-           alice.bio = 'Senior Software Engineer'
-           session.commit()
-           print(f"✓ Updated {alice.username}'s bio")
-
-       # Advanced queries
-       high_balance_users = session.query(User).filter(
-           User.balance > 1500
-       ).order_by(User.created_at.desc()).all()
-       
-       print(f"✓ Found {len(high_balance_users)} users with balance > $1500:")
-       for user in high_balance_users:
-           print(f"  - {user.full_name} ({user.username}): ${user.balance}")
-
-   finally:
-       session.close()
-       client.disconnect()
-
-Transaction Management with ORM
---------------------------------
-
-Client Transaction Interface
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from sqlalchemy import Column, Integer, String, DECIMAL
+   from sqlalchemy import Column, Integer, String, DECIMAL, ForeignKey
    from sqlalchemy.ext.declarative import declarative_base
+   from sqlalchemy.orm import sessionmaker, relationship
    from matrixone import Client
+   from matrixone.config import get_connection_params
 
-   Base = declarative_base()
-
-   class Account(Base):
-       __tablename__ = 'accounts'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       account_number = Column(String(20), unique=True, nullable=False)
-       owner_name = Column(String(100), nullable=False)
-       balance = Column(DECIMAL(15, 2), nullable=False, default=0.00)
-
-   client = Client()
-   client.connect(host='localhost', port=6001, user='root', password='111', database='test')
-
-   # Create table
-   client.create_all(Base)
-
-   # Insert initial accounts using client transaction
-   accounts_data = [
-       ('ACC-001', 'Alice Johnson', 5000.00),
-       ('ACC-002', 'Bob Smith', 3000.00),
-       ('ACC-003', 'Charlie Brown', 2000.00)
-   ]
-
-   with client.transaction() as tx:
-       for acc_num, owner, balance in accounts_data:
-           tx.execute(
-               "INSERT INTO accounts (account_number, owner_name, balance) VALUES (%s, %s, %s)",
-               (acc_num, owner, balance)
-           )
-   print("✓ Initial accounts created")
-
-   # Transfer money between accounts using transaction
-   def transfer_money(from_account, to_account, amount):
-       with client.transaction() as tx:
-           # Check source account balance
-           result = tx.execute(
-               "SELECT balance FROM accounts WHERE account_number = %s",
-               (from_account,)
-           )
-           source_balance = result.fetchone()
-           
-           if not source_balance or source_balance[0] < amount:
-               raise ValueError(f"Insufficient funds in account {from_account}")
-           
-           # Debit from source account
-           tx.execute(
-               "UPDATE accounts SET balance = balance - %s WHERE account_number = %s",
-               (amount, from_account)
-           )
-           
-           # Credit to destination account
-           tx.execute(
-               "UPDATE accounts SET balance = balance + %s WHERE account_number = %s",
-               (amount, to_account)
-           )
-           
-           print(f"✓ Transferred ${amount} from {from_account} to {to_account}")
-
-   # Perform transfers
-   try:
-       transfer_money('ACC-001', 'ACC-002', 500.00)
-       transfer_money('ACC-002', 'ACC-003', 200.00)
-   except ValueError as e:
-       print(f"❌ Transfer failed: {e}")
-
-   # Verify final balances
-   result = client.execute("SELECT account_number, owner_name, balance FROM accounts ORDER BY account_number")
-   print("\nFinal Account Balances:")
-   for row in result.fetchall():
-       print(f"  {row[0]} ({row[1]}): ${row[2]}")
-
-   client.disconnect()
-
-Mixed ORM and SQL Operations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from sqlalchemy.orm import sessionmaker
-   from sqlalchemy import text
-   from matrixone import Client
-
-   client = Client()
-   client.connect(host='localhost', port=6001, user='root', password='111', database='test')
-
-   # Create tables and get session
-   client.create_all(Base)
-   engine = client.get_sqlalchemy_engine()
-   Session = sessionmaker(bind=engine)
-
-   # Combine ORM operations with raw SQL in transaction
-   session = Session()
-   
-   try:
-       # Begin transaction
-       session.begin()
-       
-       # ORM operations
-       new_user = User(
-           username='charlie',
-           email='charlie@example.com',
-           full_name='Charlie Wilson',
-           balance=1000.00
-       )
-       session.add(new_user)
-       session.flush()  # Get the ID without committing
-       
-       user_id = new_user.id
-       print(f"✓ Created user with ID: {user_id}")
-       
-       # Raw SQL operations within the same transaction
-       session.execute(text("""
-           INSERT INTO accounts (account_number, owner_name, balance) 
-           VALUES (:acc_num, :owner, :balance)
-       """), {
-           'acc_num': f'ACC-{user_id:03d}',
-           'owner': new_user.full_name,
-           'balance': new_user.balance
-       })
-       
-       # Complex query using raw SQL
-       result = session.execute(text("""
-           SELECT u.username, u.full_name, a.account_number, a.balance
-           FROM users u
-           JOIN accounts a ON a.owner_name = u.full_name
-           WHERE u.id = :user_id
-       """), {'user_id': user_id})
-       
-       user_account = result.fetchone()
-       if user_account:
-           print(f"✓ Created account {user_account[2]} for user {user_account[0]}")
-       
-       # Commit transaction
-       session.commit()
-       print("✓ Transaction completed successfully")
-       
-   except Exception as e:
-       session.rollback()
-       print(f"❌ Transaction failed, rolled back: {e}")
-   finally:
-       session.close()
-
-   client.disconnect()
-
-Advanced ORM Patterns
-----------------------
-
-Model Relationships and Joins
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from sqlalchemy import Column, Integer, String, ForeignKey, Text
-   from sqlalchemy.ext.declarative import declarative_base
-   from sqlalchemy.orm import relationship, sessionmaker
-   from matrixone import Client
-
+   # Define ORM models
    Base = declarative_base()
 
    class Department(Base):
        __tablename__ = 'departments'
        
        id = Column(Integer, primary_key=True, autoincrement=True)
-       name = Column(String(100), nullable=False, unique=True)
-       description = Column(Text)
+       name = Column(String(50), nullable=False)
+       budget = Column(DECIMAL(12, 2), nullable=False)
        
-       # Relationship (note: foreign keys work but relationships need manual handling)
-       # employees = relationship("Employee", back_populates="department")
+       # Relationship
+       users = relationship("User", back_populates="department")
 
-   class Employee(Base):
-       __tablename__ = 'employees'
+   class User(Base):
+       __tablename__ = 'users'
+       
+       id = Column(Integer, primary_key=True, autoincrement=True)
+       username = Column(String(50), nullable=False, unique=True)
+       email = Column(String(100), nullable=False, unique=True)
+       age = Column(Integer, nullable=False)
+       department_id = Column(Integer, ForeignKey('departments.id'), nullable=False)
+       salary = Column(DECIMAL(10, 2), nullable=False)
+       
+       # Relationship
+       department = relationship("Department", back_populates="users")
+
+   # Get connection and create client
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create tables using ORM models
+   client.create_table(Department)
+   client.create_table(User)
+
+   # Create session
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
+
+   # Insert data using ORM
+   dept1 = Department(name="Engineering", budget=1000000.00)
+   dept2 = Department(name="Marketing", budget=500000.00)
+   session.add_all([dept1, dept2])
+   session.commit()
+
+   user1 = User(username="alice", email="alice@example.com", age=25, department_id=1, salary=50000.00)
+   user2 = User(username="bob", email="bob@example.com", age=30, department_id=1, salary=60000.00)
+   user3 = User(username="charlie", email="charlie@example.com", age=35, department_id=2, salary=70000.00)
+   session.add_all([user1, user2, user3])
+   session.commit()
+
+   # Query using ORM
+   users = session.query(User).filter(User.age > 25).all()
+   print("Users over 25:")
+   for user in users:
+       print(f"  {user.username} - {user.email} - Age: {user.age}")
+
+   # Query with joins using ORM
+   results = session.query(User, Department).join(Department).filter(Department.name == "Engineering").all()
+   print("Engineering users:")
+   for user, dept in results:
+       print(f"  {user.username} - {dept.name} - ${user.salary}")
+
+   # Update using ORM
+   session.query(User).filter(User.username == "alice").update({"salary": 55000.00})
+   session.commit()
+
+   # Delete using ORM
+   session.query(User).filter(User.username == "charlie").delete()
+   session.commit()
+
+   # Clean up
+   client.drop_table(User)
+   client.drop_table(Department)
+   session.close()
+   client.disconnect()
+
+Enhanced Query Building with logical_in
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import logical_in
+   from matrixone.sqlalchemy_ext import boolean_match
+   from sqlalchemy import func
+   from matrixone.config import get_connection_params
+
+   def enhanced_query_example():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Create a sample table
+       client.create_table("products", {
+           "id": "int",
+           "name": "varchar(100)",
+           "category": "varchar(50)",
+           "price": "decimal(10,2)",
+           "description": "text"
+       }, primary_key="id")
+
+       # Insert sample data
+       products = [
+           {"id": 1, "name": "Laptop", "category": "Electronics", "price": 999.99, "description": "High-performance laptop"},
+           {"id": 2, "name": "Phone", "category": "Electronics", "price": 699.99, "description": "Smartphone with AI features"},
+           {"id": 3, "name": "Book", "category": "Education", "price": 29.99, "description": "Programming guide"},
+           {"id": 4, "name": "Tablet", "category": "Electronics", "price": 499.99, "description": "Portable tablet device"}
+       ]
+       client.batch_insert("products", products)
+
+       # Enhanced query building with logical_in
+       query = client.query("products")
+       
+       # Filter by multiple categories
+       results = query.filter(logical_in("category", ["Electronics", "Education"])).all()
+       print("Products in Electronics or Education:")
+       for row in results:
+           print(f"  {row[1]} - {row[2]} - ${row[3]}")
+
+       # Filter by price range using logical_in with subquery
+       price_range_query = client.query("products").select(func.min("price"), func.max("price"))
+       results = query.filter(logical_in("price", price_range_query)).all()
+       print("Products in price range:")
+       for row in results:
+           print(f"  {row[1]} - ${row[3]}")
+
+       # Create fulltext index for advanced search
+       client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
+
+       # Use logical_in with fulltext search
+       fulltext_filter = boolean_match("description").must("laptop OR phone")
+       results = query.filter(logical_in("id", fulltext_filter)).all()
+       print("Products matching fulltext search:")
+       for row in results:
+           print(f"  {row[1]} - {row[4]}")
+
+       # Clean up
+       client.drop_table("products")
+       client.disconnect()
+
+   enhanced_query_example()
+
+Vector Operations with ORM
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from sqlalchemy import Column, Integer, String, Text
+   from sqlalchemy.ext.declarative import declarative_base
+   from sqlalchemy.orm import sessionmaker
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+   from matrixone.sqlalchemy_ext import create_vector_column
+   import numpy as np
+
+   # Define vector ORM model
+   VectorBase = declarative_base()
+
+   class Document(VectorBase):
+       __tablename__ = 'documents'
+       
+       id = Column(Integer, primary_key=True, autoincrement=True)
+       title = Column(String(200), nullable=False)
+       content = Column(Text)
+       embedding = create_vector_column(384, "f32")  # 384-dimensional vector
+
+   # Connect and setup
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Create table using ORM model
+   client.create_table(Document)
+
+   # Create vector index
+   client.vector_ops.enable_ivf()
+   client.vector_ops.create_ivf(
+       table_name='documents',
+       name='idx_embedding',
+       column='embedding',
+       lists=50,
+       op_type='vector_l2_ops'
+   )
+
+   # Create session
+   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+   session = Session()
+
+   # Insert documents using ORM
+   docs = [
+       Document(
+           title='AI Research',
+           content='Artificial intelligence research paper',
+           embedding=np.random.rand(384).astype(np.float32).tolist()
+       ),
+       Document(
+           title='ML Guide',
+           content='Machine learning tutorial',
+           embedding=np.random.rand(384).astype(np.float32).tolist()
+       )
+   ]
+   
+   session.add_all(docs)
+   session.commit()
+
+   # Vector similarity search using vector_query API
+   query_vector = np.random.rand(384).astype(np.float32).tolist()
+   results = client.vector_ops.similarity_search(
+       table_name='documents',
+       vector_column='embedding',
+       query_vector=query_vector,
+       limit=5,
+       distance_type='l2'
+   )
+
+   print("Vector Search Results:")
+   for result in results.rows:
+       print(f"Document: {result[1]} (Distance: {result[-1]:.4f})")
+
+   # Clean up
+   client.drop_table(Document)
+   session.close()
+   client.disconnect()
+
+Async ORM Operations
+~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import asyncio
+   from sqlalchemy import Column, Integer, String, DECIMAL
+   from sqlalchemy.ext.declarative import declarative_base
+   from sqlalchemy.orm import sessionmaker
+   from matrixone import AsyncClient
+   from matrixone.config import get_connection_params
+
+   # Define async ORM model
+   AsyncBase = declarative_base()
+
+   class AsyncUser(AsyncBase):
+       __tablename__ = 'async_users'
+       
+       id = Column(Integer, primary_key=True, autoincrement=True)
+       username = Column(String(50), nullable=False, unique=True)
+       email = Column(String(100), nullable=False, unique=True)
+       balance = Column(DECIMAL(10, 2), nullable=False, default=0.00)
+
+   async def async_orm_example():
+       # Get connection parameters
+       host, port, user, password, database = get_connection_params()
+       
+       client = AsyncClient()
+       await client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Create table using async create_table API
+       await client.create_table(AsyncUser)
+
+       # Create async session
+       Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+       session = Session()
+
+       # Insert data using ORM
+       user1 = AsyncUser(username="async_alice", email="alice@async.com", balance=1000.00)
+       user2 = AsyncUser(username="async_bob", email="bob@async.com", balance=500.00)
+       
+       session.add_all([user1, user2])
+       session.commit()
+
+       # Query using ORM
+       users = session.query(AsyncUser).filter(AsyncUser.balance > 600).all()
+       print("Users with balance > 600:")
+       for user in users:
+           print(f"  {user.username} - ${user.balance}")
+
+       # Update using ORM
+       session.query(AsyncUser).filter(AsyncUser.username == "async_alice").update({"balance": 1200.00})
+       session.commit()
+
+       # Delete using ORM
+       session.query(AsyncUser).filter(AsyncUser.username == "async_bob").delete()
+       session.commit()
+
+       # Clean up
+       await client.drop_table(AsyncUser)
+       session.close()
+       await client.disconnect()
+
+   asyncio.run(async_orm_example())
+
+Transaction Management with ORM
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from sqlalchemy import Column, Integer, String, DECIMAL
+   from sqlalchemy.ext.declarative import declarative_base
+   from sqlalchemy.orm import sessionmaker
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+
+   # Define transaction ORM models
+   TransactionBase = declarative_base()
+
+   class Account(TransactionBase):
+       __tablename__ = 'accounts'
        
        id = Column(Integer, primary_key=True, autoincrement=True)
        name = Column(String(100), nullable=False)
-       email = Column(String(200), unique=True, nullable=False)
-       department_id = Column(Integer, ForeignKey('departments.id'))
-       position = Column(String(100))
+       balance = Column(DECIMAL(10, 2), nullable=False)
+
+   class Transaction(TransactionBase):
+       __tablename__ = 'transactions'
        
-       # department = relationship("Department", back_populates="employees")
+       id = Column(Integer, primary_key=True, autoincrement=True)
+       from_account_id = Column(Integer, nullable=False)
+       to_account_id = Column(Integer, nullable=False)
+       amount = Column(DECIMAL(10, 2), nullable=False)
+       timestamp = Column(String(50), nullable=False)
 
-   client = Client()
-   client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+   def transaction_example():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create tables
-   client.create_all(Base)
+       # Create tables using ORM models
+       client.create_table(Account)
+       client.create_table(Transaction)
 
-   engine = client.get_sqlalchemy_engine()
-   Session = sessionmaker(bind=engine)
-   session = Session()
+       # Create session
+       Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+       session = Session()
 
-   try:
-       # Create departments
-       eng_dept = Department(name='Engineering', description='Software development team')
-       hr_dept = Department(name='Human Resources', description='People operations')
-       
-       session.add_all([eng_dept, hr_dept])
+       # Insert initial data
+       account1 = Account(name="Alice", balance=1000.00)
+       account2 = Account(name="Bob", balance=500.00)
+       session.add_all([account1, account2])
        session.commit()
 
-       # Create employees
-       employees = [
-           Employee(name='Alice Johnson', email='alice@company.com', 
-                   department_id=eng_dept.id, position='Senior Developer'),
-           Employee(name='Bob Smith', email='bob@company.com', 
-                   department_id=eng_dept.id, position='DevOps Engineer'),
-           Employee(name='Carol Wilson', email='carol@company.com', 
-                   department_id=hr_dept.id, position='HR Manager')
-       ]
-       
-       session.add_all(employees)
-       session.commit()
+       # Transfer money using transaction
+       try:
+           # Start transaction
+           session.begin()
+           
+           # Update balances
+           session.query(Account).filter(Account.name == "Alice").update({"balance": 900.00})
+           session.query(Account).filter(Account.name == "Bob").update({"balance": 600.00})
+           
+           # Record transaction
+           transaction = Transaction(
+               from_account_id=1,
+               to_account_id=2,
+               amount=100.00,
+               timestamp="2024-01-01 10:00:00"
+           )
+           session.add(transaction)
+           
+           # Commit transaction
+           session.commit()
+           print("✓ Transaction completed successfully")
+           
+       except Exception as e:
+           # Rollback on error
+           session.rollback()
+           print(f"❌ Transaction failed: {e}")
 
-       # Query with joins using raw SQL through ORM
-       from sqlalchemy import text
-       
-       result = session.execute(text("""
-           SELECT e.name, e.position, d.name as department_name
-           FROM employees e
-           JOIN departments d ON e.department_id = d.id
-           ORDER BY d.name, e.name
-       """))
-       
-       print("Employee Directory:")
-       for row in result:
-           print(f"  {row[0]} - {row[1]} ({row[2]})")
+       # Verify the transfer
+       accounts = session.query(Account).all()
+       for account in accounts:
+           print(f"{account.name}: ${account.balance}")
 
-       # Aggregation queries
-       dept_counts = session.execute(text("""
-           SELECT d.name, COUNT(e.id) as employee_count
-           FROM departments d
-           LEFT JOIN employees e ON d.id = e.department_id
-           GROUP BY d.id, d.name
-           ORDER BY employee_count DESC
-       """))
-       
-       print("\nDepartment Employee Counts:")
-       for row in dept_counts:
-           print(f"  {row[0]}: {row[1]} employees")
-
-   finally:
+       # Clean up
+       client.drop_table(Transaction)
+       client.drop_table(Account)
        session.close()
        client.disconnect()
 
-Bulk Operations
-~~~~~~~~~~~~~~~
+   transaction_example()
+
+Advanced Query Features
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from sqlalchemy.orm import sessionmaker
-   from sqlalchemy import text
    from matrixone import Client
-   import time
+   from matrixone.orm import logical_in
+   from sqlalchemy import func, text
+   from matrixone.config import get_connection_params
 
-   client = Client()
-   client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+   def advanced_query_features():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create table for bulk operations demo
-   client.create_all(Base)
+       # Create sample table
+       client.create_table("sales", {
+           "id": "int",
+           "product_id": "int",
+           "customer_id": "int",
+           "amount": "decimal(10,2)",
+           "sale_date": "date",
+           "region": "varchar(50)"
+       }, primary_key="id")
 
-   engine = client.get_sqlalchemy_engine()
-   Session = sessionmaker(bind=engine)
-
-   # Bulk insert using client transaction (recommended for large datasets)
-   def bulk_insert_with_client():
-       print("Bulk insert using client transaction...")
-       start_time = time.time()
-       
-       # Generate test data
-       users_data = [
-           (f'user_{i}', f'user{i}@example.com', f'User {i}', f'Bio for user {i}', 1000 + i)
-           for i in range(1000)
+       # Insert sample data
+       sales_data = [
+           {"id": 1, "product_id": 101, "customer_id": 201, "amount": 100.00, "sale_date": "2024-01-01", "region": "North"},
+           {"id": 2, "product_id": 102, "customer_id": 202, "amount": 200.00, "sale_date": "2024-01-02", "region": "South"},
+           {"id": 3, "product_id": 101, "customer_id": 203, "amount": 150.00, "sale_date": "2024-01-03", "region": "North"},
+           {"id": 4, "product_id": 103, "customer_id": 201, "amount": 300.00, "sale_date": "2024-01-04", "region": "East"}
        ]
-       
-       # Use client transaction for bulk insert
-       with client.transaction() as tx:
-           for username, email, full_name, bio, balance in users_data:
-               tx.execute(
-                   "INSERT INTO users (username, email, full_name, bio, balance) VALUES (%s, %s, %s, %s, %s)",
-                   (username, email, full_name, bio, balance)
-               )
-       
-       elapsed = time.time() - start_time
-       print(f"✓ Inserted 1000 users in {elapsed:.2f} seconds using client transaction")
+       client.batch_insert("sales", sales_data)
 
-   # Bulk update using SQLAlchemy
-   def bulk_update_with_orm():
-       print("Bulk update using ORM...")
-       session = Session()
-       
-       try:
-           start_time = time.time()
-           
-           # Bulk update using raw SQL through ORM
-           result = session.execute(text("""
-               UPDATE users 
-               SET balance = balance * 1.1 
-               WHERE balance > :min_balance
-           """), {'min_balance': 1500})
-           
-           session.commit()
-           
-           elapsed = time.time() - start_time
-           print(f"✓ Updated {result.rowcount} users in {elapsed:.4f} seconds using ORM")
-           
-       finally:
-           session.close()
+       # Group by with having clause
+       result = client.query("sales").select(
+           "region", 
+           func.sum("amount").label("total_sales"),
+           func.count("*").label("sale_count")
+       ).group_by("region").having(func.sum("amount") > 200).execute()
 
-   # Bulk query with pagination
-   def paginated_query():
-       print("Paginated query example...")
-       session = Session()
-       
-       try:
-           page_size = 100
-           offset = 0
-           
-           while True:
-               users = session.query(User).offset(offset).limit(page_size).all()
-               
-               if not users:
-                   break
-                   
-               print(f"✓ Page {offset // page_size + 1}: {len(users)} users")
-               # Process users here
-               
-               offset += page_size
-               
-               if len(users) < page_size:
-                   break
-                   
-       finally:
-           session.close()
+       print("Regions with sales > 200:")
+       for row in result.fetchall():
+           print(f"  {row[0]}: ${row[1]} ({row[2]} sales)")
 
-   # Run bulk operations
-   try:
-       bulk_insert_with_client()
-       bulk_update_with_orm()
-       paginated_query()
-       
-       # Verify final state
-       result = client.execute("SELECT COUNT(*) FROM users")
-       count = result.fetchone()[0]
-       print(f"✓ Total users in database: {count}")
-       
-   finally:
+       # Order by with expressions
+       result = client.query("sales").select("*").order_by("amount DESC").limit(2).execute()
+       print("Top 2 sales by amount:")
+       for row in result.fetchall():
+           print(f"  Sale {row[0]}: ${row[3]}")
+
+       # Complex where conditions with logical_in
+       result = client.query("sales").select("*").filter(
+           logical_in("product_id", [101, 102]) & 
+           logical_in("region", ["North", "South"])
+       ).execute()
+
+       print("Sales for products 101,102 in North/South:")
+       for row in result.fetchall():
+           print(f"  Sale {row[0]}: Product {row[1]}, Region {row[5]}, Amount ${row[3]}")
+
+       # Clean up
+       client.drop_table("sales")
        client.disconnect()
 
-Error Handling in ORM Operations
----------------------------------
+   advanced_query_features()
 
-Comprehensive Error Handling
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Error Handling with ORM
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.exceptions import ConnectionError, QueryError
-   from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-   from sqlalchemy.orm import sessionmaker
+   from matrixone.exceptions import QueryError, ConnectionError
+   from matrixone.config import get_connection_params
+   from sqlalchemy.exc import SQLAlchemyError
 
-   def robust_orm_operations():
+   def robust_orm_example():
        client = None
        session = None
        
        try:
-           # Connection with error handling
+           host, port, user, password, database = get_connection_params()
+           
+           # Create client with error handling
            client = Client()
-           client.connect(
-               host='localhost',
-               port=6001,
-               user='root',
-               password='111',
-               database='test'
-           )
-           print("✓ Connected to database")
+           client.connect(host=host, port=port, user=user, password=password, database=database)
 
-           # Table creation with error handling
+           # Create table with error handling
            try:
-               client.create_all(Base)
-               print("✓ Tables created/verified")
+               client.create_table("robust_users", {
+                   "id": "int",
+                   "username": "varchar(50)",
+                   "email": "varchar(100)"
+               }, primary_key="id")
+               print("✓ Table created successfully")
            except QueryError as e:
-               if "already exists" in str(e).lower():
-                   print("⚠️  Tables already exist, continuing...")
-               else:
-                   raise
+               print(f"❌ Table creation failed: {e}")
 
-           # Session operations with error handling
-           engine = client.get_sqlalchemy_engine()
-           Session = sessionmaker(bind=engine)
-           session = Session()
-
-           # Insert with duplicate key handling
+           # Create session with error handling
            try:
-               duplicate_user = User(
-                   username='alice',  # This might already exist
-                   email='alice@example.com',
-                   full_name='Alice Johnson'
-               )
-               session.add(duplicate_user)
-               session.commit()
-               print("✓ User created successfully")
-               
-           except IntegrityError as e:
-               session.rollback()
-               if "duplicate" in str(e).lower() or "unique" in str(e).lower():
-                   print("⚠️  User already exists, skipping...")
-               else:
-                   print(f"❌ Integrity constraint violation: {e}")
-                   
+               from sqlalchemy.orm import sessionmaker
+               Session = sessionmaker(bind=client.get_sqlalchemy_engine())
+               session = Session()
+               print("✓ Session created successfully")
            except SQLAlchemyError as e:
-               session.rollback()
-               print(f"❌ Database error: {e}")
+               print(f"❌ Session creation failed: {e}")
 
-           # Query with error handling
+           # Insert data with error handling
            try:
-               users = session.query(User).filter(User.balance > 1000).all()
-               print(f"✓ Found {len(users)} users with high balance")
-               
-               for user in users:
-                   print(f"  - {user.username}: ${user.balance}")
-                   
-           except SQLAlchemyError as e:
+               client.insert("robust_users", {"id": 1, "username": "test", "email": "test@example.com"})
+               print("✓ Data inserted successfully")
+           except QueryError as e:
+               print(f"❌ Data insertion failed: {e}")
+
+           # Query data with error handling
+           try:
+               result = client.query("robust_users").select("*").execute()
+               print(f"✓ Query successful: {result.fetchall()}")
+           except QueryError as e:
                print(f"❌ Query failed: {e}")
-
-           # Transaction with rollback on error
-           try:
-               session.begin()
-               
-               # Simulated business logic that might fail
-               high_balance_user = session.query(User).filter(User.balance > 2000).first()
-               if high_balance_user:
-                   high_balance_user.balance -= 500
-                   
-                   # Simulate potential error
-                   if high_balance_user.balance < 0:
-                       raise ValueError("Balance cannot be negative")
-                   
-                   session.commit()
-                   print(f"✓ Updated {high_balance_user.username}'s balance")
-               else:
-                   print("⚠️  No high balance users found")
-                   
-           except ValueError as e:
-               session.rollback()
-               print(f"❌ Business logic error: {e}")
-           except SQLAlchemyError as e:
-               session.rollback()
-               print(f"❌ Transaction failed: {e}")
 
        except ConnectionError as e:
            print(f"❌ Connection failed: {e}")
        except Exception as e:
            print(f"❌ Unexpected error: {e}")
        finally:
-           # Clean up resources
+           # Always clean up
            if session:
-               session.close()
-               print("✓ Session closed")
+               try:
+                   session.close()
+                   print("✓ Session closed")
+               except Exception as e:
+                   print(f"⚠️ Session cleanup warning: {e}")
+           
            if client:
                try:
+                   client.drop_table("robust_users")
                    client.disconnect()
-                   print("✓ Database connection closed")
+                   print("✓ Cleanup completed")
                except Exception as e:
-                   print(f"⚠️  Warning during cleanup: {e}")
+                   print(f"⚠️ Cleanup warning: {e}")
 
-   robust_orm_operations()
+   robust_orm_example()
 
 Best Practices
---------------
+~~~~~~~~~~~~~~
 
-Performance Tips
-~~~~~~~~~~~~~~~~
+1. **Use ORM models for complex schemas**:
+   - Define clear relationships between tables
+   - Use proper foreign keys and constraints
+   - Leverage SQLAlchemy's declarative base
 
-1. **Use Client Transactions for Bulk Operations**: For large batch operations, use ``client.transaction()`` instead of ORM sessions.
+2. **Combine ORM with query API**:
+   - Use ORM for data modeling and relationships
+   - Use query API for complex queries and performance-critical operations
+   - Mix both approaches as needed
 
-2. **Connection Pooling**: The client automatically provides connection pooling through SQLAlchemy.
+3. **Handle transactions properly**:
+   - Always use try-catch blocks for transactions
+   - Rollback on errors
+   - Commit only when all operations succeed
 
-3. **Session Management**: Always close sessions and use try/finally blocks.
+4. **Use async operations for I/O-bound tasks**:
+   - Use AsyncClient for concurrent operations
+   - Use async/await patterns consistently
+   - Handle async errors properly
 
-4. **Bulk Operations**: For inserting/updating many records, use raw SQL through transactions.
+5. **Optimize queries**:
+   - Use appropriate indexes
+   - Avoid N+1 query problems
+   - Use batch operations for bulk data
 
-5. **Query Optimization**: Use EXPLAIN to analyze query performance.
-
-Security Best Practices
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-1. **Parameterized Queries**: Always use parameterized queries to prevent SQL injection.
-
-2. **Input Validation**: Validate data before inserting into the database.
-
-3. **Connection Security**: Use environment variables for connection credentials.
-
-4. **Error Handling**: Don't expose sensitive database information in error messages.
-
-Model Design Guidelines
-~~~~~~~~~~~~~~~~~~~~~~~
-
-1. **Clear Table Names**: Use descriptive table names and follow naming conventions.
-
-2. **Proper Data Types**: Choose appropriate data types for your columns.
-
-3. **Constraints**: Define proper constraints (unique, nullable, etc.).
-
-4. **Serialization**: Add ``to_dict()`` and ``from_dict()`` methods for JSON serialization.
-
-5. **Documentation**: Document complex models and relationships.
+6. **Error handling**:
+   - Always use try-catch blocks
+   - Provide meaningful error messages
+   - Clean up resources properly
 
 Next Steps
 ----------
 
-* Explore :doc:`vector_guide` for vector search with ORM
-* Check :doc:`fulltext_guide` for fulltext search integration  
-* Review :doc:`examples` for more comprehensive examples
-* See :doc:`api/index` for detailed API documentation
+* Read the :doc:`api/query_builders` for detailed query builder API
+* Check out the :doc:`api/orm_classes` for ORM class documentation
+* Explore :doc:`vector_guide` for vector operations with ORM
+* Learn about :doc:`fulltext_guide` for fulltext search with ORM
+* Check out the :doc:`examples` for comprehensive usage examples

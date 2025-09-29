@@ -43,16 +43,14 @@ Creating Tables for Pinecone Index
 
 .. code-block:: python
 
-   # Create table with vector column
-   client.execute("""
-       CREATE TABLE documents (
-           id VARCHAR(50) PRIMARY KEY,
-           title VARCHAR(200),
-           content TEXT,
-           embedding vecf32(384),
-           metadata JSON
-       )
-   """)
+   # Create table with vector column using create_table API
+   client.create_table("documents", {
+       "id": "varchar(50)",
+       "title": "varchar(200)",
+       "content": "text",
+       "embedding": "vecf32(384)",
+       "metadata": "json"
+   }, primary_key="id")
 
    # Create vector index
    client.vector_index.create_ivf(
