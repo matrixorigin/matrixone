@@ -228,11 +228,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	newTableDef := newRel.CopyTableDef(c.proc.Ctx)
 	//--------------------------------------------------------------------------------------------------------------
 	{
 		// 9. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
-		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
 
@@ -300,6 +300,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				return err
 			}
 		}
+	}
+
+	// 10. register ISCP job again
+	err = CreateAllIndexCdcTasks(c, newTableDef.Indexes, dbName, tblName)
+	if err != nil {
+		return err
 	}
 
 	// get and update the change mapping information of table colIds
