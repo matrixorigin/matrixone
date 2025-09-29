@@ -1502,7 +1502,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		// TODO: HNSWCDC create PITR and CDC for index async update
+		// create iscp jobs for index async update
 		ct, err := GetConstraintDef(c.proc.Ctx, newRelation)
 		if err != nil {
 			return err
@@ -2131,7 +2131,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	// HNSWCDC CREATE PITR AND CDC TASK HERE
+	// create ISCP job when Async is true
 	if async {
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
@@ -2196,7 +2196,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 
-		//3. HNSWCDC delete cdc table task for vector, fulltext index
+		//3. delete iscp job for vector, fulltext index
 		err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
 		if err != nil {
 			return err
@@ -2723,7 +2723,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// HNSWCDC delete cdc task of the vector and fulltext index here
+	// delete cdc task of the vector and fulltext index here
 	err = DropAllIndexCdcTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
 	if err != nil {
 		return err
