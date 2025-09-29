@@ -38,13 +38,31 @@ Basic Setup
        id_column="id"  # Optional, defaults to 'id'
    )
 
-Creating Tables for Pinecone Index
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Creating Tables for Pinecone Index with Table Models
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   # Create table with vector column using create_table API
-   client.create_table("documents", {
+   from sqlalchemy import Column, String, Text, JSON
+   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.sqlalchemy_ext import Vectorf32
+
+   # Define table model
+   Base = declarative_base()
+
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(String(50), primary_key=True)
+       title = Column(String(200))
+       content = Column(Text)
+       embedding = Column(Vectorf32(384))
+       metadata = Column(JSON)
+
+   # Create table using model
+   client.create_table(Document)
+
+   # Alternative: Create table with column definitions
+   client.create_table("documents_alt", {
        "id": "varchar(50)",
        "title": "varchar(200)",
        "content": "text",
@@ -52,8 +70,11 @@ Creating Tables for Pinecone Index
        "metadata": "json"
    }, primary_key="id")
 
+   # Enable IVF indexing
+   client.vector_ops.enable_ivf()
+
    # Create vector index
-   client.vector_index.create_ivf(
+   client.vector_ops.create_ivf(
        table_name="documents",
        name="idx_documents_embedding",
        column="embedding",

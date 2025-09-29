@@ -1317,19 +1317,23 @@ class AsyncClientExecutor(BaseMatrixOneExecutor):
 
 class AsyncClient(BaseMatrixOneClient):
     """
-    MatrixOne Async Client for asynchronous database operations.
+    MatrixOne Async Client - Asynchronous interface for MatrixOne database operations.
 
-    This class provides asynchronous connection and query functionality for MatrixOne
-    database, allowing non-blocking database operations in async/await contexts.
-    It mirrors the functionality of the synchronous Client class but with async methods.
+    This class provides a comprehensive asynchronous interface for connecting to and
+    interacting with MatrixOne databases. It supports modern async/await patterns
+    including table creation, data insertion, querying, vector operations, and
+    transaction management.
 
     Key Features:
-    - Asynchronous connection management
-    - Non-blocking query execution
-    - Async/await support for all operations
-    - Connection pooling with async support
-    - Transaction support with async context managers
-    - Integration with asyncio event loops
+    - Asynchronous connection management with connection pooling
+    - High-level table operations (create_table, drop_table, insert, batch_insert)
+    - Query builder interface for complex async queries
+    - Vector operations (similarity search, range search, indexing)
+    - Async transaction management with context managers
+    - Snapshot and restore operations
+    - Account and user management
+    - Fulltext search capabilities
+    - Non-blocking I/O operations
 
     Supported Operations:
     - Async connection and disconnection
@@ -1338,34 +1342,63 @@ class AsyncClient(BaseMatrixOneClient):
     - Async transaction management
     - Async table creation and management
     - Async vector and fulltext operations
+    - Async snapshot and restore operations
 
     Usage Examples:
-        # Basic async usage
-        async def main():
-            client = AsyncClient()
-            await client.connect('localhost', 6001, 'root', '111', 'test')
+        Basic async usage::
 
-            # Async query execution
-            result = await client.execute("SELECT * FROM users WHERE age > ?", (25,))
-            for row in result.fetchall():
-                print(row)
+            async def main():
+                client = AsyncClient()
+                await client.connect('localhost', 6001, 'root', '111', 'test')
 
-            # Async batch insert
-            users = [
-                {'name': 'John', 'age': 30},
-                {'name': 'Jane', 'age': 25}
-            ]
-            await client.batch_insert_async('users', users)
+                # Create table using high-level API
+                await client.create_table("users", {
+                    "id": "int primary key",
+                    "name": "varchar(100)",
+                    "email": "varchar(255)"
+                })
 
-            await client.disconnect()
+                # Insert data
+                await client.insert("users", {"id": 1, "name": "John", "email": "john@example.com"})
 
-        # Async transaction usage
-        async def transaction_example():
-            client = AsyncClient()
-            await client.connect('localhost', 6001, 'root', '111', 'test')
+                # Query data
+                result = await client.query("users").where("id = ?", 1).all()
+                print(result.rows)
 
-            async with client.transaction() as tx:
-                await tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+                await client.disconnect()
+
+        Vector operations::
+
+            async def vector_example():
+                client = AsyncClient()
+                await client.connect('localhost', 6001, 'root', '111', 'test')
+
+                # Create vector table
+                await client.create_table("documents", {
+                    "id": "int primary key",
+                    "content": "text",
+                    "embedding": "vecf32(384)"
+                })
+
+                # Vector similarity search
+                results = await client.vector_ops.similarity_search(
+                    table_name="documents",
+                    vector_column="embedding",
+                    query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
+                    limit=10,
+                    distance_type="l2"
+                )
+
+                await client.disconnect()
+
+        Async transaction usage::
+
+            async def transaction_example():
+                client = AsyncClient()
+                await client.connect('localhost', 6001, 'root', '111', 'test')
+
+                async with client.transaction() as tx:
+                    await tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
                 await tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
                 # Transaction commits automatically on success
 

@@ -42,12 +42,21 @@ class ClientExecutor(BaseMatrixOneExecutor):
 
 class Client(BaseMatrixOneClient):
     """
-    MatrixOne Client - SQLAlchemy wrapper for database operations.
+    MatrixOne Client - High-level interface for MatrixOne database operations.
 
-    This class provides a high-level interface for connecting to and interacting
-    with MatrixOne databases using SQLAlchemy engine and connection pooling.
-    It supports transaction management and various database features like
-    snapshots, PITR, and account management.
+    This class provides a comprehensive interface for connecting to and interacting
+    with MatrixOne databases. It supports modern API patterns including table creation,
+    data insertion, querying, vector operations, and transaction management.
+
+    Key Features:
+    - High-level table operations (create_table, drop_table, insert, batch_insert)
+    - Query builder interface for complex queries
+    - Vector operations (similarity search, range search, indexing)
+    - Transaction management with context managers
+    - Snapshot and restore operations
+    - Account and user management
+    - Fulltext search capabilities
+    - Connection pooling and SSL support
 
     Examples:
         Basic usage::
@@ -62,8 +71,37 @@ class Client(BaseMatrixOneClient):
                 database='test'
             )
 
-            result = client.execute("SELECT 1 as test")
-            print(result.fetchall())
+            # Create table using high-level API
+            client.create_table("users", {
+                "id": "int primary key",
+                "name": "varchar(100)",
+                "email": "varchar(255)"
+            })
+
+            # Insert data
+            client.insert("users", {"id": 1, "name": "John", "email": "john@example.com"})
+
+            # Query data
+            result = client.query("users").where("id = ?", 1).all()
+            print(result.rows)
+
+        Vector operations::
+
+            # Create vector table
+            client.create_table("documents", {
+                "id": "int primary key",
+                "content": "text",
+                "embedding": "vecf32(384)"
+            })
+
+            # Vector similarity search
+            results = client.vector_ops.similarity_search(
+                table_name="documents",
+                vector_column="embedding",
+                query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
+                limit=10,
+                distance_type="l2"
+            )
 
         With transaction::
 
@@ -76,6 +114,9 @@ class Client(BaseMatrixOneClient):
         engine (Engine): SQLAlchemy engine instance
         connected (bool): Connection status
         backend_version (str): Detected backend version
+        vector_ops (VectorManager): Vector operations manager
+        snapshots (SnapshotManager): Snapshot operations manager
+        query (QueryBuilder): Query builder for complex queries
     """
 
     def __init__(
@@ -659,36 +700,6 @@ class Client(BaseMatrixOneClient):
         executor = ClientExecutor(self)
         return executor.insert(table_name, data)
 
-    async def insert_async(self, table_name: str, data: dict) -> "ResultSet":
-        """
-        Async version of insert method.
-
-        Args:
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
-
-        Returns:
-            ResultSet object
-        """
-
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                formatted_values.append(str(value))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        return await self.execute_async(sql)
-
     def batch_insert(self, table_name_or_model, data_list: list) -> "ResultSet":
         """
         Batch insert multiple rows of data into a table.
@@ -745,41 +756,6 @@ class Client(BaseMatrixOneClient):
 
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
-
-    async def batch_insert_async(self, table_name: str, data_list: list) -> "ResultSet":
-        """
-        Async version of batch_insert method.
-
-        Args:
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
-
-        Returns:
-            ResultSet object
-        """
-        if not data_list:
-            return ResultSet([], [], affected_rows=0)
-
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if isinstance(value, list):
-                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
-                else:
-                    formatted_values.append(str(value))
-            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
-        return await self.execute_async(sql)
 
     def _substitute_parameters(self, sql: str, params=None) -> str:
         """
@@ -2905,15 +2881,16 @@ class VectorManager:
     Unified vector manager for MatrixOne vector operations and chain operations.
 
     This class provides comprehensive vector functionality including vector table
-    creation, vector indexing, and vector data operations. It supports both
-    IVF (Inverted File) and HNSW (Hierarchical Navigable Small World) indexing
-    algorithms for efficient vector similarity search.
+    creation, vector indexing, vector data operations, and vector similarity search.
+    It supports both IVF (Inverted File) and HNSW (Hierarchical Navigable Small World)
+    indexing algorithms for efficient vector similarity search.
 
     Key Features:
     - Vector table creation with configurable dimensions and precision
     - Vector index creation and management (IVF, HNSW)
     - Vector data insertion and batch operations
-    - Vector similarity search operations
+    - Vector similarity search with multiple distance metrics
+    - Vector range search for distance-based filtering
     - Integration with MatrixOne's vector capabilities
     - Support for both f32 and f64 vector precision
 
@@ -2921,16 +2898,22 @@ class VectorManager:
     - IVF (Inverted File): Good for large datasets, requires training
     - HNSW: Good for high-dimensional vectors, no training required
 
+    Supported Distance Metrics:
+    - L2 (Euclidean) distance: Standard Euclidean distance
+    - Cosine similarity: Cosine of the angle between vectors
+    - Inner product: Dot product of vectors
+
     Supported Operations:
     - Vector table creation with various column types
     - Vector index creation with configurable parameters
     - Vector data insertion and batch operations
     - Vector similarity search and distance calculations
+    - Vector range search for distance-based filtering
     - Vector index management and optimization
 
     Usage Examples:
         # Initialize vector manager
-        vector = client.vector
+        vector_ops = client.vector_ops
 
         # Create vector table
         vector.create_table("documents", {

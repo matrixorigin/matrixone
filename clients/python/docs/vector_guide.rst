@@ -23,35 +23,52 @@ Modern Vector Operations
 
 The MatrixOne Python SDK provides a modern, high-level API for vector operations that simplifies common AI workflows.
 
-Creating Vector Tables
-~~~~~~~~~~~~~~~~~~~~~~
+Creating Vector Tables with Table Models
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from matrixone import Client
    from matrixone.config import get_connection_params
+   from sqlalchemy import Column, Integer, String, Text, JSON
+   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.sqlalchemy_ext import Vectorf32, Vectorf64
 
    # Get connection parameters
    host, port, user, password, database = get_connection_params()
    client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create vector table using create_table API
-   client.create_table("documents", {
+   # Define table models
+   Base = declarative_base()
+
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(Integer, primary_key=True)
+       title = Column(String(200))
+       content = Column(Text)
+       embedding = Column(Vectorf32(384))  # 384-dimensional f32 vector
+       metadata = Column(JSON)
+
+   class Product(Base):
+       __tablename__ = 'products'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(200))
+       description = Column(Text)
+       features = Column(Vectorf64(512))  # 512-dimensional f64 vector
+       category = Column(String(50))
+
+   # Create tables using models
+   client.create_table(Document)
+   client.create_table(Product)
+
+   # Alternative: Create tables using create_table API with column definitions
+   client.create_table("documents_alt", {
        "id": "int",
        "title": "varchar(200)",
        "content": "text",
        "embedding": "vecf32(384)",  # 384-dimensional f32 vector
        "metadata": "json"
-   }, primary_key="id")
-
-   # Create another vector table for products
-   client.create_table("products", {
-       "id": "int",
-       "name": "varchar(200)",
-       "description": "text",
-       "features": "vecf64(512)",  # 512-dimensional f64 vector
-       "category": "varchar(50)"
    }, primary_key="id")
 
 Vector Index Management
@@ -82,12 +99,22 @@ MatrixOne provides powerful vector index management through the `vector_ops` API
        op_type="vector_cosine_ops"  # Cosine distance
    )
 
-   # List all vector indexes
-   indexes = client.vector_ops.list_indexes("documents")
-   print("Vector indexes:", indexes)
+   # Enable HNSW indexing
+   client.vector_ops.enable_hnsw()
 
-   # Drop an index
-   client.vector_ops.drop_index("documents", "idx_embedding_ivf")
+   # Create HNSW index
+   client.vector_ops.create_hnsw(
+       table_name="documents",
+       name="idx_embedding_hnsw",
+       column="embedding",
+       m=16,                        # Number of bi-directional links
+       ef_construction=200,         # Size of dynamic candidate list
+       ef_search=50                 # Size of dynamic candidate list for search
+   )
+
+   # Drop vector indexes using drop method
+   client.vector_ops.drop("documents", "idx_embedding_ivf")
+   client.vector_ops.drop("documents", "idx_embedding_hnsw")
 
 Vector Data Insertion
 ~~~~~~~~~~~~~~~~~~~~~
@@ -100,10 +127,10 @@ Insert vector data using the modern insert API:
 
    # Insert single document
    client.insert("documents", {
-       "id": 1,
-       "title": "AI Research Paper",
-       "content": "Advanced artificial intelligence research",
-       "embedding": np.random.rand(384).astype(np.float32).tolist(),
+           "id": 1,
+           "title": "AI Research Paper",
+           "content": "Advanced artificial intelligence research",
+           "embedding": np.random.rand(384).astype(np.float32).tolist(),
        "metadata": '{"category": "research", "year": 2024}'
    })
 
@@ -195,8 +222,65 @@ Advanced Vector Search
        query_vector=query_vector,
        limit=5,
        distance_type="l2",
-       where_clause="JSON_EXTRACT(metadata, '$.category') = 'research'"
+       where_conditions=["JSON_EXTRACT(metadata, '$.category') = ?"],
+       where_params=["research"]
    )
+
+Complex Vector Queries with Query Builder
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For complex vector queries, use the query builder with vector functions:
+
+.. code-block:: python
+
+   # Complex vector query with JOIN
+   result = client.query("documents d").select(
+       "d.id", "d.title", "d.content",
+       "l2_distance(d.embedding, ?) as distance"
+   ).join(
+       "categories c", "d.category_id = c.id"
+   ).where(
+       "l2_distance(d.embedding, ?) < ?", 
+       (query_vector, query_vector, 0.5)
+   ).and_where(
+       "c.name = ?", "AI"
+   ).order_by(
+       "l2_distance(d.embedding, ?)", query_vector
+   ).limit(10).execute()
+
+   # Vector query with CTE (Common Table Expression)
+   result = client.query().select("*").from_(
+       """
+       WITH similar_docs AS (
+           SELECT id, title, l2_distance(embedding, ?) as distance
+           FROM documents
+           WHERE l2_distance(embedding, ?) < ?
+           ORDER BY distance
+           LIMIT 20
+       )
+       SELECT sd.*, d.content
+       FROM similar_docs sd
+       JOIN documents d ON sd.id = d.id
+       """, (query_vector, query_vector, 0.8)
+   ).execute()
+
+   # Vector query with aggregation
+   result = client.query("documents").select(
+       "category",
+       "COUNT(*) as doc_count",
+       "AVG(l2_distance(embedding, ?)) as avg_distance"
+   ).where(
+       "l2_distance(embedding, ?) < ?",
+       (query_vector, query_vector, 1.0)
+   ).group_by("category").having(
+       "COUNT(*) > ?", 5
+   ).execute()
+
+   # Vector query with subquery
+   result = client.query("documents").select("*").where(
+       "id IN (SELECT id FROM documents WHERE l2_distance(embedding, ?) < ? ORDER BY l2_distance(embedding, ?) LIMIT 10)",
+       (query_vector, 0.5, query_vector)
+   ).execute()
 
 Async Vector Operations
 ~~~~~~~~~~~~~~~~~~~~~~~

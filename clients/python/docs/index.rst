@@ -80,7 +80,7 @@ Quick Start
    }, primary_key="id")
 
    # Create vector index
-   client.vector.create_hnsw(
+   client.vector_ops.create_hnsw(
        table_name="documents",
        name="idx_embedding",
        column="embedding",
@@ -96,12 +96,12 @@ Quick Start
    })
 
    # Vector similarity search
-   results = client.vector_query.similarity_search(
+   results = client.vector_ops.similarity_search(
        table_name="documents",
        vector_column="embedding",
        query_vector=[0.1, 0.2, 0.3] * 128,
        limit=5,
-       distance_function="cosine"
+       distance_type="cosine"
    )
 
    # Get backend version (auto-detected)

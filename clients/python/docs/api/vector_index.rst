@@ -52,7 +52,7 @@ Basic Vector Index Creation
 
     # Create HNSW vector index
     config = HNSWConfig(m=16, ef_construction=200)
-    client.vector_index.create(
+    client.vector_ops.create(
         table_name='embeddings',
         name='idx_embedding',
         column='embedding',
@@ -77,7 +77,7 @@ Advanced Vector Operations
 
     # Create IVF vector index
     config = IVFConfig(nlist=100, nprobe=10)
-    client.vector_index.create(
+    client.vector_ops.create(
         table_name='embeddings',
         name='idx_ivf',
         column='embedding',
@@ -156,17 +156,17 @@ Vector Index Management
 .. code-block:: python
 
     # List all vector indexes
-    indexes = client.vector_index.list()
+    indexes = client.vector_ops.list()
     for idx in indexes:
         print(f"Index: {idx.name}, Table: {idx.table_name}")
 
     # Get index information
-    info = client.vector_index.get('idx_embedding')
+    info = client.vector_ops.get('idx_embedding')
     print(f"Index algorithm: {info.algorithm}")
     print(f"Index config: {info.config}")
 
     # Drop vector index
-    client.vector_index.drop('idx_embedding')
+    client.vector_ops.drop('idx_embedding')
 
     # Rebuild index
-    client.vector_index.rebuild('idx_embedding')
+    client.vector_ops.rebuild('idx_embedding')

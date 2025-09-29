@@ -3,13 +3,15 @@ Quick Start
 
 This guide will help you get started with the MatrixOne Python SDK quickly using modern API patterns, vector search, fulltext search, and enhanced query building capabilities.
 
-Basic Usage with Modern API
-----------------------------
+Basic Usage with Table Models and Modern API
+----------------------------------------------
 
 .. code-block:: python
 
    from matrixone import Client
    from matrixone.config import get_connection_params, print_config
+   from sqlalchemy import Column, Integer, String, DateTime
+   from sqlalchemy.ext.declarative import declarative_base
 
    # Print connection configuration (reads from environment variables)
    print_config()
@@ -21,13 +23,18 @@ Basic Usage with Modern API
    client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create table using modern API
-   client.create_table("users", {
-       "id": "int",
-       "name": "varchar(100)",
-       "email": "varchar(200)",
-       "created_at": "datetime"
-   }, primary_key="id")
+   # Define table model
+   Base = declarative_base()
+   
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       email = Column(String(200))
+       created_at = Column(DateTime)
+
+   # Create table using model
+   client.create_table(User)
 
    # Insert data using insert API
    client.insert("users", {
@@ -37,7 +44,11 @@ Basic Usage with Modern API
        "created_at": "2024-01-01 10:00:00"
    })
 
-   # Query data using query API
+   # Simple query using execute API
+   result = client.execute("SELECT * FROM users WHERE id = ?", (1,))
+   print(result.fetchall())
+
+   # Complex query using query builder
    result = client.query("users").select("*").where("id = ?", 1).execute()
    print(result.fetchall())
 
@@ -52,14 +63,16 @@ Basic Usage with Modern API
 
    client.disconnect()
 
-Async Usage with Modern API
----------------------------
+Async Usage with Table Models and Modern API
+----------------------------------------------
 
 .. code-block:: python
 
    import asyncio
    from matrixone import AsyncClient
    from matrixone.config import get_connection_params
+   from sqlalchemy import Column, Integer, String, DECIMAL
+   from sqlalchemy.ext.declarative import declarative_base
 
    async def async_quickstart():
        # Get connection parameters
@@ -68,13 +81,18 @@ Async Usage with Modern API
        client = AsyncClient()
        await client.connect(host=host, port=port, user=user, password=password, database=database)
        
-       # Create table using async create_table API
-       await client.create_table("products", {
-           "id": "int",
-           "name": "varchar(200)",
-           "price": "decimal(10,2)",
-           "category": "varchar(50)"
-       }, primary_key="id")
+       # Define table model
+       Base = declarative_base()
+       
+       class Product(Base):
+           __tablename__ = 'products'
+           id = Column(Integer, primary_key=True)
+           name = Column(String(200))
+           price = Column(DECIMAL(10, 2))
+           category = Column(String(50))
+       
+       # Create table using model
+       await client.create_table(Product)
        
        # Insert data using async insert API
        await client.insert("products", {
@@ -84,7 +102,13 @@ Async Usage with Modern API
            "category": "Electronics"
        })
        
-       # Query data using async query API
+       # Simple query using async execute API
+       result = await client.execute("SELECT * FROM products WHERE category = ?", ("Electronics",))
+       rows = result.fetchall()
+       for row in rows:
+           print(f"Product: {row[1]}, Price: ${row[2]}")
+       
+       # Complex query using async query builder
        result = await client.query("products").select("*").where("category = ?", "Electronics").execute()
        rows = result.fetchall()
        for row in rows:
@@ -102,6 +126,135 @@ Async Usage with Modern API
        await client.disconnect()
 
    asyncio.run(async_quickstart())
+
+Vector Operations with Table Models
+------------------------------------
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+   from sqlalchemy import Column, Integer, String, Text
+   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.sqlalchemy_ext import Vectorf32
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Define vector table model
+   Base = declarative_base()
+   
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(Integer, primary_key=True)
+       title = Column(String(200))
+       content = Column(Text)
+       embedding = Column(Vectorf32(384))  # 384-dimensional vector
+
+   # Create table using model
+   client.create_table(Document)
+
+   # Insert vector data
+   client.insert("documents", {
+       "id": 1,
+       "title": "Introduction to AI",
+       "content": "Artificial Intelligence is a field of computer science...",
+       "embedding": [0.1] * 384  # Example 384-dimensional vector
+   })
+
+   # Enable IVF indexing
+   client.vector_ops.enable_ivf()
+
+   # Create IVF index
+   client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=100)
+
+   # Vector similarity search using simple interface
+   query_vector = [0.1] * 384
+   results = client.vector_ops.similarity_search(
+       table_name="documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=5,
+       distance_type="l2"
+   )
+   print("Similarity search results:", results)
+
+   # Complex vector query using query builder
+   result = client.query("documents").select("*").where(
+       "l2_distance(embedding, ?) < ?", 
+       (query_vector, 0.5)
+   ).order_by("l2_distance(embedding, ?)", query_vector).limit(10).execute()
+   
+   for row in result.fetchall():
+       print(f"Document: {row[1]}, Distance: {row[3]}")
+
+   # Drop vector index
+   client.vector_ops.drop("documents", "idx_embedding")
+
+   # Clean up
+   client.drop_table("documents")
+   client.disconnect()
+
+HNSW Vector Indexing
+--------------------
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+   from sqlalchemy import Column, Integer, String
+   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.sqlalchemy_ext import Vectorf32
+
+   # Get connection parameters
+   host, port, user, password, database = get_connection_params()
+   client = Client()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+
+   # Define vector table model
+   Base = declarative_base()
+   
+   class Product(Base):
+       __tablename__ = 'products'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(200))
+       features = Column(Vectorf32(128))  # 128-dimensional feature vector
+
+   # Create table using model
+   client.create_table(Product)
+
+   # Insert vector data
+   client.insert("products", {
+       "id": 1,
+       "name": "Smartphone",
+       "features": [0.2] * 128  # Example 128-dimensional vector
+   })
+
+   # Enable HNSW indexing
+   client.vector_ops.enable_hnsw()
+
+   # Create HNSW index
+   client.vector_ops.create_hnsw("products", "idx_features", "features", m=16, ef_construction=200)
+
+   # Vector similarity search
+   query_vector = [0.2] * 128
+   results = client.vector_ops.similarity_search(
+       table_name="products",
+       vector_column="features",
+       query_vector=query_vector,
+       limit=5,
+       distance_type="cosine"
+   )
+   print("HNSW similarity search results:", results)
+
+   # Drop vector index
+   client.vector_ops.drop("products", "idx_features")
+
+   # Clean up
+   client.drop_table("products")
+   client.disconnect()
 
 ORM with Modern Patterns
 ------------------------

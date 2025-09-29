@@ -13,7 +13,55 @@ if TYPE_CHECKING:
 
 
 class AsyncVectorManager:
-    """Unified async vector manager for client chain operations - handles both index and data operations"""
+    """
+    Unified async vector manager for MatrixOne vector operations and chain operations.
+
+    This class provides comprehensive asynchronous vector functionality including vector table
+    creation, vector indexing, vector data operations, and vector similarity search.
+    It supports both IVF (Inverted File) and HNSW (Hierarchical Navigable Small World)
+    indexing algorithms for efficient vector similarity search.
+
+    Key Features:
+    - Async vector table creation with configurable dimensions and precision
+    - Async vector index creation and management (IVF, HNSW)
+    - Async vector data insertion and batch operations
+    - Async vector similarity search with multiple distance metrics
+    - Async vector range search for distance-based filtering
+    - Integration with MatrixOne's vector capabilities
+    - Support for both f32 and f64 vector precision
+
+    Supported Index Types:
+    - IVF (Inverted File): Good for large datasets, requires training
+    - HNSW: Good for high-dimensional vectors, no training required
+
+    Supported Distance Metrics:
+    - L2 (Euclidean) distance: Standard Euclidean distance
+    - Cosine similarity: Cosine of the angle between vectors
+    - Inner product: Dot product of vectors
+
+    Usage Examples:
+        # Initialize async vector manager
+        vector_ops = client.vector_ops
+        
+        # Create vector table
+        await vector_ops.create_table("documents", {
+            "id": "int primary key",
+            "content": "text",
+            "embedding": "vecf32(384)"
+        })
+        
+        # Create vector index
+        await vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=100)
+        
+        # Vector similarity search
+        results = await vector_ops.similarity_search(
+            table_name="documents",
+            vector_column="embedding",
+            query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
+            limit=10,
+            distance_type="l2"
+        )
+    """
 
     def __init__(self, client):
         self.client = client

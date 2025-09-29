@@ -77,7 +77,7 @@ The MatrixOne Python SDK provides high-level APIs that are more maintainable, ty
 .. code-block:: python
 
    # ✅ Good: Use vector operations API
-   client.vector.create_hnsw(
+   client.vector_ops.create_hnsw(
        table_name="documents",
        name="idx_embedding",
        column="embedding",
@@ -85,12 +85,12 @@ The MatrixOne Python SDK provides high-level APIs that are more maintainable, ty
        ef_construction=200
    )
 
-   results = client.vector_query.similarity_search(
+   results = client.vector_ops.similarity_search(
        table_name="documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
-       distance_function="cosine"
+       distance_type="cosine"
    )
 
    # ✅ Good: Use fulltext search API
@@ -652,7 +652,7 @@ The `query_vector` parameter in vector search functions supports multiple format
    query_vector_list = np.random.rand(384).tolist()  # [0.1, 0.2, 0.3, ...]
    
    # Use in vector search
-   results = client.vector_query.similarity_search(
+   results = client.vector_ops.similarity_search(
    table_name='documents',
    vector_column='embedding',
    query_vector=query_vector_list,  # List format
@@ -668,7 +668,7 @@ The `query_vector` parameter in vector search functions supports multiple format
    query_vector_str = str(query_vector_list)  # '[0.1, 0.2, 0.3, ...]'
    
    # Use in vector search
-   results = client.vector_query.similarity_search(
+   results = client.vector_ops.similarity_search(
        table_name='documents',
        vector_column='embedding',
        query_vector=query_vector_str,  # String format
@@ -740,10 +740,10 @@ Index Configuration
        def setup_vector_indexes(self):
            """Setup optimized vector indexes"""
            # Enable vector indexing
-           self.client.vector_index.enable_ivf()
+           self.client.vector_ops.enable_ivf()
            
            # Create IVF index for large datasets
-           self.client.vector_index.create_ivf(
+           self.client.vector_ops.create_ivf(
                table_name='documents',
                name='idx_documents_embedding_ivf',
                column='embedding',
@@ -752,10 +752,10 @@ Index Configuration
            )
            
            # Enable HNSW for high-accuracy searches
-           self.client.vector_index.enable_hnsw()
+           self.client.vector_ops.enable_hnsw()
            
            # Create HNSW index for high-accuracy searches
-           self.client.vector_index.create_hnsw(
+           self.client.vector_ops.create_hnsw(
                table_name='documents',
                name='idx_documents_embedding_hnsw',
                column='embedding',
@@ -769,7 +769,7 @@ Index Configuration
            """Search documents with different index types"""
            if search_type == 'ivf':
                # Fast search with IVF
-               results = self.client.vector_query.similarity_search(
+               results = self.client.vector_ops.similarity_search(
                    table_name='documents',
                    vector_column='embedding',
                    query_vector=query_vector,
@@ -778,7 +778,7 @@ Index Configuration
                )
            elif search_type == 'hnsw':
                # High-accuracy search with HNSW
-               results = self.client.vector_query.similarity_search(
+               results = self.client.vector_ops.similarity_search(
                    table_name='documents',
                    vector_column='embedding',
                    query_vector=query_vector,
@@ -1318,7 +1318,7 @@ Test Database Setup
        session.close()
        
        # Test vector search using client interface
-       results = test_client.vector_query.similarity_search(
+       results = test_client.vector_ops.similarity_search(
            table_name='documents',
            vector_column='embedding',
            query_vector=[0.1, 0.2, 0.3] + [0.0] * 381,

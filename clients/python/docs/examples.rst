@@ -34,21 +34,38 @@ Connection and Basic Operations
 
    client.disconnect()
 
-Table Management with Modern API
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Table Management with Table Models and Modern API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from matrixone import Client
    from matrixone.config import get_connection_params
+   from sqlalchemy import Column, Integer, String, DECIMAL, Text, DateTime
+   from sqlalchemy.ext.declarative import declarative_base
 
    # Get connection parameters
    host, port, user, password, database = get_connection_params()
    client = Client()
    client.connect(host=host, port=port, user=user, password=password, database=database)
 
-   # Create table using create_table API
-   client.create_table("products", {
+   # Define table model
+   Base = declarative_base()
+
+   class Product(Base):
+       __tablename__ = 'products'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(200))
+       category = Column(String(50))
+       price = Column(DECIMAL(10, 2))
+       description = Column(Text)
+       created_at = Column(DateTime)
+
+   # Create table using model
+   client.create_table(Product)
+
+   # Alternative: Create table using create_table API with column definitions
+   client.create_table("products_alt", {
        "id": "int",
        "name": "varchar(200)",
        "category": "varchar(50)",
@@ -74,9 +91,15 @@ Table Management with Modern API
    ]
    client.batch_insert("products", products)
 
-   # Query data using query API
+   # Simple query using execute API
+   result = client.execute("SELECT * FROM products WHERE category = ?", ("Electronics",))
+   print("Electronics products (simple query):")
+   for row in result.fetchall():
+       print(f"  {row[1]} - ${row[3]}")
+
+   # Complex query using query builder
    result = client.query("products").select("*").where("category = ?", "Electronics").execute()
-   print("Electronics products:")
+   print("Electronics products (query builder):")
    for row in result.fetchall():
        print(f"  {row[1]} - ${row[3]}")
 
@@ -88,6 +111,7 @@ Table Management with Modern API
 
    # Drop table using drop_table API
    client.drop_table("products")
+   client.drop_table("products_alt")
 
    client.disconnect()
 
@@ -237,6 +261,166 @@ ORM Examples with Modern API
        client.disconnect()
 
    orm_example()
+
+Complex Query Examples with Query Builder
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+   from sqlalchemy import Column, Integer, String, DECIMAL, DateTime, ForeignKey
+   from sqlalchemy.ext.declarative import declarative_base
+
+   def complex_query_examples():
+       # Get connection parameters
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Define table models
+       Base = declarative_base()
+
+       class Customer(Base):
+           __tablename__ = 'customers'
+           id = Column(Integer, primary_key=True)
+           name = Column(String(100))
+           email = Column(String(200))
+           city = Column(String(50))
+
+       class Order(Base):
+           __tablename__ = 'orders'
+           id = Column(Integer, primary_key=True)
+           customer_id = Column(Integer, ForeignKey('customers.id'))
+           total = Column(DECIMAL(10, 2))
+           status = Column(String(20))
+           created_at = Column(DateTime)
+
+       class Product(Base):
+           __tablename__ = 'products'
+           id = Column(Integer, primary_key=True)
+           name = Column(String(200))
+           price = Column(DECIMAL(10, 2))
+           category = Column(String(50))
+
+       # Create tables
+       client.create_table(Customer)
+       client.create_table(Order)
+       client.create_table(Product)
+
+       # Insert sample data
+       client.batch_insert("customers", [
+           {"id": 1, "name": "Alice Johnson", "email": "alice@example.com", "city": "New York"},
+           {"id": 2, "name": "Bob Smith", "email": "bob@example.com", "city": "Los Angeles"},
+           {"id": 3, "name": "Charlie Brown", "email": "charlie@example.com", "city": "Chicago"}
+       ])
+
+       client.batch_insert("orders", [
+           {"id": 1, "customer_id": 1, "total": 199.99, "status": "completed", "created_at": "2024-01-01 10:00:00"},
+           {"id": 2, "customer_id": 2, "total": 299.99, "status": "pending", "created_at": "2024-01-02 11:00:00"},
+           {"id": 3, "customer_id": 1, "total": 149.99, "status": "completed", "created_at": "2024-01-03 12:00:00"}
+       ])
+
+       client.batch_insert("products", [
+           {"id": 1, "name": "Laptop", "price": 999.99, "category": "Electronics"},
+           {"id": 2, "name": "Phone", "price": 699.99, "category": "Electronics"},
+           {"id": 3, "name": "Book", "price": 29.99, "category": "Education"}
+       ])
+
+       # 1. JOIN query with aggregation
+       result = client.query("customers c").select(
+           "c.name", "c.city", "COUNT(o.id) as order_count", "SUM(o.total) as total_spent"
+       ).join(
+           "orders o", "c.id = o.customer_id"
+       ).where(
+           "o.status = ?", "completed"
+       ).group_by(
+           "c.id", "c.name", "c.city"
+       ).having(
+           "COUNT(o.id) > ?", 0
+       ).order_by(
+           "total_spent DESC"
+       ).execute()
+
+       print("Customer order summary:")
+       for row in result.fetchall():
+           print(f"  {row[0]} ({row[1]}): {row[2]} orders, ${row[3]}")
+
+       # 2. CTE (Common Table Expression) query
+       result = client.query().select("*").from_(
+           """
+           WITH customer_stats AS (
+               SELECT 
+                   c.id,
+                   c.name,
+                   COUNT(o.id) as order_count,
+                   AVG(o.total) as avg_order_value
+               FROM customers c
+               LEFT JOIN orders o ON c.id = o.customer_id
+               GROUP BY c.id, c.name
+           )
+           SELECT 
+               name,
+               order_count,
+               avg_order_value,
+               CASE 
+                   WHEN order_count = 0 THEN 'No orders'
+                   WHEN avg_order_value > 200 THEN 'High value'
+                   ELSE 'Regular'
+               END as customer_type
+           FROM customer_stats
+           ORDER BY avg_order_value DESC
+           """
+       ).execute()
+
+       print("\nCustomer analysis:")
+       for row in result.fetchall():
+           print(f"  {row[0]}: {row[1]} orders, avg ${row[2]:.2f} ({row[3]})")
+
+       # 3. Subquery with EXISTS
+       result = client.query("customers c").select(
+           "c.name", "c.email"
+       ).where(
+           "EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = ?)",
+           "completed"
+       ).execute()
+
+       print("\nCustomers with completed orders:")
+       for row in result.fetchall():
+           print(f"  {row[0]} - {row[1]}")
+
+       # 4. Complex UPDATE with JOIN
+       client.query("orders o").update(
+           {"status": "processing"}
+       ).join(
+           "customers c", "o.customer_id = c.id"
+       ).where(
+           "c.city = ? AND o.status = ?", ("New York", "pending")
+       ).execute()
+
+       # 5. Complex DELETE with subquery
+       client.query("orders").where(
+           "id IN (SELECT o.id FROM orders o JOIN customers c ON o.customer_id = c.id WHERE c.city = ?)",
+           "Chicago"
+       ).delete()
+
+       # 6. Window functions (if supported)
+       result = client.query("orders o").select(
+           "o.id", "o.customer_id", "o.total",
+           "ROW_NUMBER() OVER (PARTITION BY o.customer_id ORDER BY o.total DESC) as rank"
+       ).execute()
+
+       print("\nOrder ranking by customer:")
+       for row in result.fetchall():
+           print(f"  Order {row[0]} (Customer {row[1]}): ${row[2]} (Rank: {row[3]})")
+
+       # Clean up
+       client.drop_table(Product)
+       client.drop_table(Order)
+       client.drop_table(Customer)
+       client.disconnect()
+
+   complex_query_examples()
 
 Vector Search Examples
 ~~~~~~~~~~~~~~~~~~~~~~
