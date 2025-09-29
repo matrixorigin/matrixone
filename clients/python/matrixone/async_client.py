@@ -1931,17 +1931,25 @@ class AsyncClient(BaseMatrixOneClient):
         executor = AsyncClientExecutor(self)
         return await executor.insert(table_name, data)
 
-    async def batch_insert(self, table_name: str, data_list: list) -> "AsyncResultSet":
+    async def batch_insert(self, table_name_or_model, data_list: list) -> "AsyncResultSet":
         """
         Batch insert data into a table asynchronously.
 
         Args:
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data_list: List of data dictionaries to insert
 
         Returns:
             AsyncResultSet object
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         executor = AsyncClientExecutor(self)
         return await executor.batch_insert(table_name, data_list)
 
@@ -2128,13 +2136,13 @@ class AsyncClient(BaseMatrixOneClient):
         if self.connected():
             await self.disconnect()
 
-    async def create_table(self, table_name: str, columns: dict, **kwargs) -> "AsyncClient":
+    async def create_table(self, table_name_or_model, columns: dict = None, **kwargs) -> "AsyncClient":
         """
         Create a table asynchronously
 
         Args:
-            table_name: Name of the table to create
-            columns: Dictionary mapping column names to their definitions
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            columns: Dictionary mapping column names to their definitions (required if table_name_or_model is str)
             **kwargs: Additional table creation options
 
         Returns:
@@ -2150,6 +2158,21 @@ class AsyncClient(BaseMatrixOneClient):
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            model_class = table_name_or_model
+            table_name = model_class.__tablename__
+            # Use SQLAlchemy metadata to create table
+            async with self._engine.begin() as conn:
+                await conn.run_sync(model_class.__table__.create)
+            return self
+
+        # It's a table name string
+        table_name = table_name_or_model
+        if columns is None:
+            raise ValueError("columns parameter is required when table_name_or_model is a string")
+
         # Build CREATE TABLE SQL
         column_definitions = []
         for column_name, column_def in columns.items():
@@ -2160,12 +2183,12 @@ class AsyncClient(BaseMatrixOneClient):
         await self.execute(sql)
         return self
 
-    async def drop_table(self, table_name: str) -> "AsyncClient":
+    async def drop_table(self, table_name_or_model) -> "AsyncClient":
         """
         Drop a table asynchronously
 
         Args:
-            table_name: Name of the table to drop
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
 
         Returns:
             AsyncClient: Self for chaining
@@ -2175,6 +2198,14 @@ class AsyncClient(BaseMatrixOneClient):
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
 
         sql = f"DROP TABLE IF EXISTS {table_name}"
         await self.execute(sql)

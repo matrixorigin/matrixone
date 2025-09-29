@@ -273,39 +273,44 @@ class TestSQLAlchemyIntegration:
 
     @pytest.mark.asyncio
     async def test_async_sqlalchemy_operations(self, test_async_client):
-        """Test async SQLAlchemy operations"""
+        """Test async SQLAlchemy operations using models"""
+        # Create independent Base and models for this test
+        Base = declarative_base()
+
+        class AsyncUser(Base):
+            __tablename__ = 'async_users'
+
+            id = Column(Integer, primary_key=True, autoincrement=True)
+            username = Column(String(50), nullable=False)
+            email = Column(String(100), nullable=False)
+
         try:
-            # Test async CRUD operations using raw SQL
-            await test_async_client.execute(
-                "CREATE TABLE IF NOT EXISTS async_users (id INT PRIMARY KEY AUTO_INCREMENT, username VARCHAR(50), email VARCHAR(100))"
-            )
+            # Create table using model
+            await test_async_client.create_table(AsyncUser)
 
-            # Clear any existing data
-            await test_async_client.execute("DELETE FROM async_users")
+            # Clear any existing data using model
+            await test_async_client.query(AsyncUser).delete()
 
-            # Insert user
-            await test_async_client.execute(
-                "INSERT INTO async_users (username, email) VALUES ('async_user', 'async@example.com')"
-            )
+            # Insert user using model
+            await test_async_client.batch_insert(AsyncUser, [{"username": "async_user", "email": "async@example.com"}])
 
-            # Query user
-            result = await test_async_client.execute("SELECT * FROM async_users WHERE username = 'async_user'")
-            assert result is not None
-            assert len(result.rows) > 0
-            assert result.rows[0][1] == "async_user"  # username column
+            # Query user using model
+            users = await test_async_client.query(AsyncUser).filter(AsyncUser.username == "async_user").all()
+            assert len(users) > 0
+            assert users[0].username == "async_user"
 
-            # Update user
-            await test_async_client.execute(
-                "UPDATE async_users SET email = 'updated_async@example.com' WHERE username = 'async_user'"
-            )
+            # Update user using model
+            await test_async_client.query(AsyncUser).filter(AsyncUser.username == "async_user").update(
+                email="updated_async@example.com"
+            ).execute()
 
-            # Verify update
-            result = await test_async_client.execute("SELECT email FROM async_users WHERE username = 'async_user'")
-            assert result.rows[0][0] == "updated_async@example.com"
+            # Verify update using model
+            updated_user = await test_async_client.query(AsyncUser).filter(AsyncUser.username == "async_user").first()
+            assert updated_user.email == "updated_async@example.com"
 
         finally:
-            # Cleanup
-            await test_async_client.execute("DROP TABLE IF EXISTS async_users")
+            # Cleanup using model
+            await test_async_client.drop_table(AsyncUser)
 
     def test_sqlalchemy_with_matrixone_features(self, test_client):
         """Test SQLAlchemy with MatrixOne-specific features"""

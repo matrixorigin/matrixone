@@ -130,8 +130,8 @@ def demo_simple_updates():
     finally:
         # Clean up
         try:
-            client.execute("DROP TABLE IF EXISTS example_users_update")
-            client.execute("DROP TABLE IF EXISTS example_products_update")
+            client.drop_table(User)
+            client.drop_table(Product)
         except Exception as e:
             print(f"Warning: Failed to clean up tables: {e}")
         client.disconnect()
@@ -200,8 +200,8 @@ def demo_sqlalchemy_expressions():
     finally:
         # Clean up
         try:
-            client.execute("DROP TABLE IF EXISTS example_users_update")
-            client.execute("DROP TABLE IF EXISTS example_products_update")
+            client.drop_table(User)
+            client.drop_table(Product)
         except Exception as e:
             print(f"Warning: Failed to clean up tables: {e}")
         client.disconnect()
@@ -256,8 +256,8 @@ def demo_update_with_explain():
     finally:
         # Clean up
         try:
-            client.execute("DROP TABLE IF EXISTS example_users_update")
-            client.execute("DROP TABLE IF EXISTS example_products_update")
+            client.drop_table(User)
+            client.drop_table(Product)
         except Exception as e:
             print(f"Warning: Failed to clean up tables: {e}")
         client.disconnect()
@@ -335,8 +335,8 @@ def demo_update_with_transactions():
     finally:
         # Clean up
         try:
-            client.execute("DROP TABLE IF EXISTS example_users_update")
-            client.execute("DROP TABLE IF EXISTS example_products_update")
+            client.drop_table(User)
+            client.drop_table(Product)
         except Exception as e:
             print(f"Warning: Failed to clean up tables: {e}")
         client.disconnect()

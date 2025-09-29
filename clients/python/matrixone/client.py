@@ -689,7 +689,7 @@ class Client(BaseMatrixOneClient):
         sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
         return await self.execute_async(sql)
 
-    def batch_insert(self, table_name: str, data_list: list) -> "ResultSet":
+    def batch_insert(self, table_name_or_model, data_list: list) -> "ResultSet":
         """
         Batch insert multiple rows of data into a table.
 
@@ -698,7 +698,7 @@ class Client(BaseMatrixOneClient):
         must have the same column structure.
 
         Args:
-            table_name (str): Name of the target table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data_list (list): List of dictionaries, where each dictionary represents
                             a row to insert. All dictionaries must have the same keys.
                             Example: [
@@ -735,6 +735,14 @@ class Client(BaseMatrixOneClient):
             ... ]
             >>> result = client.batch_insert('products', products)
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
 
@@ -1304,13 +1312,13 @@ class Client(BaseMatrixOneClient):
     def __enter__(self):
         return self
 
-    def create_table(self, table_name: str, columns: dict, **kwargs) -> "Client":
+    def create_table(self, table_name_or_model, columns: dict = None, **kwargs) -> "Client":
         """
         Create a table with a simplified interface.
 
         Args:
-            table_name: Name of the table
-            columns: Dictionary mapping column names to their types
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            columns: Dictionary mapping column names to their types (required if table_name_or_model is str)
                     Supported formats:
                     - 'id': 'bigint' (with primary_key=True if needed)
                     - 'name': 'varchar(100)'
@@ -1336,6 +1344,20 @@ class Client(BaseMatrixOneClient):
             }, primary_key='id')
         """
         from .sqlalchemy_ext import VectorTableBuilder
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            model_class = table_name_or_model
+            table_name = model_class.__tablename__
+            # Use SQLAlchemy metadata to create table
+            model_class.__table__.create(self.get_sqlalchemy_engine())
+            return self
+
+        # It's a table name string
+        table_name = table_name_or_model
+        if columns is None:
+            raise ValueError("columns parameter is required when table_name_or_model is a string")
 
         # Parse primary key from kwargs
         primary_key = kwargs.get("primary_key", None)
@@ -1577,17 +1599,25 @@ class Client(BaseMatrixOneClient):
 
         return self
 
-    def drop_table(self, table_name: str) -> "Client":
+    def drop_table(self, table_name_or_model) -> "Client":
         """
         Drop a table.
 
         Args:
-            table_name: Name of the table to drop
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
 
         Returns:
             Client: Self for chaining
         """
         from sqlalchemy import text
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
 
         with self.get_sqlalchemy_engine().begin() as conn:
             conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))

@@ -79,7 +79,7 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 client.execute("CREATE DATABASE IF NOT EXISTS sqlalchemy_orm_test")
                 client.execute("USE sqlalchemy_orm_test")
-                client.execute("DROP TABLE IF EXISTS products")
+                client.drop_table(Product)
 
                 # Create table using ORM
                 Base.metadata.create_all(client._engine)
@@ -138,7 +138,7 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 await client.execute("CREATE DATABASE IF NOT EXISTS async_sqlalchemy_orm_test")
                 await client.execute("USE async_sqlalchemy_orm_test")
-                await client.execute("DROP TABLE IF EXISTS orders")
+                await client.drop_table(Order)
 
                 # Create table using ORM
                 async with client._engine.begin() as conn:
@@ -198,7 +198,7 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 client.execute("CREATE DATABASE IF NOT EXISTS orm_query_methods_test")
                 client.execute("USE orm_query_methods_test")
-                client.execute("DROP TABLE IF EXISTS products")
+                client.drop_table(Product)
 
                 # Create table using ORM
                 Base.metadata.create_all(client._engine)
@@ -264,8 +264,8 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 client.execute("CREATE DATABASE IF NOT EXISTS orm_snapshots_test")
                 client.execute("USE orm_snapshots_test")
-                client.execute("DROP TABLE IF EXISTS products")
-                client.execute("DROP TABLE IF EXISTS orders")
+                client.drop_table(Product)
+                client.drop_table(Order)
 
                 # Create table using ORM
                 Base.metadata.create_all(client._engine)
