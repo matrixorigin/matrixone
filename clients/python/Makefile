@@ -1,9 +1,23 @@
+# Copyright 2021 - 2022 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # MatrixOne Python SDK Makefile
 # Provides unified commands for development, testing, building and publishing
 
 # Configuration variables
 PYTHON ?= python3
-PIP ?= pip
+PIP ?= $(PYTHON) -m pip
 PACKAGE_NAME := matrixone_python_sdk
 VERSION := $(shell grep '^version' pyproject.toml | cut -d'"' -f2)
 BUILD_DIR := dist
@@ -53,6 +67,13 @@ help: ## Show help information
 	@echo "$(YELLOW)Python path: $(PYTHON)$(NC)"
 
 # Environment check
+.PHONY: install-dev
+install-dev: ## Install development dependencies including build tools
+	@echo "$(BLUE)Checking development dependencies...$(NC)"
+	@$(PYTHON) -c "import build" 2>/dev/null && echo "$(GREEN)✓ build module available$(NC)" || (echo "$(RED)✗ build module not found$(NC)" && echo "$(YELLOW)Please install with: pip install build twine$(NC)" && exit 1)
+	@$(PYTHON) -c "import twine" 2>/dev/null && echo "$(GREEN)✓ twine module available$(NC)" || (echo "$(RED)✗ twine module not found$(NC)" && echo "$(YELLOW)Please install with: pip install build twine$(NC)" && exit 1)
+	@echo "$(GREEN)All development dependencies are available!$(NC)"
+
 .PHONY: check-env
 check-env: ## Check if environment meets testing requirements
 	@echo "$(BLUE)Checking MatrixOne Python SDK test environment...$(NC)"
@@ -317,13 +338,13 @@ build-release: clean ## Build release package (with user README)
 	@echo "$(GREEN)Release package built! Output directory: $(BUILD_DIR)/$(NC)"
 
 .PHONY: publish-test
-publish-test: build ## Publish to test PyPI
+publish-test: install-dev build ## Publish to test PyPI
 	@echo "$(BLUE)Publishing to test PyPI...$(NC)"
 	$(PYTHON) -m twine upload --repository testpypi $(BUILD_DIR)/*
 	@echo "$(GREEN)Published to test PyPI!$(NC)"
 
 .PHONY: publish
-publish: build ## Publish to PyPI (official release)
+publish: install-dev build ## Publish to PyPI (official release)
 	@echo "$(BLUE)Publishing to PyPI...$(NC)"
 	@echo "$(RED)Warning: This will publish to official PyPI!$(NC)"
 	@read -p "Confirm publish to PyPI? (y/N): " confirm && [ "$$confirm" = "y" ]
@@ -340,14 +361,15 @@ version: ## Show current version
 	@echo "$(VERSION)"
 
 .PHONY: version-bump
-version-bump: ## Bump version (requires VERSION_TYPE=patch|minor|major)
+version-bump: ## Bump version (default: patch, or specify VERSION_TYPE=patch|minor|major)
 	@if [ -z "$(VERSION_TYPE)" ]; then \
-		echo "$(RED)Error: VERSION_TYPE must be set (patch|minor|major)$(NC)"; \
-		exit 1; \
+		echo "$(YELLOW)No VERSION_TYPE specified, defaulting to patch$(NC)"; \
+		$(PYTHON) scripts/update_version.py --increment patch; \
+	else \
+		echo "$(BLUE)Bumping $(VERSION_TYPE) version...$(NC)"; \
+		$(PYTHON) scripts/update_version.py --increment $(VERSION_TYPE); \
 	fi
-	@echo "$(BLUE)Bumping $(VERSION_TYPE) version...$(NC)"
-	@$(PYTHON) -c "import re; content=open('pyproject.toml').read(); new_content=re.sub(r'version = \"([^\"]+)\"', lambda m: f'version = \"{m.group(1).split(\".\")[0]}.{m.group(1).split(\".\")[1]}.{int(m.group(1).split(\".\")[2])+1}\"', content) if '$(VERSION_TYPE)' == 'patch' else content; open('pyproject.toml', 'w').write(new_content)"
-	@echo "$(GREEN)Version bumped!$(NC)"
+	@echo "$(GREEN)Version bumped! New version: $$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')$(NC)"
 
 .PHONY: version-check
 version-check: ## Check if version is ready for release

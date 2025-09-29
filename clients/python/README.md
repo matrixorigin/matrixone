@@ -7,6 +7,8 @@
 
 A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector search, fulltext search, snapshot management, PITR, restore operations, table cloning, and mo-ctl integration.
 
+> **Note**: This SDK implementation is generated and optimized through AI-assisted development, leveraging advanced code generation techniques to ensure comprehensive API coverage, type safety, and modern Python best practices.
+
 ## ✨ Features
 
 - 🚀 **High Performance**: Optimized for MatrixOne database operations
