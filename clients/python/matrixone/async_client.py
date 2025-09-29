@@ -1317,9 +1317,60 @@ class AsyncClientExecutor(BaseMatrixOneExecutor):
 
 class AsyncClient(BaseMatrixOneClient):
     """
-    MatrixOne Async Client
+    MatrixOne Async Client for asynchronous database operations.
 
-    Provides asynchronous connection and query functionality for MatrixOne database.
+    This class provides asynchronous connection and query functionality for MatrixOne
+    database, allowing non-blocking database operations in async/await contexts.
+    It mirrors the functionality of the synchronous Client class but with async methods.
+
+    Key Features:
+    - Asynchronous connection management
+    - Non-blocking query execution
+    - Async/await support for all operations
+    - Connection pooling with async support
+    - Transaction support with async context managers
+    - Integration with asyncio event loops
+
+    Supported Operations:
+    - Async connection and disconnection
+    - Async query execution (SELECT, INSERT, UPDATE, DELETE)
+    - Async batch operations
+    - Async transaction management
+    - Async table creation and management
+    - Async vector and fulltext operations
+
+    Usage Examples:
+        # Basic async usage
+        async def main():
+            client = AsyncClient()
+            await client.connect('localhost', 6001, 'root', '111', 'test')
+
+            # Async query execution
+            result = await client.execute("SELECT * FROM users WHERE age > ?", (25,))
+            for row in result.fetchall():
+                print(row)
+
+            # Async batch insert
+            users = [
+                {'name': 'John', 'age': 30},
+                {'name': 'Jane', 'age': 25}
+            ]
+            await client.batch_insert_async('users', users)
+
+            await client.disconnect()
+
+        # Async transaction usage
+        async def transaction_example():
+            client = AsyncClient()
+            await client.connect('localhost', 6001, 'root', '111', 'test')
+
+            async with client.transaction() as tx:
+                await tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+                await tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
+                # Transaction commits automatically on success
+
+    Note: This class requires asyncio and async database drivers. Use the synchronous
+    Client class for blocking operations or when async support is not needed.
     """
 
     def __init__(

@@ -96,7 +96,69 @@ class Subscription:
 
 
 class PubSubManager:
-    """Manager for Publish-Subscribe operations"""
+    """
+    Manager for Publish-Subscribe operations in MatrixOne.
+
+    This class provides comprehensive pub/sub functionality for real-time data
+    distribution and event-driven architectures. It supports creating publications
+    and subscriptions for database changes, enabling efficient data replication
+    and real-time updates across multiple systems.
+
+    Key Features:
+    - Database publication creation and management
+    - Subscription management for real-time updates
+    - Event-driven data distribution
+    - Integration with MatrixOne's replication system
+    - Support for both database and table-level publications
+    - Transaction-aware pub/sub operations
+
+    Supported Operations:
+    - Create and manage database publications
+    - Create and manage table publications
+    - Create and manage subscriptions
+    - List and query publications and subscriptions
+    - Monitor pub/sub status and performance
+
+    Usage Examples:
+        # Initialize pub/sub manager
+        pubsub = client.pubsub
+
+        # Create database publication
+        publication = pubsub.create_database_publication(
+            name='user_changes',
+            database='my_database',
+            account='my_account'
+        )
+
+        # Create table publication
+        publication = pubsub.create_table_publication(
+            name='user_updates',
+            database='my_database',
+            table='users',
+            account='my_account'
+        )
+
+        # Create subscription
+        subscription = pubsub.create_subscription(
+            name='user_subscription',
+            publication='user_changes',
+            target_database='replica_database',
+            account='my_account'
+        )
+
+        # List publications
+        publications = pubsub.list_publications()
+
+        # List subscriptions
+        subscriptions = pubsub.list_subscriptions()
+
+        # Get pub/sub status
+        status = pubsub.get_publication_status('user_changes')
+
+    Note: Pub/sub functionality requires MatrixOne version 1.0.0 or higher and
+    appropriate replication infrastructure. Pub/sub operations may impact
+    database performance and should be used judiciously.
+    """
 
     def __init__(self, client):
         """Initialize PubSubManager with client connection"""

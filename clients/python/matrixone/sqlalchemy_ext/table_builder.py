@@ -31,6 +31,45 @@ from .vector_type import Vectorf32, Vectorf64, VectorPrecision, VectorType
 class VectorTableBuilder:
     """
     Builder class for creating MatrixOne vector tables with SQLAlchemy.
+
+    This class provides a fluent interface for building vector tables with
+    proper column definitions, indexes, and constraints. It's designed to
+    work seamlessly with MatrixOne's vector capabilities and SQLAlchemy.
+
+    Key Features:
+    - Fluent method chaining for table definition
+    - Support for all MatrixOne column types including vectors
+    - Automatic vector index creation
+    - Constraint and foreign key support
+    - Integration with SQLAlchemy metadata
+
+    Supported Column Types:
+    - Standard types: Integer, String, Text, DateTime, etc.
+    - Vector types: Vectorf32, Vectorf64 with configurable dimensions
+    - MatrixOne-specific types: JSON, BLOB variants
+
+    Usage Examples:
+        # Create a simple vector table
+        builder = VectorTableBuilder('documents')
+        table = (builder
+                .add_int_column('id', primary_key=True)
+                .add_string_column('title', length=255)
+                .add_text_column('content')
+                .add_vector_column('embedding', Vectorf32(384))
+                .build())
+
+        # Create a complex table with indexes
+        builder = VectorTableBuilder('products')
+        table = (builder
+                .add_bigint_column('id', primary_key=True)
+                .add_string_column('name', length=100)
+                .add_numeric_column('price', precision=10, scale=2)
+                .add_vector_column('features', Vectorf64(512))
+                .add_vector_index('idx_features', 'features', 'ivfflat', lists=100)
+                .build())
+
+    Note: This builder is primarily used internally by the Client's table
+    creation methods, but can be used directly for advanced use cases.
     """
 
     def __init__(self, table_name: str, metadata: MetaData = None):

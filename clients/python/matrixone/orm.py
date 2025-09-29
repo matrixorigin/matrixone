@@ -50,7 +50,36 @@ __all__ = ["declarative_base", "Query", "MatrixOneQuery"]
 
 
 class Query:
-    """Query builder for ORM operations - SQLAlchemy style"""
+    """
+    Query builder for ORM operations with SQLAlchemy-style interface.
+
+    This class provides a fluent interface for building SQL queries in a way that
+    mimics SQLAlchemy's query builder. It supports both SQLAlchemy models and
+    custom MatrixOne models.
+
+    Key Features:
+    - Fluent method chaining for building complex queries
+    - Support for SELECT, INSERT, UPDATE, DELETE operations
+    - SQLAlchemy expression support in filter(), having(), and other methods
+    - Automatic SQL generation and parameter binding
+    - Snapshot support for point-in-time queries
+
+    Usage:
+        # Basic query building
+        query = client.query(User)
+        results = query.filter(User.age > 25).order_by(User.name).limit(10).all()
+
+        # Complex queries with joins and aggregations
+        query = client.query(User, func.count(Order.id).label('order_count'))
+        results = (query
+                  .join(Order, User.id == Order.user_id)
+                  .group_by(User.id)
+                  .having(func.count(Order.id) > 5)
+                  .all())
+
+    Note: This is the legacy query builder. For new code, consider using
+    MatrixOneQuery which provides enhanced SQLAlchemy compatibility.
+    """
 
     def __init__(self, model_class, client, snapshot_name: Optional[str] = None):
         self.model_class = model_class
@@ -849,7 +878,7 @@ class BaseMatrixOneQuery:
                         formatted_condition = formatted_condition.replace("?", str(param), 1)
 
             self._having_conditions.append(formatted_condition)
-        
+
         return self
 
     def snapshot(self, snapshot_name: str) -> "BaseMatrixOneQuery":
@@ -1005,13 +1034,13 @@ class BaseMatrixOneQuery:
     def logical_in(self, column, values) -> "BaseMatrixOneQuery":
         """
         Add IN condition with support for various value types.
-        
+
         This method provides enhanced IN functionality that can handle:
         - Lists of values: [1, 2, 3]
         - SQLAlchemy expressions: func.count(User.id)
         - FulltextFilter objects: boolean_match("title", "content").must("python")
         - Subqueries: client.query(User).select(User.id)
-        
+
         Args:
             column: Column to check (can be string or SQLAlchemy column)
             values: Values to check against. Can be:
@@ -1019,25 +1048,25 @@ class BaseMatrixOneQuery:
                 - SQLAlchemy expression: func.count(User.id)
                 - FulltextFilter object: boolean_match("title", "content").must("python")
                 - Subquery object: client.query(User).select(User.id)
-        
+
         Returns:
             BaseMatrixOneQuery: Self for method chaining.
-        
+
         Examples:
             # List of values
             query.logical_in("city", ["北京", "上海", "广州"])
             query.logical_in(User.id, [1, 2, 3, 4])
-            
+
             # SQLAlchemy expression
             query.logical_in("id", func.count(User.id))
-            
+
             # FulltextFilter
             query.logical_in("id", boolean_match("title", "content").must("python"))
-            
+
             # Subquery
             subquery = client.query(User).select(User.id).filter(User.active == True)
             query.logical_in("author_id", subquery)
-        
+
         Notes:
             - This method automatically handles different value types
             - For FulltextFilter objects, it creates a subquery using the fulltext search
@@ -1049,7 +1078,7 @@ class BaseMatrixOneQuery:
             column_name = column.name
         else:
             column_name = str(column)
-        
+
         # Handle different types of values
         if hasattr(values, "compile") and hasattr(values, "columns"):
             # This is a FulltextFilter object
@@ -1068,6 +1097,7 @@ class BaseMatrixOneQuery:
                 sql_str = str(compiled)
                 # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
                 import re
+
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
                 sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
                 condition = f"{column_name} IN ({sql_str})"
@@ -1095,7 +1125,7 @@ class BaseMatrixOneQuery:
             condition = f"{column_name} IN (?)"
             self._where_conditions.append(condition)
             self._where_params.append(values)
-        
+
         return self
 
     def order_by(self, *columns) -> "BaseMatrixOneQuery":
@@ -1633,27 +1663,27 @@ def asc(column: str) -> str:
 class LogicalIn:
     """
     Helper class for creating IN conditions that can be used in filter() method.
-    
+
     This class provides a way to create IN conditions with support for various
     value types including FulltextFilter objects, lists, and SQLAlchemy expressions.
-    
+
     Usage:
         # List of values
         query.filter(logical_in("city", ["北京", "上海", "广州"]))
         query.filter(logical_in(User.id, [1, 2, 3, 4]))
-        
+
         # FulltextFilter
         query.filter(logical_in("id", boolean_match("title", "content").must("python")))
-        
+
         # Subquery
         subquery = client.query(User).select(User.id).filter(User.active == True)
         query.filter(logical_in("author_id", subquery))
     """
-    
+
     def __init__(self, column, values):
         self.column = column
         self.values = values
-    
+
     def compile(self, compile_kwargs=None):
         """Compile to SQL expression for use in filter() method"""
         # Handle column name
@@ -1661,7 +1691,7 @@ class LogicalIn:
             column_name = self.column.name
         else:
             column_name = str(self.column)
-        
+
         # Handle different types of values
         if hasattr(self.values, "compile") and hasattr(self.values, "columns"):
             # This is a FulltextFilter object
@@ -1680,6 +1710,7 @@ class LogicalIn:
                 sql_str = str(compiled)
                 # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
                 import re
+
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
                 sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
                 return f"{column_name} IN ({sql_str})"
@@ -1712,49 +1743,58 @@ class LogicalIn:
 def logical_in(column, values):
     """
     Create a logical IN condition for use in filter() method.
-    
-    This function provides enhanced IN functionality that can handle:
-    - Lists of values: [1, 2, 3]
-    - SQLAlchemy expressions: func.count(User.id)
-    - FulltextFilter objects: boolean_match("title", "content").must("python")
-    - Subqueries: client.query(User).select(User.id)
-    
+
+    This function provides enhanced IN functionality that can handle various
+    types of values and expressions, making it more flexible than standard
+    SQLAlchemy IN operations. It automatically generates appropriate SQL
+    based on the input type.
+
+    Key Features:
+    - Support for lists of values with automatic SQL generation
+    - Integration with SQLAlchemy expressions
+    - FulltextFilter support for complex search conditions
+    - Subquery support for dynamic value sets
+    - Automatic parameter binding and SQL injection prevention
+
     Args:
-        column: Column to check (can be string or SQLAlchemy column)
+        column: Column to check against. Can be:
+            - String column name: "user_id"
+            - SQLAlchemy column: User.id
+            - Column expression: func.upper(User.name)
         values: Values to check against. Can be:
             - List of values: [1, 2, 3, "a", "b"]
+            - Single value: 42 or "test"
             - SQLAlchemy expression: func.count(User.id)
             - FulltextFilter object: boolean_match("title", "content").must("python")
             - Subquery object: client.query(User).select(User.id)
-    
+            - None: Creates "column IN (NULL)" condition
+
     Returns:
         LogicalIn: A logical IN condition object that can be used in filter().
-    
+                   The object automatically compiles to appropriate SQL when used.
+
     Examples:
-        # List of values
+        # List of values - generates: WHERE city IN ('北京', '上海', '广州')
         query.filter(logical_in("city", ["北京", "上海", "广州"]))
         query.filter(logical_in(User.id, [1, 2, 3, 4]))
-        
-        # SQLAlchemy expression
+
+        # Single value - generates: WHERE id IN (42)
+        query.filter(logical_in("id", 42))
+
+        # SQLAlchemy expression - generates: WHERE id IN (SELECT COUNT(*) FROM users)
         query.filter(logical_in("id", func.count(User.id)))
-        
-        # FulltextFilter
-        query.filter(logical_in("id", boolean_match("title", "content").must("python")))
-        
-        # Subquery
-        subquery = client.query(User).select(User.id).filter(User.active == True)
-        query.filter(logical_in("author_id", subquery))
-        
-        # Combined with other conditions
-        query.filter(logical_in("city", ["北京", "上海"]))
-        query.filter(logical_in("department", ["Engineering", "Sales"]))
-        query.filter(User.age > 25)
-    
-    Notes:
-        - This function returns a LogicalIn object that can be used in filter()
-        - For FulltextFilter objects, it creates a subquery using the fulltext search
-        - For SQLAlchemy expressions, it compiles them to SQL
-        - For lists, it creates standard IN clauses with proper parameter binding
-        - The function automatically handles different value types
+
+        # FulltextFilter - generates: WHERE id IN (SELECT id FROM table WHERE MATCH(...))
+        query.filter(logical_in(User.id, boolean_match("title", "content").must("python")))
+
+        # Subquery - generates: WHERE user_id IN (SELECT id FROM active_users)
+        active_user_ids = client.query(User).select(User.id).filter(User.active == True)
+        query.filter(logical_in("user_id", active_user_ids))
+
+        # NULL value - generates: WHERE id IN (NULL)
+        query.filter(logical_in("id", None))
+
+    Note: This function is designed to work seamlessly with MatrixOne's query
+    builder and provides better integration than standard SQLAlchemy IN operations.
     """
     return LogicalIn(column, values)

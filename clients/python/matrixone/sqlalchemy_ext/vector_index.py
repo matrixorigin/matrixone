@@ -776,10 +776,48 @@ class VectorIndex(Index):
     """
     SQLAlchemy Index for vector columns with MatrixOne-specific syntax.
 
-    Supports creating vector indexes with various algorithms and operation types.
+    This class provides a generic interface for creating vector indexes with various
+    algorithms and operation types. It supports both IVF (Inverted File) and HNSW
+    (Hierarchical Navigable Small World) indexing algorithms.
 
-    Note: This is the legacy generic class. For better type safety, consider using
-    IVFVectorIndex or HnswVectorIndex instead.
+    Key Features:
+    - Support for multiple vector indexing algorithms (IVF, HNSW)
+    - Configurable operation types (L2 distance, cosine similarity, inner product)
+    - Automatic SQL generation for index creation and management
+    - Integration with MatrixOne's vector search capabilities
+    - Support for both class methods and instance methods
+
+    Supported Index Types:
+    - IVF (Inverted File): Good for large datasets, requires training
+    - HNSW: Good for high-dimensional vectors, no training required
+
+    Supported Operation Types:
+    - VECTOR_L2_OPS: L2 (Euclidean) distance
+    - VECTOR_COSINE_OPS: Cosine similarity
+    - VECTOR_INNER_PRODUCT_OPS: Inner product similarity
+
+    Usage Examples:
+        # Create IVF index
+        index = VectorIndex(
+            name='vec_idx_ivf',
+            column='embedding',
+            index_type=VectorIndexType.IVFFLAT,
+            lists=100,
+            op_type=VectorOpType.VECTOR_L2_OPS
+        )
+
+        # Create HNSW index
+        index = VectorIndex(
+            name='vec_idx_hnsw',
+            column='embedding',
+            index_type=VectorIndexType.HNSW,
+            m=16,
+            ef_construction=200,
+            op_type=VectorOpType.VECTOR_COSINE_OPS
+        )
+
+    Note: This is the legacy generic class. For better type safety and specific
+    algorithm features, consider using IVFVectorIndex or HnswVectorIndex instead.
     """
 
     def __init__(

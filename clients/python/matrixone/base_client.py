@@ -6,7 +6,36 @@ Base client functionality for MatrixOne clients
 
 
 class BaseMatrixOneClient:
-    """Base class for MatrixOne clients with common SQL building logic"""
+    """
+    Base class for MatrixOne clients with common SQL building logic.
+
+    This abstract base class provides common functionality and SQL building
+    logic that is shared between synchronous and asynchronous MatrixOne
+    clients. It includes methods for constructing SQL statements, handling
+    parameters, and managing common database operations.
+
+    Key Features:
+    - Common SQL building logic for INSERT, UPDATE, DELETE operations
+    - Parameter substitution and SQL injection prevention
+    - Batch operation support
+    - Error handling and validation
+    - Integration with MatrixOne's SQL syntax
+
+    Supported Operations:
+    - INSERT statement generation with parameter binding
+    - UPDATE statement generation with WHERE conditions
+    - DELETE statement generation with WHERE conditions
+    - Batch INSERT operations for multiple rows
+    - Parameter substitution and escaping
+
+    Usage:
+        This class is not intended to be used directly. It serves as a base
+        class for Client and AsyncClient implementations, providing common
+        functionality and reducing code duplication.
+
+    Note: This is an internal base class. Use Client or AsyncClient for
+    actual database operations.
+    """
 
     def _build_insert_sql(self, table_name: str, data: dict) -> str:
         """
@@ -71,7 +100,35 @@ class BaseMatrixOneClient:
 
 
 class BaseMatrixOneExecutor:
-    """Base class for MatrixOne executors with common insert/batch_insert logic"""
+    """
+    Base class for MatrixOne executors with common insert/batch_insert logic.
+
+    This abstract base class provides common execution logic for database
+    operations that is shared between different executor implementations.
+    It includes methods for data insertion, batch operations, and result
+    handling that are common across synchronous and asynchronous executors.
+
+    Key Features:
+    - Common data insertion logic
+    - Batch operation support
+    - Result set handling
+    - Error handling and validation
+    - Integration with MatrixOne's data operations
+
+    Supported Operations:
+    - Single row insertion with parameter binding
+    - Batch insertion for multiple rows
+    - Result set creation and management
+    - Error handling and exception management
+
+    Usage:
+        This class is not intended to be used directly. It serves as a base
+        class for ClientExecutor and AsyncClientExecutor implementations,
+        providing common functionality and reducing code duplication.
+
+    Note: This is an internal base class. Use Client or AsyncClient for
+    actual database operations.
+    """
 
     def __init__(self, base_client: BaseMatrixOneClient):
         self.base_client = base_client

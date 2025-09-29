@@ -22,6 +22,39 @@ class VectorType(UserDefinedType):
 
     This type represents vector data in MatrixOne database and provides
     proper serialization/deserialization for SQLAlchemy operations.
+    It supports both vecf32 and vecf64 precision types with configurable dimensions.
+
+    Key Features:
+    - Support for both 32-bit (vecf32) and 64-bit (vecf64) vector precision
+    - Configurable vector dimensions
+    - Automatic serialization/deserialization of vector data
+    - Integration with MatrixOne's vector indexing and search capabilities
+    - Support for vector similarity operations
+
+    Usage:
+        # Define vector columns in SQLAlchemy models
+        class Document(Base):
+            __tablename__ = 'documents'
+            id = Column(Integer, primary_key=True)
+            content = Column(Text)
+            embedding = Column(VectorType(384, VectorPrecision.F32))  # 384-dim f32 vector
+            embedding_64 = Column(VectorType(512, VectorPrecision.F64))  # 512-dim f64 vector
+
+        # Use in table creation
+        client.create_table_orm('documents',
+            Column('id', Integer, primary_key=True),
+            Column('content', Text),
+            Column('embedding', VectorType(384, VectorPrecision.F32))
+        )
+
+    Supported Operations:
+    - Vector similarity search using distance functions
+    - Vector indexing with HNSW and IVF algorithms
+    - Vector arithmetic operations
+    - Integration with fulltext search capabilities
+
+    Note: Vector dimensions and precision must match the requirements of your
+    vector indexing strategy and embedding model.
     """
 
     __visit_name__ = "VECTOR"

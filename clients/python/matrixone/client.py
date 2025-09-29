@@ -412,7 +412,25 @@ class Client(BaseMatrixOneClient):
         self._fulltext_index = FulltextIndexManager(self)
 
     def disconnect(self) -> None:
-        """Disconnect from MatrixOne database and dispose engine"""
+        """
+        Disconnect from MatrixOne database and dispose engine.
+
+        This method properly closes all database connections and disposes of the
+        SQLAlchemy engine. It should be called when the client is no longer needed
+        to free up resources.
+
+        After calling this method, the client will need to be reconnected using
+        the connect() method before any database operations can be performed.
+
+        Raises:
+            Exception: If disconnection fails (logged but re-raised)
+
+        Example:
+            >>> client = Client('localhost', 6001, 'root', '111', 'test')
+            >>> client.connect()
+            >>> # ... perform database operations ...
+            >>> client.disconnect()  # Clean up resources
+        """
         if self._engine:
             try:
                 self._engine.dispose()
@@ -424,7 +442,29 @@ class Client(BaseMatrixOneClient):
                 raise
 
     def get_login_info(self) -> Optional[dict]:
-        """Get parsed login information"""
+        """
+        Get parsed login information used for database connection.
+
+        Returns the login information dictionary that was used to establish
+        the database connection. This includes user, account, role, and other
+        authentication details.
+
+        Returns:
+            Optional[dict]: Dictionary containing login information with keys:
+                - user: Username
+                - account: Account name (if specified)
+                - role: Role name (if specified)
+                - host: Database host
+                - port: Database port
+                - database: Database name
+            Returns None if not connected or no login info available.
+
+        Example:
+            >>> client = Client('localhost', 6001, 'root', '111', 'test')
+            >>> client.connect()
+            >>> login_info = client.get_login_info()
+            >>> print(f"Connected as {login_info['user']} to {login_info['database']}")
+        """
         return self._login_info
 
     def _escape_identifier(self, identifier: str) -> str:
@@ -504,14 +544,43 @@ class Client(BaseMatrixOneClient):
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> "ResultSet":
         """
-        Execute SQL query using connection pool
+        Execute SQL query using connection pool.
+
+        This is the primary method for executing SQL statements against the MatrixOne
+        database. It supports both SELECT queries (returning data) and DML operations
+        (INSERT, UPDATE, DELETE) that modify data.
 
         Args:
-            sql: SQL query string
-            params: Query parameters
+            sql (str): SQL query string. Can include '?' placeholders for parameter binding.
+            params (Optional[Tuple]): Query parameters to replace '?' placeholders in the SQL.
+                                    Parameters are automatically escaped to prevent SQL injection.
 
         Returns:
-            ResultSet object
+            ResultSet: Object containing query results with the following attributes:
+                - columns: List of column names
+                - rows: List of tuples containing row data
+                - affected_rows: Number of rows affected (for DML operations)
+                - fetchall(): Method to get all rows as a list
+                - fetchone(): Method to get the next row
+                - fetchmany(size): Method to get multiple rows
+
+        Raises:
+            ConnectionError: If not connected to database
+            QueryError: If query execution fails
+
+        Examples:
+            # SELECT query
+            >>> result = client.execute("SELECT * FROM users WHERE age > ?", (25,))
+            >>> for row in result.fetchall():
+            ...     print(row)
+
+            # INSERT query
+            >>> result = client.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("John", 30))
+            >>> print(f"Inserted {result.affected_rows} rows")
+
+            # UPDATE query
+            >>> result = client.execute("UPDATE users SET age = ? WHERE name = ?", (31, "John"))
+            >>> print(f"Updated {result.affected_rows} rows")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -550,14 +619,42 @@ class Client(BaseMatrixOneClient):
 
     def insert(self, table_name: str, data: dict) -> "ResultSet":
         """
-        Insert data into a table.
+        Insert a single row of data into a table.
+
+        This method provides a convenient way to insert data using a dictionary
+        where keys are column names and values are the data to insert. The method
+        automatically handles SQL generation and parameter binding.
 
         Args:
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
+            table_name (str): Name of the target table
+            data (dict): Dictionary mapping column names to values. Example:
+                        {'name': 'John', 'age': 30, 'email': 'john@example.com'}
 
         Returns:
-            ResultSet object
+            ResultSet: Object containing insertion results with:
+                - affected_rows: Number of rows inserted (should be 1)
+                - columns: Empty list (no columns returned for INSERT)
+                - rows: Empty list (no rows returned for INSERT)
+
+        Raises:
+            ConnectionError: If not connected to database
+            QueryError: If insertion fails
+
+        Examples:
+            # Insert a single user
+            >>> result = client.insert('users', {
+            ...     'name': 'John Doe',
+            ...     'age': 30,
+            ...     'email': 'john@example.com'
+            ... })
+            >>> print(f"Inserted {result.affected_rows} row")
+
+            # Insert with NULL values
+            >>> result = client.insert('products', {
+            ...     'name': 'Product A',
+            ...     'price': 99.99,
+            ...     'description': None  # NULL value
+            ... })
         """
         executor = ClientExecutor(self)
         return executor.insert(table_name, data)
@@ -594,14 +691,49 @@ class Client(BaseMatrixOneClient):
 
     def batch_insert(self, table_name: str, data_list: list) -> "ResultSet":
         """
-        Batch insert data into a table.
+        Batch insert multiple rows of data into a table.
+
+        This method efficiently inserts multiple rows in a single operation,
+        which is much faster than calling insert() multiple times. All rows
+        must have the same column structure.
 
         Args:
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
+            table_name (str): Name of the target table
+            data_list (list): List of dictionaries, where each dictionary represents
+                            a row to insert. All dictionaries must have the same keys.
+                            Example: [
+                                {'name': 'John', 'age': 30},
+                                {'name': 'Jane', 'age': 25},
+                                {'name': 'Bob', 'age': 35}
+                            ]
 
         Returns:
-            ResultSet object
+            ResultSet: Object containing insertion results with:
+                - affected_rows: Number of rows inserted
+                - columns: Empty list (no columns returned for INSERT)
+                - rows: Empty list (no rows returned for INSERT)
+
+        Raises:
+            ConnectionError: If not connected to database
+            QueryError: If batch insertion fails
+            ValueError: If data_list is empty or has inconsistent column structure
+
+        Examples:
+            # Insert multiple users
+            >>> users = [
+            ...     {'name': 'John Doe', 'age': 30, 'email': 'john@example.com'},
+            ...     {'name': 'Jane Smith', 'age': 25, 'email': 'jane@example.com'},
+            ...     {'name': 'Bob Johnson', 'age': 35, 'email': 'bob@example.com'}
+            ... ]
+            >>> result = client.batch_insert('users', users)
+            >>> print(f"Inserted {result.affected_rows} rows")
+
+            # Insert with some NULL values
+            >>> products = [
+            ...     {'name': 'Product A', 'price': 99.99, 'description': 'Great product'},
+            ...     {'name': 'Product B', 'price': 149.99, 'description': None}
+            ... ]
+            >>> result = client.batch_insert('products', products)
         """
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
@@ -1981,7 +2113,48 @@ class Client(BaseMatrixOneClient):
 
 
 class ResultSet:
-    """Result set wrapper for query results"""
+    """
+    Result set wrapper for query results from MatrixOne database operations.
+
+    This class provides a convenient interface for accessing query results
+    with methods similar to database cursor objects. It supports both
+    SELECT queries (returning data) and DML operations (returning affected row counts).
+
+    Key Features:
+    - Iterator interface for row-by-row access
+    - Bulk data access methods (fetchall, fetchmany)
+    - Column name access and metadata
+    - Affected row count for DML operations
+    - Cursor-like positioning for result navigation
+
+    Attributes:
+        columns (List[str]): List of column names in the result set
+        rows (List[Tuple[Any, ...]]): List of tuples containing row data
+        affected_rows (int): Number of rows affected by DML operations
+
+    Usage Examples:
+        # SELECT query results
+        >>> result = client.execute("SELECT id, name, age FROM users WHERE age > ?", (25,))
+        >>> print(f"Found {len(result.rows)} users")
+        >>> for row in result.fetchall():
+        ...     print(f"ID: {row[0]}, Name: {row[1]}, Age: {row[2]}")
+
+        # Access by column name
+        >>> for row in result.rows:
+        ...     user_id = row[result.columns.index('id')]
+        ...     user_name = row[result.columns.index('name')]
+
+        # DML operation results
+        >>> result = client.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("John", 30))
+        >>> print(f"Inserted {result.affected_rows} rows")
+
+        # Iterator interface
+        >>> for row in result:
+        ...     print(row)
+
+    Note: This class is automatically created by the Client's execute() method
+    and provides a consistent interface for all query results.
+    """
 
     def __init__(self, columns: List[str], rows: List[Tuple[Any, ...]], affected_rows: int = 0):
         self.columns = columns
@@ -2055,7 +2228,59 @@ class SnapshotClient:
 
 
 class TransactionWrapper:
-    """Transaction wrapper for executing queries within a transaction"""
+    """
+    Transaction wrapper for executing queries within a MatrixOne transaction.
+
+    This class provides a transaction context for executing multiple database
+    operations atomically. It wraps a SQLAlchemy connection and provides
+    access to all MatrixOne managers (snapshots, clone, restore, PITR, etc.)
+    within the transaction context.
+
+    Key Features:
+    - Atomic transaction execution with automatic rollback on errors
+    - Access to all MatrixOne managers within transaction context
+    - SQLAlchemy session integration
+    - Automatic commit/rollback handling
+    - Support for nested transactions
+
+    Available Managers:
+    - snapshots: TransactionSnapshotManager for snapshot operations
+    - clone: TransactionCloneManager for clone operations
+    - restore: TransactionRestoreManager for restore operations
+    - pitr: TransactionPitrManager for point-in-time recovery
+    - pubsub: TransactionPubSubManager for pub/sub operations
+    - account: TransactionAccountManager for account operations
+    - vector: TransactionVectorManager for vector operations
+    - fulltext_index: TransactionFulltextIndexManager for fulltext operations
+
+    Usage Examples:
+        # Basic transaction usage
+        with client.transaction() as tx:
+            tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+            tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
+            # Transaction commits automatically on success
+
+        # Using managers within transaction
+        with client.transaction() as tx:
+            # Create snapshot within transaction
+            tx.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
+
+            # Clone database within transaction
+            tx.clone.clone_database("new_db", "source_db")
+
+            # Vector operations within transaction
+            tx.vector.create_table("vectors", {"id": "int", "embedding": "vector(384,f32)"})
+
+        # SQLAlchemy session integration
+        with client.transaction() as tx:
+            session = tx.get_sqlalchemy_session()
+            user = User(name="John")
+            session.add(user)
+            session.commit()
+
+    Note: This class is automatically created by the Client's transaction()
+    context manager and should not be instantiated directly.
+    """
 
     def __init__(self, connection, client):
         self.connection = connection
@@ -2645,7 +2870,79 @@ class TransactionCloneManager(CloneManager):
 
 
 class VectorManager:
-    """Unified vector manager for client chain operations - handles both index and data operations"""
+    """
+    Unified vector manager for MatrixOne vector operations and chain operations.
+
+    This class provides comprehensive vector functionality including vector table
+    creation, vector indexing, and vector data operations. It supports both
+    IVF (Inverted File) and HNSW (Hierarchical Navigable Small World) indexing
+    algorithms for efficient vector similarity search.
+
+    Key Features:
+    - Vector table creation with configurable dimensions and precision
+    - Vector index creation and management (IVF, HNSW)
+    - Vector data insertion and batch operations
+    - Vector similarity search operations
+    - Integration with MatrixOne's vector capabilities
+    - Support for both f32 and f64 vector precision
+
+    Supported Index Types:
+    - IVF (Inverted File): Good for large datasets, requires training
+    - HNSW: Good for high-dimensional vectors, no training required
+
+    Supported Operations:
+    - Vector table creation with various column types
+    - Vector index creation with configurable parameters
+    - Vector data insertion and batch operations
+    - Vector similarity search and distance calculations
+    - Vector index management and optimization
+
+    Usage Examples:
+        # Initialize vector manager
+        vector = client.vector
+
+        # Create vector table
+        vector.create_table("documents", {
+            "id": "int",
+            "content": "text",
+            "embedding": "vector(384,f32)"
+        })
+
+        # Create IVF index
+        vector.create_ivf(
+            table_name="documents",
+            name="idx_embedding_ivf",
+            column="embedding",
+            lists=100
+        )
+
+        # Create HNSW index
+        vector.create_hnsw(
+            table_name="documents",
+            name="idx_embedding_hnsw",
+            column="embedding",
+            m=16,
+            ef_construction=200
+        )
+
+        # Insert vector data
+        vector.insert("documents", {
+            "id": 1,
+            "content": "Sample document",
+            "embedding": [0.1, 0.2, 0.3, ...]  # 384-dimensional vector
+        })
+
+        # Batch insert vector data
+        documents = [
+            {"id": 1, "content": "Doc 1", "embedding": [0.1, 0.2, ...]},
+            {"id": 2, "content": "Doc 2", "embedding": [0.3, 0.4, ...]}
+        ]
+        vector.batch_insert("documents", documents)
+
+    Note: Vector operations require appropriate vector data and indexing
+    strategies. Vector dimensions and precision must match your embedding
+    model requirements and indexing parameters.
+    """
 
     def __init__(self, client):
         self.client = client
@@ -3082,7 +3379,77 @@ class TransactionVectorIndexManager(VectorManager):
 
 
 class VectorQueryManager:
-    """Vector query manager for client chain operations"""
+    """
+    Vector query manager for MatrixOne vector similarity search operations.
+
+    This class provides comprehensive vector query functionality including
+    similarity search, distance calculations, and vector-based filtering.
+    It supports various distance metrics and provides efficient vector
+    search capabilities using MatrixOne's vector indexing.
+
+    Key Features:
+    - Vector similarity search with configurable distance metrics
+    - Support for multiple distance functions (L2, cosine, inner product)
+    - Vector-based filtering and querying
+    - Integration with vector indexes for optimal performance
+    - Support for both f32 and f64 vector precision
+    - Chain operations for complex vector queries
+
+    Supported Distance Metrics:
+    - L2 (Euclidean) distance: Standard Euclidean distance
+    - Cosine similarity: Cosine of the angle between vectors
+    - Inner product: Dot product of vectors
+    - Negative inner product: Negative dot product for similarity
+
+    Supported Operations:
+    - Vector similarity search with ranking
+    - Vector distance calculations
+    - Vector-based filtering in queries
+    - Integration with fulltext and other search capabilities
+    - Vector query optimization and performance tuning
+
+    Usage Examples:
+        # Initialize vector query manager
+        vector_query = client.vector_query
+
+        # Similarity search with L2 distance
+        results = vector_query.similarity_search(
+            table_name="documents",
+            vector_column="embedding",
+            query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
+            limit=10,
+            distance_function="l2"
+        )
+
+        # Similarity search with cosine similarity
+        results = vector_query.similarity_search(
+            table_name="products",
+            vector_column="features",
+            query_vector=[0.5, 0.6, 0.7, ...],
+            limit=5,
+            distance_function="cosine"
+        )
+
+        # Vector-based filtering in queries
+        query = client.query(Document)
+        results = (query
+                  .filter(vector_query.within_distance(
+                      "embedding", [0.1, 0.2, 0.3, ...], 0.5, "l2"
+                  ))
+                  .limit(20)
+                  .all())
+
+        # Get vector distance between two vectors
+        distance = vector_query.calculate_distance(
+            vector1=[0.1, 0.2, 0.3, ...],
+            vector2=[0.4, 0.5, 0.6, ...],
+            distance_function="cosine"
+        )
+
+    Note: Vector queries require appropriate vector indexes for optimal
+    performance. Choose distance metrics based on your similarity
+    requirements and data characteristics.
+    """
 
     def __init__(self, client):
         self.client = client
@@ -3628,7 +3995,69 @@ class SimpleFulltextQueryBuilder:
 
 
 class FulltextIndexManager:
-    """Fulltext index manager for client chain operations"""
+    """
+    Fulltext index manager for MatrixOne fulltext search operations.
+
+    This class provides comprehensive fulltext indexing functionality for
+    enabling fast text search capabilities in MatrixOne databases. It supports
+    various fulltext algorithms and provides chain operations for efficient
+    index management.
+
+    Key Features:
+    - Fulltext index creation and management
+    - Support for multiple fulltext algorithms (TF-IDF, BM25)
+    - Multi-column fulltext indexing
+    - Index optimization and maintenance
+    - Integration with MatrixOne's fulltext search capabilities
+    - Chain operations for efficient index management
+
+    Supported Algorithms:
+    - TF-IDF: Term Frequency-Inverse Document Frequency (default)
+    - BM25: Best Matching 25 algorithm for improved relevance scoring
+
+    Supported Operations:
+    - Create fulltext indexes on single or multiple columns
+    - Drop fulltext indexes
+    - List and query existing fulltext indexes
+    - Index optimization and maintenance
+    - Integration with fulltext search queries
+
+    Usage Examples:
+        # Initialize fulltext index manager
+        fulltext = client.fulltext_index
+
+        # Create fulltext index on single column
+        fulltext.create(
+            table_name="documents",
+            name="idx_content",
+            columns="content",
+            algorithm="BM25"
+        )
+
+        # Create fulltext index on multiple columns
+        fulltext.create(
+            table_name="articles",
+            name="idx_title_content",
+            columns=["title", "content"],
+            algorithm="TF-IDF"
+        )
+
+        # Drop fulltext index
+        fulltext.drop("documents", "idx_content")
+
+        # List fulltext indexes
+        indexes = fulltext.list("documents")
+
+        # Check if index exists
+        exists = fulltext.exists("documents", "idx_content")
+
+        # Get index information
+        info = fulltext.get_info("documents", "idx_content")
+
+    Note: Fulltext indexes significantly improve text search performance
+    but require additional storage space. Choose appropriate algorithms
+    based on your search requirements and data characteristics.
+    """
 
     def __init__(self, client: "Client"):
         """Initialize fulltext index manager"""

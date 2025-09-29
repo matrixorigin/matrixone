@@ -11,7 +11,37 @@ class MatrixOneDialect(MySQLDialect):
     """
     MatrixOne dialect for SQLAlchemy.
 
-    Extends MySQL dialect to support MatrixOne-specific features like vecf32/vecf64 types.
+    This dialect extends MySQL dialect to support MatrixOne-specific features
+    including vector types (vecf32/vecf64), fulltext search, and other
+    MatrixOne-specific SQL constructs.
+
+    Key Features:
+    - Full MySQL compatibility for standard operations
+    - Support for MatrixOne vector types (vecf32, vecf64)
+    - Fulltext search syntax support
+    - MatrixOne-specific error handling
+    - Connection charset configuration
+    - Statement caching support
+
+    Supported MatrixOne Features:
+    - Vector data types and operations
+    - Fulltext indexing and search
+    - Snapshot and PITR operations
+    - Account and user management
+    - Vector similarity search functions
+
+    Usage:
+        # Create engine with MatrixOne dialect
+        engine = create_engine(
+            'matrixone://user:password@host:port/database',
+            dialect=MatrixOneDialect()
+        )
+
+        # Or use the dialect name in connection string
+        engine = create_engine('matrixone+mysql://user:password@host:port/database')
+
+    Note: This dialect is automatically used when connecting to MatrixOne
+    databases through the MatrixOne Python client.
     """
 
     name = "matrixone"

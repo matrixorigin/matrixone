@@ -16,7 +16,47 @@ class MoCtlError(MatrixOneError):
 
 
 class MoCtlManager:
-    """Manager for MatrixOne control operations (mo_ctl)"""
+    """
+    Manager for MatrixOne control operations (mo_ctl).
+
+    This class provides access to MatrixOne's control operations through the
+    mo_ctl command-line tool. It allows programmatic execution of various
+    MatrixOne administrative and maintenance operations.
+
+    Key Features:
+    - Programmatic access to mo_ctl commands
+    - Database and cluster management operations
+    - Configuration and maintenance tasks
+    - Integration with MatrixOne client operations
+    - Error handling and result parsing
+
+    Supported Operations:
+    - Database creation and management
+    - Cluster configuration and maintenance
+    - User and account management
+    - Backup and restore operations
+    - Performance monitoring and tuning
+    - System health checks and diagnostics
+
+    Usage Examples:
+        # Initialize mo_ctl manager
+        moctl = client.moctl
+
+        # Create a new database
+        result = moctl.create_database("new_database")
+
+        # List all databases
+        databases = moctl.list_databases()
+
+        # Get cluster status
+        status = moctl.get_cluster_status()
+
+        # Perform maintenance operations
+        moctl.optimize_database("my_database")
+
+    Note: This manager requires mo_ctl to be installed and accessible in the
+    system PATH. Some operations may require appropriate administrative privileges.
+    """
 
     def __init__(self, client):
         """

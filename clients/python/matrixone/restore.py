@@ -9,7 +9,57 @@ from .exceptions import RestoreError
 
 
 class RestoreManager:
-    """Manager for restore operations from snapshots"""
+    """
+    Manager for restore operations from snapshots in MatrixOne.
+
+    This class provides comprehensive restore functionality for recovering data
+    from snapshots. It supports restoring entire clusters, databases, or tables
+    from previously created snapshots, enabling data recovery and disaster
+    recovery scenarios.
+
+    Key Features:
+    - Restore entire clusters from snapshots
+    - Restore specific databases from snapshots
+    - Restore individual tables from snapshots
+    - Integration with snapshot management
+    - Transaction-aware restore operations
+    - Support for both full and incremental restores
+
+    Supported Restore Levels:
+    - CLUSTER: Full cluster restore from snapshot
+    - DATABASE: Database-level restore from snapshot
+    - TABLE: Table-level restore from snapshot
+
+    Usage Examples:
+        # Initialize restore manager
+        restore = client.restore
+
+        # Restore entire cluster from snapshot
+        success = restore.restore_cluster('daily_backup_snapshot')
+
+        # Restore database from snapshot
+        success = restore.restore_database(
+            snapshot_name='daily_backup',
+            target_database='restored_database'
+        )
+
+        # Restore table from snapshot
+        success = restore.restore_table(
+            snapshot_name='users_backup',
+            target_database='restored_database',
+            target_table='restored_users'
+        )
+
+        # List available snapshots for restore
+        snapshots = client.snapshots.list()
+
+        # Get restore status
+        status = restore.get_restore_status('restore_job_id')
+
+    Note: Restore operations require appropriate snapshots to be available.
+    Restore operations may take significant time depending on the amount of
+    data being restored and the snapshot size.
+    """
 
     def __init__(self, client):
         """Initialize RestoreManager with client connection"""

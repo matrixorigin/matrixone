@@ -54,7 +54,56 @@ class Pitr:
 
 
 class PitrManager:
-    """Manager for PITR operations"""
+    """
+    Manager for Point-in-Time Recovery (PITR) operations in MatrixOne.
+
+    This class provides comprehensive PITR functionality for recovering data
+    to specific points in time. PITR allows you to restore databases or
+    tables to their state at any point in time, providing granular recovery
+    capabilities for data protection and disaster recovery.
+
+    Key Features:
+    - Point-in-time recovery for databases and tables
+    - Recovery to specific timestamps
+    - Integration with backup and snapshot systems
+    - Transaction-aware recovery operations
+    - Support for both cluster and table-level recovery
+
+    Supported Recovery Levels:
+    - CLUSTER: Full cluster recovery to a specific point in time
+    - DATABASE: Database-level recovery to a specific point in time
+    - TABLE: Table-level recovery to a specific point in time
+
+    Usage Examples:
+        # Initialize PITR manager
+        pitr = client.pitr
+
+        # Recover database to specific timestamp
+        pitr.recover_database(
+            database='my_database',
+            timestamp='2024-01-15 10:30:00',
+            target_database='recovered_database'
+        )
+
+        # Recover table to specific timestamp
+        pitr.recover_table(
+            database='my_database',
+            table='users',
+            timestamp='2024-01-15 10:30:00',
+            target_database='recovered_database',
+            target_table='recovered_users'
+        )
+
+        # List available recovery points
+        recovery_points = pitr.list_recovery_points('my_database')
+
+        # Get recovery status
+        status = pitr.get_recovery_status('recovery_job_id')
+
+    Note: PITR functionality requires MatrixOne version 1.0.0 or higher and
+    appropriate backup infrastructure. Recovery operations may take significant
+    time depending on the amount of data and the target timestamp.
+    """
 
     def __init__(self, client):
         """Initialize PitrManager with client connection"""

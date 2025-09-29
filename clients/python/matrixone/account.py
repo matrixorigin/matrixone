@@ -89,7 +89,61 @@ class Grant:
 
 
 class AccountManager:
-    """MatrixOne Account Manager - Corrected implementation based on actual MatrixOne behavior"""
+    """
+    MatrixOne Account Manager for user and account management operations.
+
+    This class provides comprehensive account and user management functionality
+    for MatrixOne databases, including account creation, user management, role
+    assignments, and permission grants.
+
+    Key Features:
+    - Account creation and management
+    - User creation and authentication
+    - Role-based access control (RBAC)
+    - Permission grants and revocations
+    - Account and user listing and querying
+    - Integration with MatrixOne's security model
+
+    Supported Operations:
+    - Create and manage accounts with administrators
+    - Create users within accounts
+    - Assign roles to users
+    - Grant and revoke permissions
+    - List accounts, users, and roles
+    - Query account and user information
+
+    Usage Examples:
+        # Create a new account
+        account = client.account.create_account(
+            account_name='company_account',
+            admin_name='admin_user',
+            password='secure_password',
+            comment='Company main account'
+        )
+
+        # Create a user within an account
+        user = client.account.create_user(
+            username='john_doe',
+            password='user_password',
+            account='company_account',
+            comment='Employee user'
+        )
+
+        # Grant permissions to a user
+        client.account.grant_privilege(
+            username='john_doe',
+            account='company_account',
+            privilege='SELECT',
+            object_type='TABLE',
+            object_name='employees'
+        )
+
+        # List all accounts
+        accounts = client.account.list_accounts()
+
+    Note: Account management operations require appropriate administrative
+    privileges in MatrixOne.
+    """
 
     def __init__(self, client: "Client"):
         self._client = client

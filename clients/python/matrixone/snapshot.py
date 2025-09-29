@@ -50,7 +50,52 @@ class Snapshot:
 
 
 class SnapshotManager:
-    """Snapshot management for MatrixOne"""
+    """
+    Snapshot management for MatrixOne database operations.
+
+    This class provides comprehensive snapshot functionality for creating, managing,
+    and restoring database snapshots at various levels (database, table, or cluster).
+    Snapshots enable point-in-time recovery and data protection capabilities.
+
+    Key Features:
+    - Create snapshots at database, table, or cluster level
+    - List and query existing snapshots
+    - Restore data from snapshots
+    - Snapshot lifecycle management
+    - Integration with transaction operations
+
+    Supported Snapshot Levels:
+    - CLUSTER: Full cluster snapshot
+    - DATABASE: Database-level snapshot
+    - TABLE: Table-level snapshot
+
+    Usage Examples:
+        # Create a database snapshot
+        snapshot = client.snapshots.create(
+            name='daily_backup',
+            level=SnapshotLevel.DATABASE,
+            database='my_database',
+            description='Daily backup snapshot'
+        )
+
+        # Create a table snapshot
+        snapshot = client.snapshots.create(
+            name='users_backup',
+            level=SnapshotLevel.TABLE,
+            database='my_database',
+            table='users',
+            description='Users table backup'
+        )
+
+        # List all snapshots
+        snapshots = client.snapshots.list()
+
+        # Restore from snapshot
+        client.snapshots.restore('daily_backup', 'restored_database')
+
+    Note: Snapshot functionality requires MatrixOne version 1.0.0 or higher.
+    For older versions, use backup/restore operations instead.
+    """
 
     def __init__(self, client):
         self.client = client
@@ -265,7 +310,63 @@ class SnapshotManager:
 
 
 class CloneManager:
-    """Clone management for MatrixOne"""
+    """
+    Clone management for MatrixOne database operations.
+
+    This class provides comprehensive database cloning functionality for creating
+    copies of databases, tables, or data subsets. Cloning enables efficient
+    data replication, testing environments, and data distribution scenarios.
+
+    Key Features:
+    - Database cloning with full data replication
+    - Table-level cloning for specific data subsets
+    - Efficient cloning using MatrixOne's native capabilities
+    - Integration with snapshot and restore operations
+    - Transaction-aware cloning operations
+    - Support for both full and incremental cloning
+
+    Supported Cloning Levels:
+    - DATABASE: Full database cloning with all tables and data
+    - TABLE: Table-level cloning with data replication
+    - SUBSET: Partial data cloning based on conditions
+
+    Usage Examples:
+        # Initialize clone manager
+        clone = client.clone
+
+        # Clone entire database
+        success = clone.clone_database(
+            target_database='cloned_database',
+            source_database='source_database'
+        )
+
+        # Clone table with data
+        success = clone.clone_table(
+            target_database='cloned_database',
+            target_table='cloned_users',
+            source_database='source_database',
+            source_table='users'
+        )
+
+        # Clone table with conditions
+        success = clone.clone_table_with_conditions(
+            target_database='cloned_database',
+            target_table='active_users',
+            source_database='source_database',
+            source_table='users',
+            conditions='active = 1'
+        )
+
+        # List clone operations
+        clones = clone.list_clones()
+
+        # Get clone status
+        status = clone.get_clone_status('clone_job_id')
+
+    Note: Cloning functionality requires MatrixOne version 1.0.0 or higher.
+    Clone operations may take significant time depending on the amount of
+    data being cloned and the complexity of the source database.
+    """
 
     def __init__(self, client):
         self.client = client
