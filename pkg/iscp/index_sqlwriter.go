@@ -339,8 +339,9 @@ func NewGenericHnswSqlWriter[T types.RealNumbers](algo string, jobID JobID, info
 
 	// get the first indexdef as they are the same
 	idxdef := indexdef[0]
+	writer_capacity := 8192
 
-	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T]()}
+	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T](writer_capacity)}
 
 	paramstr := idxdef.IndexAlgoParams
 	var meta, storage string

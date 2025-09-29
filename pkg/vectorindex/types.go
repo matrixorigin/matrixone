@@ -112,9 +112,9 @@ type VectorIndexCdc[T types.RealNumbers] struct {
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
-func NewVectorIndexCdc[T types.RealNumbers]() *VectorIndexCdc[T] {
+func NewVectorIndexCdc[T types.RealNumbers](capacity int) *VectorIndexCdc[T] {
 	return &VectorIndexCdc[T]{
-		Data: make([]VectorIndexCdcEntry[T], 0, 8192),
+		Data: make([]VectorIndexCdcEntry[T], 0, capacity),
 	}
 }
 
