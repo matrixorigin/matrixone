@@ -1204,28 +1204,6 @@ class AsyncFulltextIndexManager:
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} on table {table_name}: {e}")
 
-    def simple_query(self, table_or_columns):
-        """
-        Create a simplified fulltext query builder for common search operations.
-
-        This method provides an easy-to-use interface for fulltext search without
-        requiring deep knowledge of fulltext search syntax or the underlying builder pattern.
-
-        Args:
-            table_or_columns: Either a table name (str), an ORM model class, or a list of columns
-
-        Returns:
-            AsyncSimpleFulltextQueryBuilder: An async builder instance for chaining search operations
-
-        Example:
-            # Search in a table
-            results = await client.fulltext_index.simple_query("articles") \\
-                .columns("title", "content") \\
-                .search("machine learning") \\
-                .execute()
-        """
-        return AsyncSimpleFulltextQueryBuilder(self.client, table_or_columns)
-
     async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
         """
         Enable fulltext indexing with chain operations.
@@ -1285,21 +1263,6 @@ class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
-
-    def simple_query(self, table_or_columns):
-        """
-        Create a simplified fulltext query builder for async transaction operations.
-
-        Returns a transaction-aware query builder that executes within the current async transaction.
-
-        Args:
-            table_or_columns: Either a table name, ORM model class, or list of columns
-
-        Returns:
-            AsyncTransactionSimpleFulltextQueryBuilder: Async transaction-aware query builder
-        """
-
-        return AsyncTransactionSimpleFulltextQueryBuilder(self.client, table_or_columns, self.transaction_wrapper)
 
 
 class AsyncClientExecutor(BaseMatrixOneExecutor):
@@ -1928,11 +1891,102 @@ class AsyncClient(BaseMatrixOneClient):
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
-    def query(self, model_class, database: str = None, snapshot: str = None):
-        """Get async MatrixOne query builder - SQLAlchemy style"""
+    def query(self, *columns, snapshot: str = None):
+        """Get async MatrixOne query builder - SQLAlchemy style
+
+        Args:
+            *columns: Can be:
+                - Single model class: query(Article) - returns all columns from model
+                - Multiple columns: query(Article.id, Article.title) - returns specific columns
+                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+            snapshot: Optional snapshot name for snapshot queries
+
+        Examples:
+            # Traditional model query (all columns)
+            await client.query(Article).filter(...).all()
+
+            # Column-specific query
+            await client.query(Article.id, Article.title).filter(...).all()
+
+            # With fulltext score
+            await client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
+
+            # Snapshot query
+            await client.query(Article, snapshot="my_snapshot").filter(...).all()
+
+        Returns:
+            AsyncMatrixOneQuery instance configured for the specified columns
+        """
         from .async_orm import AsyncMatrixOneQuery
 
-        return AsyncMatrixOneQuery(model_class, self, database, None, snapshot)
+        if len(columns) == 1:
+            # Traditional single model class usage
+            column = columns[0]
+            if isinstance(column, str):
+                # String table name
+                return AsyncMatrixOneQuery(column, self, None, None, snapshot)
+            elif hasattr(column, '__tablename__'):
+                # This is a model class
+                return AsyncMatrixOneQuery(column, self, None, None, snapshot)
+            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
+                # This is a CTE object
+                from .orm import CTE
+
+                if isinstance(column, CTE):
+                    query = AsyncMatrixOneQuery(None, self, None, None, snapshot)
+                    query._table_name = column.name
+                    query._select_columns = ["*"]  # Default to select all from CTE
+                    query._ctes = [column]  # Add the CTE to the query
+                    return query
+            else:
+                # This is a single column/expression - need to handle specially
+                # For now, we'll create a query that can handle column selections
+                query = AsyncMatrixOneQuery(None, self, None, None, snapshot)
+                query._select_columns = [column]
+                # Try to infer table name from column
+                if hasattr(column, 'table') and hasattr(column.table, 'name'):
+                    query._table_name = column.table.name
+                return query
+        else:
+            # Multiple columns/expressions
+            model_class = None
+            select_columns = []
+
+            for column in columns:
+                if hasattr(column, '__tablename__'):
+                    # This is a model class - use its table
+                    model_class = column
+                else:
+                    # This is a column or expression
+                    select_columns.append(column)
+
+            if model_class:
+                query = AsyncMatrixOneQuery(model_class, self, None, None, snapshot)
+                if select_columns:
+                    # Add additional columns to the model's default columns
+                    query._select_columns = select_columns
+                return query
+            else:
+                # No model class provided, need to infer table from columns
+                query = AsyncMatrixOneQuery(None, self, None, None, snapshot)
+                query._select_columns = select_columns
+
+                # Try to infer table name from first column that has table info
+                for col in select_columns:
+                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
+                        query._table_name = col.table.name
+                        break
+                    elif isinstance(col, str) and '.' in col:
+                        # String column like "table.column" - extract table name
+                        parts = col.split('.')
+                        if len(parts) >= 2:
+                            # For "db.table.column" format, use "db.table"
+                            # For "table.column" format, use "table"
+                            table_name = '.'.join(parts[:-1])
+                            query._table_name = table_name
+                            break
+
+                return query
 
     @asynccontextmanager
     async def snapshot(self, snapshot_name: str):
@@ -2481,20 +2535,89 @@ class AsyncTransactionWrapper:
         sql = self.client._build_batch_insert_sql(table_name, data_list)
         return await self.execute(sql)
 
-    def query(self, model_class, database: str = None, snapshot: str = None):
+    def query(self, *columns, snapshot: str = None):
         """Get async MatrixOne query builder within transaction - SQLAlchemy style
 
         Args:
-            model_class: SQLAlchemy model class
-            database: Optional database name
+            *columns: Can be:
+                - Single model class: query(Article) - returns all columns from model
+                - Multiple columns: query(Article.id, Article.title) - returns specific columns
+                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
             snapshot: Optional snapshot name for snapshot queries
 
         Returns:
-            AsyncMatrixOneQuery instance configured for the specified model within transaction
+            AsyncMatrixOneQuery instance configured for the specified columns within transaction
         """
         from .async_orm import AsyncMatrixOneQuery
 
-        return AsyncMatrixOneQuery(model_class, self.client, database, transaction_wrapper=self, snapshot=snapshot)
+        if len(columns) == 1:
+            # Traditional single model class usage
+            column = columns[0]
+            if isinstance(column, str):
+                # String table name
+                return AsyncMatrixOneQuery(column, self.client, None, transaction_wrapper=self, snapshot=snapshot)
+            elif hasattr(column, '__tablename__'):
+                # This is a model class
+                return AsyncMatrixOneQuery(column, self.client, None, transaction_wrapper=self, snapshot=snapshot)
+            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
+                # This is a CTE object
+                from .orm import CTE
+
+                if isinstance(column, CTE):
+                    query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
+                    query._table_name = column.name
+                    query._select_columns = ["*"]  # Default to select all from CTE
+                    query._ctes = [column]  # Add the CTE to the query
+                    return query
+            else:
+                # This is a single column/expression - need to handle specially
+                # For now, we'll create a query that can handle column selections
+                query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
+                query._select_columns = [column]
+                # Try to infer table name from column
+                if hasattr(column, 'table') and hasattr(column.table, 'name'):
+                    query._table_name = column.table.name
+                return query
+        else:
+            # Multiple columns/expressions
+            model_class = None
+            select_columns = []
+
+            for column in columns:
+                if hasattr(column, '__tablename__'):
+                    # This is a model class - use its table
+                    model_class = column
+                else:
+                    # This is a column or expression
+                    select_columns.append(column)
+
+            if model_class:
+                query = AsyncMatrixOneQuery(model_class, self.client, None, transaction_wrapper=self, snapshot=snapshot)
+                if select_columns:
+                    # Add additional columns to the model's default columns
+                    query._select_columns = select_columns
+                return query
+            else:
+                # No model class provided, need to infer table from columns
+                query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
+                query._select_columns = select_columns
+
+                # Try to infer table name from first column that has table info
+                for col in select_columns:
+                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
+                        query._table_name = col.table.name
+                        break
+                    elif isinstance(col, str) and '.' in col:
+                        # String column like "table.column" - extract table name
+                        parts = col.split('.')
+                        if len(parts) >= 2:
+                            # For "db.table.column" format, use "db.table"
+                            # For "table.column" format, use "table"
+                            table_name = '.'.join(parts[:-1])
+                            query._table_name = table_name
+                            break
+
+                return query
 
 
 class AsyncTransactionSnapshotManager(AsyncSnapshotManager):
@@ -3303,90 +3426,3 @@ class AsyncTransactionAccountManager:
             locked_time=row[6] if len(row) > 6 else None,
             locked_reason=row[7] if len(row) > 7 else None,
         )
-
-
-class AsyncSimpleFulltextQueryBuilder:
-    """
-    Async version of SimpleFulltextQueryBuilder for asynchronous operations.
-
-    Shares the same interface and logic as the synchronous version,
-    but with async execute() method for use with AsyncClient.
-    """
-
-    def __init__(self, client: "AsyncClient", table_or_columns):
-        """
-        Initialize async simple fulltext query builder.
-
-        Args:
-            client: AsyncClient instance
-            table_or_columns: Either a table name/model or specific columns
-        """
-        # Import here to avoid circular imports
-        from .client import SimpleFulltextQueryBuilder
-
-        self._base_builder = SimpleFulltextQueryBuilder(client, table_or_columns)
-        self.client = client
-
-    def __getattr__(self, name):
-        """
-        Delegate all builder methods to the base builder, but return self for chaining.
-        This allows us to reuse all the logic from SimpleFulltextQueryBuilder.
-        """
-        method = getattr(self._base_builder, name)
-        if callable(method):
-
-            def wrapper(*args, **kwargs):
-                result = method(*args, **kwargs)
-                # If the method returns the builder (for chaining), return self instead
-                if result is self._base_builder:
-                    return self
-                return result
-
-            return wrapper
-        return method
-
-    async def execute(self):
-        """
-        Execute the query asynchronously.
-
-        Returns:
-            Query result from AsyncClient.execute()
-        """
-        sql = self._base_builder.build_sql()
-        return await self.client.execute(sql)
-
-    def explain(self) -> str:
-        """Get the SQL query without executing it."""
-        return self._base_builder.explain()
-
-
-class AsyncTransactionSimpleFulltextQueryBuilder:
-    """Async transaction-aware simple fulltext query builder."""
-
-    def __init__(self, client: "AsyncClient", table_or_columns, transaction_wrapper):
-        """Initialize async transaction-aware query builder."""
-        # Import here to avoid circular imports
-        from .client import SimpleFulltextQueryBuilder
-
-        self._base_builder = SimpleFulltextQueryBuilder(client, table_or_columns)
-        self.transaction_wrapper = transaction_wrapper
-
-    def __getattr__(self, name):
-        """Delegate all builder methods to the base builder, but return self for chaining."""
-        method = getattr(self._base_builder, name)
-        if callable(method):
-
-            def wrapper(*args, **kwargs):
-                result = method(*args, **kwargs)
-                # If the method returns the builder (for chaining), return self instead
-                if result is self._base_builder:
-                    return self
-                return result
-
-            return wrapper
-        return method
-
-    async def execute(self):
-        """Execute the query asynchronously within the transaction."""
-        sql = self._base_builder.build_sql()
-        return await self.transaction_wrapper.execute(sql)

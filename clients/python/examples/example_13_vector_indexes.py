@@ -43,7 +43,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from matrixone import Client
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
-from matrixone.sqlalchemy_ext import create_vector_column
+from matrixone.sqlalchemy_ext import create_vector_column, boolean_match
 
 
 class VectorIndexDemo:
@@ -482,15 +482,16 @@ class VectorIndexDemo:
 
             # Test fulltext search - Natural Language Mode
             print("\n--- Testing Natural Language Mode ---")
-            result = (
-                self.client.fulltext_index.simple_query("fulltext_test_docs")
-                .columns("title", "content")
-                .search("Python")
-                .execute()
-            )
+            result = self.client.query(
+                "fulltext_test_docs.id",
+                "fulltext_test_docs.title",
+                "fulltext_test_docs.content",
+                "fulltext_test_docs.author",
+                boolean_match("title", "content").search("Python"),
+            ).execute()
 
-            print(f"✓ Natural language search for 'Python': {len(result.rows)} results")
-            for row in result.rows:
+            print(f"✓ Natural language search for 'Python': {len(result.fetchall())} results")
+            for row in result.fetchall():
                 try:
                     score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
                     print(f"    ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
@@ -499,29 +500,31 @@ class VectorIndexDemo:
 
             # Test fulltext search - Boolean Mode
             print("\n--- Testing Boolean Mode ---")
-            result = (
-                self.client.fulltext_index.simple_query("fulltext_test_docs")
-                .columns("title", "content")
-                .must_have("Python", "web")
-                .execute()
-            )
+            result = self.client.query(
+                "fulltext_test_docs.id",
+                "fulltext_test_docs.title",
+                "fulltext_test_docs.content",
+                "fulltext_test_docs.author",
+                boolean_match("title", "content").must("Python", "web"),
+            ).execute()
 
-            print(f"✓ Boolean search for '+Python +web': {len(result.rows)} results")
-            for row in result.rows:
+            print(f"✓ Boolean search for '+Python +web': {len(result.fetchall())} results")
+            for row in result.fetchall():
                 print(f"    ID: {row[0]}, Title: {row[1]}")
 
             # Test different algorithms using API
             print("\n--- Testing TF-IDF Algorithm ---")
             self.client.execute('SET ft_relevancy_algorithm = "TF-IDF"')
-            result = (
-                self.client.fulltext_index.simple_query("fulltext_test_docs")
-                .columns("title", "content")
-                .search("Python")
-                .execute()
-            )
+            result = self.client.query(
+                "fulltext_test_docs.id",
+                "fulltext_test_docs.title",
+                "fulltext_test_docs.content",
+                "fulltext_test_docs.author",
+                boolean_match("title", "content").search("Python"),
+            ).execute()
 
-            print(f"✓ TF-IDF search for 'Python': {len(result.rows)} results")
-            for row in result.rows:
+            print(f"✓ TF-IDF search for 'Python': {len(result.fetchall())} results")
+            for row in result.fetchall():
                 try:
                     score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
                     print(f"    ID: {row[0]}, Title: {row[1]}, Score: {score:.4f}")
@@ -615,15 +618,16 @@ class VectorIndexDemo:
                     print(f"✓ Inserted {len(articles)} async test articles")
 
                     # Test async fulltext search
-                    result = (
-                        await async_client.fulltext_index.simple_query("async_fulltext_docs")
-                        .columns("headline", "body")
-                        .search("technology")
-                        .execute()
-                    )
+                    result = await async_client.query(
+                        "async_fulltext_docs.id",
+                        "async_fulltext_docs.headline",
+                        "async_fulltext_docs.body",
+                        "async_fulltext_docs.category",
+                        boolean_match("headline", "body").search("technology"),
+                    ).execute()
 
-                    print(f"✓ Async fulltext search for 'technology': {len(result.rows)} results")
-                    for row in result.rows:
+                    print(f"✓ Async fulltext search for 'technology': {len(result.fetchall())} results")
+                    for row in result.fetchall():
                         try:
                             score = float(row[2]) if len(row) > 2 and row[2] is not None else 0.0
                             print(f"    ID: {row[0]}, Headline: {row[1]}, Score: {score:.4f}")

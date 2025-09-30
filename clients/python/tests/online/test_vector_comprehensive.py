@@ -327,7 +327,7 @@ class TestVectorComprehensive:
             # Search using cosine distance
             query_vector = [1.0] + [0.0] * 63
             # Use query interface for vector distance functions
-            result = test_client.vector_query.similarity_search(
+            result = test_client.vector_ops.similarity_search(
                 table_name=VectorCosine.__tablename__,
                 vector_column="embedding",
                 query_vector=query_vector,

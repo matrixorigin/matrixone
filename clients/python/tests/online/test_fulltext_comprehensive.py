@@ -31,6 +31,7 @@ import pytest
 import pytest_asyncio
 from matrixone import Client, AsyncClient, FulltextAlgorithmType, FulltextModeType
 from matrixone.sqlalchemy_ext import FulltextIndex, FulltextSearchBuilder
+from matrixone.sqlalchemy_ext import boolean_match, natural_match
 
 
 class TestFulltextComprehensive:
@@ -74,12 +75,11 @@ class TestFulltextComprehensive:
 
         try:
             # Test search functionality
-            result = (
-                test_client.fulltext_index.simple_query("test_documents")
-                .columns("title", "content")
-                .search("machine learning")
-                .execute()
-            )
+            result = test_client.query(
+                "test_documents.title",
+                "test_documents.content",
+                boolean_match("title", "content").encourage("machine learning"),
+            ).execute()
 
             assert result is not None
             assert len(result.rows) > 0
@@ -131,13 +131,12 @@ class TestFulltextComprehensive:
         test_client.fulltext_index.create(table_name="test_docs_tx", name="ftidx_tx_docs", columns=["title", "content"])
 
         try:
-            # Test simple_query method
-            result = (
-                test_client.fulltext_index.simple_query("test_docs_tx")
-                .columns("title", "content")
-                .search("python programming")
-                .execute()
-            )
+            # Test query method
+            result = test_client.query(
+                "test_docs_tx.title",
+                "test_docs_tx.content",
+                boolean_match("title", "content").encourage("python programming"),
+            ).execute()
 
             assert result is not None
             assert len(result.rows) > 0
@@ -193,12 +192,9 @@ class TestFulltextComprehensive:
 
         try:
             # Test async search functionality
-            result = (
-                await test_async_client.fulltext_index.simple_query("async_documents")
-                .columns("title", "content")
-                .search("database")
-                .execute()
-            )
+            result = await test_async_client.query(
+                "async_documents.title", "async_documents.content", boolean_match("title", "content").encourage("database")
+            ).execute()
 
             assert result is not None
             assert len(result.rows) > 0
@@ -253,13 +249,12 @@ class TestFulltextComprehensive:
         )
 
         try:
-            # Test simple_query method
-            result = (
-                await test_async_client.fulltext_index.simple_query("async_docs_tx")
-                .columns("title", "content")
-                .search("async programming")
-                .execute()
-            )
+            # Test query method
+            result = await test_async_client.query(
+                "async_docs_tx.title",
+                "async_docs_tx.content",
+                boolean_match("title", "content").encourage("async programming"),
+            ).execute()
 
             assert result is not None
             assert len(result.rows) > 0
@@ -319,7 +314,9 @@ class TestFulltextComprehensive:
         )
 
         # Verify index was created by checking if we can search
-        result = test_client.fulltext_index.simple_query(test_table).columns("title", "content").search("test").execute()
+        result = test_client.query(
+            f"{test_table}.title", f"{test_table}.content", boolean_match("title", "content").encourage("test")
+        ).execute()
 
         assert result is not None
 
@@ -350,12 +347,11 @@ class TestFulltextComprehensive:
             )
 
             # Verify index was created by checking if we can search
-            result = (
-                await test_async_client.fulltext_index.simple_query("test_fulltext_async")
-                .columns("title", "content")
-                .search("test")
-                .execute()
-            )
+            result = await test_async_client.query(
+                "test_fulltext_async.title",
+                "test_fulltext_async.content",
+                boolean_match("title", "content").encourage("test"),
+            ).execute()
 
             assert result is not None
 
@@ -454,13 +450,12 @@ class TestFulltextComprehensive:
         test_client.fulltext_index.create(table_name="manual_tx_docs", name="ftidx_manual_tx", columns=["title", "content"])
 
         try:
-            # Test using simple_query in context
-            result = (
-                test_client.fulltext_index.simple_query("manual_tx_docs")
-                .columns("title", "content")
-                .search("transaction management")
-                .execute()
-            )
+            # Test using query in context
+            result = test_client.query(
+                "manual_tx_docs.title",
+                "manual_tx_docs.content",
+                boolean_match("title", "content").encourage("transaction management"),
+            ).execute()
 
             assert result is not None
             assert len(result.rows) > 0
@@ -517,13 +512,12 @@ class TestFulltextComprehensive:
         )
 
         try:
-            # Test using simple_query in async context
-            result = (
-                await test_async_client.fulltext_index.simple_query("manual_async_tx_docs")
-                .columns("title", "content")
-                .search("async transactions")
-                .execute()
-            )
+            # Test using query in async context
+            result = await test_async_client.query(
+                "manual_async_tx_docs.title",
+                "manual_async_tx_docs.content",
+                boolean_match("title", "content").encourage("async transactions"),
+            ).execute()
 
             assert result is not None
             assert len(result.rows) > 0
@@ -610,14 +604,14 @@ class TestFulltextComprehensive:
             await test_async_client.fulltext_index.create("async_advanced_docs", "ftidx_advanced", ["title", "content"])
 
             # Test 1: Complex boolean search with multiple conditions
-            result = await (
-                test_async_client.fulltext_index.simple_query("async_advanced_docs")
-                .columns("title", "content")
-                .must_have("async")
-                .must_not_have("basic")
-                .where("priority >= 2")
-                .with_score()
-                .order_by_score(desc=True)
+            result = (
+                await test_async_client.query(
+                    "async_advanced_docs.title",
+                    "async_advanced_docs.content",
+                    boolean_match("title", "content").must("async").must_not("basic").label("score"),
+                )
+                .filter("async_advanced_docs.priority >= 2")
+                .order_by("score DESC")
                 .limit(3)
                 .execute()
             )
@@ -632,13 +626,13 @@ class TestFulltextComprehensive:
                 assert "basic" not in title_content
 
             # Test 2: Search with custom score alias and ordering
-            result = await (
-                test_async_client.fulltext_index.simple_query("async_advanced_docs")
-                .columns("title", "content")
-                .search("programming")
-                .with_score("relevance_score")
-                .order_by("priority", desc=True)
-                .order_by_score(desc=True)
+            result = (
+                await test_async_client.query(
+                    "async_advanced_docs.title",
+                    "async_advanced_docs.content",
+                    boolean_match("title", "content").encourage("programming").label("relevance_score"),
+                )
+                .order_by("async_advanced_docs.priority DESC")
                 .execute()
             )
 
@@ -646,12 +640,13 @@ class TestFulltextComprehensive:
             assert len(result.rows) > 0
 
             # Test 3: Multiple WHERE conditions
-            result = await (
-                test_async_client.fulltext_index.simple_query("async_advanced_docs")
-                .columns("title", "content")
-                .search("programming")
-                .where("category = 'Programming'")
-                .where("priority > 1")
+            result = (
+                await test_async_client.query("async_advanced_docs.title", "async_advanced_docs.content")
+                .filter(
+                    boolean_match("title", "content").encourage("programming"),
+                    "async_advanced_docs.category = 'Programming'",
+                    "async_advanced_docs.priority > 1",
+                )
                 .execute()
             )
 
@@ -660,28 +655,55 @@ class TestFulltextComprehensive:
             # Since we only select title and content, we can't directly check category in results
             assert len(result.rows) > 0  # Should have results matching the conditions
 
-            # Test 4: Explain functionality
-            builder = test_async_client.fulltext_index.simple_query("async_advanced_docs")
-            builder.columns("title", "content").search("test").with_score().where("priority >= 2")
-
-            sql = builder.explain()
-            assert isinstance(sql, str)
-            assert "SELECT" in sql.upper()
-            assert "MATCH" in sql.upper()
-            assert "AGAINST" in sql.upper()
-
-            # Test 5: Method chaining verification
-            builder = test_async_client.fulltext_index.simple_query("async_advanced_docs")
-            chained_builder = (
-                builder.columns("title", "content")
-                .search("test")
-                .with_score("score")
-                .where("category = 'Programming'")
-                .order_by_score(desc=True)
-                .limit(5, 0)
+            # Test 4: Basic query functionality (replacing explain functionality)
+            result = (
+                await test_async_client.query(
+                    "async_advanced_docs.title",
+                    "async_advanced_docs.content",
+                    boolean_match("title", "content").encourage("javascript").label("score"),
+                )
+                .filter("async_advanced_docs.priority >= 2")
+                .execute()
             )
 
-            assert chained_builder is builder  # Should return same instance
+            assert result is not None
+            # Should find documents with "javascript" in title or content and priority >= 2
+            # From test data: "Medium Priority JavaScript Tutorial" has priority 2 and contains "javascript"
+            assert len(result.rows) > 0, "Should find documents containing 'javascript' with priority >= 2"
+
+            # Verify score column is present and has numeric values
+            assert "score" in result.columns
+            score_column_index = result.columns.index("score")
+            for row in result.rows:
+                score = row[score_column_index]
+                assert isinstance(score, (int, float)), f"Score should be numeric, got {type(score)}"
+                assert score >= 0, f"Score should be non-negative, got {score}"
+
+            # Test 5: Method chaining verification
+            result = (
+                await test_async_client.query(
+                    "async_advanced_docs.title",
+                    "async_advanced_docs.content",
+                    boolean_match("title", "content").encourage("python").label("score"),
+                )
+                .filter("async_advanced_docs.category = 'Programming'")
+                .order_by("score DESC")
+                .limit(5)
+                .execute()
+            )
+
+            assert result is not None
+            # Should find Programming documents containing "python"
+            # From test data: "High Priority Python Guide" is Programming category and contains "python"
+            assert len(result.rows) > 0, "Should find Programming documents containing 'python'"
+
+            # Verify score column is present and has numeric values
+            assert "score" in result.columns
+            score_column_index = result.columns.index("score")
+            for row in result.rows:
+                score = row[score_column_index]
+                assert isinstance(score, (int, float)), f"Score should be numeric, got {type(score)}"
+                assert score >= 0, f"Score should be non-negative, got {score}"
 
         finally:
             # Clean up
@@ -750,26 +772,21 @@ class TestFulltextComprehensive:
             # Create multiple concurrent search tasks (use database prefix to avoid connection pool issues)
             table_name = "async_concurrent_test.async_concurrent_docs"
             tasks = [
-                test_async_client.fulltext_index.simple_query(table_name)
-                .columns("title", "content")
-                .search("python")
-                .execute(),
-                test_async_client.fulltext_index.simple_query(table_name)
-                .columns("title", "content")
-                .search("javascript")
-                .execute(),
-                test_async_client.fulltext_index.simple_query(table_name)
-                .columns("title", "content")
-                .search("database")
-                .execute(),
-                test_async_client.fulltext_index.simple_query(table_name)
-                .columns("title", "content")
-                .search("web")
-                .execute(),
-                test_async_client.fulltext_index.simple_query(table_name)
-                .columns("title", "content")
-                .search("testing")
-                .execute(),
+                test_async_client.query(
+                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("python")
+                ).execute(),
+                test_async_client.query(
+                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("javascript")
+                ).execute(),
+                test_async_client.query(
+                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("database")
+                ).execute(),
+                test_async_client.query(
+                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("web")
+                ).execute(),
+                test_async_client.query(
+                    f"{table_name}.title", f"{table_name}.content", boolean_match("title", "content").encourage("testing")
+                ).execute(),
             ]
 
             # Execute all searches concurrently
@@ -782,15 +799,19 @@ class TestFulltextComprehensive:
                 assert isinstance(result.rows, list)
                 assert len(result.rows) > 0
 
-            # Verify each search returned relevant results (row[0] is id, row[1] is title)
+            # Verify each search returned relevant results (row[0] is title, row[1] is content)
             python_results = results[0]
-            assert any("Python" in str(row[1]) for row in python_results.rows)
+            assert any("python" in str(row[0]).lower() or "python" in str(row[1]).lower() for row in python_results.rows)
 
             javascript_results = results[1]
-            assert any("JavaScript" in str(row[1]) for row in javascript_results.rows)
+            assert any(
+                "javascript" in str(row[0]).lower() or "javascript" in str(row[1]).lower() for row in javascript_results.rows
+            )
 
             database_results = results[2]
-            assert any("Database" in str(row[1]) for row in database_results.rows)
+            assert any(
+                "database" in str(row[0]).lower() or "database" in str(row[1]).lower() for row in database_results.rows
+            )
 
         finally:
             # Clean up
@@ -841,21 +862,15 @@ class TestFulltextComprehensive:
 
         try:
             # Test natural language mode
-            result = (
-                test_client.fulltext_index.simple_query("test_modes")
-                .columns("title", "content")
-                .search("machine learning")
-                .execute()
-            )
+            result = test_client.query(
+                "test_modes.title", "test_modes.content", boolean_match("title", "content").encourage("machine learning")
+            ).execute()
             assert result is not None
 
             # Test boolean mode using must_have
-            result = (
-                test_client.fulltext_index.simple_query("test_modes")
-                .columns("title", "content")
-                .must_have("machine", "learning")
-                .execute()
-            )
+            result = test_client.query(
+                "test_modes.title", "test_modes.content", boolean_match("title", "content").must("machine", "learning")
+            ).execute()
             assert result is not None
 
         finally:
@@ -903,12 +918,12 @@ class TestFulltextComprehensive:
 
         try:
             # Test search across multiple columns
-            result = (
-                test_client.fulltext_index.simple_query("test_multi_col")
-                .columns("title", "content", "tags")
-                .search("python")
-                .execute()
-            )
+            result = test_client.query(
+                "test_multi_col.title",
+                "test_multi_col.content",
+                "test_multi_col.tags",
+                boolean_match("title", "content", "tags").encourage("python"),
+            ).execute()
 
             assert result is not None
             # Note: Fulltext search might not return results if no exact matches

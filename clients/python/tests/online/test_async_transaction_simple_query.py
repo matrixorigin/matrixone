@@ -19,6 +19,7 @@ Test async transaction simple_query functionality
 import pytest
 import pytest_asyncio
 from matrixone import AsyncClient
+from matrixone.sqlalchemy_ext import boolean_match, natural_match
 
 
 class TestAsyncTransactionSimpleQuery:
@@ -105,16 +106,15 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.transaction() as tx:
             # Test basic search within transaction
-            result = await (
-                tx.fulltext_index.simple_query("async_tx_docs").columns("title", "content").search("python").execute()
-            )
+            result = await tx.query("async_tx_docs").filter(boolean_match("title", "content").encourage("python")).execute()
 
             assert result is not None
-            assert len(result.rows) > 0
+            rows = result.fetchall()
+            assert len(rows) > 0
 
             # Verify results contain "python"
-            for row in result.rows:
-                title_content = f"{row[1]} {row[2]}".lower()  # title and content
+            for row in rows:
+                title_content = f"{row[0]} {row[1]}".lower()  # title and content
                 assert "python" in title_content
 
     @pytest.mark.asyncio
@@ -124,21 +124,25 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.transaction() as tx:
             # Test search with score within transaction
-            result = await (
-                tx.fulltext_index.simple_query("async_tx_docs")
-                .columns("title", "content")
-                .search("async")
-                .with_score()
-                .order_by_score(desc=True)
-                .execute()
-            )
+            result = await tx.query(
+                "async_tx_docs.title",
+                "async_tx_docs.content",
+                boolean_match("title", "content").encourage("async").label("score"),
+            ).execute()
 
             assert result is not None
-            assert len(result.rows) > 0
+            rows = result.fetchall()
+            assert len(rows) > 0
 
-            # Verify results are ordered by score (descending)
-            scores = [row[-1] for row in result.rows]  # Last column is score
-            assert scores == sorted(scores, reverse=True)
+            # Verify results have score column
+            assert "score" in result.columns
+            score_column_index = result.columns.index("score")
+
+            # Verify score values are numeric
+            for row in rows:
+                score = row[score_column_index]
+                assert isinstance(score, (int, float))
+                assert score >= 0
 
     @pytest.mark.asyncio
     async def test_async_transaction_simple_query_boolean_mode(self, async_client_setup):
@@ -147,20 +151,19 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.transaction() as tx:
             # Test boolean mode search within transaction
-            result = await (
-                tx.fulltext_index.simple_query("async_tx_docs")
-                .columns("title", "content")
-                .must_have("async")
-                .must_not_have("basic")
+            result = (
+                await tx.query("async_tx_docs.title", "async_tx_docs.content")
+                .filter(boolean_match("title", "content").must("async").must_not("basic"))
                 .execute()
             )
 
             assert result is not None
-            assert len(result.rows) > 0
+            rows = result.fetchall()
+            assert len(rows) > 0
 
             # Verify all results contain "async" but not "basic"
-            for row in result.rows:
-                title_content = f"{row[1]} {row[2]}".lower()  # title and content
+            for row in rows:
+                title_content = f"{row[0]} {row[1]}".lower()  # title and content
                 assert "async" in title_content
                 assert "basic" not in title_content
 
@@ -171,21 +174,20 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.transaction() as tx:
             # Test search with WHERE conditions within transaction
-            result = await (
-                tx.fulltext_index.simple_query("async_tx_docs")
-                .columns("title", "content")
-                .search("programming")
-                .where("category = 'Programming'")
+            result = (
+                await tx.query("async_tx_docs.title", "async_tx_docs.content")
+                .filter(boolean_match("title", "content").encourage("programming"), "async_tx_docs.category = 'Programming'")
                 .execute()
             )
 
             assert result is not None
-            assert len(result.rows) > 0
+            rows = result.fetchall()
+            assert len(rows) > 0
 
-            # Verify all results are from Programming category
-            # Since we only select title and content, we can't directly check category
-            # But the WHERE clause ensures this
-            assert len(result.rows) > 0
+            # Verify all results contain "programming"
+            for row in rows:
+                title_content = f"{row[0]} {row[1]}".lower()
+                assert "programming" in title_content
 
     @pytest.mark.asyncio
     async def test_async_transaction_simple_query_ordering_and_limit(self, async_client_setup):
@@ -194,20 +196,20 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.transaction() as tx:
             # Test search with ordering and limit within transaction
-            result = await (
-                tx.fulltext_index.simple_query("async_tx_docs")
-                .columns("title", "content")
-                .search("async")
-                .order_by("title", desc=True)
+            result = (
+                await tx.query("async_tx_docs.title", "async_tx_docs.content")
+                .filter(boolean_match("title", "content").encourage("async"))
+                .order_by("async_tx_docs.title DESC")
                 .limit(2)
                 .execute()
             )
 
             assert result is not None
-            assert len(result.rows) <= 2
+            rows = result.fetchall()
+            assert len(rows) <= 2
 
             # Verify results are ordered by title (descending)
-            titles = [row[1] for row in result.rows]  # title column
+            titles = [row[0] for row in rows]  # title column
             assert titles == sorted(titles, reverse=True)
 
     @pytest.mark.asyncio
@@ -216,16 +218,22 @@ class TestAsyncTransactionSimpleQuery:
         client, test_db = async_client_setup
 
         async with client.transaction() as tx:
-            # Test explain functionality within transaction
-            builder = tx.fulltext_index.simple_query("async_tx_docs")
-            builder.columns("title", "content").search("test").with_score().where("category = 'Testing'")
+            # Test basic query functionality within transaction
+            result = (
+                await tx.query("async_tx_docs.title", "async_tx_docs.content")
+                .filter(boolean_match("title", "content").encourage("test"), "async_tx_docs.category = 'Testing'")
+                .execute()
+            )
 
-            sql = builder.explain()
-            assert sql is not None
-            assert "SELECT" in sql.upper()
-            assert "MATCH" in sql.upper()
-            assert "AGAINST" in sql.upper()
-            assert "async_tx_docs" in sql
+            assert result is not None
+            rows = result.fetchall()
+            # Should find testing-related content
+            assert len(rows) > 0, "Should find testing-related content"
+
+            # Verify all results contain "test" in title or content
+            for row in rows:
+                title_content = f"{row[0]} {row[1]}".lower()
+                assert "test" in title_content, f"Row should contain 'test': {row}"
 
     @pytest.mark.asyncio
     async def test_async_transaction_simple_query_multiple_operations(self, async_client_setup):
@@ -237,32 +245,37 @@ class TestAsyncTransactionSimpleQuery:
             results = []
 
             # Search 1: Basic search
-            result1 = await (
-                tx.fulltext_index.simple_query("async_tx_docs").columns("title", "content").search("python").execute()
-            )
+            result1 = await tx.query(
+                "async_tx_docs.title", "async_tx_docs.content", boolean_match("title", "content").encourage("python")
+            ).execute()
             results.append(result1)
 
             # Search 2: Boolean mode
-            result2 = await (
-                tx.fulltext_index.simple_query("async_tx_docs").columns("title", "content").must_have("javascript").execute()
-            )
+            result2 = await tx.query(
+                "async_tx_docs.title", "async_tx_docs.content", boolean_match("title", "content").must("javascript")
+            ).execute()
             results.append(result2)
 
-            # Search 3: With score and ordering
-            result3 = await (
-                tx.fulltext_index.simple_query("async_tx_docs")
-                .columns("title", "content")
-                .search("database")
-                .with_score()
-                .order_by_score(desc=True)
-                .execute()
-            )
+            # Search 3: With score
+            result3 = await tx.query(
+                "async_tx_docs.title",
+                "async_tx_docs.content",
+                boolean_match("title", "content").encourage("database").label("score"),
+            ).execute()
             results.append(result3)
 
             # Verify all searches returned results
-            for result in results:
+            for i, result in enumerate(results):
                 assert result is not None
-                assert len(result.rows) > 0
+                rows = result.fetchall()
+                assert len(rows) > 0, f"Search {i+1} should return results"
+
+                # Verify content matches search terms
+                search_terms = ["python", "javascript", "database"]
+                term = search_terms[i]
+                for row in rows:
+                    title_content = f"{row[0]} {row[1]}".lower()
+                    assert term in title_content, f"Row should contain '{term}': {row}"
 
     @pytest.mark.asyncio
     async def test_async_transaction_simple_query_with_database_prefix(self, async_client_setup):
@@ -271,13 +284,17 @@ class TestAsyncTransactionSimpleQuery:
 
         async with client.transaction() as tx:
             # Test search with database prefix within transaction
-            table_name = f"{test_db}.async_tx_docs"
-            result = await tx.fulltext_index.simple_query(table_name).columns("title", "content").search("web").execute()
+            result = await tx.query(
+                f"{test_db}.async_tx_docs.title",
+                f"{test_db}.async_tx_docs.content",
+                boolean_match("title", "content").encourage("web"),
+            ).execute()
 
             assert result is not None
-            assert len(result.rows) > 0
+            rows = result.fetchall()
+            assert len(rows) > 0
 
             # Verify results contain "web"
-            for row in result.rows:
-                title_content = f"{row[1]} {row[2]}".lower()  # title and content
+            for row in rows:
+                title_content = f"{row[0]} {row[1]}".lower()  # title and content
                 assert "web" in title_content

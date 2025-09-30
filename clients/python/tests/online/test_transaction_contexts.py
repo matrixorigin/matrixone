@@ -23,6 +23,7 @@ import pytest_asyncio
 from matrixone import Client, AsyncClient
 from contextlib import contextmanager
 from .test_config import online_config
+from matrixone.sqlalchemy_ext import boolean_match
 
 
 class TestSyncTransactionContexts:
@@ -97,7 +98,9 @@ class TestSyncTransactionContexts:
             assert result.rows[0][0] == 5
 
             # Test fulltext search
-            result = tx.fulltext_index.simple_query("sync_tx_docs").columns("title", "content").search("python").execute()
+            result = tx.query(
+                "sync_tx_docs.title", "sync_tx_docs.content", boolean_match("title", "content").encourage("python")
+            ).execute()
             assert len(result.rows) > 0
 
             # Test snapshot operations (commented out as MatrixOne doesn't support snapshots in transactions)
@@ -232,9 +235,9 @@ class TestAsyncTransactionContexts:
             assert result.rows[0][0] == 5
 
             # Test fulltext search
-            result = (
-                await tx.fulltext_index.simple_query("async_tx_docs").columns("title", "content").search("python").execute()
-            )
+            result = await tx.query(
+                "async_tx_docs.title", "async_tx_docs.content", boolean_match("title", "content").encourage("python")
+            ).execute()
             assert len(result.rows) > 0
 
             # Test snapshot operations (commented out as MatrixOne doesn't support snapshots in transactions)
@@ -348,14 +351,13 @@ class TestTransactionContextCompatibility:
             assert hasattr(tx, 'fulltext_index')
             assert hasattr(tx, 'get_sqlalchemy_session')
 
-            # Test that fulltext_index has simple_query
-            assert hasattr(tx.fulltext_index, 'simple_query')
+            # Test that fulltext_index has create and drop methods
+            assert hasattr(tx.fulltext_index, 'create')
+            assert hasattr(tx.fulltext_index, 'drop')
 
-            # Test that simple_query returns transaction-aware builder
-            builder = tx.fulltext_index.simple_query("compat_tx_docs")
-            assert hasattr(builder, 'execute')
-            assert hasattr(builder, 'columns')
-            assert hasattr(builder, 'search')
+            # Test that query method works in transaction context
+            result = tx.query("compat_tx_docs.title", "compat_tx_docs.content").execute()
+            assert len(result.rows) > 0
 
     @pytest.mark.asyncio
     async def test_async_transaction_wrapper_has_all_managers(self):
@@ -402,17 +404,12 @@ class TestTransactionContextCompatibility:
                 assert hasattr(tx, 'fulltext_index')
                 assert hasattr(tx, 'get_sqlalchemy_session')
 
-                # Test that fulltext_index has simple_query
-                assert hasattr(tx.fulltext_index, 'simple_query')
+                # Test that fulltext_index has create and drop methods
+                assert hasattr(tx.fulltext_index, 'create')
+                assert hasattr(tx.fulltext_index, 'drop')
 
-                # Test that simple_query returns transaction-aware builder
-                builder = tx.fulltext_index.simple_query("async_compat_tx_docs")
-                assert hasattr(builder, 'execute')
-                assert hasattr(builder, 'columns')
-                assert hasattr(builder, 'search')
-
-                # Test execution
-                result = await builder.columns("title", "content").search("test").execute()
+                # Test that query method works in transaction context
+                result = await tx.query("async_compat_tx_docs.title", "async_compat_tx_docs.content").execute()
                 assert len(result.rows) > 0
 
         finally:
@@ -493,56 +490,47 @@ class TestTransactionContextFeatures:
 
         with client.transaction() as tx:
             # Test basic search
-            result = (
-                tx.fulltext_index.simple_query("features_tx_docs").columns("title", "content").search("feature").execute()
-            )
+            result = tx.query(
+                "features_tx_docs.title", "features_tx_docs.content", boolean_match("title", "content").encourage("feature")
+            ).execute()
             assert len(result.rows) > 0
 
             # Test with score
-            result = (
-                tx.fulltext_index.simple_query("features_tx_docs")
-                .columns("title", "content")
-                .search("test")
-                .with_score()
-                .execute()
-            )
+            result = tx.query(
+                "features_tx_docs.title",
+                "features_tx_docs.content",
+                boolean_match("title", "content").encourage("test").label("score"),
+            ).execute()
             assert len(result.rows) > 0
             # Check that score column is present
-            assert len(result.columns) > 2  # id, title, content, score
+            assert len(result.columns) > 2  # title, content, score
 
             # Test boolean mode
-            result = (
-                tx.fulltext_index.simple_query("features_tx_docs").columns("title", "content").must_have("feature").execute()
-            )
+            result = tx.query(
+                "features_tx_docs.title", "features_tx_docs.content", boolean_match("title", "content").must("feature")
+            ).execute()
             assert len(result.rows) > 0
 
             # Test with WHERE conditions
             result = (
-                tx.fulltext_index.simple_query("features_tx_docs")
-                .columns("title", "content")
-                .search("test")
-                .where("category = 'Category1'")
+                tx.query("features_tx_docs.title", "features_tx_docs.content")
+                .filter(boolean_match("title", "content").encourage("test"), "features_tx_docs.category = 'Category1'")
                 .execute()
             )
             assert len(result.rows) > 0
 
             # Test ordering and limit
             result = (
-                tx.fulltext_index.simple_query("features_tx_docs")
-                .columns("title", "content")
-                .search("test")
-                .order_by("title")
+                tx.query(
+                    "features_tx_docs.title",
+                    "features_tx_docs.content",
+                    boolean_match("title", "content").encourage("test").label("score"),
+                )
+                .order_by("score ASC")
                 .limit(2)
                 .execute()
             )
             assert len(result.rows) <= 2
-
-            # Test explain
-            builder = tx.fulltext_index.simple_query("features_tx_docs").columns("title", "content").search("test")
-            sql = builder.explain()
-            assert "SELECT" in sql.upper()
-            assert "MATCH" in sql.upper()
-            assert "AGAINST" in sql.upper()
 
     @pytest.mark.asyncio
     async def test_async_fulltext_features_in_transaction(self):
@@ -592,62 +580,53 @@ class TestTransactionContextFeatures:
 
             async with client.transaction() as tx:
                 # Test basic search
-                result = (
-                    await tx.fulltext_index.simple_query("async_features_tx_docs")
-                    .columns("title", "content")
-                    .search("async")
-                    .execute()
-                )
+                result = await tx.query(
+                    "async_features_tx_docs.title",
+                    "async_features_tx_docs.content",
+                    boolean_match("title", "content").encourage("async"),
+                ).execute()
                 assert len(result.rows) > 0
 
                 # Test with score
-                result = (
-                    await tx.fulltext_index.simple_query("async_features_tx_docs")
-                    .columns("title", "content")
-                    .search("test")
-                    .with_score()
-                    .execute()
-                )
+                result = await tx.query(
+                    "async_features_tx_docs.title",
+                    "async_features_tx_docs.content",
+                    boolean_match("title", "content").encourage("test").label("score"),
+                ).execute()
                 assert len(result.rows) > 0
                 # Check that score column is present
-                assert len(result.columns) > 2  # id, title, content, score
+                assert len(result.columns) > 2  # title, content, score
 
                 # Test boolean mode
-                result = (
-                    await tx.fulltext_index.simple_query("async_features_tx_docs")
-                    .columns("title", "content")
-                    .must_have("async")
-                    .execute()
-                )
+                result = await tx.query(
+                    "async_features_tx_docs.title",
+                    "async_features_tx_docs.content",
+                    boolean_match("title", "content").must("async"),
+                ).execute()
                 assert len(result.rows) > 0
 
                 # Test with WHERE conditions
                 result = (
-                    await tx.fulltext_index.simple_query("async_features_tx_docs")
-                    .columns("title", "content")
-                    .search("test")
-                    .where("category = 'Category1'")
+                    await tx.query("async_features_tx_docs.title", "async_features_tx_docs.content")
+                    .filter(
+                        boolean_match("title", "content").encourage("test"), "async_features_tx_docs.category = 'Category1'"
+                    )
                     .execute()
                 )
                 assert len(result.rows) > 0
 
                 # Test ordering and limit
                 result = (
-                    await tx.fulltext_index.simple_query("async_features_tx_docs")
-                    .columns("title", "content")
-                    .search("test")
-                    .order_by("title")
+                    await tx.query(
+                        "async_features_tx_docs.title",
+                        "async_features_tx_docs.content",
+                        boolean_match("title", "content").encourage("test").label("score"),
+                    )
+                    .order_by("score ASC")
                     .limit(2)
                     .execute()
                 )
                 assert len(result.rows) <= 2
-
-                # Test explain
-                builder = tx.fulltext_index.simple_query("async_features_tx_docs").columns("title", "content").search("test")
-                sql = builder.explain()
-                assert "SELECT" in sql.upper()
-                assert "MATCH" in sql.upper()
-                assert "AGAINST" in sql.upper()
 
         finally:
             # Cleanup
