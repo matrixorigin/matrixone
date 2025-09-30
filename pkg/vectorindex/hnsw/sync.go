@@ -45,25 +45,67 @@ const (
 var runTxn = sqlexec.RunTxn
 var runCatalogSql = sqlexec.RunSql
 
-func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl string, vectype int32, dimension int32, cdc *vectorindex.VectorIndexCdc[T]) error {
+type HnswSync[T types.RealNumbers] struct {
+	indexes []*HnswModel[T]
+	idxcfg  vectorindex.IndexConfig
+	tblcfg  vectorindex.IndexTableConfig
+	uid     string
+	ts      int64
+	ninsert atomic.Int32
+	ndelete atomic.Int32
+	nupdate atomic.Int32
+	current *HnswModel[T]
+	last    *HnswModel[T]
+}
 
-	accountId, err := defines.GetAccountId(sqlproc.GetContext())
+func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (err error) {
+
+	defer s.Destroy()
+	err = s.Update(sqlproc, cdc)
 	if err != nil {
 		return err
+	}
+
+	err = s.Save(sqlproc)
+	if err != nil {
+		return err
+	}
+
+	// clear the cache (it only work in standalone mode though)
+	veccache.Cache.Remove(s.tblcfg.IndexTable)
+
+	return nil
+}
+
+func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
+	db string,
+	tbl string,
+	vectype int32,
+	dimension int32) (*HnswSync[T], error) {
+	var err error
+
+	accountId := uint32(0)
+	if sqlproc.Proc != nil {
+		accountId, err = defines.GetAccountId(sqlproc.GetContext())
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		accountId = sqlproc.SqlCtx.AccountId
 	}
 
 	// get index catalog
 	sql := fmt.Sprintf(catalogsql, tbl, db, accountId)
 	res, err := runCatalogSql(sqlproc, sql)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer res.Close()
 
 	//os.Stderr.WriteString(sql)
 
 	if len(res.Batches) == 0 {
-		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("hnsw cdc sync: no secondary index tables found with accountID %d, table %s and db %s",
+		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("hnsw cdc sync: no secondary index tables found with accountID %d, table %s and db %s",
 			accountId, tbl, db))
 	}
 
@@ -85,13 +127,13 @@ func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl st
 		proc := sqlproc.Proc
 		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(val.(int64))
 
 		idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		idxtblcfg.IndexCapacity = idxcap.(int64)
 	} else {
@@ -113,7 +155,7 @@ func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl st
 			if len(paramstr) > 0 {
 				err := json.Unmarshal([]byte(paramstr), &param)
 				if err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
@@ -134,13 +176,13 @@ func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl st
 
 	idxcfg.Usearch.Quantization, err = QuantizationToUsearch(vectype)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(param.M) > 0 {
 		val, err := strconv.Atoi(param.M)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		idxcfg.Usearch.Connectivity = uint(val)
 	}
@@ -148,14 +190,14 @@ func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl st
 	// default L2Sq
 	metrictype, ok := metric.OpTypeToUsearchMetric[param.OpType]
 	if !ok {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Invalid op_type")
+		return nil, moerr.NewInternalError(sqlproc.GetContext(), "Invalid op_type")
 	}
 	idxcfg.Usearch.Metric = metrictype
 
 	if len(param.EfConstruction) > 0 {
 		val, err := strconv.Atoi(param.EfConstruction)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		idxcfg.Usearch.ExpansionAdd = uint(val)
 	}
@@ -163,7 +205,7 @@ func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl st
 	if len(param.EfSearch) > 0 {
 		val, err := strconv.Atoi(param.EfSearch)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		idxcfg.Usearch.ExpansionSearch = uint(val)
 	}
@@ -174,54 +216,31 @@ func CdcSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, db string, tbl st
 	// load metadata
 	indexes, err := LoadMetadata[T](sqlproc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	ts := time.Now().Unix()
-	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, cdc: cdc, uid: uid, ts: ts}
-	defer sync.destroy()
-	err = sync.run(sqlproc)
-	if err != nil {
-		return err
-	}
-
-	// clear the cache (it only work in standalone mode though)
-	veccache.Cache.Remove(idxtblcfg.IndexTable)
-
-	return nil
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts}
+	return sync, nil
 }
 
-type HnswSync[T types.RealNumbers] struct {
-	indexes []*HnswModel[T]
-	idxcfg  vectorindex.IndexConfig
-	tblcfg  vectorindex.IndexTableConfig
-	cdc     *vectorindex.VectorIndexCdc[T]
-	uid     string
-	ts      int64
-	ninsert atomic.Int32
-	ndelete atomic.Int32
-	nupdate atomic.Int32
-	current *HnswModel[T]
-	last    *HnswModel[T]
-}
-
-func (s *HnswSync[T]) destroy() {
+func (s *HnswSync[T]) Destroy() {
 	for _, m := range s.indexes {
 		m.Destroy()
 	}
 	s.indexes = nil
 }
 
-func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess) (maxcap uint, midx []int, err error) {
+func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (maxcap uint, midx []int, err error) {
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
 
 	maxcap = uint(s.tblcfg.IndexCapacity)
 
 	// try to find index cap
-	cdclen := len(s.cdc.Data)
+	cdclen := len(cdc.Data)
 
 	midx = make([]int, cdclen)
 	// reset idx to -1
@@ -247,7 +266,7 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess) (maxcap uint, m
 			wg.Add(1)
 			go func(tid int) {
 				defer wg.Done()
-				for j, row := range s.cdc.Data {
+				for j, row := range cdc.Data {
 
 					if j%nthread != tid {
 						continue
@@ -288,7 +307,7 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess) (maxcap uint, m
 	return maxcap, midx, nil
 }
 
-func (s *HnswSync[T]) insertAllInParallel(sqlproc *sqlexec.SqlProcess, maxcap uint, midx []int) error {
+func (s *HnswSync[T]) insertAllInParallel(sqlproc *sqlexec.SqlProcess, maxcap uint, midx []int, cdc *vectorindex.VectorIndexCdc[T]) error {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
@@ -299,7 +318,7 @@ func (s *HnswSync[T]) insertAllInParallel(sqlproc *sqlexec.SqlProcess, maxcap ui
 		go func(tid int) {
 			defer wg.Done()
 
-			for j, row := range s.cdc.Data {
+			for j, row := range cdc.Data {
 
 				if j%nthread != tid {
 					continue
@@ -379,9 +398,9 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 	return nil
 }
 
-func (s *HnswSync[T]) sequentialUpdate(sqlproc *sqlexec.SqlProcess, maxcap uint, midx []int) error {
+func (s *HnswSync[T]) sequentialUpdate(sqlproc *sqlexec.SqlProcess, maxcap uint, midx []int, cdc *vectorindex.VectorIndexCdc[T]) error {
 
-	for i, row := range s.cdc.Data {
+	for i, row := range cdc.Data {
 
 		switch row.Type {
 		case vectorindex.CDC_UPSERT:
@@ -451,13 +470,13 @@ func (s *HnswSync[T]) sequentialUpdate(sqlproc *sqlexec.SqlProcess, maxcap uint,
 	return nil
 }
 
-func (s *HnswSync[T]) run(sqlproc *sqlexec.SqlProcess) error {
+func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) error {
 	var err error
 
 	start := time.Now()
 
 	// check contains and find the correspoding index id
-	maxcap, midx, err := s.checkContains(sqlproc)
+	maxcap, midx, err := s.checkContains(sqlproc, cdc)
 	if err != nil {
 		return err
 	}
@@ -466,7 +485,7 @@ func (s *HnswSync[T]) run(sqlproc *sqlexec.SqlProcess) error {
 
 	checkidxElapsed := t.Sub(start)
 
-	s.ninsert.Store(int32(len(s.cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
+	s.ninsert.Store(int32(len(cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
 
 	// setup s.last and s.current model. s.late will point to the last model in metadata and s.current is nil
 	err = s.setupModel(sqlproc, maxcap)
@@ -476,18 +495,18 @@ func (s *HnswSync[T]) run(sqlproc *sqlexec.SqlProcess) error {
 
 	logutil.Infof("hnsw_cdc_update: db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
 		s.tblcfg.DbName, s.tblcfg.SrcTable,
-		len(s.cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
+		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
-	if len(s.cdc.Data) == int(s.ninsert.Load()) {
+	if len(cdc.Data) == int(s.ninsert.Load()) {
 		// pure insert and insert into parallel
-		err = s.insertAllInParallel(sqlproc, maxcap, midx)
+		err = s.insertAllInParallel(sqlproc, maxcap, midx, cdc)
 		if err != nil {
 			return err
 		}
 
 	} else {
 		// perform sequential update in single thread
-		err = s.sequentialUpdate(sqlproc, maxcap, midx)
+		err = s.sequentialUpdate(sqlproc, maxcap, midx, cdc)
 		if err != nil {
 			return err
 		}
@@ -496,6 +515,14 @@ func (s *HnswSync[T]) run(sqlproc *sqlexec.SqlProcess) error {
 	t2 := time.Now()
 	updateElapsed := t2.Sub(t)
 
+	t3 := time.Now()
+	saveElapsed := t3.Sub(t2)
+	logutil.Debugf("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms, save %d ms",
+		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds(), saveElapsed.Milliseconds())
+	return nil
+}
+
+func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
@@ -511,11 +538,6 @@ func (s *HnswSync[T]) run(sqlproc *sqlexec.SqlProcess) error {
 		return err
 	}
 
-	t3 := time.Now()
-	saveElapsed := t3.Sub(t2)
-
-	logutil.Debugf("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms, save %d ms",
-		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds(), saveElapsed.Milliseconds())
 	return nil
 }
 
