@@ -33,7 +33,7 @@ type SpillableAggState struct {
 }
 
 func (s *SpillableAggState) Serialize() ([]byte, error) {
-	logutil.Debug("SpillableAggState starting serialization",
+	logutil.Info("SpillableAggState starting serialization",
 		zap.Int("group_count", s.GroupCount),
 		zap.Int("group_vectors_count", len(s.GroupVectors)),
 		zap.Int("agg_states_count", len(s.MarshaledAggStates)))
@@ -116,14 +116,14 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 	}
 
 	result := buf.Bytes()
-	logutil.Debug("SpillableAggState completed serialization",
+	logutil.Info("SpillableAggState completed serialization",
 		zap.Int("serialized_size", len(result)))
 
 	return result, nil
 }
 
 func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
-	logutil.Debug("SpillableAggState starting deserialization",
+	logutil.Info("SpillableAggState starting deserialization",
 		zap.Int("data_size", len(data)))
 
 	buf := bytes.NewReader(data)
@@ -223,7 +223,7 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 		}
 	}
 
-	logutil.Debug("SpillableAggState completed deserialization",
+	logutil.Info("SpillableAggState completed deserialization",
 		zap.Int("group_count", s.GroupCount),
 		zap.Int("group_vectors_count", len(s.GroupVectors)),
 		zap.Int("agg_states_count", len(s.MarshaledAggStates)))

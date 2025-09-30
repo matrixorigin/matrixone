@@ -50,7 +50,7 @@ func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	m.data[id] = serialized
 	newTotalMem := atomic.AddInt64(&m.totalMem, int64(len(serialized)))
 
-	logutil.Debug("MemorySpillManager spilled data",
+	logutil.Info("MemorySpillManager spilled data",
 		zap.String("spill_id", string(id)),
 		zap.Int("data_size", len(serialized)),
 		zap.Int64("total_memory", newTotalMem))
@@ -69,7 +69,7 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 		return nil, fmt.Errorf("spill data not found: %s", id)
 	}
 
-	logutil.Debug("MemorySpillManager retrieving spilled data",
+	logutil.Info("MemorySpillManager retrieving spilled data",
 		zap.String("spill_id", string(id)),
 		zap.Int("data_size", len(serialized)))
 
@@ -81,7 +81,7 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 		return nil, err
 	}
 
-	logutil.Debug("MemorySpillManager successfully retrieved and deserialized data",
+	logutil.Info("MemorySpillManager successfully retrieved and deserialized data",
 		zap.String("spill_id", string(id)),
 		zap.Int64("estimated_size", data.EstimateSize()))
 
@@ -96,7 +96,7 @@ func (m *MemorySpillManager) Delete(id SpillID) error {
 		newTotalMem := atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
 		delete(m.data, id)
 
-		logutil.Debug("MemorySpillManager deleted spilled data",
+		logutil.Info("MemorySpillManager deleted spilled data",
 			zap.String("spill_id", string(id)),
 			zap.Int("data_size", len(serialized)),
 			zap.Int64("total_memory", newTotalMem))
@@ -114,7 +114,7 @@ func (m *MemorySpillManager) Free() {
 	count := len(m.data)
 	totalSize := atomic.LoadInt64(&m.totalMem)
 
-	logutil.Debug("MemorySpillManager freeing all spilled data",
+	logutil.Info("MemorySpillManager freeing all spilled data",
 		zap.Int("spilled_count", count),
 		zap.Int64("total_size", totalSize))
 
@@ -123,7 +123,7 @@ func (m *MemorySpillManager) Free() {
 	}
 	m.data = nil
 
-	logutil.Debug("MemorySpillManager completed cleanup")
+	logutil.Info("MemorySpillManager completed cleanup")
 }
 
 func (m *MemorySpillManager) TotalMem() int64 {

@@ -33,7 +33,7 @@ func (group *Group) shouldSpill() bool {
 		len(group.ctr.result1.AggList) > 0 &&
 		len(group.ctr.result1.ToPopped) > 0
 
-	logutil.Debug("shouldSpill",
+	logutil.Info("shouldSpill",
 		zap.Any("threshold", group.SpillThreshold),
 		zap.Any("current usage", group.ctr.currentMemUsage),
 		zap.Any("agg list len", len(group.ctr.result1.AggList)),
@@ -41,7 +41,7 @@ func (group *Group) shouldSpill() bool {
 	)
 
 	if shouldSpill {
-		logutil.Debug("Group operator triggering spill",
+		logutil.Info("Group operator triggering spill",
 			zap.Int64("current_memory_usage", group.ctr.currentMemUsage),
 			zap.Int64("spill_threshold", group.SpillThreshold),
 			zap.Int("agg_count", len(group.ctr.result1.AggList)),
@@ -74,7 +74,7 @@ func (group *Group) updateMemoryUsage(proc *process.Process) {
 	group.ctr.currentMemUsage = usage
 
 	if usage > previousUsage && usage > group.SpillThreshold/2 {
-		logutil.Debug("Group operator memory usage update",
+		logutil.Info("Group operator memory usage update",
 			zap.Int64("previous_usage", previousUsage),
 			zap.Int64("current_usage", usage),
 			zap.Int64("spill_threshold", group.SpillThreshold))
@@ -83,7 +83,7 @@ func (group *Group) updateMemoryUsage(proc *process.Process) {
 
 func (group *Group) spillPartialResults(proc *process.Process) error {
 	if len(group.ctr.result1.AggList) == 0 || len(group.ctr.result1.ToPopped) == 0 {
-		logutil.Debug("Group operator spill called but no data to spill")
+		logutil.Info("Group operator spill called but no data to spill")
 		return nil
 	}
 
@@ -113,7 +113,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	}
 
 	if totalGroups == 0 {
-		logutil.Debug("Group operator spill found no groups to spill")
+		logutil.Info("Group operator spill found no groups to spill")
 		for _, agg := range group.ctr.result1.AggList {
 			if agg != nil {
 				agg.Free()
@@ -200,7 +200,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	}
 
 	group.ctr.currentMemUsage = 0
-	logutil.Debug("Group operator completed spill cleanup",
+	logutil.Info("Group operator completed spill cleanup",
 		zap.Int("spilled_states_count", len(group.ctr.spilledStates)))
 	return nil
 }
@@ -214,7 +214,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 		zap.Int("spilled_states_count", len(group.ctr.spilledStates)))
 
 	for i, spillID := range group.ctr.spilledStates {
-		logutil.Debug("Group operator merging spilled state",
+		logutil.Info("Group operator merging spilled state",
 			zap.Int("state_index", i),
 			zap.String("spill_id", string(spillID)))
 
@@ -233,7 +233,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 			panic(fmt.Sprintf("invalid spilled data type"))
 		}
 
-		logutil.Debug("Group operator retrieved spilled state",
+		logutil.Info("Group operator retrieved spilled state",
 			zap.String("spill_id", string(spillID)),
 			zap.Int("group_count", spillState.GroupCount),
 			zap.Int64("estimated_size", spillState.EstimateSize()))
@@ -252,7 +252,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 			return err
 		}
 
-		logutil.Debug("Group operator completed merge of spilled state",
+		logutil.Info("Group operator completed merge of spilled state",
 			zap.String("spill_id", string(spillID)))
 	}
 
@@ -265,16 +265,16 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 
 func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spillState *SpillableAggState) error {
 	if len(spillState.MarshaledAggStates) == 0 {
-		logutil.Debug("Group operator restore found no marshaled aggregator states")
+		logutil.Info("Group operator restore found no marshaled aggregator states")
 		return nil
 	}
 
-	logutil.Debug("Group operator restoring spilled aggregators",
+	logutil.Info("Group operator restoring spilled aggregators",
 		zap.Int("agg_states_count", len(spillState.MarshaledAggStates)),
 		zap.Int("group_count", spillState.GroupCount))
 
 	if len(group.ctr.result1.AggList) == 0 {
-		logutil.Debug("Group operator initializing aggregators from spilled state")
+		logutil.Info("Group operator initializing aggregators from spilled state")
 		aggs := make([]aggexec.AggFuncExec, len(spillState.MarshaledAggStates))
 		defer func() {
 			if group.ctr.result1.AggList == nil {
@@ -318,7 +318,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		group.ctr.result1.ChunkSize = chunkSize
 		group.ctr.result1.AggList = aggs
 
-		logutil.Debug("Group operator initialized aggregators from spilled state",
+		logutil.Info("Group operator initialized aggregators from spilled state",
 			zap.Int("chunk_size", chunkSize),
 			zap.Int("agg_count", len(aggs)))
 
@@ -354,7 +354,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		return nil
 	}
 
-	logutil.Debug("Group operator merging spilled aggregators with existing ones",
+	logutil.Info("Group operator merging spilled aggregators with existing ones",
 		zap.Int("existing_agg_count", len(group.ctr.result1.AggList)),
 		zap.Int("spilled_group_count", spillState.GroupCount))
 
@@ -466,7 +466,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 		group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, batchesToAdd...)
 	}
 
-	logutil.Debug("Group operator completed restore and merge of spilled aggregators",
+	logutil.Info("Group operator completed restore and merge of spilled aggregators",
 		zap.Int("final_batch_count", len(group.ctr.result1.ToPopped)))
 
 	return nil
