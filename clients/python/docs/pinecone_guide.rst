@@ -33,9 +33,8 @@ Basic Setup
 
    # Get Pinecone-compatible index
    index = client.get_pinecone_index(
-       table_name="documents",
-       vector_column="embedding",
-       id_column="id"  # Optional, defaults to 'id'
+       "documents",
+       vector_column="embedding"
    )
 
 Creating Tables for Pinecone Index with Table Models
@@ -75,7 +74,7 @@ Creating Tables for Pinecone Index with Table Models
 
    # Create vector index
    client.vector_ops.create_ivf(
-       table_name="documents",
+       "documents",
        name="idx_documents_embedding",
        column="embedding",
        lists=100
@@ -288,7 +287,7 @@ Full async/await support for high-performance applications:
 
        # Get async Pinecone index
        index = async_client.get_pinecone_index(
-           table_name="documents",
+           table_name_or_model="documents",
            vector_column="embedding"
        )
 
@@ -407,7 +406,7 @@ Best practices for optimal performance:
            self.client = Client(*get_connection_params())
            self.client.connect(*get_connection_params())
            self.index = self.client.get_pinecone_index(
-               table_name="documents",
+               table_name_or_model="documents",
                vector_column="embedding"
            )
            self.lock = threading.Lock()
@@ -433,7 +432,7 @@ Easy migration from Pinecone to MatrixOne:
    client = Client(*get_connection_params())
    client.connect(*get_connection_params())
    index = client.get_pinecone_index(
-       table_name="your-table-name",
+       table_name_or_model="your-table-name",
        vector_column="your-vector-column"
    )
 
@@ -461,7 +460,7 @@ Real-world integration patterns:
            self.client = Client(*get_connection_params())
            self.client.connect(*get_connection_params())
            self.index = self.client.get_pinecone_index(
-               table_name="documents",
+               table_name_or_model="documents",
                vector_column="embedding"
            )
 
@@ -491,7 +490,7 @@ Real-world integration patterns:
            self.client = Client(*get_connection_params())
            self.client.connect(*get_connection_params())
            self.index = self.client.get_pinecone_index(
-               table_name="products",
+               table_name_or_model="products",
                vector_column="feature_vector"
            )
 
@@ -515,7 +514,7 @@ Real-world integration patterns:
            self.client = Client(*get_connection_params())
            self.client.connect(*get_connection_params())
            self.index = self.client.get_pinecone_index(
-               table_name="tenant_data",
+               table_name_or_model="tenant_data",
                vector_column="embedding"
            )
 

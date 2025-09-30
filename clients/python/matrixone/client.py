@@ -110,7 +110,7 @@ class Client(BaseMatrixOneClient):
 
             # Vector similarity search
             results = client.vector_ops.similarity_search(
-                table_name="documents",
+                "documents",
                 vector_column="embedding",
                 query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
                 limit=10,
@@ -1614,6 +1614,13 @@ class Client(BaseMatrixOneClient):
 
         Returns:
             Client: Self for chaining
+
+        Example:
+            # Drop table by name
+            client.drop_table("users")
+
+            # Drop table by model class
+            client.drop_table(UserModel)
         """
         from sqlalchemy import text
 
@@ -3018,15 +3025,26 @@ class VectorManager:
         """
         Create an IVFFLAT vector index using chain operations.
 
+        IVFFLAT (Inverted File with Flat Compression) is a vector index type
+        that provides good performance for similarity search on large datasets.
+        It supports insert, update, and delete operations.
+
         Args:
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Name of the index
             column: Vector column to index
-            lists: Number of lists for IVFFLAT (default: 100)
+            lists: Number of lists for IVFFLAT (default: 100). More lists for larger datasets
             op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
             VectorManager: Self for chaining
+
+        Example:
+            # Create IVF index by table name
+            client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=50)
+
+            # Create IVF index by model class
+            client.vector_ops.create_ivf(DocumentModel, "idx_embedding", "embedding", lists=100)
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
@@ -3067,6 +3085,10 @@ class VectorManager:
         """
         Create an HNSW vector index using chain operations.
 
+        HNSW (Hierarchical Navigable Small World) is a vector index type
+        that provides excellent search performance but is read-only.
+        It does not support insert, update, or delete operations.
+
         Args:
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Name of the index
@@ -3078,6 +3100,13 @@ class VectorManager:
 
         Returns:
             VectorManager: Self for chaining
+
+        Example:
+            # Create HNSW index by table name
+            client.vector_ops.create_hnsw("documents", "idx_embedding", "embedding", m=32)
+
+            # Create HNSW index by model class
+            client.vector_ops.create_hnsw(DocumentModel, "idx_embedding", "embedding", m=16)
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
@@ -3399,6 +3428,23 @@ class VectorManager:
 
         Returns:
             List of search results
+
+        Example:
+            # Basic similarity search
+            results = client.vector_ops.similarity_search(
+                "documents", "embedding", [0.1, 0.2, 0.3], limit=5
+            )
+
+            # Search with model class
+            results = client.vector_ops.similarity_search(
+                DocumentModel, "embedding", [0.1, 0.2, 0.3], limit=5
+            )
+
+            # Search with filtering
+            results = client.vector_ops.similarity_search(
+                "documents", "embedding", [0.1, 0.2, 0.3], limit=5,
+                where_conditions=["category = ?"], where_params=["AI"]
+            )
         """
         from sqlalchemy import text
         from .sql_builder import DistanceFunction, build_vector_similarity_query
@@ -3631,7 +3677,7 @@ class FulltextIndexManager:
 
             # Create fulltext index on single column
             fulltext.create(
-                table_name="documents",
+                "documents",
                 name="idx_content",
                 columns="content",
                 algorithm="BM25"
@@ -3639,7 +3685,7 @@ class FulltextIndexManager:
 
             # Create fulltext index on multiple columns
             fulltext.create(
-                table_name="articles",
+                "articles",
                 name="idx_title_content",
                 columns=["title", "content"],
                 algorithm="TF-IDF"
@@ -3647,15 +3693,6 @@ class FulltextIndexManager:
 
             # Drop fulltext index
             fulltext.drop("documents", "idx_content")
-
-            # List fulltext indexes
-            indexes = fulltext.list("documents")
-
-            # Check if index exists
-            exists = fulltext.exists("documents", "idx_content")
-
-            # Get index information
-            info = fulltext.get_info("documents", "idx_content")
 
     Note: Fulltext indexes significantly improve text search performance
     but require additional storage space. Choose appropriate algorithms
@@ -3680,6 +3717,16 @@ class FulltextIndexManager:
 
         Returns:
             FulltextIndexManager: Self for chaining
+
+        Example:
+            # Create fulltext index by table name
+            client.fulltext_index.create("articles", "idx_content", ["title", "content"])
+
+            # Create fulltext index by model class
+            client.fulltext_index.create(ArticleModel, "idx_content", ["title", "content"])
+
+            # Create with BM25 algorithm
+            client.fulltext_index.create("articles", "idx_bm25", "content", algorithm="BM25")
         """
         from .sqlalchemy_ext import FulltextIndex
 

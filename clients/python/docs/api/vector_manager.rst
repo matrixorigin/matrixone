@@ -33,7 +33,7 @@ Usage Examples:
     
     # Similarity search with L2 distance
     results = vector_ops.similarity_search(
-        table_name="documents",
+        table_name_or_model="documents",
         vector_column="embedding",
         query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
         limit=10,
@@ -42,7 +42,7 @@ Usage Examples:
     
     # Range search with cosine similarity
     results = vector_ops.range_search(
-        table_name="products",
+        table_name_or_model="products",
         vector_column="features",
         query_vector=[0.5, 0.6, 0.7, ...],
         max_distance=0.8,

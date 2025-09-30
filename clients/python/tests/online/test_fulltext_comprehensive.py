@@ -176,10 +176,11 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear existing data and insert test data
+        await test_async_client.execute("DELETE FROM async_documents")
         await test_async_client.execute(
             """
-            INSERT INTO async_documents (title, content) VALUES 
+            INSERT INTO async_documents (title, content) VALUES
             ('Database Design', 'Database design principles and best practices'),
             ('SQL Optimization', 'Techniques for optimizing SQL queries and performance'),
             ('NoSQL Systems', 'Understanding NoSQL database systems and their use cases')
@@ -188,7 +189,7 @@ class TestFulltextComprehensive:
 
         # Create fulltext index
         await test_async_client.fulltext_index.create(
-            table_name="async_documents", name="ftidx_async_content", columns=["title", "content"]
+            "async_documents", name="ftidx_async_content", columns=["title", "content"]
         )
 
         try:
@@ -234,7 +235,8 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear existing data and insert test data
+        await test_async_client.execute("DELETE FROM async_docs_tx")
         await test_async_client.execute(
             """
             INSERT INTO async_docs_tx (id, title, content) VALUES
@@ -246,7 +248,7 @@ class TestFulltextComprehensive:
 
         # Create fulltext index
         await test_async_client.fulltext_index.create(
-            table_name="async_docs_tx", name="ftidx_async_tx_docs", columns=["title", "content"]
+            "async_docs_tx", name="ftidx_async_tx_docs", columns=["title", "content"]
         )
 
         try:
@@ -341,7 +343,7 @@ class TestFulltextComprehensive:
         try:
             # Create fulltext index
             await test_async_client.fulltext_index.create(
-                table_name="test_fulltext_async",
+                "test_fulltext_async",
                 name="ftidx_async_test",
                 columns=["title", "content"],
                 algorithm=FulltextAlgorithmType.BM25,
@@ -396,13 +398,13 @@ class TestFulltextComprehensive:
         try:
             # Create index first
             await test_async_client.fulltext_index.create(
-                table_name="test_fulltext_drop_async",
+                "test_fulltext_drop_async",
                 name="ftidx_drop_async_test",
                 columns=["title", "content"],
             )
 
             # Drop the index
-            await test_async_client.fulltext_index.drop(table_name="test_fulltext_drop_async", name="ftidx_drop_async_test")
+            await test_async_client.fulltext_index.drop("test_fulltext_drop_async", name="ftidx_drop_async_test")
 
             # Verify index was dropped
             assert True
@@ -496,7 +498,8 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear existing data and insert test data
+        await test_async_client.execute("DELETE FROM manual_async_tx_docs")
         await test_async_client.execute(
             """
             INSERT INTO manual_async_tx_docs (id, title, content) VALUES
@@ -508,7 +511,7 @@ class TestFulltextComprehensive:
 
         # Create fulltext index
         await test_async_client.fulltext_index.create(
-            table_name="manual_async_tx_docs",
+            "manual_async_tx_docs",
             name="ftidx_manual_async_tx",
             columns=["title", "content"],
         )

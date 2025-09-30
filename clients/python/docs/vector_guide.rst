@@ -83,7 +83,7 @@ MatrixOne provides powerful vector index management through the `vector_ops` API
 
    # Create IVF index for similarity search
    client.vector_ops.create_ivf(
-       table_name="documents",
+       "documents",
        name="idx_embedding_ivf",
        column="embedding",
        lists=50,                    # Number of clusters
@@ -92,7 +92,7 @@ MatrixOne provides powerful vector index management through the `vector_ops` API
 
    # Create another IVF index with different parameters
    client.vector_ops.create_ivf(
-       table_name="products",
+       "products",
        name="idx_features_ivf",
        column="features",
        lists=100,                   # More clusters for larger datasets
@@ -104,7 +104,7 @@ MatrixOne provides powerful vector index management through the `vector_ops` API
 
    # Create HNSW index
    client.vector_ops.create_hnsw(
-       table_name="documents",
+       "documents",
        name="idx_embedding_hnsw",
        column="embedding",
        m=16,                        # Number of bi-directional links
@@ -166,7 +166,7 @@ The `vector_query` API provides powerful similarity search capabilities:
    
    # L2 distance search
    results = client.vector_ops.similarity_search(
-       table_name="documents",
+       "documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -179,7 +179,7 @@ The `vector_query` API provides powerful similarity search capabilities:
 
    # Cosine distance search
    cosine_results = client.vector_ops.similarity_search(
-       table_name="documents",
+       "documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -197,7 +197,7 @@ Advanced Vector Search
 
    # Search with offset for pagination
    results = client.vector_ops.similarity_search(
-       table_name="documents",
+       "documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=10,
@@ -207,7 +207,7 @@ Advanced Vector Search
 
    # Search with custom select columns
    results = client.vector_ops.similarity_search(
-       table_name="documents",
+       "documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -217,7 +217,7 @@ Advanced Vector Search
 
    # Search with metadata filtering
    results = client.vector_ops.similarity_search(
-       table_name="documents",
+       "documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -309,7 +309,7 @@ Async Vector Operations
 
        # Create vector index
        await client.vector_ops.create_ivf(
-           table_name="async_documents",
+           "async_documents",
            name="idx_async_embedding",
            column="embedding",
            lists=25,
@@ -326,7 +326,7 @@ Async Vector Operations
        # Vector similarity search using async vector_query API
        query_vector = np.random.rand(256).astype(np.float32).tolist()
        results = await client.vector_ops.similarity_search(
-           table_name="async_documents",
+           "async_documents",
            vector_column="embedding",
            query_vector=query_vector,
            limit=3,
@@ -398,7 +398,7 @@ MatrixOne supports different vector index types for different use cases:
 
    # IVF Index - Good for large datasets
    client.vector_ops.create_ivf(
-       table_name="large_dataset",
+       "large_dataset",
        name="idx_ivf_large",
        column="embedding",
        lists=1000,  # More lists for larger datasets
@@ -407,7 +407,7 @@ MatrixOne supports different vector index types for different use cases:
 
    # IVF Index with cosine distance
    client.vector_ops.create_ivf(
-       table_name="recommendations",
+       "recommendations",
        name="idx_ivf_cosine",
        column="features",
        lists=100,
@@ -416,7 +416,7 @@ MatrixOne supports different vector index types for different use cases:
 
    # IVF Index with inner product
    client.vector_ops.create_ivf(
-       table_name="similarity",
+       "similarity",
        name="idx_ivf_inner",
        column="vectors",
        lists=50,
@@ -465,7 +465,7 @@ Performance Optimization
 
    # Optimize index parameters for your use case
    client.vector_ops.create_ivf(
-       table_name="documents",
+       "documents",
        name="idx_optimized",
        column="embedding",
        lists=200,  # Adjust based on dataset size
@@ -498,7 +498,7 @@ Error Handling
            # Create index with error handling
            try:
                client.vector_ops.create_ivf(
-                   table_name="robust_docs",
+                   "robust_docs",
                    name="idx_robust",
                    column="embedding",
                    lists=10,
@@ -519,7 +519,7 @@ Error Handling
            # Vector search with error handling
            try:
                results = client.vector_ops.similarity_search(
-                   table_name="robust_docs",
+                   "robust_docs",
                    vector_column="embedding",
                    query_vector=[0.1] * 128,
                    limit=5,

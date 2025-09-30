@@ -14,6 +14,54 @@
 
 """
 SearchVectorIndex - A Pinecone-compatible vector search interface for MatrixOne
+
+This module provides a high-level interface for vector search operations that is
+compatible with Pinecone's API, making it easy to migrate from Pinecone to MatrixOne.
+
+Key Features:
+- Pinecone-compatible API for seamless migration
+- Support for both IVF and HNSW vector indexes
+- Metadata filtering with complex query syntax
+- Vector upsert and delete operations (IVF only)
+- Synchronous and asynchronous operation support
+- Automatic index type detection and configuration
+
+Supported Operations:
+- Vector similarity search with multiple distance metrics
+- Metadata filtering with Pinecone-compatible syntax
+- Vector upsert (insert/update) operations
+- Vector deletion by ID
+- Index statistics and information
+
+Index Types:
+- IVF (Inverted File): Supports full CRUD operations, good for frequent updates
+- HNSW (Hierarchical Navigable Small World): Read-only, optimized for search performance
+
+Usage Example:
+    # Get a Pinecone-compatible index
+    index = client.get_pinecone_index("my_table", "embedding_column")
+
+    # Query vectors with metadata filtering
+    results = index.query(
+        vector=[0.1, 0.2, 0.3, ...],
+        top_k=10,
+        include_metadata=True,
+        filter={"category": "technology", "price": {"$gte": 100}}
+    )
+
+    # Process results
+    for match in results.matches:
+        print(f"ID: {match.id}, Score: {match.score}")
+        print(f"Metadata: {match.metadata}")
+
+    # Upsert vectors (IVF index only)
+    index.upsert([
+        {"id": "doc1", "embedding": [0.1, 0.2, ...], "title": "Document 1"},
+        {"id": "doc2", "embedding": [0.3, 0.4, ...], "title": "Document 2"}
+    ])
+
+    # Delete vectors (IVF index only)
+    index.delete(["doc1", "doc2"])
 """
 
 import re
@@ -23,7 +71,15 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class VectorMatch:
-    """Represents a vector search match result"""
+    """
+    Represents a single vector search match result.
+
+    Attributes:
+        id: Unique identifier for the vector (primary key value as string)
+        score: Similarity score (lower is more similar for L2 distance)
+        metadata: Dictionary containing all metadata fields from the table
+        values: Optional vector values if include_values=True in query
+    """
 
     id: str
     score: float
@@ -33,7 +89,14 @@ class VectorMatch:
 
 @dataclass
 class QueryResponse:
-    """Represents a query response compatible with Pinecone"""
+    """
+    Represents a query response compatible with Pinecone API.
+
+    Attributes:
+        matches: List of VectorMatch objects containing search results
+        namespace: Namespace identifier (empty string for MatrixOne)
+        usage: Optional usage statistics (e.g., {"read_units": 10})
+    """
 
     matches: List[VectorMatch]
     namespace: str = ""
@@ -47,6 +110,39 @@ class PineconeCompatibleIndex:
     This class provides a high-level interface for vector search operations
     that is compatible with Pinecone's API, making it easy to migrate from
     Pinecone to MatrixOne.
+
+    Features:
+    - Vector similarity search with multiple distance metrics (L2, cosine, inner product)
+    - Metadata filtering with Pinecone-compatible filter syntax
+    - Vector upsert and delete operations (IVF index only)
+    - Support for both synchronous and asynchronous operations
+    - Automatic index type detection (IVF/HNSW)
+    - Case-insensitive column name handling
+
+    Supported Index Types:
+    - IVF (Inverted File): Supports upsert/delete operations, good for frequent updates
+    - HNSW (Hierarchical Navigable Small World): Read-only, optimized for search performance
+
+    Example:
+        # Get a Pinecone-compatible index
+        index = client.get_pinecone_index("my_table", "embedding_column")
+
+        # Query vectors
+        results = index.query(
+            vector=[0.1, 0.2, 0.3, ...],
+            top_k=10,
+            include_metadata=True,
+            filter={"category": "technology", "price": {"$gte": 100}}
+        )
+
+        # Upsert vectors (IVF index only)
+        index.upsert([
+            {"id": "doc1", "embedding": [0.1, 0.2, ...], "title": "Document 1"},
+            {"id": "doc2", "embedding": [0.3, 0.4, ...], "title": "Document 2"}
+        ])
+
+        # Delete vectors (IVF index only)
+        index.delete(["doc1", "doc2"])
     """
 
     def __init__(self, client, table_name: str, vector_column: str):
@@ -54,9 +150,14 @@ class PineconeCompatibleIndex:
         Initialize PineconeCompatibleIndex.
 
         Args:
-            client: MatrixOne client instance
+            client: MatrixOne client instance (Client or AsyncClient)
             table_name: Name of the table containing vectors
-            vector_column: Name of the vector column
+            vector_column: Name of the vector column containing embeddings
+
+        Note:
+            The table must already exist and contain a vector column.
+            The primary key column will be automatically detected.
+            Metadata columns are all non-primary-key, non-vector columns.
         """
         self.client = client
         self.table_name = table_name
@@ -390,18 +491,85 @@ class PineconeCompatibleIndex:
         namespace: str = "",
     ) -> QueryResponse:
         """
-        Query the vector index (Pinecone-compatible API).
+        Query the vector index using similarity search (Pinecone-compatible API).
+
+        Performs vector similarity search and returns the most similar vectors
+        based on the configured distance metric (L2, cosine, or inner product).
 
         Args:
-            vector: Query vector
-            top_k: Number of results to return
-            include_metadata: Whether to include metadata in results
-            include_values: Whether to include vector values in results
-            filter: Optional metadata filter (Pinecone-compatible)
-            namespace: Namespace (not used in MatrixOne)
+            vector: Query vector for similarity search. Must match the dimension
+                   of vectors in the index.
+            top_k: Maximum number of results to return (default: 10)
+            include_metadata: Whether to include metadata fields in results (default: True)
+            include_values: Whether to include vector values in results (default: False)
+            filter: Optional metadata filter using Pinecone-compatible syntax:
+                    - Equality: {"category": "technology"} or {"category": {"$eq": "technology"}}
+                    - Not Equal: {"status": {"$ne": "inactive"}}
+                    - Greater Than: {"price": {"$gt": 100}}
+                    - Greater Than or Equal: {"price": {"$gte": 100}}
+                    - Less Than: {"price": {"$lt": 500}}
+                    - Less Than or Equal: {"price": {"$lte": 500}}
+                    - In: {"status": {"$in": ["active", "pending", "review"]}}
+                    - Not In: {"category": {"$nin": ["deprecated", "archived"]}}
+                    - Logical AND: {"$and": [{"category": "tech"}, {"price": {"$gt": 50}}]}
+                    - Logical OR: {"$or": [{"status": "active"}, {"priority": "high"}]}
+                    - Nested conditions: {"$and": [{"$or": [{"a": 1}, {"b": 2}]}, {"c": 3}]}
+            namespace: Namespace identifier (not used in MatrixOne, kept for compatibility)
 
         Returns:
-            QueryResponse object with matches
+            QueryResponse: Object containing:
+                - matches: List of VectorMatch objects with id, score, metadata, and optional values
+                - namespace: Namespace (empty string for MatrixOne)
+                - usage: Dictionary with read_units count
+
+        Example:
+            # Basic similarity search
+            results = index.query([0.1, 0.2, 0.3], top_k=5)
+
+            # Simple equality filter
+            results = index.query(
+                vector=[0.1, 0.2, 0.3],
+                filter={"category": "technology"}
+            )
+
+            # Comparison operators
+            results = index.query(
+                vector=[0.1, 0.2, 0.3],
+                filter={"price": {"$gte": 100, "$lt": 500}}
+            )
+
+            # In/Not In operators
+            results = index.query(
+                vector=[0.1, 0.2, 0.3],
+                filter={"status": {"$in": ["active", "pending"]}}
+            )
+
+            # Logical AND/OR operators
+            results = index.query(
+                vector=[0.1, 0.2, 0.3],
+                filter={
+                    "$and": [
+                        {"category": {"$in": ["tech", "science"]}},
+                        {"$or": [{"price": {"$lt": 100}}, {"discount": True}]}
+                    ]
+                }
+            )
+
+            # Complex nested conditions
+            results = index.query(
+                vector=[0.1, 0.2, 0.3],
+                filter={
+                    "$and": [
+                        {"$or": [{"priority": "high"}, {"urgent": True}]},
+                        {"status": {"$ne": "archived"}},
+                        {"created_date": {"$gte": "2024-01-01"}}
+                    ]
+                }
+            )
+
+        Raises:
+            ValueError: If vector dimension doesn't match index dimension
+            RuntimeError: If used with async client (use query_async instead)
         """
         index_info = self._get_index_info()
 
@@ -574,14 +742,38 @@ class PineconeCompatibleIndex:
 
     def delete(self, ids: List[Any], namespace: str = ""):
         """
-        Delete vectors by IDs (Pinecone-compatible API).
+        Delete vectors by their primary key IDs (IVF index only).
+
+        Removes vectors from the index based on their primary key values.
+        This operation is only supported for IVF indexes, not HNSW indexes.
 
         Args:
-            ids: List of vector IDs to delete (can be any type: str, int, etc.)
-            namespace: Namespace (not used in MatrixOne)
+            ids: List of primary key values to delete. Can be any type (str, int, etc.)
+                 that matches the primary key column type.
+            namespace: Namespace identifier (not used in MatrixOne, kept for compatibility)
+
+        Returns:
+            None
+
+        Example:
+            # Delete vectors by ID
+            index.delete(["doc1", "doc2", "doc3"])
+
+            # Delete vectors with integer IDs
+            index.delete([1, 2, 3, 4, 5])
+
+            # Delete a single vector
+            index.delete(["single_doc_id"])
 
         Raises:
             ValueError: If the index type is HNSW (not supported for delete operations)
+            RuntimeError: If used with async client (use delete_async instead)
+
+        Note:
+            - Only IVF indexes support delete operations
+            - HNSW indexes are read-only and do not support upsert/delete
+            - IDs must match the primary key column type and values
+            - Non-existent IDs are silently ignored (no error raised)
         """
         index_info = self._get_index_info()
 
@@ -638,10 +830,29 @@ class PineconeCompatibleIndex:
 
     def describe_index_stats(self) -> Dict[str, Any]:
         """
-        Get index statistics (Pinecone-compatible API).
+        Get comprehensive index statistics (Pinecone-compatible API).
+
+        Returns detailed information about the vector index including dimensions,
+        vector count, and namespace information.
 
         Returns:
-            Dictionary with index statistics
+            Dict: Index statistics containing:
+                - dimension: Vector dimension size
+                - index_fullness: Index fullness ratio (always 0.0 for MatrixOne)
+                - total_vector_count: Total number of vectors in the index
+                - namespaces: Dictionary with namespace information:
+                    - "": Default namespace with vector_count
+
+        Example:
+            stats = index.describe_index_stats()
+            print(f"Index has {stats['total_vector_count']} vectors")
+            print(f"Vector dimension: {stats['dimension']}")
+            print(f"Namespace vector count: {stats['namespaces']['']['vector_count']}")
+
+        Note:
+            - index_fullness is always 0.0 as MatrixOne doesn't use this concept
+            - Only the default namespace ("") is supported
+            - Vector count is the total number of rows in the table
         """
         # Get table row count using unified SQL builder
         from .sql_builder import build_select_query
@@ -684,17 +895,53 @@ class PineconeCompatibleIndex:
 
     def upsert(self, vectors: List[Dict[str, Any]], namespace: str = ""):
         """
-        Upsert vectors (MatrixOne native API).
+        Upsert vectors into the index (IVF index only).
+
+        Inserts new vectors or updates existing ones based on the primary key.
+        This operation is only supported for IVF indexes, not HNSW indexes.
 
         Args:
-            vectors: List of vectors to upsert. Each vector should be a dict with:
+            vectors: List of vector dictionaries to upsert. Each vector dict must contain:
                 - Primary key field: Value for the primary key column (required)
-                - Vector field: Vector values (required)
-                - Other fields: Any additional metadata fields
-            namespace: Namespace (not used in MatrixOne)
+                - Vector field: Vector values as a list of floats (required)
+                - Additional fields: Any metadata fields to store
+            namespace: Namespace identifier (not used in MatrixOne, kept for compatibility)
 
         Returns:
-            Dict with upsert statistics
+            Dict: Statistics about the upsert operation:
+                - upserted_count: Number of vectors successfully upserted
+
+        Example:
+            # Upsert vectors with metadata
+            vectors = [
+                {
+                    "id": "doc1",  # Primary key field
+                    "embedding": [0.1, 0.2, 0.3, 0.4],  # Vector field
+                    "title": "Document 1",
+                    "category": "technology",
+                    "price": 99.99
+                },
+                {
+                    "id": "doc2",
+                    "embedding": [0.5, 0.6, 0.7, 0.8],
+                    "title": "Document 2",
+                    "category": "science",
+                    "price": 149.99
+                }
+            ]
+            result = index.upsert(vectors)
+            print(f"Upserted {result['upserted_count']} vectors")
+
+        Raises:
+            ValueError: If the index type is HNSW (not supported for upsert operations)
+            ValueError: If a vector is missing required fields (primary key or vector)
+            RuntimeError: If used with async client (use upsert_async instead)
+
+        Note:
+            - Only IVF indexes support upsert operations
+            - HNSW indexes are read-only and do not support upsert/delete
+            - Vector dimensions must match the index configuration
+            - Primary key values must be unique within the table
         """
         if not vectors:
             return {"upserted_count": 0}

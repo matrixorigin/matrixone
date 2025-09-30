@@ -1151,21 +1151,34 @@ class AsyncFulltextIndexManager:
         self.client = client
 
     async def create(
-        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+        self, table_name_or_model, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
     ) -> "AsyncFulltextIndexManager":
         """
         Create a fulltext index using chain operations.
 
         Args:
-            table_name: Target table name
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Index name
             columns: Column(s) to index
             algorithm: Fulltext algorithm type (TF-IDF or BM25)
 
         Returns:
             AsyncFulltextIndexManager: Self for chaining
+
+        Example:
+            # Create fulltext index by table name
+            await client.fulltext_index.create("articles", name="idx_content", columns=["title", "content"])
+
+            # Create fulltext index by model class
+            await client.fulltext_index.create(ArticleModel, name="idx_content", columns=["title", "content"])
         """
         from sqlalchemy import text
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         try:
             if isinstance(columns, str):
@@ -1181,18 +1194,31 @@ class AsyncFulltextIndexManager:
         except Exception as e:
             raise Exception(f"Failed to create fulltext index {name} on table {table_name}: {e}")
 
-    async def drop(self, table_name: str, name: str) -> "AsyncFulltextIndexManager":
+    async def drop(self, table_name_or_model, name: str) -> "AsyncFulltextIndexManager":
         """
         Drop a fulltext index using chain operations.
 
         Args:
-            table_name: Target table name
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Index name
 
         Returns:
             AsyncFulltextIndexManager: Self for chaining
+
+        Example:
+            # Drop fulltext index by table name
+            await client.fulltext_index.drop("articles", "idx_content")
+
+            # Drop fulltext index by model class
+            await client.fulltext_index.drop(ArticleModel, "idx_content")
         """
         from sqlalchemy import text
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
@@ -1202,7 +1228,7 @@ class AsyncFulltextIndexManager:
 
             return self
         except Exception as e:
-            raise Exception(f"Failed to drop fulltext index {name} on table {table_name}: {e}")
+            raise Exception(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
 
     async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
         """
@@ -1359,7 +1385,7 @@ class AsyncClient(BaseMatrixOneClient):
 
                 # Vector similarity search
                 results = await client.vector_ops.similarity_search(
-                    table_name="documents",
+                    "documents",
                     vector_column="embedding",
                     query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
                     limit=10,

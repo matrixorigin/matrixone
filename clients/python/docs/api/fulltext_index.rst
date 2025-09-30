@@ -51,7 +51,7 @@ Basic Fulltext Index Creation
 
     # Create a fulltext index
     client.fulltext_index.create(
-        table_name='articles',
+        table_name_or_model='articles',
         name='ftidx_content',
         columns=['title', 'content'],
         algorithm='TF-IDF'
@@ -105,7 +105,7 @@ Async Operations
 
     # Create fulltext index asynchronously
     await async_client.fulltext_index.create(
-        table_name='articles',
+        table_name_or_model='articles',
         name='ftidx_async',
         columns=['title', 'content']
     )

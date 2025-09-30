@@ -173,7 +173,7 @@ Vector Operations with Table Models
    # Vector similarity search using simple interface
    query_vector = [0.1] * 384
    results = client.vector_ops.similarity_search(
-       table_name="documents",
+       table_name_or_model="documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -241,7 +241,7 @@ HNSW Vector Indexing
    # Vector similarity search
    query_vector = [0.2] * 128
    results = client.vector_ops.similarity_search(
-       table_name="products",
+       table_name_or_model="products",
        vector_column="features",
        query_vector=query_vector,
        limit=5,
@@ -336,7 +336,7 @@ Vector Search with Modern API
    # Create vector index using vector_ops API
    client.vector_ops.enable_ivf()
    client.vector_ops.create_ivf(
-       table_name="documents",
+       table_name_or_model="documents",
        name="idx_embedding",
        column="embedding",
        lists=50,
@@ -365,7 +365,7 @@ Vector Search with Modern API
    # Vector similarity search using vector_query API
    query_vector = np.random.rand(384).astype(np.float32).tolist()
    results = client.vector_ops.similarity_search(
-       table_name="documents",
+       table_name_or_model="documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -408,7 +408,7 @@ Async Vector Operations
        # Create vector index using async vector_ops API
        await client.vector_ops.enable_ivf()
        await client.vector_ops.create_ivf(
-           table_name="products",
+           table_name_or_model="products",
            name="idx_features",
            column="features",
            lists=100,
@@ -437,7 +437,7 @@ Async Vector Operations
        # Vector similarity search using async vector_query API
        query_vector = np.random.rand(512).astype(np.float64).tolist()
        results = await client.vector_ops.similarity_search(
-           table_name="products",
+           table_name_or_model="products",
            vector_column="features",
            query_vector=query_vector,
            limit=3,
