@@ -181,6 +181,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 			txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 			if err != nil {
 				errch <- err
+				return
 			}
 			defer func() {
 				if err != nil {
