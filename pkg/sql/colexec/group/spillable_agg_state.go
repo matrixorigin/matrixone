@@ -54,18 +54,18 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 		logutil.Error("SpillableAggState failed to write group vector types count", zap.Error(err))
 		return nil, err
 	}
-	for _, typ := range s.GroupVectorTypes {
+	for i, typ := range s.GroupVectorTypes {
 		typBytes, err := typ.MarshalBinary()
 		if err != nil {
-			logutil.Error("SpillableAggState failed to marshal vector type", zap.Error(err))
+			logutil.Error("SpillableAggState failed to marshal vector type", zap.Int("type_index", i), zap.Error(err))
 			return nil, err
 		}
 		if err := binary.Write(buf, binary.LittleEndian, int32(len(typBytes))); err != nil {
-			logutil.Error("SpillableAggState failed to write type bytes length", zap.Error(err))
+			logutil.Error("SpillableAggState failed to write type bytes length", zap.Int("type_index", i), zap.Error(err))
 			return nil, err
 		}
 		if _, err := buf.Write(typBytes); err != nil {
-			logutil.Error("SpillableAggState failed to write type bytes", zap.Error(err))
+			logutil.Error("SpillableAggState failed to write type bytes", zap.Int("type_index", i), zap.Error(err))
 			return nil, err
 		}
 	}
@@ -95,10 +95,6 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 			logutil.Error("SpillableAggState failed to write vector bytes",
 				zap.Int("vec_index", i), zap.Error(err))
 			return nil, err
-		}
-
-		if i >= len(s.GroupVectorTypes) {
-			s.GroupVectorTypes = append(s.GroupVectorTypes, *vec.GetType())
 		}
 	}
 
