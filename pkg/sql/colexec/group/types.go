@@ -93,6 +93,10 @@ type Group struct {
 	GroupingFlag []bool
 	// agg info and agg column.
 	Aggs []aggexec.AggFuncExecExpression
+
+	// spill configuration
+	SpillManager   SpillManager
+	SpillThreshold int64
 }
 
 func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
@@ -161,6 +165,11 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
+
+	// spill state
+	currentMemUsage int64
+	spilledStates   []SpillID
+	spillPending    bool
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
@@ -173,6 +182,11 @@ func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 	group.ctr.freeGroupEvaluate()
 	group.ctr.freeAggEvaluate()
 	group.FreeProjection(proc)
+
+	if group.SpillManager != nil {
+		group.SpillManager.Free()
+		group.SpillManager = nil
+	}
 }
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -189,6 +203,13 @@ func (group *Group) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.hr.Free0()
 	group.ctr.result1.Free0(mp)
 	group.ctr.result2.Free0(mp)
+
+	for _, id := range group.ctr.spilledStates {
+		if group.SpillManager != nil {
+			group.SpillManager.Delete(id)
+		}
+	}
+	group.ctr.spilledStates = nil
 }
 
 func (ctr *container) freeAggEvaluate() {
