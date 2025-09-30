@@ -68,10 +68,10 @@ func TestGroupSpillLargeGroups(t *testing.T) {
 		INSERT INTO large_group_test (id, group_col1, group_col2, value_col)
 		SELECT 
 			g.result as id,
-			FLOOR(RAND() * 100000) as group_col1,  -- 100k distinct values
-			CONCAT('group_', FLOOR(RAND() * 50000)) as group_col2,  -- 50k distinct values
+			FLOOR(RAND() * 100000) as group_col1,  
+			CONCAT('group_', FLOOR(RAND() * 50000)) as group_col2,  
 			FLOOR(RAND() * 1000) as value_col
-		FROM generate_series(1000000) g  -- 1M rows creating many distinct combinations
+		FROM generate_series(1000000) g  
 	`)
 	require.NoError(t, err)
 

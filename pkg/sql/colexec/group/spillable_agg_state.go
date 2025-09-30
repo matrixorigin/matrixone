@@ -187,11 +187,9 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 
-		var vecType types.Type
+		vecType := types.T_any.ToType()
 		if i < len(s.GroupVectorTypes) {
 			vecType = s.GroupVectorTypes[i]
-		} else {
-			vecType = types.T_any.ToType()
 		}
 
 		vec := vector.NewOffHeapVecWithType(vecType)
