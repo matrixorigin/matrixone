@@ -1,27 +1,26 @@
 Quick Start
 ===========
 
-This guide will help you get started with the MatrixOne Python SDK quickly using modern API patterns, vector search, fulltext search, and enhanced query building capabilities.
+This guide will help you get started with the MatrixOne Python SDK quickly. For detailed configuration options, see :doc:`configuration_guide`.
 
-Basic Usage with Table Models and Modern API
-----------------------------------------------
+Basic Usage
+-----------
 
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.config import get_connection_params, print_config
    from sqlalchemy import Column, Integer, String, DateTime
    from sqlalchemy.ext.declarative import declarative_base
 
-   # Print connection configuration (reads from environment variables)
-   print_config()
-
-   # Get connection parameters automatically
-   host, port, user, password, database = get_connection_params()
-
    # Create and connect to MatrixOne
    client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
+   client.connect(
+       host="127.0.0.1",
+       port=6001,
+       user="root",
+       password="111",
+       database="test"
+   )
 
    # Define table model
    Base = declarative_base()

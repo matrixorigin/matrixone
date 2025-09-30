@@ -16,12 +16,10 @@ type safety and extensive documentation.
    installation
    quickstart
    configuration_guide
+   connection_hooks_guide
    orm_guide
-   logical_in_guide
    vector_guide
-   pinecone_guide
    fulltext_guide
-   orm_vector_search_guide
    account_guide
    pubsub_guide
    snapshot_restore_guide

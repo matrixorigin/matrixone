@@ -24,12 +24,10 @@ Creating Tables with Text Content
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.config import get_connection_params
 
-   # Get connection parameters
-   host, port, user, password, database = get_connection_params()
+   # Create client and connect (see configuration_guide for connection options)
    client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
 
    # Create table with text content using create_table API
    client.create_table("articles", {

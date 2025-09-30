@@ -16,7 +16,7 @@ MatrixOne provides powerful vector operations designed for modern AI and machine
 * **ORM Support**: Full SQLAlchemy integration with vector types
 * **Performance Optimization**: Built-in query optimization and index management
 
-For detailed information about the Pinecone-compatible index interface, see the :doc:`pinecone_guide`.
+The vector guide covers both basic vector operations and advanced indexing features.
 
 Modern Vector Operations
 ------------------------
@@ -29,15 +29,13 @@ Creating Vector Tables with Table Models
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.config import get_connection_params
    from sqlalchemy import Column, Integer, String, Text, JSON
    from sqlalchemy.ext.declarative import declarative_base
    from matrixone.sqlalchemy_ext import Vectorf32, Vectorf64
 
-   # Get connection parameters
-   host, port, user, password, database = get_connection_params()
+   # Create client and connect (see configuration_guide for connection options)
    client = Client()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
 
    # Define table models
    Base = declarative_base()
@@ -570,11 +568,44 @@ Best Practices
    - Provide meaningful error messages
    - Clean up resources properly
 
+Pinecone-Compatible Interface
+-----------------------------
+
+MatrixOne provides a Pinecone-compatible interface for easy migration from Pinecone:
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.search_vector_index import PineconeCompatibleIndex
+
+   client = Client()
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+
+   # Create Pinecone-compatible index
+   index = PineconeCompatibleIndex(
+       client=client,
+       table_name="documents",
+       vector_column="embedding",
+       dimension=384
+   )
+
+   # Pinecone-style operations
+   index.upsert([
+       {"id": "1", "values": [0.1, 0.2, 0.3] * 128, "metadata": {"title": "Document 1"}},
+       {"id": "2", "values": [0.4, 0.5, 0.6] * 128, "metadata": {"title": "Document 2"}}
+   ])
+
+   # Query with Pinecone-style interface
+   results = index.query(
+       vector=[0.1, 0.2, 0.3] * 128,
+       top_k=5,
+       include_metadata=True
+   )
+
 Next Steps
 ----------
 
 * Read the :doc:`api/vector_manager` for detailed vector query API
-* Check out the :doc:`api/vector_manager` for vector index management
-* Explore :doc:`pinecone_guide` for Pinecone-compatible interface
+* Check out the :doc:`api/vector_index` for vector index management
 * Learn about :doc:`orm_guide` for ORM patterns with vectors
 * Check out the :doc:`examples` for comprehensive usage examples
