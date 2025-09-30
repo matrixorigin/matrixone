@@ -88,11 +88,15 @@ func LoadPersistedColumnDatas(
 	typs := make([]types.Type, 0)
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
+	committsIdx := -1
+	assignedCommitts := false
 	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
 		if colIdx == objectio.SEQNUM_COMMITTS {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
 			typs = append(typs, objectio.TSType)
+			committsIdx = i
+			assignedCommitts = true
 			continue
 		}
 		def := schema.ColDefs[colIdx]
@@ -113,10 +117,15 @@ func LoadPersistedColumnDatas(
 	}
 	if tsForAppendable != nil {
 		deletes = nulls.NewWithSize(1024)
-		cols = append(cols, objectio.SEQNUM_COMMITTS)
-		defer func() {
-			cols = cols[:len(cols)-1]
-		}()
+		if committsIdx == -1 {
+			cols = append(cols, objectio.SEQNUM_COMMITTS)
+			typs = append(typs, types.T_TS.ToType())
+			committsIdx = len(cols) - 1
+			defer func() {
+				cols = cols[:len(cols)-1]
+				typs = typs[:len(typs)-1]
+			}()
+		}
 	}
 	var vecs []containers.Vector
 	var err error
@@ -134,14 +143,16 @@ func LoadPersistedColumnDatas(
 		return nil, deletes, err
 	}
 	if tsForAppendable != nil {
-		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[len(vecs)-1].GetDownstreamVector())
-		for i := 0; i < len(commits); i++ {
+		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[committsIdx].GetDownstreamVector())
+		for i := range commits {
 			if commits[i].GT(tsForAppendable) {
 				deletes.Add(uint64(i))
 			}
 		}
-		vecs[len(vecs)-1].Close()
-		vecs = vecs[:len(vecs)-1]
+		if !assignedCommitts {
+			vecs[committsIdx].Close()
+			vecs = vecs[:len(vecs)-1]
+		}
 	}
 	for i, vec := range vecs {
 		idx := i
