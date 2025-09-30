@@ -32,6 +32,7 @@ from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionHook, ConnectionAction, create_connection_hook
 from .exceptions import ConnectionError, QueryError
 from .logger import MatrixOneLogger, create_default_logger
+from .metadata import MetadataManager, TransactionMetadataManager
 from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
@@ -230,6 +231,7 @@ class Client(BaseMatrixOneClient):
         # self._vector_query = None  # Removed - functionality moved to vector_ops
         self._vector_data = None
         self._fulltext_index = None
+        self._metadata = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -543,6 +545,7 @@ class Client(BaseMatrixOneClient):
         self._vector = VectorManager(self)
         # self._vector_query = VectorQueryManager(self)  # Removed - functionality moved to vector_ops
         self._fulltext_index = FulltextIndexManager(self)
+        self._metadata = MetadataManager(self)
 
     def disconnect(self) -> None:
         """
@@ -1157,6 +1160,11 @@ class Client(BaseMatrixOneClient):
     def fulltext_index(self) -> Optional["FulltextIndexManager"]:
         """Get fulltext index manager for fulltext index operations"""
         return self._fulltext_index
+
+    @property
+    def metadata(self) -> Optional["MetadataManager"]:
+        """Get metadata manager for table metadata operations"""
+        return self._metadata
 
     # @property
     # def vector_query(self) -> Optional["VectorQueryManager"]:
@@ -2418,6 +2426,7 @@ class TransactionWrapper:
         self.account = TransactionAccountManager(self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
+        self.metadata = TransactionMetadataManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
 

@@ -20,6 +20,7 @@ type safety and extensive documentation.
    orm_guide
    vector_guide
    fulltext_guide
+   metadata_guide
    account_guide
    pubsub_guide
    snapshot_restore_guide
@@ -37,6 +38,7 @@ Features
 * 🔄 **Async Support**: Full async/await support with AsyncClient for non-blocking operations
 * 🧠 **Vector Search**: Advanced vector similarity search with HNSW and IVF indexing
 * 🔍 **Fulltext Search**: Powerful fulltext search with BM25 and TF-IDF algorithms
+* 📊 **Metadata Analysis**: Comprehensive table and column metadata analysis with statistics
 * 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 * ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 * 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication

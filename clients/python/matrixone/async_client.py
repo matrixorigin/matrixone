@@ -48,6 +48,7 @@ from .exceptions import (
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
+from .async_metadata_manager import AsyncMetadataManager
 from .pitr import Pitr
 from .pubsub import Publication, Subscription
 from .snapshot import Snapshot, SnapshotLevel
@@ -1473,6 +1474,7 @@ class AsyncClient(BaseMatrixOneClient):
         self._pubsub = AsyncPubSubManager(self)
         self._account = AsyncAccountManager(self)
         self._fulltext_index = None
+        self._metadata = None
 
     async def connect(
         self,
@@ -1546,6 +1548,9 @@ class AsyncClient(BaseMatrixOneClient):
 
             # Initialize vector managers after successful connection
             self._initialize_vector_managers()
+
+            # Initialize metadata manager after successful connection
+            self._metadata = AsyncMetadataManager(self)
 
             self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
@@ -2488,6 +2493,11 @@ class AsyncClient(BaseMatrixOneClient):
             await conn.run_sync(metadata.create_all)
 
         return self
+
+    @property
+    def metadata(self) -> Optional["AsyncMetadataManager"]:
+        """Get metadata manager for table metadata operations"""
+        return self._metadata
 
 
 class AsyncTransactionVectorIndexManager(AsyncVectorManager):
