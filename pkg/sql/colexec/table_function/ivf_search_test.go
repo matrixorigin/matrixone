@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -94,12 +95,12 @@ func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param st
 	return ret
 }
 
-func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_ivf_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
-func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+func mockVersion(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (int64, error) {
 	return 0, nil
 }
 
@@ -108,7 +109,7 @@ type MockIvfSearch[T types.RealNumbers] struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockIvfSearch[T]) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockIvfSearch[T]) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []any{int64(1)}, []float64{2.0}, nil
 }
@@ -116,7 +117,7 @@ func (m *MockIvfSearch[T]) Search(proc *process.Process, query any, rt vectorind
 func (m *MockIvfSearch[T]) Destroy() {
 }
 
-func (m *MockIvfSearch[T]) Load(*process.Process) error {
+func (m *MockIvfSearch[T]) Load(*sqlexec.SqlProcess) error {
 	//time.Sleep(6 * time.Second)
 	return nil
 }

@@ -15,9 +15,9 @@
 package vectorindex
 
 import (
-	"encoding/json"
 	"runtime"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -161,7 +161,7 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
 
-	b, err := json.Marshal(h)
+	b, err := sonic.Marshal(h)
 	if err != nil {
 		return "", err
 	}

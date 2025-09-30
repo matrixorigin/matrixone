@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 
@@ -41,20 +42,21 @@ import (
 )
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
 }
 
 // give blob
 func mock_runSql_streaming(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
 ) (executor.Result, error) {
 
+	proc := sqlproc.Proc
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
@@ -62,15 +64,15 @@ func mock_runSql_streaming(
 }
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql_2files(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql_2files(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch2Files(proc)}}, nil
 }
 
 // give blob
 func mock_runSql_streaming_2files(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
@@ -82,6 +84,7 @@ func mock_runSql_streaming_2files(
 		idx = 1
 	}
 
+	proc := sqlproc.Proc
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch2Files(proc, idx)}}
 	ch <- res
@@ -89,20 +92,22 @@ func mock_runSql_streaming_2files(
 }
 
 // give moindexes metadata [index_table_name, algo_table_type, algo_params, column_name]
-func mock_runCatalogSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runCatalogSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMoIndexesBatch(proc)}}, nil
 }
 
 // give moindexes metadata [index_table_name, algo_table_type, algo_params, column_name]
-func mock_runEmptyCatalogSql(proc *process.Process, sql string) (executor.Result, error) {
+func mock_runEmptyCatalogSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
 	runSql = mock_runSql
@@ -131,7 +136,7 @@ func TestHnsw(t *testing.T) {
 				cache.Cache.Once()
 
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)

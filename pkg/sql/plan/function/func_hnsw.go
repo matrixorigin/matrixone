@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -76,7 +77,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
 			// hnsw sync
 			//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
-			err = hnsw.CdcSync[float32](proc, string(dbname), string(tblname), typ, dim, &cdc)
+			err = hnsw.CdcSync[float32](sqlexec.NewSqlProcess(proc), string(dbname), string(tblname), typ, dim, &cdc)
 			if err != nil {
 				return err
 			}
@@ -91,7 +92,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
 			// hnsw sync
 			//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
-			err = hnsw.CdcSync[float64](proc, string(dbname), string(tblname), typ, dim, &cdc)
+			err = hnsw.CdcSync[float64](sqlexec.NewSqlProcess(proc), string(dbname), string(tblname), typ, dim, &cdc)
 			if err != nil {
 				return err
 			}

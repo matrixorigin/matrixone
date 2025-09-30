@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var runSql = sqlexec.RunSql
@@ -56,7 +55,7 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	ThreadsSearch int64
 }
 
-func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
 	sql := fmt.Sprintf(
@@ -103,7 +102,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 // load chunk from database
 func (idx *IvfflatSearchIndex[T]) searchEntries(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	query []T,
 	distfn metric.DistanceFunction[T],
 	heap *vectorindex.SearchResultSafeHeap,
@@ -116,6 +115,8 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(
 		res executor.Result
 	)
 
+	procCtx := sqlproc.GetContext()
+
 	select {
 	case res, ok = <-stream_chan:
 		if !ok {
@@ -123,8 +124,8 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(
 		}
 	case err = <-error_chan:
 		return false, err
-	case <-proc.Ctx.Done():
-		return false, proc.Ctx.Err()
+	case <-procCtx.Done():
+		return false, procCtx.Err()
 	case <-ctx.Done():
 		// local context cancelled. something went wrong with other threads
 		return false, context.Cause(ctx)
@@ -149,7 +150,7 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(
 	return false, nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
 
 	if len(idx.Centroids) == 0 {
 		// empty index has id = 1
@@ -195,7 +196,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
-			return nil, moerr.NewInternalError(proc.Ctx, "findCentroids: heap return key is not int64")
+			return nil, moerr.NewInternalError(sqlproc.GetContext(), "findCentroids: heap return key is not int64")
 		}
 		res = append(res, sr.Id)
 	}
@@ -206,7 +207,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 
 // Call usearch.Search
 func (idx *IvfflatSearchIndex[T]) Search(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	query []T,
@@ -222,7 +223,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return nil, nil, err
 	}
 
-	centroids_ids, err := idx.findCentroids(proc, query, distfn, idxcfg, rt.Probe, nthread)
+	centroids_ids, err := idx.findCentroids(sqlproc, query, distfn, idxcfg, rt.Probe, nthread)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -249,7 +250,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	var (
 		wg          sync.WaitGroup
-		ctx, cancel = context.WithCancelCause(proc.GetTopContext())
+		ctx, cancel = context.WithCancelCause(sqlproc.GetTopContext())
 	)
 	defer cancel(nil)
 
@@ -257,7 +258,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	go func() {
 		defer wg.Done()
 		if _, err2 := runSql_streaming(
-			ctx, proc, sql, stream_chan, error_chan,
+			ctx, sqlproc, sql, stream_chan, error_chan,
 		); err2 != nil {
 			// consumer notify the producer to stop the sql streaming
 			cancel(err2)
@@ -282,7 +283,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			)
 			for !streamClosed {
 				if streamClosed, err2 = idx.searchEntries(
-					ctx, proc, query, distfn, heap, stream_chan, error_chan,
+					ctx, sqlproc, query, distfn, heap, stream_chan, error_chan,
 				); err2 != nil {
 					// consumer notify the producer to stop the sql streaming
 					cancel(err2)
@@ -329,10 +330,12 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	default:
 	}
 
+	procCtx := sqlproc.GetContext()
+
 	// check local context cancelled
 	select {
-	case <-proc.Ctx.Done():
-		err = proc.Ctx.Err()
+	case <-procCtx.Done():
+		err = procCtx.Err()
 		return
 	case <-ctx.Done():
 		err = context.Cause(ctx)
@@ -349,7 +352,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
 		if !ok {
-			err = moerr.NewInternalError(proc.Ctx, "ivf search: heap return key is not any")
+			err = moerr.NewInternalError(sqlproc.GetContext(), "ivf search: heap return key is not any")
 			return
 		}
 		resid = append(resid, sr.Id)
@@ -374,14 +377,14 @@ func NewIvfflatSearch[T types.RealNumbers](
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
 func (s *IvfflatSearch[T]) Search(
-	proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig,
+	sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig,
 ) (keys any, distances []float64, err error) {
 	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")
 	}
 
-	return s.Index.Search(proc, s.Idxcfg, s.Tblcfg, query, rt, s.ThreadsSearch)
+	return s.Index.Search(sqlproc, s.Idxcfg, s.Tblcfg, query, rt, s.ThreadsSearch)
 }
 
 func (s *IvfflatSearch[T]) Contains(key int64) (bool, error) {
@@ -398,11 +401,11 @@ func (s *IvfflatSearch[T]) Destroy() {
 }
 
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
-func (s *IvfflatSearch[T]) Load(proc *process.Process) error {
+func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	idx := &IvfflatSearchIndex[T]{}
 	// load index model
-	err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
+	err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
 	if err != nil {
 		return err
 	}
