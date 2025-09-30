@@ -40,7 +40,7 @@ func NewMemorySpillManager() *MemorySpillManager {
 func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	serialized, err := data.Serialize()
 	if err != nil {
-		logutil.Error("MemorySpillManager failed to serialize data", zap.Error(err))
+		logutil.Error("[SPILL] MemorySpillManager failed to serialize data", zap.Error(err))
 		return "", err
 	}
 
@@ -50,7 +50,7 @@ func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	m.data[id] = serialized
 	newTotalMem := atomic.AddInt64(&m.totalMem, int64(len(serialized)))
 
-	logutil.Info("MemorySpillManager spilled data",
+	logutil.Info("[SPILL] MemorySpillManager spilled data",
 		zap.String("spill_id", string(id)),
 		zap.Int("data_size", len(serialized)),
 		zap.Int64("total_memory", newTotalMem))
@@ -64,24 +64,24 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 
 	serialized, exists := m.data[id]
 	if !exists {
-		logutil.Error("MemorySpillManager failed to find spilled data",
+		logutil.Error("[SPILL] MemorySpillManager failed to find spilled data",
 			zap.String("spill_id", string(id)))
 		return nil, fmt.Errorf("spill data not found: %s", id)
 	}
 
-	logutil.Info("MemorySpillManager retrieving spilled data",
+	logutil.Info("[SPILL] MemorySpillManager retrieving spilled data",
 		zap.String("spill_id", string(id)),
 		zap.Int("data_size", len(serialized)))
 
 	data := &SpillableAggState{}
 	if err := data.Deserialize(serialized, mp); err != nil {
-		logutil.Error("MemorySpillManager failed to deserialize data",
+		logutil.Error("[SPILL] MemorySpillManager failed to deserialize data",
 			zap.String("spill_id", string(id)), zap.Error(err))
 		data.Free(mp)
 		return nil, err
 	}
 
-	logutil.Info("MemorySpillManager successfully retrieved and deserialized data",
+	logutil.Info("[SPILL] MemorySpillManager successfully retrieved and deserialized data",
 		zap.String("spill_id", string(id)),
 		zap.Int64("estimated_size", data.EstimateSize()))
 
@@ -96,12 +96,12 @@ func (m *MemorySpillManager) Delete(id SpillID) error {
 		newTotalMem := atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
 		delete(m.data, id)
 
-		logutil.Info("MemorySpillManager deleted spilled data",
+		logutil.Info("[SPILL] MemorySpillManager deleted spilled data",
 			zap.String("spill_id", string(id)),
 			zap.Int("data_size", len(serialized)),
 			zap.Int64("total_memory", newTotalMem))
 	} else {
-		logutil.Warn("MemorySpillManager attempted to delete non-existent spilled data",
+		logutil.Warn("[SPILL] MemorySpillManager attempted to delete non-existent spilled data",
 			zap.String("spill_id", string(id)))
 	}
 	return nil
@@ -114,7 +114,7 @@ func (m *MemorySpillManager) Free() {
 	count := len(m.data)
 	totalSize := atomic.LoadInt64(&m.totalMem)
 
-	logutil.Info("MemorySpillManager freeing all spilled data",
+	logutil.Info("[SPILL] MemorySpillManager freeing all spilled data",
 		zap.Int("spilled_count", count),
 		zap.Int64("total_size", totalSize))
 
@@ -123,7 +123,7 @@ func (m *MemorySpillManager) Free() {
 	}
 	m.data = nil
 
-	logutil.Info("MemorySpillManager completed cleanup")
+	logutil.Info("[SPILL] MemorySpillManager completed cleanup")
 }
 
 func (m *MemorySpillManager) TotalMem() int64 {
