@@ -18,10 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 func MarshalJobStatus(status *JobStatus) (string, error) {
@@ -135,7 +138,14 @@ func (r *DataRetrieverImpl) Next() *ISCPData {
 	return data
 }
 
-func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts executor.StatementOption) error {
+func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator) error {
+
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
+
 	if r.typ == ISCPDataType_Snapshot {
 		return nil
 	}
@@ -153,8 +163,12 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 		statusJson,
 		ISCPJobState_Completed,
 	)
-	_, err = exec.Exec(updateWatermarkSQL, opts)
-	return err
+	res, err := ExecWithResult(ctxWithSysAccount, updateWatermarkSQL, cnUUID, txn)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
 }
 
 func (r *DataRetrieverImpl) GetDataType() int8 {

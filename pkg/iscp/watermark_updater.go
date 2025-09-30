@@ -51,7 +51,7 @@ func UnmarshalJobSpec(jsonByte []byte) (*JobSpec, error) {
 	return &jobSpec, nil
 }
 
-func ExecWithResult(
+var ExecWithResult = func(
 	ctx context.Context,
 	sql string,
 	cnUUID string,

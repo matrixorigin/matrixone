@@ -24,10 +24,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 /* IndexConsumer */
@@ -52,6 +58,8 @@ func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
 /* IndexConsumer */
 type IndexConsumer struct {
 	cnUUID       string
+	cnEngine     engine.Engine
+	cnTxnClient  client.TxnClient
 	jobID        JobID
 	info         *ConsumerInfo
 	tableDef     *plan.TableDef
@@ -60,11 +68,14 @@ type IndexConsumer struct {
 	rowdata      []any
 	rowdelete    []any
 	sqlBufSendCh chan []byte
+	algo         string
 }
 
 var _ Consumer = new(IndexConsumer)
 
 func NewIndexConsumer(cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
 	tableDef *plan.TableDef,
 	jobID JobID,
 	info *ConsumerInfo) (Consumer, error) {
@@ -95,20 +106,23 @@ func NewIndexConsumer(cnUUID string,
 	}
 
 	c := &IndexConsumer{cnUUID: cnUUID,
-		jobID:     jobID,
-		info:      info,
-		tableDef:  tableDef,
-		sqlWriter: sqlwriter,
-		exec:      exec,
-		rowdata:   make([]any, len(tableDef.Cols)),
-		rowdelete: make([]any, 1),
+		cnEngine:    cnEngine,
+		cnTxnClient: cnTxnClient,
+		jobID:       jobID,
+		info:        info,
+		tableDef:    tableDef,
+		sqlWriter:   sqlwriter,
+		exec:        exec,
+		rowdata:     make([]any, len(tableDef.Cols)),
+		rowdelete:   make([]any, 1),
+		algo:        ie.algo,
 		//sqlBufSendCh: make(chan []byte),
 	}
 
 	return c, nil
 }
 
-func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
+func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 
 	datatype := r.GetDataType()
 
@@ -126,12 +140,27 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 					return
 				}
 				func() {
-					newctx, cancel := context.WithTimeout(ctx, time.Hour)
 
+					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
+					newctx, cancel := context.WithTimeout(ctx, time.Hour)
 					defer cancel()
-					//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
-					opts := executor.Options{}.WithAccountID(r.GetAccountID())
-					res, err := c.exec.Exec(newctx, string(sql), opts)
+
+					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
+					if err != nil {
+						errch <- err
+					}
+					defer func() {
+						if err != nil {
+							err = txnOp.Rollback(newctx)
+						} else {
+							err = txnOp.Commit(ctx)
+						}
+						if err != nil {
+							errch <- err
+						}
+					}()
+
+					res, err := ExecWithResult(newctx, string(sql), c.cnUUID, txnOp)
 					if err != nil {
 						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
 						os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
@@ -144,39 +173,207 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 		}
 
 	} else {
-		// TAIL
+
+		newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
 		newctx, cancel := context.WithTimeout(ctx, time.Hour)
 		defer cancel()
-		opts := executor.Options{}
-		err := c.exec.ExecTxn(newctx,
-			func(exec executor.TxnExecutor) error {
-				for {
-					select {
-					case <-ctx.Done():
-						return nil
-					case e2 := <-errch:
-						return e2
-					case sql, ok := <-c.sqlBufSendCh:
-						if !ok {
-							// channel closed
-							return r.UpdateWatermark(exec, opts.StatementOption())
-						}
 
-						// update SQL
-						res, err := exec.Exec(string(sql), opts.StatementOption().WithAccountID(r.GetAccountID()))
-						if err != nil {
-							return err
-						}
-						res.Close()
-					}
-				}
-			}, opts)
+		txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 		if err != nil {
 			errch <- err
+		}
+		defer func() {
+			if err != nil {
+				err = txnOp.Rollback(newctx)
+			} else {
+				err = txnOp.Commit(ctx)
+			}
+			if err != nil {
+				errch <- err
+			}
+		}()
+
+		// TAIL
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e2 := <-errch:
+				errch <- e2
+				return
+			case sql, ok := <-c.sqlBufSendCh:
+				if !ok {
+					// channel closed
+					err = r.UpdateWatermark(newctx, c.cnUUID, txnOp)
+					if err != nil {
+						errch <- err
+						return
+					}
+				}
+
+				// update SQL
+				res, err := ExecWithResult(newctx, string(sql), c.cnUUID, txnOp)
+				if err != nil {
+					errch <- err
+					return
+				}
+				res.Close()
+			}
+		}
+	}
+}
+
+func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+
+	/*
+		nowTs := c.cnEngine.LatestLogtailAppliedTime()
+		createByOpt := client.WithTxnCreateBy(
+			0,
+			"",
+			"hnsw consumer",
+			0)
+		txnOp, err := c.cnTxnClient.New(ctx, nowTs, createByOpt)
+		if txnOp != nil {
+			defer txnOp.Commit(ctx)
+		}
+		if err != nil {
 			return
+		}
+		err = c.cnEngine.New(ctx, txnOp)
+		if err != nil {
+			return
+		}
+	*/
+
+	// init HnswSync[T]
+
+	datatype := r.GetDataType()
+
+	if datatype == ISCPDataType_Snapshot {
+		// SNAPSHOT
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e2 := <-errch:
+				errch <- e2
+				return
+			case sql, ok := <-c.sqlBufSendCh:
+				if !ok {
+					return
+				}
+				func() {
+					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+					newctx, cancel := context.WithTimeout(ctx, time.Hour)
+					defer cancel()
+
+					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
+					if err != nil {
+						errch <- err
+					}
+					defer func() {
+						if err != nil {
+							err = txnOp.Rollback(newctx)
+						} else {
+							err = txnOp.Commit(newctx)
+						}
+						if err != nil {
+							errch <- err
+						}
+					}()
+
+					sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(newctx, c.cnUUID, txnOp, r.GetAccountID()))
+
+					sync, err := hnsw.NewHnswSync[float32](sqlproc, "", "", 0, 0)
+					if err != nil {
+						errch <- err
+						return
+					}
+
+					// sql -> cdc
+					_ = sql
+					err = sync.RunOnce(sqlproc, nil)
+					if err != nil {
+						errch <- err
+						return
+					}
+
+				}()
+			}
+		}
+
+	} else {
+		// TAIL
+		newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+		newctx, cancel := context.WithTimeout(ctx, time.Hour)
+		defer cancel()
+
+		txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
+		if err != nil {
+			errch <- err
+		}
+		defer func() {
+			if err != nil {
+				err = txnOp.Rollback(newctx)
+			} else {
+				err = txnOp.Commit(ctx)
+			}
+			if err != nil {
+				errch <- err
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e2 := <-errch:
+				errch <- e2
+				return
+			case sql, ok := <-c.sqlBufSendCh:
+				if !ok {
+					// channel closed
+					err := r.UpdateWatermark(newctx, c.cnUUID, txnOp)
+					if err != nil {
+						errch <- err
+						return
+					}
+				}
+
+				sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(newctx, c.cnUUID, txnOp, r.GetAccountID()))
+				sync, err := hnsw.NewHnswSync[float32](sqlproc, "", "", 0, 0)
+				if err != nil {
+					errch <- err
+					return
+				}
+
+				// sql -> cdc
+				_ = sql
+				err = sync.RunOnce(sqlproc, nil)
+				if err != nil {
+					errch <- err
+					return
+				}
+
+			}
 		}
 	}
 
+}
+
+func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
+
+	switch c.sqlWriter.(type) {
+	case *HnswSqlWriter[float32]:
+		// init HnswSync[float32]
+		runHnsw[float32](c, ctx, errch, r)
+	case *HnswSqlWriter[float64]:
+		// init HnswSync[float64]
+		runHnsw[float64](c, ctx, errch, r)
+	default:
+		// run fulltext/ivfflat index
+		runIndex(c, ctx, errch, r)
+	}
 }
 
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {

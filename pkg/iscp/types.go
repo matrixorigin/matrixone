@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -54,7 +53,7 @@ const (
 
 type DataRetriever interface {
 	Next() (iscpData *ISCPData)
-	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
+	UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	GetDataType() int8
 	GetAccountID() uint32
 	GetTableID() uint64

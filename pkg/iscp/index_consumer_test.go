@@ -26,9 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/prashantv/gostub"
@@ -56,7 +58,7 @@ func (r *MockRetriever) Next() *ISCPData {
 	return d
 }
 
-func (r *MockRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
+func (r *MockRetriever) UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	return nil
 }
@@ -112,6 +114,64 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 				IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
 			},
 		},
+	}
+}
+
+func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
+	return &plan.TableDef{
+		Name: "test_orig_tbl",
+		Name2ColIndex: map[string]int32{
+			pkName:     0,
+			vecColName: 1,
+			"dummy":    2, // Add another col to make sure pk/vec col indices are used
+		},
+		Cols: []*plan.ColDef{
+			{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+			{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+			{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{pkName},
+			PkeyColName: pkName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:          "ivf_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivf_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centriods",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivf_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+		},
+	}
+}
+
+func newTestIvfConsumerInfo() *ConsumerInfo {
+	return &ConsumerInfo{
+		ConsumerType: 0,
+		DBName:       "test_db",
+		TableName:    "test_tbl",
+		IndexName:    "ivf_idx",
 	}
 }
 
@@ -222,7 +282,9 @@ func TestConsumer(t *testing.T) {
 	info := newTestConsumerInfo()
 	job := newTestJobID()
 
-	consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+	cnEngine, cnClient, _ := testengine.New(ctx)
+
+	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
@@ -232,7 +294,8 @@ func TestHnswSnapshot(t *testing.T) {
 
 	proc := testutil.NewProcess(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
@@ -242,9 +305,11 @@ func TestHnswSnapshot(t *testing.T) {
 	cnUUID := "a-b-c-d"
 	info := newTestConsumerInfo()
 	job := newTestJobID()
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
 
 	t.Run("snapshot", func(t *testing.T) {
-		consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 		require.NoError(t, err)
 
 		bat := testutil.NewBatchWithVectors(
@@ -279,7 +344,7 @@ func TestHnswSnapshot(t *testing.T) {
 	})
 
 	t.Run("noMoreData", func(t *testing.T) {
-		consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 		require.NoError(t, err)
 
 		output := &MockRetriever{
@@ -309,8 +374,10 @@ func TestHnswTail(t *testing.T) {
 	cnUUID := "a-b-c-d"
 	info := newTestConsumerInfo()
 	job := newTestJobID()
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
 
-	consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 	require.NoError(t, err)
 
 	bat := testutil.NewBatchWithVectors(
@@ -378,4 +445,83 @@ func TestHnswTail(t *testing.T) {
 
 	require.Equal(t, string(expectedSqlBytes), sqls[0])
 
+}
+
+func TestIvfSnapshot(t *testing.T) {
+
+	proc := testutil.NewProcess(t)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sqls := make([]string, 0, 1)
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	})
+	defer stub1.Reset()
+
+	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
+	defer sqlexecstub.Reset()
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	cnUUID := "a-b-c-d"
+	info := newTestIvfConsumerInfo()
+	job := newTestJobID()
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
+
+	t.Run("snapshot", func(t *testing.T) {
+		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
+		require.NoError(t, err)
+
+		bat := testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+				testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+				testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
+			}, nil)
+
+		defer bat.Clean(testutil.TestUtilMp)
+
+		insertAtomicBat := &AtomicBatch{
+			Mp:      nil,
+			Batches: []*batch.Batch{bat},
+			Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+		}
+
+		output := &MockRetriever{
+			dtype:       ISCPDataType_Snapshot,
+			insertBatch: insertAtomicBat,
+			deleteBatch: nil,
+			noMoreData:  false,
+		}
+		err = consumer.Consume(ctx, output)
+		require.NoError(t, err)
+		require.Equal(t, len(sqls), 1)
+		sql := sqls[0]
+		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,'[0.1, 0.2]'),ROW(2,'[0.3, 0.4]'))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
+
+		require.Equal(t, string(sql), expected)
+
+		sqls = sqls[:0]
+		//fmt.Printf("Consume %p %v\n", consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls, consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls)
+	})
+
+	t.Run("noMoreData", func(t *testing.T) {
+		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
+		require.NoError(t, err)
+
+		output := &MockRetriever{
+			dtype:       ISCPDataType_Snapshot,
+			insertBatch: nil,
+			deleteBatch: nil,
+			noMoreData:  true,
+		}
+		err = consumer.Consume(ctx, output)
+		require.NoError(t, err)
+		sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls
+		require.Equal(t, len(sqls), 0)
+	})
 }

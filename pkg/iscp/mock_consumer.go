@@ -28,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -43,6 +45,9 @@ const (
 var _ Consumer = &interalSqlConsumer{}
 
 type interalSqlConsumer struct {
+	cnUUID              string
+	cnEngine            engine.Engine
+	cnTxnClient         client.TxnClient
 	internalSqlExecutor executor.SQLExecutor
 	jobName             string
 
@@ -94,13 +99,18 @@ type interalSqlConsumer struct {
 
 func NewInteralSqlConsumer(
 	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
 	tableDef *plan.TableDef,
 	jobID JobID,
 	info *ConsumerInfo,
 ) (Consumer, error) {
 	s := &interalSqlConsumer{
-		tableInfo: tableDef,
-		jobName:   jobID.JobName,
+		tableInfo:   tableDef,
+		jobName:     jobID.JobName,
+		cnUUID:      cnUUID,
+		cnEngine:    cnEngine,
+		cnTxnClient: cnTxnClient,
 	}
 	s.maxAllowedPacket = uint64(1024 * 1024)
 	logutil.Infof("iscp mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
@@ -230,25 +240,39 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			for {
-				iscpData := data.Next()
-				noMoreData, err := s.consumeData(ctx, data.GetDataType(), iscpData, txn)
-				if err != nil {
-					return err
-				}
-				if noMoreData {
-					return nil
-				}
+		txn, err := getTxn(ctx, s.cnEngine, s.cnTxnClient, "internalSqlConsumer")
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			if err != nil {
+				err = txn.Rollback(ctx)
+			} else {
+				err = txn.Commit(ctx)
 			}
-		}, executor.Options{})
-		return err
+
+			if err != nil {
+				logutil.Error("InteralSqlConsumer Consume Tail failed")
+			}
+		}()
+
+		for {
+			iscpData := data.Next()
+			noMoreData, err := s.consumeData(ctx, data.GetDataType(), iscpData, txn)
+			if err != nil {
+				return err
+			}
+			if noMoreData {
+				return nil
+			}
+		}
 	default:
 		panic("logic error")
 	}
 
 }
-func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, iscpData *ISCPData, txn executor.TxnExecutor) (noMoreData bool, err error) {
+func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, iscpData *ISCPData, txn client.TxnOperator) (noMoreData bool, err error) {
 	if iscpData == nil {
 		noMoreData = true
 		return
@@ -263,7 +287,7 @@ func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, isc
 	if noMoreData {
 
 		if s.dataRetriever.GetDataType() != ISCPDataType_Snapshot {
-			err = s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
+			err = s.dataRetriever.UpdateWatermark(ctx, s.cnUUID, txn)
 			if err != nil {
 				return
 			}
@@ -310,12 +334,12 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch)
 			}
 
 			// step3: append to sqlBuf, send sql if sqlBuf is full
-			if sqlBuffer, err = s.appendSqlBuf(UpsertRow, sqlBuffer, nil); err != nil {
+			if sqlBuffer, err = s.appendSqlBuf(ctx, UpsertRow, sqlBuffer, nil); err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = s.tryFlushSqlBuf(nil, sqlBuffer)
+	err = s.tryFlushSqlBuf(ctx, nil, sqlBuffer)
 	if err != nil {
 		return err
 	}
@@ -324,7 +348,7 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch)
 
 // insertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then insert
-func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBatch *AtomicBatch, txn executor.TxnExecutor) error {
+func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBatch *AtomicBatch, txn client.TxnOperator) error {
 	var err error
 
 	insertIter := insertBatch.GetRowIterator().(*atomicBatchRowIter)
@@ -350,7 +374,7 @@ func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBa
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
-	err = s.tryFlushSqlBuf(txn, sqlBuffer)
+	err = s.tryFlushSqlBuf(ctx, txn, sqlBuffer)
 	if err != nil {
 		return err
 	}
@@ -367,14 +391,14 @@ func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBa
 		// get next item
 		insertIterHasNext = insertIter.Next()
 	}
-	err = s.tryFlushSqlBuf(txn, sqlBuffer)
+	err = s.tryFlushSqlBuf(ctx, txn, sqlBuffer)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter, sqlBuffer []byte, txn executor.TxnExecutor) (res []byte, err error) {
+func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter, sqlBuffer []byte, txn client.TxnOperator) (res []byte, err error) {
 	// if last row is not insert row, need complete the last sql first
 	if s.preRowType != InsertRow {
 		panic("logic error")
@@ -391,14 +415,14 @@ func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicB
 	}
 
 	// step3: append to sqlBuf
-	if res, err = s.appendSqlBuf(InsertRow, sqlBuffer, txn); err != nil {
+	if res, err = s.appendSqlBuf(ctx, InsertRow, sqlBuffer, txn); err != nil {
 		return
 	}
 
 	return
 }
 
-func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter, sqlBuffer []byte, txn executor.TxnExecutor) (res []byte, err error) {
+func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter, sqlBuffer []byte, txn client.TxnOperator) (res []byte, err error) {
 	// if last row is not insert row, need complete the last sql first
 	if s.preRowType != DeleteRow {
 		panic("logic error")
@@ -415,14 +439,14 @@ func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicB
 	}
 
 	// step3: append to sqlBuf
-	if res, err = s.appendSqlBuf(DeleteRow, sqlBuffer, txn); err != nil {
+	if res, err = s.appendSqlBuf(ctx, DeleteRow, sqlBuffer, txn); err != nil {
 		return
 	}
 
 	return
 }
 
-func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer []byte) (err error) {
+func (s *interalSqlConsumer) tryFlushSqlBuf(ctx context.Context, txn client.TxnOperator, sqlBuffer []byte) (err error) {
 	if len(sqlBuffer) == 0 {
 		return
 	}
@@ -440,7 +464,7 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer 
 		return
 	}
 	var result executor.Result
-	result, err = txn.Exec(string(sqlBuffer), executor.StatementOption{})
+	result, err = ExecWithResult(ctx, string(sqlBuffer), s.cnUUID, txn)
 	result.Close()
 	if err != nil {
 		logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
@@ -452,7 +476,7 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer 
 
 // appendSqlBuf appends rowBuf to sqlBuf if not exceed its cap
 // otherwise, send sql to downstream first, then reset sqlBuf and append
-func (s *interalSqlConsumer) appendSqlBuf(rowType RowType, sqlBuffer []byte, txn executor.TxnExecutor) (res []byte, err error) {
+func (s *interalSqlConsumer) appendSqlBuf(ctx context.Context, rowType RowType, sqlBuffer []byte, txn client.TxnOperator) (res []byte, err error) {
 	suffixLen := len(s.insertSuffix)
 	if rowType == DeleteRow {
 		suffixLen = len(s.deleteSuffix)
@@ -486,7 +510,7 @@ func (s *interalSqlConsumer) appendSqlBuf(rowType RowType, sqlBuffer []byte, txn
 		if s.isNonEmptyDeleteStmt(sqlBuffer) {
 			sqlBuffer = appendBytes(sqlBuffer, s.deleteSuffix)
 		}
-		s.tryFlushSqlBuf(txn, sqlBuffer)
+		s.tryFlushSqlBuf(ctx, txn, sqlBuffer)
 		sqlBuffer = make([]byte, 0)
 
 		// reset s.sqlBuf

@@ -151,7 +151,7 @@ func ExecuteIteration(
 			DBName:    dbName,
 			TableName: tableName,
 		}
-		consumers[i], err = NewConsumer(cnUUID, rel.CopyTableDef(ctx), jobID, &jobSpecs[i].ConsumerInfo)
+		consumers[i], err = NewConsumer(cnUUID, cnEngine, cnTxnClient, rel.CopyTableDef(ctx), jobID, &jobSpecs[i].ConsumerInfo)
 		if err != nil {
 			return
 		}
