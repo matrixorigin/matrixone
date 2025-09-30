@@ -66,6 +66,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is null")
 		}
 
+		sqlproc := sqlexec.NewSqlProcess(proc)
 		switch typ {
 		case int32(types.T_array_float32):
 			var cdc vectorindex.VectorIndexCdc[float32]
@@ -77,7 +78,11 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
 			// hnsw sync
 			//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
-			err = hnsw.CdcSync[float32](sqlexec.NewSqlProcess(proc), string(dbname), string(tblname), typ, dim, &cdc)
+			sync, err := hnsw.NewHnswSync[float32](sqlproc, string(dbname), string(tblname), typ, dim)
+			if err != nil {
+				return err
+			}
+			err = sync.RunOnce(sqlproc, &cdc)
 			if err != nil {
 				return err
 			}
@@ -92,7 +97,11 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
 			// hnsw sync
 			//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
-			err = hnsw.CdcSync[float64](sqlexec.NewSqlProcess(proc), string(dbname), string(tblname), typ, dim, &cdc)
+			sync, err := hnsw.NewHnswSync[float64](sqlproc, string(dbname), string(tblname), typ, dim)
+			if err != nil {
+				return err
+			}
+			err = sync.RunOnce(sqlproc, &cdc)
 			if err != nil {
 				return err
 			}
