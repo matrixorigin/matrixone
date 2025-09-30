@@ -31,11 +31,12 @@ except ImportError:
 
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .account import Account, User
 from .async_vector_index_manager import AsyncVectorManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .connection_hooks import ConnectionHook, ConnectionAction, create_connection_hook
 from .exceptions import (
     AccountError,
     ConnectionError,
@@ -1482,6 +1483,7 @@ class AsyncClient(BaseMatrixOneClient):
         database: str = None,
         account: Optional[str] = None,
         role: Optional[str] = None,
+        on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
     ):
         """
         Connect to MatrixOne database asynchronously
@@ -1494,6 +1496,27 @@ class AsyncClient(BaseMatrixOneClient):
             database: Database name
             account: Optional account name (will be combined with user if user doesn't contain '#')
             role: Optional role name (will be combined with user if user doesn't contain '#')
+            on_connect: Connection hook to execute after successful connection.
+                       Can be:
+                       - ConnectionHook instance
+                       - List of ConnectionAction or string action names
+                       - Custom callback function (async or sync)
+
+        Examples:
+            # Enable all features after connection
+            await client.connect(host, port, user, password, database,
+                               on_connect=[ConnectionAction.ENABLE_ALL])
+
+            # Enable only vector operations
+            await client.connect(host, port, user, password, database,
+                               on_connect=[ConnectionAction.ENABLE_VECTOR])
+
+            # Custom async callback
+            async def my_callback(client):
+                print(f"Connected to {client._connection_params['host']}")
+
+            await client.connect(host, port, user, password, database,
+                               on_connect=my_callback)
         """
         try:
             # Build final login info based on user parameter and optional account/role
@@ -1526,10 +1549,65 @@ class AsyncClient(BaseMatrixOneClient):
 
             self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
+            # Setup connection hook if provided
+            if on_connect:
+                self._setup_connection_hook(on_connect)
+                # Execute the hook once immediately for the initial connection
+                await self._execute_connection_hook_immediately(on_connect)
+
         except Exception as e:
             self.logger.log_connection(host, port, final_user, database or "default", success=False)
             self.logger.log_error(e, context="Async connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
+
+    def _setup_connection_hook(
+        self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
+    ) -> None:
+        """Setup connection hook to be executed on each new connection"""
+        try:
+            if isinstance(on_connect, ConnectionHook):
+                # Direct ConnectionHook instance
+                hook = on_connect
+            elif isinstance(on_connect, list):
+                # List of actions - create a hook
+                hook = create_connection_hook(actions=on_connect)
+            elif callable(on_connect):
+                # Custom callback function
+                hook = create_connection_hook(custom_hook=on_connect)
+            else:
+                self.logger.warning(f"Invalid on_connect parameter type: {type(on_connect)}")
+                return
+
+            # Set the client reference and attach to engine
+            hook.set_client(self)
+            hook.attach_to_engine(self._engine)
+
+        except Exception as e:
+            self.logger.warning(f"Connection hook setup failed: {e}")
+
+    async def _execute_connection_hook_immediately(
+        self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
+    ) -> None:
+        """Execute connection hook immediately for the initial connection"""
+        try:
+            if isinstance(on_connect, ConnectionHook):
+                # Direct ConnectionHook instance
+                hook = on_connect
+            elif isinstance(on_connect, list):
+                # List of actions - create a hook
+                hook = create_connection_hook(actions=on_connect)
+            elif callable(on_connect):
+                # Custom callback function
+                hook = create_connection_hook(custom_hook=on_connect)
+            else:
+                self.logger.warning(f"Invalid on_connect parameter type: {type(on_connect)}")
+                return
+
+            # Execute the hook immediately
+            await hook.execute_async(self)
+
+        except Exception as e:
+            self.logger.warning(f"Immediate connection hook execution failed: {e}")
 
     @classmethod
     def from_engine(cls, engine: AsyncEngine, **kwargs) -> "AsyncClient":

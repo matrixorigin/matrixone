@@ -15,6 +15,7 @@ type safety and extensive documentation.
 
    installation
    quickstart
+   configuration_guide
    orm_guide
    logical_in_guide
    vector_guide

@@ -19,7 +19,7 @@ MatrixOne Client - Basic implementation
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
@@ -29,6 +29,7 @@ from sqlalchemy.engine import Engine
 
 from .account import AccountManager, TransactionAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .connection_hooks import ConnectionHook, ConnectionAction, create_connection_hook
 from .exceptions import ConnectionError, QueryError
 from .logger import MatrixOneLogger, create_default_logger
 from .moctl import MoCtlManager
@@ -263,6 +264,7 @@ class Client(BaseMatrixOneClient):
         ssl_key: Optional[str] = None,
         account: Optional[str] = None,
         role: Optional[str] = None,
+        on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
     ) -> None:
         """
         Connect to MatrixOne database using SQLAlchemy engine
@@ -279,6 +281,27 @@ class Client(BaseMatrixOneClient):
             ssl_key: SSL client key path
             account: Optional account name (will be combined with user if user doesn't contain '#')
             role: Optional role name (will be combined with user if user doesn't contain '#')
+            on_connect: Connection hook to execute after successful connection.
+                       Can be:
+                       - ConnectionHook instance
+                       - List of ConnectionAction or string action names
+                       - Custom callback function
+
+        Examples:
+            # Enable all features after connection
+            client.connect(host, port, user, password, database,
+                          on_connect=[ConnectionAction.ENABLE_ALL])
+
+            # Enable only vector operations
+            client.connect(host, port, user, password, database,
+                          on_connect=[ConnectionAction.ENABLE_VECTOR])
+
+            # Custom callback
+            def my_callback(client):
+                print(f"Connected to {client._connection_params['host']}")
+
+            client.connect(host, port, user, password, database,
+                          on_connect=my_callback)
         """
         # Build final login info based on user parameter and optional account/role
         final_user, parsed_info = self._build_login_info(user, account, role)
@@ -322,10 +345,65 @@ class Client(BaseMatrixOneClient):
             except Exception as e:
                 self.logger.warning(f"Failed to detect backend version: {e}")
 
+            # Setup connection hook if provided
+            if on_connect:
+                self._setup_connection_hook(on_connect)
+                # Execute the hook once immediately for the initial connection
+                self._execute_connection_hook_immediately(on_connect)
+
         except Exception as e:
             self.logger.log_connection(host, port, final_user, database, success=False)
             self.logger.log_error(e, context="Connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
+
+    def _setup_connection_hook(
+        self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
+    ) -> None:
+        """Setup connection hook to be executed on each new connection"""
+        try:
+            if isinstance(on_connect, ConnectionHook):
+                # Direct ConnectionHook instance
+                hook = on_connect
+            elif isinstance(on_connect, list):
+                # List of actions - create a hook
+                hook = create_connection_hook(actions=on_connect)
+            elif callable(on_connect):
+                # Custom callback function
+                hook = create_connection_hook(custom_hook=on_connect)
+            else:
+                self.logger.warning(f"Invalid on_connect parameter type: {type(on_connect)}")
+                return
+
+            # Set the client reference and attach to engine
+            hook.set_client(self)
+            hook.attach_to_engine(self._engine)
+
+        except Exception as e:
+            self.logger.warning(f"Connection hook setup failed: {e}")
+
+    def _execute_connection_hook_immediately(
+        self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
+    ) -> None:
+        """Execute connection hook immediately for the initial connection"""
+        try:
+            if isinstance(on_connect, ConnectionHook):
+                # Direct ConnectionHook instance
+                hook = on_connect
+            elif isinstance(on_connect, list):
+                # List of actions - create a hook
+                hook = create_connection_hook(actions=on_connect)
+            elif callable(on_connect):
+                # Custom callback function
+                hook = create_connection_hook(custom_hook=on_connect)
+            else:
+                self.logger.warning(f"Invalid on_connect parameter type: {type(on_connect)}")
+                return
+
+            # Execute the hook immediately
+            hook.execute_sync(self)
+
+        except Exception as e:
+            self.logger.warning(f"Immediate connection hook execution failed: {e}")
 
     @classmethod
     def from_engine(cls, engine: Engine, **kwargs) -> "Client":
