@@ -123,7 +123,6 @@ func NewIndexConsumer(cnUUID string,
 }
 
 func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
-
 	datatype := r.GetDataType()
 
 	if datatype == ISCPDataType_Snapshot {
@@ -142,7 +141,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				func() {
 
 					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
-					newctx, cancel := context.WithTimeout(ctx, time.Hour)
+					newctx, cancel := context.WithTimeout(newctx, time.Hour)
 					defer cancel()
 
 					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
@@ -153,7 +152,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 						if err != nil {
 							err = txnOp.Rollback(newctx)
 						} else {
-							err = txnOp.Commit(ctx)
+							err = txnOp.Commit(newctx)
 						}
 						if err != nil {
 							errch <- err
@@ -174,52 +173,54 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 
 	} else {
 
-		newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
-		newctx, cancel := context.WithTimeout(ctx, time.Hour)
-		defer cancel()
+		func() {
+			newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
+			newctx, cancel := context.WithTimeout(newctx, time.Hour)
+			defer cancel()
 
-		txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
-		if err != nil {
-			errch <- err
-		}
-		defer func() {
-			if err != nil {
-				err = txnOp.Rollback(newctx)
-			} else {
-				err = txnOp.Commit(ctx)
-			}
+			txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 			if err != nil {
 				errch <- err
 			}
-		}()
+			defer func() {
+				if err != nil {
+					err = txnOp.Rollback(newctx)
+				} else {
+					err = txnOp.Commit(newctx)
+				}
+				if err != nil {
+					errch <- err
+				}
+			}()
 
-		// TAIL
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e2 := <-errch:
-				errch <- e2
-				return
-			case sql, ok := <-c.sqlBufSendCh:
-				if !ok {
-					// channel closed
-					err = r.UpdateWatermark(newctx, c.cnUUID, txnOp)
+			// TAIL
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case e2 := <-errch:
+					errch <- e2
+					return
+				case sql, ok := <-c.sqlBufSendCh:
+					if !ok {
+						// channel closed
+						err = r.UpdateWatermark(newctx, c.cnUUID, txnOp)
+						if err != nil {
+							errch <- err
+						}
+						return
+					}
+
+					// update SQL
+					res, err := ExecWithResult(newctx, string(sql), c.cnUUID, txnOp)
 					if err != nil {
 						errch <- err
 						return
 					}
+					res.Close()
 				}
-
-				// update SQL
-				res, err := ExecWithResult(newctx, string(sql), c.cnUUID, txnOp)
-				if err != nil {
-					errch <- err
-					return
-				}
-				res.Close()
 			}
-		}
+		}()
 	}
 }
 
@@ -264,7 +265,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				}
 				func() {
 					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-					newctx, cancel := context.WithTimeout(ctx, time.Hour)
+					newctx, cancel := context.WithTimeout(newctx, time.Hour)
 					defer cancel()
 
 					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
@@ -305,7 +306,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	} else {
 		// TAIL
 		newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-		newctx, cancel := context.WithTimeout(ctx, time.Hour)
+		newctx, cancel := context.WithTimeout(newctx, time.Hour)
 		defer cancel()
 
 		txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
@@ -316,7 +317,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			if err != nil {
 				err = txnOp.Rollback(newctx)
 			} else {
-				err = txnOp.Commit(ctx)
+				err = txnOp.Commit(newctx)
 			}
 			if err != nil {
 				errch <- err
