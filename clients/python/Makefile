@@ -49,7 +49,7 @@ help: ## Show help information
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(lint|format|type-check|pre-commit):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📖 Documentation:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(docs|docs-check|docs-serv):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(docs|docs-check|docs-serv|docs-clean):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📚 Examples:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(example|examples):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
@@ -411,8 +411,16 @@ status: ## Show development status
 	@$(PIP) list 2>/dev/null | grep -E "(matrixone|sqlalchemy|pytest)" | sed 's/^/  /' || echo "  No relevant packages found"
 
 # Cleanup
+.PHONY: docs-clean
+docs-clean: ## Clean documentation build artifacts
+	@echo "$(BLUE)Cleaning documentation build artifacts...$(NC)"
+	rm -rf docs/_build/
+	rm -rf docs/_static/
+	rm -rf docs/_templates/
+	@echo "$(GREEN)Documentation cleanup completed!$(NC)"
+
 .PHONY: clean
-clean: ## Clean build artifacts
+clean: docs-clean ## Clean build artifacts
 	@echo "$(BLUE)Cleaning build artifacts...$(NC)"
 	rm -rf $(BUILD_DIR)/
 	rm -rf build/
