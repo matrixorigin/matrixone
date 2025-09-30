@@ -189,14 +189,13 @@ class VectorIndexDemo:
             # Create IVF index (only one per vector column is allowed)
             ivf_config = {
                 'name': 'ivf_l2_index',
-                'table_name': 'ivf_test_docs',
                 'column': 'embedding',
                 'lists': 100,
                 'op_type': 'vector_l2_ops',
             }
 
             start_time = time.time()
-            self.client.vector_ops.create_ivf(**ivf_config)
+            self.client.vector_ops.create_ivf('ivf_test_docs', **ivf_config)
             creation_time = time.time() - start_time
             print(f"✓ Created IVF index '{ivf_config['name']}' in {creation_time:.2f}s")
 
@@ -207,12 +206,11 @@ class VectorIndexDemo:
             try:
                 duplicate_config = {
                     'name': 'ivf_cosine_index',
-                    'table_name': 'ivf_test_docs',
                     'column': 'embedding',
                     'lists': 50,
                     'op_type': 'vector_cosine_ops',
                 }
-                self.client.vector_ops.create_ivf(**duplicate_config)
+                self.client.vector_ops.create_ivf('ivf_test_docs', **duplicate_config)
                 print("✗ Unexpected: Second index creation succeeded")
             except Exception as e:
                 print(f"✓ Expected: Second index creation failed - {e}")
@@ -240,7 +238,6 @@ class VectorIndexDemo:
             # Create HNSW index (only one per vector column is allowed)
             hnsw_config = {
                 'name': 'hnsw_l2_index',
-                'table_name': 'hnsw_test_docs',
                 'column': 'embedding',
                 'm': 16,
                 'ef_construction': 200,
@@ -249,7 +246,7 @@ class VectorIndexDemo:
             }
 
             start_time = time.time()
-            self.client.vector_ops.create_hnsw(**hnsw_config)
+            self.client.vector_ops.create_hnsw('hnsw_test_docs', **hnsw_config)
             creation_time = time.time() - start_time
             print(f"✓ Created HNSW index '{hnsw_config['name']}' in {creation_time:.2f}s")
 
@@ -260,14 +257,13 @@ class VectorIndexDemo:
             try:
                 duplicate_config = {
                     'name': 'hnsw_cosine_index',
-                    'table_name': 'hnsw_test_docs',
                     'column': 'embedding',
                     'm': 32,
                     'ef_construction': 400,
                     'ef_search': 100,
                     'op_type': 'vector_cosine_ops',
                 }
-                self.client.vector_ops.create_hnsw(**duplicate_config)
+                self.client.vector_ops.create_hnsw('hnsw_test_docs', **duplicate_config)
                 print("✗ Unexpected: Second index creation succeeded")
             except Exception as e:
                 print(f"✓ Expected: Second index creation failed - {e}")
@@ -433,7 +429,7 @@ class VectorIndexDemo:
 
             # Create fulltext index
             self.client.fulltext_index.create(
-                table_name="fulltext_test_docs",
+                "fulltext_test_docs",
                 name="ftidx_docs",
                 columns=["title", "content"],
                 algorithm="BM25",
@@ -487,7 +483,7 @@ class VectorIndexDemo:
                 "fulltext_test_docs.title",
                 "fulltext_test_docs.content",
                 "fulltext_test_docs.author",
-                boolean_match("title", "content").search("Python"),
+                boolean_match("title", "content").phrase("Python"),
             ).execute()
 
             print(f"✓ Natural language search for 'Python': {len(result.fetchall())} results")
@@ -520,7 +516,7 @@ class VectorIndexDemo:
                 "fulltext_test_docs.title",
                 "fulltext_test_docs.content",
                 "fulltext_test_docs.author",
-                boolean_match("title", "content").search("Python"),
+                boolean_match("title", "content").phrase("Python"),
             ).execute()
 
             print(f"✓ TF-IDF search for 'Python': {len(result.fetchall())} results")
@@ -582,7 +578,7 @@ class VectorIndexDemo:
 
                     # Create fulltext index
                     await async_client.fulltext_index.create(
-                        table_name="async_fulltext_docs",
+                        "async_fulltext_docs",
                         name="ftidx_async_docs",
                         columns=["headline", "body"],
                         algorithm=FulltextAlgorithmType.BM25,
@@ -623,7 +619,7 @@ class VectorIndexDemo:
                         "async_fulltext_docs.headline",
                         "async_fulltext_docs.body",
                         "async_fulltext_docs.category",
-                        boolean_match("headline", "body").search("technology"),
+                        boolean_match("headline", "body").phrase("technology"),
                     ).execute()
 
                     print(f"✓ Async fulltext search for 'technology': {len(result.fetchall())} results")

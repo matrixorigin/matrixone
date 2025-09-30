@@ -71,7 +71,7 @@ class TestFulltextComprehensive:
         )
 
         # Create fulltext index
-        test_client.fulltext_index.create(table_name="test_documents", name="ftidx_content", columns=["title", "content"])
+        test_client.fulltext_index.create("test_documents", name="ftidx_content", columns=["title", "content"])
 
         try:
             # Test search functionality
@@ -117,7 +117,8 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear any existing data and insert test data
+        test_client.execute("DELETE FROM test_docs_tx")
         test_client.execute(
             """
             INSERT INTO test_docs_tx (id, title, content) VALUES
@@ -128,7 +129,7 @@ class TestFulltextComprehensive:
         )
 
         # Create fulltext index
-        test_client.fulltext_index.create(table_name="test_docs_tx", name="ftidx_tx_docs", columns=["title", "content"])
+        test_client.fulltext_index.create("test_docs_tx", name="ftidx_tx_docs", columns=["title", "content"])
 
         try:
             # Test query method
@@ -307,7 +308,7 @@ class TestFulltextComprehensive:
         """Test creating fulltext index synchronously"""
         # Create fulltext index using client.fulltext_index
         test_client.fulltext_index.create(
-            table_name=test_table,
+            test_table,
             name="ftidx_test",
             columns=["title", "content"],
             algorithm=FulltextAlgorithmType.BM25,
@@ -365,10 +366,10 @@ class TestFulltextComprehensive:
     def test_drop_fulltext_index_sync(self, test_client, test_table):
         """Test dropping fulltext index synchronously"""
         # Create index first
-        test_client.fulltext_index.create(table_name=test_table, name="ftidx_drop_test", columns=["title", "content"])
+        test_client.fulltext_index.create(test_table, name="ftidx_drop_test", columns=["title", "content"])
 
         # Drop the index
-        test_client.fulltext_index.drop(table_name=test_table, name="ftidx_drop_test")
+        test_client.fulltext_index.drop(test_table, name="ftidx_drop_test")
 
         # Verify index was dropped (this should not raise an exception)
         # Note: We can't easily verify the index is gone without checking system tables
@@ -436,7 +437,8 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear any existing data and insert test data
+        test_client.execute("DELETE FROM manual_tx_docs")
         test_client.execute(
             """
             INSERT INTO manual_tx_docs (id, title, content) VALUES
@@ -447,7 +449,7 @@ class TestFulltextComprehensive:
         )
 
         # Create fulltext index
-        test_client.fulltext_index.create(table_name="manual_tx_docs", name="ftidx_manual_tx", columns=["title", "content"])
+        test_client.fulltext_index.create("manual_tx_docs", name="ftidx_manual_tx", columns=["title", "content"])
 
         try:
             # Test using query in context
@@ -847,7 +849,8 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear any existing data and insert test data
+        test_client.execute("DELETE FROM test_modes")
         test_client.execute(
             """
             INSERT INTO test_modes (id, title, content) VALUES
@@ -858,7 +861,7 @@ class TestFulltextComprehensive:
         )
 
         # Create fulltext index
-        test_client.fulltext_index.create(table_name="test_modes", name="ftidx_modes", columns=["title", "content"])
+        test_client.fulltext_index.create("test_modes", name="ftidx_modes", columns=["title", "content"])
 
         try:
             # Test natural language mode
@@ -899,7 +902,8 @@ class TestFulltextComprehensive:
         """
         )
 
-        # Insert test data
+        # Clear any existing data and insert test data
+        test_client.execute("DELETE FROM test_multi_col")
         test_client.execute(
             """
             INSERT INTO test_multi_col (id, title, content, tags) VALUES
@@ -911,7 +915,7 @@ class TestFulltextComprehensive:
 
         # Create fulltext index on multiple columns
         test_client.fulltext_index.create(
-            table_name="test_multi_col",
+            "test_multi_col",
             name="ftidx_multi_col",
             columns=["title", "content", "tags"],
         )

@@ -420,7 +420,7 @@ class PineconeCompatibleIndex:
         # Use the appropriate similarity search method based on algorithm
         if index_info["algorithm"] == "hnsw":
             results = self.client.vector_ops.similarity_search(
-                table_name=self.table_name,
+                self.table_name,
                 vector_column=self.vector_column,
                 query_vector=vector,
                 limit=top_k,
@@ -431,7 +431,7 @@ class PineconeCompatibleIndex:
             )
         else:  # default to IVF
             results = self.client.vector_ops.similarity_search(
-                table_name=self.table_name,
+                self.table_name,
                 vector_column=self.vector_column,
                 query_vector=vector,
                 limit=top_k,

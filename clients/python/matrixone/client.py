@@ -1037,7 +1037,7 @@ class Client(BaseMatrixOneClient):
         """Get unified vector operations manager for vector operations (index and data)"""
         return self._vector
 
-    def get_pinecone_index(self, table_name: str, vector_column: str):
+    def get_pinecone_index(self, table_name_or_model, vector_column: str):
         """
         Get a PineconeCompatibleIndex object for vector search operations.
 
@@ -1047,7 +1047,7 @@ class Client(BaseMatrixOneClient):
         except the vector column will be included as metadata.
 
         Args:
-            table_name: Name of the table containing vectors
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             vector_column: Name of the vector column
 
         Returns:
@@ -1055,12 +1055,19 @@ class Client(BaseMatrixOneClient):
 
         Example:
             >>> index = client.get_pinecone_index("documents", "embedding")
+            >>> index = client.get_pinecone_index(DocumentModel, "embedding")
             >>> results = index.query([0.1, 0.2, 0.3], top_k=5)
             >>> for match in results.matches:
             ...     print(f"ID: {match.id}, Score: {match.score}")
             ...     print(f"Metadata: {match.metadata}")
         """
         from .search_vector_index import PineconeCompatibleIndex
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         return PineconeCompatibleIndex(
             client=self,
@@ -3002,7 +3009,7 @@ class VectorManager:
 
     def create_ivf(
         self,
-        table_name: str,
+        table_name_or_model,
         name: str,
         column: str,
         lists: int = 100,
@@ -3012,7 +3019,7 @@ class VectorManager:
         Create an IVFFLAT vector index using chain operations.
 
         Args:
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Name of the index
             column: Vector column to index
             lists: Number of lists for IVFFLAT (default: 100)
@@ -3022,6 +3029,12 @@ class VectorManager:
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         # Use default if not provided
         if op_type is None:
@@ -3043,7 +3056,7 @@ class VectorManager:
 
     def create_hnsw(
         self,
-        table_name: str,
+        table_name_or_model,
         name: str,
         column: str,
         m: int = 16,
@@ -3055,7 +3068,7 @@ class VectorManager:
         Create an HNSW vector index using chain operations.
 
         Args:
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Name of the index
             column: Vector column to index
             m: Number of bi-directional links for HNSW (default: 16)
@@ -3067,6 +3080,12 @@ class VectorManager:
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         # Use default if not provided
         if op_type is None:
@@ -3187,18 +3206,24 @@ class VectorManager:
 
         return self
 
-    def drop(self, table_name: str, name: str) -> "VectorManager":
+    def drop(self, table_name_or_model, name: str) -> "VectorManager":
         """
         Drop a vector index using chain operations.
 
         Args:
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Name of the index to drop
 
         Returns:
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import VectorIndex
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         success = VectorIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
 
@@ -3348,7 +3373,7 @@ class VectorManager:
 
     def similarity_search(
         self,
-        table_name: str,
+        table_name_or_model,
         vector_column: str,
         query_vector: list,
         limit: int = 10,
@@ -3362,7 +3387,7 @@ class VectorManager:
         Perform similarity search using chain operations.
 
         Args:
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             vector_column: Name of the vector column
             query_vector: Query vector as list
             limit: Number of results to return
@@ -3377,6 +3402,12 @@ class VectorManager:
         """
         from sqlalchemy import text
         from .sql_builder import DistanceFunction, build_vector_similarity_query
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         # Convert distance type to enum
         if distance_type == "l2":
@@ -3636,13 +3667,13 @@ class FulltextIndexManager:
         self.client = client
 
     def create(
-        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+        self, table_name_or_model, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
     ) -> "FulltextIndexManager":
         """
         Create a fulltext index using chain operations.
 
         Args:
-            table_name: Target table name
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Index name
             columns: Column(s) to index
             algorithm: Fulltext algorithm type (TF-IDF or BM25)
@@ -3651,6 +3682,12 @@ class FulltextIndexManager:
             FulltextIndexManager: Self for chaining
         """
         from .sqlalchemy_ext import FulltextIndex
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         success = FulltextIndex.create_index(
             engine=self.client.get_sqlalchemy_engine(),
@@ -3701,18 +3738,24 @@ class FulltextIndexManager:
 
         return self
 
-    def drop(self, table_name: str, name: str) -> "FulltextIndexManager":
+    def drop(self, table_name_or_model, name: str) -> "FulltextIndexManager":
         """
         Drop a fulltext index using chain operations.
 
         Args:
-            table_name: Target table name
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Index name
 
         Returns:
             FulltextIndexManager: Self for chaining
         """
         from .sqlalchemy_ext import FulltextIndex
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         success = FulltextIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
 

@@ -2117,7 +2117,7 @@ class AsyncClient(BaseMatrixOneClient):
         """Get unified vector operations manager for vector operations (index and data)"""
         return self._vector
 
-    def get_pinecone_index(self, table_name: str, vector_column: str):
+    def get_pinecone_index(self, table_name_or_model, vector_column: str):
         """
         Get a PineconeCompatibleIndex object for vector search operations.
 
@@ -2127,7 +2127,7 @@ class AsyncClient(BaseMatrixOneClient):
         except the vector column will be included as metadata.
 
         Args:
-            table_name: Name of the table containing vectors
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             vector_column: Name of the vector column
 
         Returns:
@@ -2135,12 +2135,19 @@ class AsyncClient(BaseMatrixOneClient):
 
         Example:
             >>> index = await client.get_pinecone_index("documents", "embedding")
+            >>> index = await client.get_pinecone_index(DocumentModel, "embedding")
             >>> results = await index.query_async([0.1, 0.2, 0.3], top_k=5)
             >>> for match in results.matches:
             ...     print(f"ID: {match.id}, Score: {match.score}")
             ...     print(f"Metadata: {match.metadata}")
         """
         from .search_vector_index import PineconeCompatibleIndex
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
 
         return PineconeCompatibleIndex(
             client=self,

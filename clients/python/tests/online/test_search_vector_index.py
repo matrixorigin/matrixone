@@ -45,11 +45,11 @@ class TestPineconeCompatibleIndex:
         )
 
         # Create vector index
-        test_client.vector_ops.create_ivf(table_name="test_vectors", name="idx_embedding", column="embedding", lists=100)
+        test_client.vector_ops.create_ivf("test_vectors", name="idx_embedding", column="embedding", lists=100)
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_client.get_pinecone_index(table_name="test_vectors", vector_column="embedding")
+            index = test_client.get_pinecone_index("test_vectors", vector_column="embedding")
 
             assert isinstance(index, PineconeCompatibleIndex)
             assert index.table_name == "test_vectors"
@@ -82,7 +82,7 @@ class TestPineconeCompatibleIndex:
 
         # Create vector index
         await test_async_client.vector_ops.create_ivf(
-            table_name="test_vectors_async",
+            "test_vectors_async",
             name="idx_embedding_async",
             column="embedding",
             lists=100,
@@ -90,7 +90,7 @@ class TestPineconeCompatibleIndex:
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_async_client.get_pinecone_index(table_name="test_vectors_async", vector_column="embedding")
+            index = test_async_client.get_pinecone_index("test_vectors_async", vector_column="embedding")
 
             assert isinstance(index, PineconeCompatibleIndex)
             assert index.table_name == "test_vectors_async"
@@ -123,13 +123,11 @@ class TestPineconeCompatibleIndex:
         )
 
         # Create vector index
-        test_client.vector_ops.create_hnsw(
-            table_name="test_parse", name="idx_hnsw", column="embedding", m=16, ef_construction=200
-        )
+        test_client.vector_ops.create_hnsw("test_parse", name="idx_hnsw", column="embedding", m=16, ef_construction=200)
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_client.get_pinecone_index(table_name="test_parse", vector_column="embedding")
+            index = test_client.get_pinecone_index("test_parse", vector_column="embedding")
 
             # Test parsing index info
             index_info = index._get_index_info()
@@ -163,7 +161,7 @@ class TestPineconeCompatibleIndex:
         )
 
         # Create vector index
-        test_client.vector_ops.create_ivf(table_name="test_query", name="idx_query", column="embedding", lists=10)
+        test_client.vector_ops.create_ivf("test_query", name="idx_query", column="embedding", lists=10)
 
         # Insert test data
         test_client.execute(
@@ -177,7 +175,7 @@ class TestPineconeCompatibleIndex:
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_client.get_pinecone_index(table_name="test_query", vector_column="embedding")
+            index = test_client.get_pinecone_index("test_query", vector_column="embedding")
 
             # Test query
             query_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 6 + [
@@ -224,7 +222,7 @@ class TestPineconeCompatibleIndex:
 
         # Create vector index
         await test_async_client.vector_ops.create_ivf(
-            table_name="test_query_async", name="idx_query_async", column="embedding", lists=5
+            "test_query_async", name="idx_query_async", column="embedding", lists=5
         )
 
         # Insert test data
@@ -238,7 +236,7 @@ class TestPineconeCompatibleIndex:
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_async_client.get_pinecone_index(table_name="test_query_async", vector_column="embedding")
+            index = test_async_client.get_pinecone_index("test_query_async", vector_column="embedding")
 
             # Test async query
             query_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 3 + [0.1, 0.2]
@@ -279,11 +277,11 @@ class TestPineconeCompatibleIndex:
         )
 
         # Create IVF vector index (required for upsert/delete operations)
-        test_client.vector_ops.create_ivf(table_name="test_upsert", name="idx_upsert", column="embedding", lists=5)
+        test_client.vector_ops.create_ivf("test_upsert", name="idx_upsert", column="embedding", lists=5)
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_client.get_pinecone_index(table_name="test_upsert", vector_column="embedding")
+            index = test_client.get_pinecone_index("test_upsert", vector_column="embedding")
 
             # Insert test data directly using SQL
             test_client.execute(
@@ -331,7 +329,7 @@ class TestPineconeCompatibleIndex:
         )
 
         # Create vector index
-        test_client.vector_ops.create_ivf(table_name="test_stats", name="idx_stats", column="embedding", lists=10)
+        test_client.vector_ops.create_ivf("test_stats", name="idx_stats", column="embedding", lists=10)
 
         # Insert test data
         test_client.execute(
@@ -344,7 +342,7 @@ class TestPineconeCompatibleIndex:
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_client.get_pinecone_index(table_name="test_stats", vector_column="embedding")
+            index = test_client.get_pinecone_index("test_stats", vector_column="embedding")
 
             # Test describe index stats
             stats = index.describe_index_stats()
@@ -384,7 +382,7 @@ class TestPineconeCompatibleIndex:
 
         # Create HNSW vector index
         test_client.vector_ops.create_hnsw(
-            table_name="test_hnsw_upsert",
+            "test_hnsw_upsert",
             name="idx_hnsw_upsert",
             column="embedding",
             m=16,
@@ -393,7 +391,7 @@ class TestPineconeCompatibleIndex:
 
         try:
             # Get PineconeCompatibleIndex object
-            index = test_client.get_pinecone_index(table_name="test_hnsw_upsert", vector_column="embedding")
+            index = test_client.get_pinecone_index("test_hnsw_upsert", vector_column="embedding")
 
             # Test that HNSW index only supports query operations
             # (upsert and delete are not supported for HNSW indexes)
@@ -433,9 +431,7 @@ class TestPineconeCompatibleIndexCaseInsensitive:
         )
 
         # Create vector index
-        test_client.vector_ops.create_ivf(
-            table_name="test_case_vectors", name="idx_case_embedding", column="Embedding", lists=10
-        )
+        test_client.vector_ops.create_ivf("test_case_vectors", name="idx_case_embedding", column="Embedding", lists=10)
 
         # Insert test data
         test_client.execute(
@@ -457,7 +453,7 @@ class TestPineconeCompatibleIndexCaseInsensitive:
 
             for vector_col in test_cases:
                 # Get PineconeCompatibleIndex object
-                index = test_client.get_pinecone_index(table_name="test_case_vectors", vector_column=vector_col)
+                index = test_client.get_pinecone_index("test_case_vectors", vector_column=vector_col)
 
                 # Test that metadata columns are correctly identified (case-insensitive)
                 metadata_cols = index.metadata_columns
@@ -508,7 +504,7 @@ class TestPineconeCompatibleIndexCaseInsensitive:
 
         # Create vector index
         await test_async_client.vector_ops.create_ivf(
-            table_name="test_case_vectors_async",
+            "test_case_vectors_async",
             name="idx_case_embedding_async",
             column="Embedding",
             lists=5,
@@ -534,7 +530,7 @@ class TestPineconeCompatibleIndexCaseInsensitive:
 
             for vector_col in test_cases:
                 # Get PineconeCompatibleIndex object
-                index = test_async_client.get_pinecone_index(table_name="test_case_vectors_async", vector_column=vector_col)
+                index = test_async_client.get_pinecone_index("test_case_vectors_async", vector_column=vector_col)
 
                 # Test that metadata columns are correctly identified (case-insensitive)
                 metadata_cols = await index._get_metadata_columns_async()

@@ -328,7 +328,7 @@ class TestVectorComprehensive:
             query_vector = [1.0] + [0.0] * 63
             # Use query interface for vector distance functions
             result = test_client.vector_ops.similarity_search(
-                table_name=VectorCosine.__tablename__,
+                VectorCosine.__tablename__,
                 vector_column="embedding",
                 query_vector=query_vector,
                 limit=2,
@@ -524,7 +524,7 @@ class TestVectorComprehensive:
             # Create vector index using client interface
             index_name = f"test_vector_index_{int(time.time())}"
             test_client.vector_ops.create_ivf(
-                table_name=VectorIndex.__tablename__,
+                VectorIndex.__tablename__,
                 name=index_name,
                 column="embedding",
                 lists=10,

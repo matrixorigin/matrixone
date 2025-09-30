@@ -81,7 +81,7 @@ class TestPineconeFilter:
 
         # Create vector index
         client.vector_ops.create_ivf(
-            table_name="test_movies",
+            "test_movies",
             name="movies_ivf_index",
             column="embedding",
             op_type="vector_l2_ops",
