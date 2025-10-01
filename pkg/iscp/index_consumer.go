@@ -241,12 +241,6 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 
 	defer func() {
 		if sync != nil {
-			err = sync.Save(sqlproc)
-			if err != nil {
-				errch <- err
-				return
-			}
-
 			sync.Destroy()
 		}
 	}()
@@ -261,6 +255,15 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 		case sql, ok := <-c.sqlBufSendCh:
 			if !ok {
 				// channel closed
+
+				// save model to db
+				err = sync.Save(sqlproc)
+				if err != nil {
+					errch <- err
+					return
+				}
+
+				// update watermark
 				if datatype == ISCPDataType_Tail {
 					err = r.UpdateWatermark(newctx, c.cnUUID, txnOp)
 					if err != nil {
