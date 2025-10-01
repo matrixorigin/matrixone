@@ -71,9 +71,6 @@ func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vect
 		return err
 	}
 
-	// clear the cache (it only work in standalone mode though)
-	veccache.Cache.Remove(s.tblcfg.IndexTable)
-
 	return nil
 }
 
@@ -537,6 +534,9 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
+
+	// clear the cache (it only work in standalone mode though)
+	veccache.Cache.Remove(s.tblcfg.IndexTable)
 
 	return nil
 }

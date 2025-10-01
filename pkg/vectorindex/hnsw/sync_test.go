@@ -15,7 +15,6 @@
 package hnsw
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -658,7 +657,6 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 
 	defer sync.Destroy()
 	for i := 0; i < 10; i++ {
-		fmt.Printf("round %d\n", i)
 		err = sync.Update(sqlproc, &cdc)
 		require.Nil(t, err)
 	}
