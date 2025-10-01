@@ -52,7 +52,8 @@ class MatrixOneLogger:
         """
         Initialize MatrixOne logger
 
-        Args:
+        Args::
+
             logger: Custom logger instance. If None, creates a default logger
             level: Logging level (default: INFO)
             format_string: Custom format string for log messages
@@ -265,10 +266,12 @@ class MatrixOneLogger:
         """
         Extract operation summary from SQL query
 
-        Args:
+        Args::
+
             sql: SQL query string
 
-        Returns:
+        Returns::
+
             Summary string describing the operation
         """
         sql_stripped = sql.strip()
@@ -344,13 +347,15 @@ class MatrixOneLogger:
         """
         Format SQL query for logging based on mode and query characteristics
 
-        Args:
+        Args::
+
             sql: SQL query string
             is_error: Whether this is an error query
             is_slow: Whether this is a slow query
             override_mode: Optional mode override for this specific query
 
-        Returns:
+        Returns::
+
             Formatted SQL string for logging
         """
         # Use override mode if provided, otherwise use instance mode
@@ -394,17 +399,16 @@ class MatrixOneLogger:
         """
         Dynamically update logger configuration at runtime.
 
-        Args:
+        Args::
+
             sql_log_mode: New SQL logging mode ('off', 'auto', 'simple', 'full')
             slow_query_threshold: New threshold in seconds for slow query warnings
             max_sql_display_length: New maximum SQL length in auto mode before summarizing
 
-        Example:
+        Example::
+
             # Enable full SQL logging for debugging
             client.logger.update_config(sql_log_mode='full')
-
-            # Lower slow query threshold
-            client.logger.update_config(slow_query_threshold=0.5)
 
             # Update multiple settings
             client.logger.update_config(
@@ -440,7 +444,8 @@ class MatrixOneLogger:
         """
         Log SQL query execution with smart formatting.
 
-        Args:
+        Args::
+
             query: SQL query string
             execution_time: Query execution time in seconds
             affected_rows: Number of rows affected
@@ -711,14 +716,16 @@ def create_default_logger(
     """
     Create a default MatrixOne logger
 
-    Args:
+    Args::
+
         level: Logging level
         format_string: Custom format string
         sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
         slow_query_threshold: Threshold in seconds for slow query warnings
         max_sql_display_length: Maximum SQL length in auto mode before summarizing
 
-    Returns:
+    Returns::
+
         MatrixOneLogger instance
     """
     return MatrixOneLogger(
@@ -740,13 +747,15 @@ def create_custom_logger(
     """
     Create MatrixOne logger from custom logger
 
-    Args:
+    Args::
+
         logger: Custom logger instance
         sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
         slow_query_threshold: Threshold in seconds for slow query warnings
         max_sql_display_length: Maximum SQL length in auto mode before summarizing
 
-    Returns:
+    Returns::
+
         MatrixOneLogger instance
     """
     return MatrixOneLogger(

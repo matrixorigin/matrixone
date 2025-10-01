@@ -35,6 +35,7 @@ class IVFConfig:
         Initialize IVF configuration manager.
 
         Args:
+
             engine: SQLAlchemy engine connected to MatrixOne
         """
         self.engine = engine
@@ -44,6 +45,7 @@ class IVFConfig:
         Enable IVF indexing in MatrixOne.
 
         Returns:
+
             True if successful, False otherwise
         """
         try:
@@ -58,6 +60,7 @@ class IVFConfig:
         Disable IVF indexing in MatrixOne.
 
         Returns:
+
             True if successful, False otherwise
         """
         try:
@@ -72,9 +75,11 @@ class IVFConfig:
         Set the probe limit for IVF index search.
 
         Args:
+
             limit: Number of probes to use during search
 
         Returns:
+
             True if successful, False otherwise
         """
         try:
@@ -89,6 +94,7 @@ class IVFConfig:
         Get current IVF configuration status.
 
         Returns:
+
             Dictionary with current IVF settings
         """
         status = {"ivf_enabled": None, "probe_limit": None, "error": None}
@@ -117,10 +123,12 @@ class IVFConfig:
         Configure IVF indexing with multiple parameters.
 
         Args:
+
             enabled: Whether to enable IVF indexing
             probe_limit: Probe limit for search (optional)
 
         Returns:
+
             True if all operations successful, False otherwise
         """
         success = True
@@ -142,6 +150,7 @@ class IVFConfig:
         Check if IVF indexing is supported in the current MatrixOne instance.
 
         Returns:
+
             True if IVF is supported, False otherwise
         """
         try:
@@ -157,9 +166,11 @@ def create_ivf_config(engine: Engine) -> IVFConfig:
     Create an IVF configuration manager.
 
     Args:
+
         engine: SQLAlchemy engine connected to MatrixOne
 
     Returns:
+
         IVFConfig instance
     """
     return IVFConfig(engine)
@@ -171,9 +182,11 @@ def enable_ivf_indexing(engine: Engine) -> bool:
     Enable IVF indexing.
 
     Args:
+
         engine: SQLAlchemy engine
 
     Returns:
+
         True if successful, False otherwise
     """
     config = IVFConfig(engine)
@@ -185,9 +198,11 @@ def disable_ivf_indexing(engine: Engine) -> bool:
     Disable IVF indexing.
 
     Args:
+
         engine: SQLAlchemy engine
 
     Returns:
+
         True if successful, False otherwise
     """
     config = IVFConfig(engine)
@@ -199,10 +214,12 @@ def set_probe_limit(engine: Engine, limit: int) -> bool:
     Set probe limit for IVF search.
 
     Args:
+
         engine: SQLAlchemy engine
         limit: Probe limit value
 
     Returns:
+
         True if successful, False otherwise
     """
     config = IVFConfig(engine)
@@ -214,9 +231,11 @@ def get_ivf_status(engine: Engine) -> Dict[str, Any]:
     Get current IVF configuration status.
 
     Args:
+
         engine: SQLAlchemy engine
 
     Returns:
+
         Dictionary with current IVF settings
     """
     config = IVFConfig(engine)

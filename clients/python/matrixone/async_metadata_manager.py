@@ -37,6 +37,7 @@ class AsyncMetadataManager(BaseMetadataManager):
         Initialize async metadata manager.
 
         Args:
+
             client: MatrixOne AsyncClient instance
         """
         self.client = client
@@ -46,9 +47,11 @@ class AsyncMetadataManager(BaseMetadataManager):
         Execute SQL query asynchronously.
 
         Args:
+
             sql: SQL query to execute
 
         Returns:
+
             SQLAlchemy Result object
         """
         return await self.client.execute(sql)
@@ -66,15 +69,18 @@ class AsyncMetadataManager(BaseMetadataManager):
         Scan table metadata using metadata_scan function (async).
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
             indexname: Optional index name
 
         Returns:
+
             SQLAlchemy Result object containing metadata scan results
 
         Example:
+
             ```python
             # Scan all columns of a table
             result = await client.metadata.scan("test_db", "users")
@@ -114,6 +120,7 @@ class AsyncMetadataManager(BaseMetadataManager):
         Get brief statistics for a table, tombstone, and indexes (async).
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -122,6 +129,7 @@ class AsyncMetadataManager(BaseMetadataManager):
             include_indexes: List of index names to include
 
         Returns:
+
             Dictionary with brief statistics for table, tombstone, and indexes
         """
 
@@ -146,6 +154,7 @@ class AsyncMetadataManager(BaseMetadataManager):
         Get detailed statistics for a table, tombstone, and indexes (async).
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -154,6 +163,7 @@ class AsyncMetadataManager(BaseMetadataManager):
             include_indexes: List of index names to include
 
         Returns:
+
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
 
@@ -179,6 +189,7 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
         Initialize async transaction metadata manager.
 
         Args:
+
             client: MatrixOne AsyncClient instance
             transaction_wrapper: Async transaction wrapper instance
         """
@@ -190,9 +201,11 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
         Execute SQL query using async transaction wrapper.
 
         Args:
+
             sql: SQL query to execute
 
         Returns:
+
             SQLAlchemy Result object
         """
         return await self.transaction_wrapper.execute(sql)
@@ -210,12 +223,14 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
         Scan table metadata using metadata_scan function within transaction (async).
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
             indexname: Optional index name
 
         Returns:
+
             SQLAlchemy Result object containing metadata scan results
         """
         # Build SQL query
@@ -240,6 +255,7 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
         Get brief statistics for a table, tombstone, and indexes within transaction (async).
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -248,6 +264,7 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
             include_indexes: List of index names to include
 
         Returns:
+
             Dictionary with brief statistics for table, tombstone, and indexes
         """
 
@@ -272,6 +289,7 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
         Get detailed statistics for a table, tombstone, and indexes within transaction (async).
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -280,6 +298,7 @@ class AsyncTransactionMetadataManager(BaseMetadataManager):
             include_indexes: List of index names to include
 
         Returns:
+
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
 

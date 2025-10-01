@@ -682,19 +682,23 @@ The `query_vector` parameter in vector search functions supports multiple format
    from sqlalchemy import text
    
    # Both formats work in raw SQL queries
+   # Using list format
    session.execute(text("""
    SELECT id, title, l2_distance(embedding, :query_vector) as distance
    FROM documents
    WHERE l2_distance(embedding, :query_vector) < 1.0
    ORDER BY distance ASC
-   """), {'query_vector': query_vector_list})  # List format
+   """), {'query_vector': query_vector_list})
    
+   # Using string format  
    session.execute(text("""
-       SELECT id, title, l2_distance(embedding, :query_vector) as distance
-       FROM documents
-       WHERE l2_distance(embedding, :query_vector) < 1.0
-       ORDER BY distance ASC
-   """), {'query_vector': query_vector_str})   # String format
+   SELECT id, title, l2_distance(embedding, :query_vector) as distance
+   FROM documents
+   WHERE l2_distance(embedding, :query_vector) < 1.0
+   ORDER BY distance ASC
+   """), {'query_vector': query_vector_str})
+
+
 
 **With VectorColumn Methods:**
 

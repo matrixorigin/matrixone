@@ -41,6 +41,7 @@ class ConnectionHook:
         Initialize connection hook
 
         Args:
+
             actions: List of predefined actions to execute
             custom_hook: Custom callback function to execute
         """
@@ -254,13 +255,16 @@ def create_connection_hook(
     Create a connection hook with predefined actions and/or custom callback
 
     Args:
+
         actions: List of predefined actions to execute
         custom_hook: Custom callback function to execute
 
     Returns:
+
         ConnectionHook: Configured connection hook
 
     Examples:
+
         # Enable all features
         hook = create_connection_hook([ConnectionAction.ENABLE_ALL])
 

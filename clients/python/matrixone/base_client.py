@@ -29,6 +29,7 @@ class BaseMatrixOneClient:
     parameters, and managing common database operations.
 
     Key Features:
+
     - Common SQL building logic for INSERT, UPDATE, DELETE operations
     - Parameter substitution and SQL injection prevention
     - Batch operation support
@@ -36,6 +37,7 @@ class BaseMatrixOneClient:
     - Integration with MatrixOne's SQL syntax
 
     Supported Operations:
+
     - INSERT statement generation with parameter binding
     - UPDATE statement generation with WHERE conditions
     - DELETE statement generation with WHERE conditions
@@ -43,6 +45,7 @@ class BaseMatrixOneClient:
     - Parameter substitution and escaping
 
     Usage:
+
         This class is not intended to be used directly. It serves as a base
         class for Client and AsyncClient implementations, providing common
         functionality and reducing code duplication.
@@ -56,10 +59,12 @@ class BaseMatrixOneClient:
         Build INSERT SQL statement from data dictionary.
 
         Args:
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
         Returns:
+
             SQL INSERT statement string
         """
         columns = list(data.keys())
@@ -83,10 +88,12 @@ class BaseMatrixOneClient:
         Build batch INSERT SQL statement from list of data dictionaries.
 
         Args:
+
             table_name: Name of the table
             data_list: List of data dictionaries to insert
 
         Returns:
+
             SQL batch INSERT statement string
         """
         if not data_list:
@@ -123,6 +130,7 @@ class BaseMatrixOneExecutor:
     handling that are common across synchronous and asynchronous executors.
 
     Key Features:
+
     - Common data insertion logic
     - Batch operation support
     - Result set handling
@@ -130,12 +138,14 @@ class BaseMatrixOneExecutor:
     - Integration with MatrixOne's data operations
 
     Supported Operations:
+
     - Single row insertion with parameter binding
     - Batch insertion for multiple rows
     - Result set creation and management
     - Error handling and exception management
 
     Usage:
+
         This class is not intended to be used directly. It serves as a base
         class for ClientExecutor and AsyncClientExecutor implementations,
         providing common functionality and reducing code duplication.
@@ -152,10 +162,12 @@ class BaseMatrixOneExecutor:
         Insert data into a table.
 
         Args:
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
         Returns:
+
             Result from execute method (implementation specific)
         """
         sql = self.base_client._build_insert_sql(table_name, data)
@@ -166,10 +178,12 @@ class BaseMatrixOneExecutor:
         Batch insert data into a table.
 
         Args:
+
             table_name: Name of the table
             data_list: List of data dictionaries to insert
 
         Returns:
+
             Result from execute method (implementation specific)
         """
         if not data_list:

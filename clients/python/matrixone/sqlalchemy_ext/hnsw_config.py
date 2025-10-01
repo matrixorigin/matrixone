@@ -39,6 +39,7 @@ class HNSWConfig:
         Initialize HNSWConfig.
 
         Args:
+
             engine: SQLAlchemy engine instance
         """
         self.engine = engine
@@ -48,9 +49,11 @@ class HNSWConfig:
         Enable HNSW indexing in MatrixOne.
 
         Args:
+
             connection: Optional existing database connection
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -69,9 +72,11 @@ class HNSWConfig:
         Disable HNSW indexing in MatrixOne.
 
         Args:
+
             connection: Optional existing database connection
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -90,9 +95,11 @@ class HNSWConfig:
         Get the current HNSW indexing status.
 
         Args:
+
             connection: Optional existing database connection
 
         Returns:
+
             bool: True if HNSW indexing is enabled, False if disabled, None if error
         """
         try:
@@ -116,9 +123,11 @@ def create_hnsw_config(engine: Engine) -> HNSWConfig:
     Create an HNSWConfig instance.
 
     Args:
+
         engine: SQLAlchemy engine instance
 
     Returns:
+
         HNSWConfig instance
     """
     return HNSWConfig(engine)
@@ -129,10 +138,12 @@ def enable_hnsw_indexing(engine: Engine, connection: Optional[Connection] = None
     Enable HNSW indexing in MatrixOne.
 
     Args:
+
         engine: SQLAlchemy engine instance
         connection: Optional existing database connection
 
     Returns:
+
         bool: True if successful, False otherwise
     """
     config = create_hnsw_config(engine)
@@ -144,10 +155,12 @@ def disable_hnsw_indexing(engine: Engine, connection: Optional[Connection] = Non
     Disable HNSW indexing in MatrixOne.
 
     Args:
+
         engine: SQLAlchemy engine instance
         connection: Optional existing database connection
 
     Returns:
+
         bool: True if successful, False otherwise
     """
     config = create_hnsw_config(engine)
@@ -159,10 +172,12 @@ def get_hnsw_status(engine: Engine, connection: Optional[Connection] = None) -> 
     Get the current HNSW indexing status.
 
     Args:
+
         engine: SQLAlchemy engine instance
         connection: Optional existing database connection
 
     Returns:
+
         bool: True if HNSW indexing is enabled, False if disabled, None if error
     """
     config = create_hnsw_config(engine)

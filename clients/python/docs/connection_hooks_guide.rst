@@ -1,5 +1,5 @@
 Connection Hooks Guide
-=====================
+======================
 
 The MatrixOne Python Client now supports Connection Hooks functionality, allowing you to automatically execute predefined actions every time a new connection is established.
 

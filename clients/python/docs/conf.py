@@ -61,6 +61,31 @@ templates_path = ['_templates']
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
+# Suppress warnings from Python docstrings (these are code quality issues, not doc issues)
+suppress_warnings = [
+    'autosummary',
+    'ref.python',  # Suppress duplicate object warnings
+    'ref.doc',
+    'ref',
+    'app',
+    'app.add_directive',
+    'app.add_node',
+]
+
+# Ignore docstring formatting warnings from source code  
+nitpicky = False
+
+# Keep going on errors (don't stop build on warnings)
+keep_going = True
+
+# Autodoc configuration to reduce warnings
+autodoc_default_flags = ['members', 'undoc-members']
+autodoc_member_order = 'bysource'
+
+# Napoleon settings to be more lenient
+napoleon_use_rtype = False
+napoleon_preprocess_types = True
+
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for

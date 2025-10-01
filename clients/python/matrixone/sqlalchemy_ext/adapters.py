@@ -45,6 +45,7 @@ class CustomFilterMixin:
         Compile the filter to a SQL string.
 
         Returns:
+
             SQL string representation of the filter
         """
         raise NotImplementedError("Subclasses must implement compile() method")
@@ -58,13 +59,16 @@ def logical_and(*conditions: Union[Any, CustomFilterMixin]) -> ClauseElement:
     with a compile() method alongside regular SQLAlchemy expressions.
 
     Args:
+
         *conditions: Mix of custom filter objects (with compile() method)
                     and regular SQLAlchemy expressions
 
     Returns:
+
         SQLAlchemy expression that can be used with filter()
 
     Example:
+
         query.filter(logical_and(
             custom_filter.some_condition(),
             Article.category == "Programming",
@@ -94,13 +98,16 @@ def logical_or(*conditions: Union[Any, CustomFilterMixin]) -> ClauseElement:
     with a compile() method alongside regular SQLAlchemy expressions.
 
     Args:
+
         *conditions: Mix of custom filter objects (with compile() method)
                     and regular SQLAlchemy expressions
 
     Returns:
+
         SQLAlchemy expression that can be used with filter()
 
     Example:
+
         query.filter(logical_or(
             custom_filter.condition_a(),
             custom_filter.condition_b(),
@@ -130,12 +137,15 @@ def logical_not(condition: Union[Any, CustomFilterMixin]) -> ClauseElement:
     with a compile() method alongside regular SQLAlchemy expressions.
 
     Args:
+
         condition: A custom filter object (with compile() method) or regular SQLAlchemy expression
 
     Returns:
+
         SQLAlchemy expression that can be used with filter()
 
     Example:
+
         query.filter(logical_not(
             custom_filter.some_condition()
         ))

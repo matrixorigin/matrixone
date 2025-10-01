@@ -38,6 +38,7 @@ class MoCtlManager:
     MatrixOne administrative and maintenance operations.
 
     Key Features:
+
     - Programmatic access to mo_ctl commands
     - Database and cluster management operations
     - Configuration and maintenance tasks
@@ -45,6 +46,7 @@ class MoCtlManager:
     - Error handling and result parsing
 
     Supported Operations:
+
     - Database creation and management
     - Cluster configuration and maintenance
     - User and account management
@@ -53,6 +55,7 @@ class MoCtlManager:
     - System health checks and diagnostics
 
     Usage Examples:
+
         # Initialize mo_ctl manager
         moctl = client.moctl
 
@@ -77,6 +80,7 @@ class MoCtlManager:
         Initialize MoCtlManager
 
         Args:
+
             client: MatrixOne client instance
         """
         self.client = client
@@ -86,14 +90,17 @@ class MoCtlManager:
         Execute mo_ctl command
 
         Args:
+
             method: Control method (e.g., 'dn')
             target: Target operation (e.g., 'flush', 'checkpoint')
             params: Parameters for the operation
 
         Returns:
+
             Parsed result from mo_ctl command
 
         Raises:
+
             MoCtlError: If the operation fails
         """
         try:
@@ -133,13 +140,16 @@ class MoCtlManager:
         Force flush table `table` in database `database`. It returns after all blks in the table are flushed.
 
         Args:
+
             database: Database name
             table: Table name
 
         Returns:
+
             Result of the flush operation
 
         Example:
+
             >>> client.moctl.flush_table('db1', 't')
             {'method': 'Flush', 'result': [{'returnStr': 'OK'}]}
         """
@@ -153,9 +163,11 @@ class MoCtlManager:
         Flush all blks in DN, generate an Incremental Checkpoint and truncate WAL.
 
         Returns:
+
             Result of the incremental checkpoint operation
 
         Example:
+
             >>> client.moctl.increment_checkpoint()
             {'method': 'Checkpoint', 'result': [{'returnStr': 'OK'}]}
         """
@@ -168,9 +180,11 @@ class MoCtlManager:
         Generate a global checkpoint across all nodes.
 
         Returns:
+
             Result of the global checkpoint operation
 
         Example:
+
             >>> client.moctl.global_checkpoint()
             {'method': 'GlobalCheckpoint', 'result': [{'returnStr': 'OK'}]}
         """

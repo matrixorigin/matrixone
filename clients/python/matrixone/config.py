@@ -20,68 +20,36 @@ allowing users to override default connection parameters via environment variabl
 configuration files, or direct parameter overrides.
 
 Features:
+
 - Default connection parameters with sensible defaults
 - Environment variable overrides for all connection parameters
 - Support for connection hooks via on_connect parameter
 - Multiple configuration retrieval methods (tuple, dict, kwargs)
 - Configuration debugging and validation
 
-Usage Examples:
+Usage Examples::
 
-1. Basic Configuration:
-   ```python
-   from matrixone.config import get_connection_kwargs, print_config
+    from matrixone.config import get_connection_kwargs, print_config
+    from matrixone.connection_hooks import ConnectionAction
+    from matrixone import Client
 
-   # Get default configuration
-   config = get_connection_kwargs()
-   print_config()  # Print current configuration
-   ```
+    # Basic Configuration
+    config = get_connection_kwargs()
+    print_config()
 
-2. Environment Variable Overrides:
-   ```bash
-   export MATRIXONE_HOST=localhost
-   export MATRIXONE_PORT=6001
-   export MATRIXONE_USER=admin
-   export MATRIXONE_PASSWORD=mypassword
-   export MATRIXONE_DATABASE=mydb
-   export MATRIXONE_ON_CONNECT=enable_all,enable_vector
-   ```
+    # Parameter Overrides
+    config = get_connection_kwargs(
+        host="production-server",
+        port=6002,
+        on_connect=[ConnectionAction.ENABLE_FULLTEXT]
+    )
 
-3. Parameter Overrides:
-   ```python
-   from matrixone.config import get_connection_kwargs
-   from matrixone.connection_hooks import ConnectionAction
-
-   # Override specific parameters
-   config = get_connection_kwargs(
-       host="production-server",
-       port=6002,
-       on_connect=[ConnectionAction.ENABLE_FULLTEXT]
-   )
-   ```
-
-4. Using with Client:
-   ```python
-   from matrixone import Client
-   from matrixone.config import get_connection_kwargs
-
-   # Get configuration and connect
-   config = get_connection_kwargs()
-   client = Client()
-
-   # Filter to only supported parameters
-   supported_config = {
-       'host': config['host'],
-       'port': config['port'],
-       'user': config['user'],
-       'password': config['password'],
-       'database': config['database'],
-       'on_connect': config['on_connect']
-   }
-   client.connect(**supported_config)
-   ```
+    # Using with Client
+    client = Client()
+    client.connect(**config)
 
 Environment Variables:
+
 - MATRIXONE_HOST: Database host (default: 127.0.0.1)
 - MATRIXONE_PORT: Database port (default: 6001)
 - MATRIXONE_USER: Database user (default: root)
@@ -93,15 +61,14 @@ Environment Variables:
 - MATRIXONE_ON_CONNECT: Connection hooks (comma-separated list)
 
 Connection Hooks:
+
 The on_connect parameter supports:
+
 - Predefined actions: enable_all, enable_ivf, enable_hnsw, enable_fulltext, enable_vector
 - Custom callback functions
 - Mixed actions and callbacks
 
-Example on_connect values:
-- "enable_all" - Enable all features
-- "enable_ivf,enable_hnsw" - Enable vector operations
-- Custom function or ConnectionHook object
+Example on_connect values: "enable_all", "enable_ivf,enable_hnsw", or custom function
 """
 
 import os
@@ -116,12 +83,13 @@ class MatrixOneConfig:
     supporting environment variable overrides, parameter validation, and multiple
     output formats for different use cases.
 
-    Attributes:
+    Attributes::
+
         DEFAULT_CONFIG (Dict[str, Any]): Default connection parameters
         ENV_MAPPING (Dict[str, str]): Mapping of parameters to environment variables
 
-    Example:
-        ```python
+    Example::
+
         # Get configuration with environment overrides
         config = MatrixOneConfig.get_config()
 
@@ -133,7 +101,7 @@ class MatrixOneConfig:
 
         # Print current configuration
         MatrixOneConfig.print_config()
-        ```
+
     """
 
     # Default connection parameters
@@ -173,11 +141,13 @@ class MatrixOneConfig:
         2. Environment variable overrides
         3. Direct parameter overrides
 
-        Args:
+        Args::
+
             **overrides: Additional parameter overrides. These take precedence
                         over environment variables and defaults.
 
-        Returns:
+        Returns::
+
             Dict[str, Any]: Complete configuration dictionary containing:
                 - host (str): Database host
                 - port (int): Database port
@@ -189,8 +159,8 @@ class MatrixOneConfig:
                 - autocommit (bool): Enable autocommit
                 - on_connect (Any): Connection hooks configuration
 
-        Example:
-            ```python
+        Example::
+
             # Get default configuration
             config = MatrixOneConfig.get_config()
 
@@ -200,7 +170,6 @@ class MatrixOneConfig:
                 port=6002,
                 on_connect=[ConnectionAction.ENABLE_ALL]
             )
-            ```
         """
         config = cls.DEFAULT_CONFIG.copy()
 
@@ -231,25 +200,21 @@ class MatrixOneConfig:
         This method returns the core connection parameters as a tuple,
         which is useful for direct unpacking into function calls.
 
-        Args:
+        Args::
+
             **overrides: Additional parameter overrides
 
-        Returns:
-            Tuple[str, int, str, str, str]: Tuple containing:
-                - host (str): Database host
-                - port (int): Database port
-                - user (str): Database user
-                - password (str): Database password
-                - database (str): Database name
+        Returns::
 
-        Example:
-            ```python
+            Tuple[str, int, str, str, str]: Tuple containing (host, port, user, password, database)
+
+        Example::
+
             # Unpack parameters directly
             host, port, user, password, database = MatrixOneConfig.get_connection_params()
 
             # Use with legacy connection methods
             connection = create_connection(*MatrixOneConfig.get_connection_params())
-            ```
         """
         config = cls.get_config(**overrides)
         return (
@@ -269,23 +234,16 @@ class MatrixOneConfig:
         including extended parameters like charset, timeout, and connection hooks.
         This is the most comprehensive configuration method.
 
-        Args:
+        Args::
+
             **overrides: Additional parameter overrides
 
-        Returns:
-            Dict[str, Any]: Complete connection parameters dictionary containing:
-                - host (str): Database host
-                - port (int): Database port
-                - user (str): Database user
-                - password (str): Database password
-                - database (str): Database name
-                - charset (str): Character set
-                - connection_timeout (int): Connection timeout in seconds
-                - auto_commit (bool): Enable autocommit
-                - on_connect (Any): Connection hooks configuration
+        Returns::
 
-        Example:
-            ```python
+            Dict[str, Any]: Complete connection parameters dictionary
+
+        Example::
+
             from matrixone import Client
             from matrixone.connection_hooks import ConnectionAction
 
@@ -294,7 +252,7 @@ class MatrixOneConfig:
                 on_connect=[ConnectionAction.ENABLE_ALL]
             )
 
-            # Filter to supported parameters for Client.connect()
+            # Use with Client
             client = Client()
             client.connect(
                 host=config['host'],
@@ -304,7 +262,6 @@ class MatrixOneConfig:
                 database=config['database'],
                 on_connect=config['on_connect']
             )
-            ```
         """
         config = cls.get_config(**overrides)
         return {
@@ -328,33 +285,19 @@ class MatrixOneConfig:
         showing all parameters with their current values. Sensitive information
         like passwords are masked for security.
 
-        Args:
+        Args::
+
             **overrides: Additional parameter overrides to apply before printing
 
-        Example:
-            ```python
+        Example::
+
             # Print default configuration
             MatrixOneConfig.print_config()
 
             # Print configuration with overrides
             MatrixOneConfig.print_config(host="production-server", port=6002)
-            ```
 
-        Output:
-            ```
-            MatrixOne Connection Configuration:
-            ========================================
-              host: 127.0.0.1
-              port: 6001
-              user: root
-              password: ***
-              database: test
-              charset: utf8mb4
-              connect_timeout: 30
-              autocommit: True
-              on_connect: None
-            ========================================
-            ```
+        Note: Prints formatted configuration to stdout.
         """
         config = cls.get_config(**overrides)
         print("MatrixOne Connection Configuration:")
@@ -379,18 +322,20 @@ def get_config(**overrides) -> Dict[str, Any]:
 
     Convenience function for MatrixOneConfig.get_config().
 
-    Args:
+    Args::
+
         **overrides: Additional parameter overrides
 
-    Returns:
+    Returns::
+
         Dict[str, Any]: Complete configuration dictionary
 
-    Example:
-        ```python
+    Example::
+
         from matrixone.config import get_config
 
         config = get_config(host="production-server")
-        ```
+
     """
     return MatrixOneConfig.get_config(**overrides)
 
@@ -401,18 +346,20 @@ def get_connection_params(**overrides) -> tuple:
 
     Convenience function for MatrixOneConfig.get_connection_params().
 
-    Args:
+    Args::
+
         **overrides: Additional parameter overrides
 
-    Returns:
+    Returns::
+
         Tuple[str, int, str, str, str]: Connection parameters tuple
 
-    Example:
-        ```python
+    Example::
+
         from matrixone.config import get_connection_params
 
         host, port, user, password, database = get_connection_params()
-        ```
+
     """
     return MatrixOneConfig.get_connection_params(**overrides)
 
@@ -424,19 +371,21 @@ def get_connection_kwargs(**overrides) -> Dict[str, Any]:
     Convenience function for MatrixOneConfig.get_connection_kwargs().
     This is the most commonly used function for getting complete configuration.
 
-    Args:
+    Args::
+
         **overrides: Additional parameter overrides
 
-    Returns:
+    Returns::
+
         Dict[str, Any]: Complete connection parameters dictionary
 
-    Example:
-        ```python
+    Example::
+
         from matrixone.config import get_connection_kwargs
         from matrixone.connection_hooks import ConnectionAction
 
         config = get_connection_kwargs(on_connect=[ConnectionAction.ENABLE_ALL])
-        ```
+
     """
     return MatrixOneConfig.get_connection_kwargs(**overrides)
 
@@ -447,14 +396,15 @@ def print_config(**overrides):
 
     Convenience function for MatrixOneConfig.print_config().
 
-    Args:
+    Args::
+
         **overrides: Additional parameter overrides to apply before printing
 
-    Example:
-        ```python
+    Example::
+
         from matrixone.config import print_config
 
         print_config()  # Print current configuration
-        ```
+
     """
     MatrixOneConfig.print_config(**overrides)

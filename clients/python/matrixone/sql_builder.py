@@ -273,14 +273,17 @@ class MatrixOneSQLBuilder:
         similar to WHERE clause but applied to aggregated results.
 
         Args:
+
             condition (str): The HAVING condition as a string.
                            Can include '?' placeholders for parameter substitution.
             *params (Any): Parameters to replace '?' placeholders in the condition.
 
         Returns:
+
             MatrixOneSQLBuilder: Self for method chaining.
 
         Examples:
+
             # Basic HAVING with placeholders
             builder.group_by("department")
             builder.having("COUNT(*) > ?", 5)
@@ -309,6 +312,7 @@ class MatrixOneSQLBuilder:
             - This is a low-level SQL builder - for ORM usage, prefer MatrixOneQuery
 
         Raises:
+
             ValueError: If condition is not a string
         """
         self._having_conditions.append(condition)
@@ -607,6 +611,7 @@ def build_vector_similarity_query(
     Convenience function to build vector similarity search query.
 
     Args:
+
         table_name: Name of the table to query
         vector_column: Name of the vector column
         query_vector: Query vector for similarity search
@@ -618,6 +623,7 @@ def build_vector_similarity_query(
         use_parameter_substitution: Whether to substitute parameters directly
 
     Returns:
+
         SQL string (if use_parameter_substitution=True) or (sql, params) tuple
     """
     builder = MatrixOneSQLBuilder().vector_similarity_search(
@@ -650,6 +656,7 @@ def build_select_query(
     Convenience function to build SELECT query.
 
     Args:
+
         table_name: Name of the table to query
         select_columns: Columns to select (None for all)
         where_conditions: WHERE conditions
@@ -659,6 +666,7 @@ def build_select_query(
         use_parameter_substitution: Whether to substitute parameters directly
 
     Returns:
+
         SQL string (if use_parameter_substitution=True) or (sql, params) tuple
     """
     builder = MatrixOneSQLBuilder()
@@ -697,11 +705,13 @@ def build_insert_query(
     Build INSERT query using unified SQL builder.
 
     Args:
+
         table_name: Name of the table
         values: Single row dict or list of row dicts
         use_parameter_substitution: Whether to substitute parameters directly
 
     Returns:
+
         SQL string (if use_parameter_substitution=True) or (sql, params) tuple
     """
     builder = MatrixOneSQLBuilder()
@@ -730,6 +740,7 @@ def build_update_query(
     Build UPDATE query using unified SQL builder.
 
     Args:
+
         table_name: Name of the table
         set_values: Dictionary of column=value pairs to update
         where_conditions: WHERE conditions
@@ -737,6 +748,7 @@ def build_update_query(
         use_parameter_substitution: Whether to substitute parameters directly
 
     Returns:
+
         SQL string (if use_parameter_substitution=True) or (sql, params) tuple
     """
     builder = MatrixOneSQLBuilder()
@@ -764,12 +776,14 @@ def build_delete_query(
     Build DELETE query using unified SQL builder.
 
     Args:
+
         table_name: Name of the table
         where_conditions: WHERE conditions
         where_params: Parameters for WHERE conditions
         use_parameter_substitution: Whether to substitute parameters directly
 
     Returns:
+
         SQL string (if use_parameter_substitution=True) or (sql, params) tuple
     """
     builder = MatrixOneSQLBuilder()
@@ -794,6 +808,7 @@ def build_create_index_query(
     Convenience function to build CREATE INDEX query.
 
     Args:
+
         index_name: Name of the index
         table_name: Name of the table
         column_name: Name of the column to index
@@ -801,6 +816,7 @@ def build_create_index_query(
         **kwargs: Additional index parameters
 
     Returns:
+
         CREATE INDEX SQL string
     """
     sql_parts = [f"CREATE INDEX {index_name} USING {index_type} ON {table_name}({column_name})"]

@@ -11,20 +11,30 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
 
 ## ✨ Features
 
-- 🚀 **High Performance**: Optimized for MatrixOne database operations
-- 🔄 **Async Support**: Full async/await support with AsyncClient
-- 📸 **Snapshot Management**: Create and manage database snapshots
-- ⏰ **Point-in-Time Recovery**: PITR functionality for data recovery
-- 🔄 **Table Cloning**: Clone databases and tables efficiently
-- 👥 **Account Management**: User and role management
-- 📊 **Pub/Sub**: Publication and subscription support
+- 🚀 **High Performance**: Optimized for MatrixOne database operations with connection pooling
+- 🔄 **Async Support**: Full async/await support with AsyncClient for non-blocking operations
+- 🧠 **Vector Search**: Advanced vector similarity search with HNSW and IVF indexing algorithms
+  - Support for f32 and f64 precision vectors
+  - Multiple distance metrics (L2, Cosine, Inner Product)
+  - Configurable index parameters for performance tuning
+- 🔍 **Fulltext Search**: Powerful fulltext indexing and search with BM25 and TF-IDF algorithms
+  - Natural language and boolean search modes
+  - Multi-column fulltext indexes
+  - Relevance scoring and ranking
+- 📊 **Metadata Analysis**: Comprehensive table and column metadata analysis with statistics
+  - Table size and row count statistics
+  - Column data distribution analysis
+  - Index usage metrics
+- 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
+- ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
+- 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
+- 👥 **Account Management**: Comprehensive user, role, and permission management
+- 📊 **Pub/Sub**: Real-time publication and subscription support
 - 🔧 **Version Management**: Automatic backend version detection and compatibility checking
-- 🛡️ **Type Safety**: Full type hints support
-- 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy integration
-- 🔍 **Fulltext Search**: Advanced fulltext indexing and search capabilities with TF-IDF and BM25 algorithms
-- 🧮 **Vector Search**: High-performance vector similarity search with HNSW and IVF algorithms
-- 📊 **Vector Indexes**: Create and manage vector indexes for AI/ML applications
-- 🎯 **Multi-Modal Support**: Support for various vector dimensions and data types
+- 🛡️ **Type Safety**: Full type hints support with comprehensive documentation
+- 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy integration with enhanced ORM features
+- 🔗 **Enhanced Query Building**: Advanced query building with logical operations (logical_and, logical_or, logical_not)
+- 🪝 **Connection Hooks**: Pre/post connection hooks for custom initialization logic
 
 ## 🚀 Installation
 
@@ -159,6 +169,110 @@ client.snapshots.clone_database(
     source_db='old_database',
     snapshot_name='my_snapshot'
 )
+```
+
+### Vector Search
+
+```python
+from matrixone.sqlalchemy_ext import create_vector_column
+from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy.ext.declarative import declarative_base
+import numpy as np
+
+# Define vector table model
+Base = declarative_base()
+
+class Document(Base):
+    __tablename__ = 'documents'
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200))
+    content = Column(Text)
+    embedding = create_vector_column(384, 'f32')  # 384-dim vector
+
+# Create table and vector index
+client.create_table(Document)
+
+# Enable and create HNSW index
+client.vector_ops.enable_hnsw()
+client.vector_ops.create_hnsw(
+    table_name='documents',
+    name='idx_embedding',
+    column='embedding',
+    m=16,
+    ef_construction=200
+)
+
+# Insert document with vector
+client.insert('documents', {
+    'id': 1,
+    'title': 'AI Research Paper',
+    'content': 'Advanced machine learning techniques...',
+    'embedding': np.random.rand(384).tolist()
+})
+
+# Vector similarity search
+query_vector = np.random.rand(384).tolist()
+results = client.vector_ops.similarity_search(
+    table_name='documents',
+    vector_column='embedding',
+    query_vector=query_vector,
+    limit=5,
+    distance_type='cosine'
+)
+```
+
+### Fulltext Search
+
+```python
+# Create fulltext index
+client.fulltext_index.create(
+    table_name='documents',
+    name='ftidx_content',
+    columns=['title', 'content'],
+    algorithm='BM25'
+)
+
+# Natural language search
+results = client.fulltext_index.fulltext_search(
+    table_name='documents',
+    columns=['title', 'content'],
+    search_term='machine learning techniques',
+    mode='natural_language',
+    with_score=True,
+    limit=10
+)
+
+# Boolean search with operators
+results = client.fulltext_index.fulltext_search(
+    table_name='documents',
+    columns=['title', 'content'],
+    search_term='machine +learning -basic',
+    mode='boolean',
+    with_score=True,
+    limit=10
+)
+```
+
+### Metadata Analysis
+
+```python
+# Get table metadata with statistics
+metadata = client.metadata.metadata_scan(
+    table_name='documents',
+    include_stats=True,
+    columns=['id', 'title', 'created_at']
+)
+
+for row in metadata:
+    print(f"Column: {row.column_name}")
+    print(f"  Type: {row.data_type}")
+    print(f"  Nulls: {row.null_count}")
+    print(f"  Distinct: {row.distinct_count}")
+
+# Get table statistics
+stats = client.metadata.get_table_brief(table_name='documents')
+print(f"Total rows: {stats.row_count}")
+print(f"Table size: {stats.size_bytes}")
 ```
 
 ### Version Management
@@ -305,26 +419,38 @@ except SnapshotError as e:
 
 Check out the `examples/` directory for comprehensive usage examples:
 
-- `example_01_basic_connection.py` - Basic database operations
+**Basic Examples:**
+- `example_01_basic_connection.py` - Basic database operations and connectivity
 - `example_02_account_management.py` - User and role management
-- `example_03_async_operations.py` - Async operations
-- `example_04_transaction_management.py` - Transaction handling
-- `example_05_snapshot_restore.py` - Snapshot and restore
-- `example_06_sqlalchemy_integration.py` - SQLAlchemy integration
-- `example_07_advanced_features.py` - Advanced features
+- `example_03_async_operations.py` - Async/await operations with AsyncClient
+- `example_04_transaction_management.py` - Transaction handling and rollback
+- `example_05_snapshot_restore.py` - Snapshot creation and restore operations
+- `example_06_sqlalchemy_integration.py` - SQLAlchemy ORM integration
+- `example_07_advanced_features.py` - Advanced SDK features
 - `example_08_pubsub_operations.py` - Pub/Sub operations
-- `example_09_logger_integration.py` - Logging integration
-- `example_10_version_management.py` - Version management
-- `example_11_matrixone_version_demo.py` - MatrixOne version demo
-- `example_12_vector_search.py` - Vector similarity search
-- `example_13_vector_index.py` - Vector index creation and management
-- `example_14_vector_index_orm.py` - Vector operations with SQLAlchemy ORM
-- `example_15_vector_index_client_chain.py` - Chained vector operations
-- `example_16_vector_comprehensive.py` - Comprehensive vector examples
-- `example_17_hnsw_vector_index.py` - HNSW vector index examples
-- `example_18_specialized_vector_indexes.py` - Specialized vector index types
-- `example_fulltext_index.py` - Fulltext indexing and search
-- `example_sql_logging.py` - SQL query logging
+- `example_09_logger_integration.py` - Logging configuration and integration
+- `example_10_version_management.py` - Version compatibility management
+- `example_11_matrixone_version_demo.py` - MatrixOne version detection
+
+**Vector Search Examples:**
+- `example_12_vector_basics.py` - Vector data types and basic distance functions
+- `example_13_vector_indexes.py` - IVF and HNSW index management and performance
+- `example_14_vector_search.py` - Vector similarity search operations
+- `example_15_vector_advanced.py` - Advanced vector operations and optimization
+
+**ORM and Advanced Examples:**
+- `example_18_snapshot_orm.py` - Snapshot operations with ORM
+- `example_19_sqlalchemy_style_orm.py` - SQLAlchemy-style ORM patterns
+- `example_20_sqlalchemy_engine_integration.py` - SQLAlchemy engine integration
+- `example_21_advanced_orm_features.py` - Advanced ORM features
+- `example_22_unified_sql_builder.py` - Unified SQL query builder
+- `example_24_query_update.py` - Query and update operations
+- `example_25_metadata_operations.py` - Table metadata analysis and statistics
+
+**Specialized Examples:**
+- `example_connection_hooks.py` - Connection hooks for custom initialization
+- `example_dynamic_logging.py` - Dynamic logging configuration
+- `example_ivf_stats_complete.py` - IVF index statistics and analysis
 
 ### Running Examples
 
@@ -335,14 +461,25 @@ make examples
 
 Run specific examples:
 ```bash
-make example-basic              # Basic connection example
-make example-async              # Async operations example
-make example-account            # Account management example
-make example-vector             # Vector search example
-make example-vector-index       # Vector index example
-make example-vector-comprehensive # Comprehensive vector examples
-make example-hnsw               # HNSW vector index example
-make example-fulltext           # Fulltext index example
+make example-basic    # Basic connection and database operations
+make example-async    # Async/await operations
+make example-vector   # Vector search and similarity
+```
+
+Run individual example files:
+```bash
+# Basic examples
+python examples/example_01_basic_connection.py
+python examples/example_03_async_operations.py
+
+# Vector examples
+python examples/example_12_vector_basics.py
+python examples/example_13_vector_indexes.py
+python examples/example_14_vector_search.py
+
+# Metadata and advanced examples
+python examples/example_25_metadata_operations.py
+python examples/example_22_unified_sql_builder.py
 ```
 
 ### Customizing Connection Parameters
@@ -429,10 +566,31 @@ For detailed testing instructions, environment setup, and troubleshooting, see [
 
 ## 📚 Documentation
 
-- **Examples**: See `example_*.py` files for comprehensive usage examples
-- **Testing Guide**: See [TESTING.md](TESTING.md) for detailed testing instructions and environment setup
-- **API Reference**: All classes and methods are fully documented with type hints
-- **Version Management**: Automatic backend version detection and compatibility checking
+The SDK includes comprehensive documentation for all features:
+
+- **[Quick Start](docs/quickstart.rst)**: Get started quickly with common use cases
+- **[Installation Guide](docs/installation.rst)**: Installation and setup instructions
+- **[Configuration Guide](docs/configuration_guide.rst)**: Connection and client configuration
+- **[Connection Hooks](docs/connection_hooks_guide.rst)**: Pre/post connection hooks
+- **[ORM Guide](docs/orm_guide.rst)**: SQLAlchemy ORM integration and patterns
+- **[Vector Guide](docs/vector_guide.rst)**: Vector search and indexing operations
+- **[Fulltext Guide](docs/fulltext_guide.rst)**: Fulltext search and indexing
+- **[Metadata Guide](docs/metadata_guide.rst)**: Table metadata analysis and statistics
+- **[Account Guide](docs/account_guide.rst)**: User and role management
+- **[Pub/Sub Guide](docs/pubsub_guide.rst)**: Publication and subscription operations
+- **[Snapshot & Restore](docs/snapshot_restore_guide.rst)**: Snapshot and PITR operations
+- **[Clone Guide](docs/clone_guide.rst)**: Database and table cloning
+- **[MoCTL Guide](docs/moctl_guide.rst)**: MoCTL integration
+- **[Best Practices](docs/best_practices.rst)**: Best practices and patterns
+- **[API Reference](docs/api/index.rst)**: Complete API reference
+- **[Examples](docs/examples.rst)**: Comprehensive usage examples
+- **[Testing Guide](TESTING.md)**: Testing instructions and environment setup
+
+Generate HTML documentation:
+```bash
+make docs          # Generate HTML documentation
+make docs-serv     # Start documentation server at http://localhost:8000
+```
 
 ## 🤝 Contributing
 

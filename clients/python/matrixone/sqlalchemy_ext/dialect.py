@@ -30,6 +30,7 @@ class MatrixOneDialect(MySQLDialect):
     MatrixOne-specific SQL constructs.
 
     Key Features:
+
     - Full MySQL compatibility for standard operations
     - Support for MatrixOne vector types (vecf32, vecf64)
     - Fulltext search syntax support
@@ -45,6 +46,7 @@ class MatrixOneDialect(MySQLDialect):
     - Vector similarity search functions
 
     Usage:
+
         # Create engine with MatrixOne dialect
         engine = create_engine(
             'matrixone://user:password@host:port/database',

@@ -120,13 +120,16 @@ class VersionManager:
         Parse version string into VersionInfo object
 
         Args:
+
             version_string: Version string in format "major.minor.patch" (e.g., "3.0.1")
                           Special case: "999.0.0" represents development version (highest priority)
 
         Returns:
+
             VersionInfo object
 
         Raises:
+
             ValueError: If version string format is invalid
         """
         if not isinstance(version_string, str):
@@ -150,13 +153,16 @@ class VersionManager:
         Compare two versions
 
         Args:
+
             version1: First version (string or VersionInfo)
             version2: Second version (string or VersionInfo)
 
         Returns:
+
             VersionComparison result
 
         Examples:
+
             compare_versions("3.0.2", "3.0.1") -> VersionComparison.GREATER
             compare_versions("2.1.19", "3.0.9") -> VersionComparison.LESS
             compare_versions("3.0.1", "3.0.1") -> VersionComparison.EQUAL
@@ -191,11 +197,13 @@ class VersionManager:
         Check if current version is compatible with required version
 
         Args:
+
             required_version: Required version
             current_version: Current version (uses backend version if None)
             operator: Comparison operator (">=", ">", "<=", "<", "==", "!=")
 
         Returns:
+
             True if compatible, False otherwise
         """
         if current_version is None:
@@ -234,6 +242,7 @@ class VersionManager:
         Set the current backend version
 
         Args:
+
             version: Backend version string or VersionInfo object
         """
         if isinstance(version, str):
@@ -249,9 +258,11 @@ class VersionManager:
         Check if a version is a development version
 
         Args:
+
             version: Version to check (uses current backend version if None)
 
         Returns:
+
             True if it's a development version (999.x.x), False otherwise
         """
         if version is None:
@@ -275,9 +286,11 @@ class VersionManager:
         3. "MatrixOne 3.0.1" -> "3.0.1" (fallback format)
 
         Args:
+
             version_string: Raw version string from MatrixOne
 
         Returns:
+
             Semantic version string or None if parsing fails
         """
         import re
@@ -323,6 +336,7 @@ class VersionManager:
         Register a feature requirement
 
         Args:
+
             feature_requirement: FeatureRequirement object
         """
         self._feature_requirements[feature_requirement.feature_name] = feature_requirement
@@ -332,9 +346,11 @@ class VersionManager:
         Check if a feature is available in current backend version
 
         Args:
+
             feature_name: Name of the feature to check
 
         Returns:
+
             True if feature is available, False otherwise
         """
         if feature_name not in self._feature_requirements:
@@ -363,9 +379,11 @@ class VersionManager:
         Get feature requirement information
 
         Args:
+
             feature_name: Name of the feature
 
         Returns:
+
             FeatureRequirement object or None if not found
         """
         return self._feature_requirements.get(feature_name)
@@ -375,10 +393,12 @@ class VersionManager:
         Get helpful hint message for version-related errors
 
         Args:
+
             feature_name: Name of the feature
             error_context: Additional context for the error
 
         Returns:
+
             Helpful hint message
         """
         if feature_name not in self._feature_requirements:
@@ -437,6 +457,7 @@ def requires_version(
     Decorator for version checking on methods
 
     Args:
+
         min_version: Minimum required version (e.g., "3.0.1")
         max_version: Maximum supported version (e.g., "3.0.5")
         feature_name: Name of the feature (defaults to function name)
@@ -445,6 +466,7 @@ def requires_version(
         raise_error: Whether to raise error if version check fails
 
     Returns:
+
         Decorated function
     """
 

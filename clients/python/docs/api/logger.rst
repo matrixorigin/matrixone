@@ -4,7 +4,7 @@ Logger
 This section documents the logging classes that provide structured logging capabilities.
 
 MatrixOneLogger
---------------
+---------------
 
 .. autoclass:: matrixone.logger.MatrixOneLogger
    :members:

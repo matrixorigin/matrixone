@@ -54,10 +54,11 @@ Features
 Quick Start
 -----------
 
+**Basic Database Operations:**
+
 .. code-block:: python
 
    from matrixone import Client
-   from sqlalchemy import func
 
    # Create and connect to MatrixOne
    client = Client()
@@ -73,43 +74,97 @@ Quick Start
    result = client.execute("SELECT 1 as test")
    print(result.fetchall())
 
-   # Create a vector table
-   client.create_table("documents", {
-       "id": "int",
-       "content": "text",
-       "embedding": "vector(384,f32)"
-   }, primary_key="id")
+   # Get backend version (auto-detected)
+   version = client.get_backend_version()
+   print(f"MatrixOne version: {version}")
 
-   # Create vector index
+   client.disconnect()
+
+**Vector Search:**
+
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import create_vector_column
+   from sqlalchemy import Column, Integer, String, Text
+   from sqlalchemy.ext.declarative import declarative_base
+   import numpy as np
+
+   # Define vector table model
+   Base = declarative_base()
+   
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(Integer, primary_key=True)
+       title = Column(String(200))
+       content = Column(Text)
+       embedding = create_vector_column(384, 'f32')
+
+   # Create table and HNSW index
+   client.create_table(Document)
+   client.vector_ops.enable_hnsw()
    client.vector_ops.create_hnsw(
-       table_name="documents",
-       name="idx_embedding",
-       column="embedding",
+       table_name='documents',
+       name='idx_embedding',
+       column='embedding',
        m=16,
        ef_construction=200
    )
 
-   # Insert vector data
-   client.insert("documents", {
-       "id": 1,
-       "content": "Sample document",
-       "embedding": [0.1, 0.2, 0.3] * 128  # 384-dimensional vector
+   # Insert and search
+   client.insert('documents', {
+       'id': 1,
+       'title': 'AI Research',
+       'content': 'Machine learning paper...',
+       'embedding': np.random.rand(384).tolist()
    })
 
-   # Vector similarity search
    results = client.vector_ops.similarity_search(
-       table_name="documents",
-       vector_column="embedding",
-       query_vector=[0.1, 0.2, 0.3] * 128,
+       table_name='documents',
+       vector_column='embedding',
+       query_vector=np.random.rand(384).tolist(),
        limit=5,
-       distance_type="cosine"
+       distance_type='cosine'
    )
 
-   # Get backend version (auto-detected)
-   version = client.version()
-   print(f"MatrixOne version: {version}")
+**Fulltext Search:**
 
-   client.disconnect()
+.. code-block:: python
+
+   # Create fulltext index
+   client.fulltext_index.create(
+       table_name='documents',
+       name='ftidx_content',
+       columns=['title', 'content'],
+       algorithm='BM25'
+   )
+
+   # Search with natural language
+   results = client.fulltext_index.fulltext_search(
+       table_name='documents',
+       columns=['title', 'content'],
+       search_term='machine learning techniques',
+       mode='natural_language',
+       with_score=True,
+       limit=10
+   )
+
+**Metadata Analysis:**
+
+.. code-block:: python
+
+   # Analyze table metadata
+   metadata = client.metadata.metadata_scan(
+       table_name='documents',
+       include_stats=True
+   )
+
+   for row in metadata:
+       print(f"{row.column_name}: {row.data_type}")
+       print(f"  Nulls: {row.null_count}, Distinct: {row.distinct_count}")
+
+   # Get table statistics
+   stats = client.metadata.get_table_brief(table_name='documents')
+   print(f"Rows: {stats.row_count}, Size: {stats.size_bytes} bytes")
 
 Installation
 ------------

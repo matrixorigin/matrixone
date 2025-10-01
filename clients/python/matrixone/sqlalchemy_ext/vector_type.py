@@ -39,29 +39,31 @@ class VectorType(UserDefinedType):
     It supports both vecf32 and vecf64 precision types with configurable dimensions.
 
     Key Features:
+
     - Support for both 32-bit (vecf32) and 64-bit (vecf64) vector precision
     - Configurable vector dimensions
     - Automatic serialization/deserialization of vector data
     - Integration with MatrixOne's vector indexing and search capabilities
     - Support for vector similarity operations
 
-    Usage:
+    Usage
         # Define vector columns in SQLAlchemy models
         class Document(Base):
-            __tablename__ = 'documents'
-            id = Column(Integer, primary_key=True)
-            content = Column(Text)
-            embedding = Column(VectorType(384, VectorPrecision.F32))  # 384-dim f32 vector
-            embedding_64 = Column(VectorType(512, VectorPrecision.F64))  # 512-dim f64 vector
+        __tablename__ = 'documents'
+        id = Column(Integer, primary_key=True)
+        content = Column(Text)
+        embedding = Column(VectorType(384, VectorPrecision.F32))  # 384-dim f32 vector
+        embedding_64 = Column(VectorType(512, VectorPrecision.F64))  # 512-dim f64 vector
 
         # Use in table creation
         client.create_table_orm('documents',
-            Column('id', Integer, primary_key=True),
-            Column('content', Text),
-            Column('embedding', VectorType(384, VectorPrecision.F32))
+        Column('id', Integer, primary_key=True),
+        Column('content', Text),
+        Column('embedding', VectorType(384, VectorPrecision.F32))
         )
 
     Supported Operations:
+
     - Vector similarity search using distance functions
     - Vector indexing with HNSW and IVF algorithms
     - Vector arithmetic operations
@@ -77,7 +79,8 @@ class VectorType(UserDefinedType):
         """
         Initialize VectorType.
 
-        Args:
+        Args::
+
             dimension: Vector dimension (optional)
             precision: Vector precision - VectorPrecision.F32 for vecf32, VectorPrecision.F64 for vecf64
         """
@@ -320,7 +323,8 @@ class VectorTypeDecorator(TypeDecorator):
         """
         Initialize VectorTypeDecorator.
 
-        Args:
+        Args::
+
             dimension: Vector dimension
             precision: Vector precision
             **kwargs: Additional arguments passed to TypeDecorator
@@ -381,18 +385,21 @@ class VectorColumn(Column):
 
     def l2_distance(self, other: Union[List[float], str, Column]) -> func:
         """
-        Calculate L2 (Euclidean) distance between vectors.
+            Calculate L2 (Euclidean) distance between vectors.
 
-        Args:
-            other: Target vector as list, string, or column
+            Args::
 
-        Returns:
-            SQLAlchemy function expression
+                other: Target vector as list, string, or column
 
-        Example:
-            query = session.query(Document).filter(
-                Document.embedding.l2_distance([1, 2, 3]) < 0.5
-            )
+            Returns::
+
+                SQLAlchemy function expression
+
+            Example
+
+        query = session.query(Document).filter(
+                    Document.embedding.l2_distance([1, 2, 3]) < 0.5
+                )
         """
         if isinstance(other, list):
             # Convert list to MatrixOne vector format
@@ -405,18 +412,21 @@ class VectorColumn(Column):
 
     def l2_distance_sq(self, other: Union[List[float], str, Column]) -> func:
         """
-        Calculate squared L2 distance between vectors.
+            Calculate squared L2 distance between vectors.
 
-        Args:
-            other: Target vector as list, string, or column
+            Args::
 
-        Returns:
-            SQLAlchemy function expression
+                other: Target vector as list, string, or column
 
-        Example:
-            query = session.query(Document).order_by(
-                Document.embedding.l2_distance_sq([1, 2, 3])
-            )
+            Returns::
+
+                SQLAlchemy function expression
+
+            Example
+
+        query = session.query(Document).order_by(
+                    Document.embedding.l2_distance_sq([1, 2, 3])
+                )
         """
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
@@ -428,18 +438,21 @@ class VectorColumn(Column):
 
     def cosine_distance(self, other: Union[List[float], str, Column]) -> func:
         """
-        Calculate cosine distance between vectors.
+            Calculate cosine distance between vectors.
 
-        Args:
-            other: Target vector as list, string, or column
+            Args::
 
-        Returns:
-            SQLAlchemy function expression
+                other: Target vector as list, string, or column
 
-        Example:
-            query = session.query(Document).filter(
-                Document.embedding.cosine_distance([1, 2, 3]) < 0.1
-            )
+            Returns::
+
+                SQLAlchemy function expression
+
+            Example
+
+        query = session.query(Document).filter(
+                    Document.embedding.cosine_distance([1, 2, 3]) < 0.1
+                )
         """
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
@@ -451,19 +464,22 @@ class VectorColumn(Column):
 
     def negative_inner_product(self, other: Union[List[float], str, Column]) -> func:
         """
-        Calculate negative inner product between vectors.
-        Note: This is implemented as -inner_product() since MatrixOne doesn't have native support.
+            Calculate negative inner product between vectors.
+            Note: This is implemented as -inner_product() since MatrixOne doesn't have native support.
 
-        Args:
-            other: Target vector as list, string, or column
+            Args::
 
-        Returns:
-            SQLAlchemy function expression
+                other: Target vector as list, string, or column
 
-        Example:
-            query = session.query(Document).order_by(
-                Document.embedding.negative_inner_product([1, 2, 3])
-            )
+            Returns::
+
+                SQLAlchemy function expression
+
+            Example
+
+        query = session.query(Document).order_by(
+                    Document.embedding.negative_inner_product([1, 2, 3])
+                )
         """
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
@@ -475,18 +491,21 @@ class VectorColumn(Column):
 
     def inner_product(self, other: Union[List[float], str, Column]) -> func:
         """
-        Calculate inner product (dot product) between vectors.
+            Calculate inner product (dot product) between vectors.
 
-        Args:
-            other: Target vector as list, string, or column
+            Args::
 
-        Returns:
-            SQLAlchemy function expression
+                other: Target vector as list, string, or column
 
-        Example:
-            query = session.query(Document).order_by(
-                Document.embedding.inner_product([1, 2, 3]).desc()
-            )
+            Returns::
+
+                SQLAlchemy function expression
+
+            Example
+
+        query = session.query(Document).order_by(
+                    Document.embedding.inner_product([1, 2, 3]).desc()
+                )
         """
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
@@ -503,26 +522,29 @@ class VectorColumn(Column):
         max_distance: Optional[float] = None,
     ) -> func:
         """
-        Create a similarity search expression with optional distance filtering.
+            Create a similarity search expression with optional distance filtering.
 
-        Args:
-            other: Target vector as list, string, or column
-            distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
-            max_distance: Optional maximum distance threshold
+            Args::
 
-        Returns:
-            SQLAlchemy function expression for distance calculation
+                other: Target vector as list, string, or column
+                distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
+                max_distance: Optional maximum distance threshold
 
-        Example:
-            # For ordering by similarity
-            query = session.query(Document).order_by(
-                Document.embedding.similarity_search([1, 2, 3])
-            )
+            Returns::
 
-            # For filtering by distance
-            query = session.query(Document).filter(
-                Document.embedding.similarity_search([1, 2, 3], max_distance=1.0) < 1.0
-            )
+                SQLAlchemy function expression for distance calculation
+
+            Example
+
+        # For ordering by similarity
+                query = session.query(Document).order_by(
+                    Document.embedding.similarity_search([1, 2, 3])
+                )
+
+                # For filtering by distance
+                query = session.query(Document).filter(
+                    Document.embedding.similarity_search([1, 2, 3], max_distance=1.0) < 1.0
+                )
         """
         if distance_type == "l2":
             distance_expr = self.l2_distance(other)
@@ -539,20 +561,23 @@ class VectorColumn(Column):
         self, other: Union[List[float], str, Column], max_distance: float, distance_type: str = "l2"
     ) -> func:
         """
-        Create a distance threshold filter expression.
+            Create a distance threshold filter expression.
 
-        Args:
-            other: Target vector as list, string, or column
-            max_distance: Maximum distance threshold
-            distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
+            Args::
 
-        Returns:
-            SQLAlchemy boolean expression
+                other: Target vector as list, string, or column
+                max_distance: Maximum distance threshold
+                distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
 
-        Example:
-            query = session.query(Document).filter(
-                Document.embedding.within_distance([1, 2, 3], max_distance=1.0)
-            )
+            Returns::
+
+                SQLAlchemy boolean expression
+
+            Example
+
+        query = session.query(Document).filter(
+                    Document.embedding.within_distance([1, 2, 3], max_distance=1.0)
+                )
         """
         if distance_type == "l2":
             return self.l2_distance(other) < max_distance
@@ -566,20 +591,23 @@ class VectorColumn(Column):
 
     def most_similar(self, other: Union[List[float], str, Column], distance_type: str = "l2", limit: int = 10) -> func:
         """
-        Create an expression for finding most similar vectors.
+            Create an expression for finding most similar vectors.
 
-        Args:
-            other: Target vector as list, string, or column
-            distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
-            limit: Number of results to return
+            Args::
 
-        Returns:
-            SQLAlchemy function expression for ordering
+                other: Target vector as list, string, or column
+                distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
+                limit: Number of results to return
 
-        Example:
-            query = session.query(Document).order_by(
-                Document.embedding.most_similar([1, 2, 3])
-            ).limit(10)
+            Returns::
+
+                SQLAlchemy function expression for ordering
+
+            Example
+
+        query = session.query(Document).order_by(
+                    Document.embedding.most_similar([1, 2, 3])
+                ).limit(10)
         """
         if distance_type == "l2":
             return self.l2_distance(other)
@@ -600,29 +628,31 @@ def l2_distance(column: Column, other: Union[List[float], str, Column]) -> func:
     This is an independent function that can be used with any column,
     providing more flexibility than the VectorColumn methods.
 
-    Args:
+    Args::
+
         column: Vector column to calculate distance from
         other: Target vector as list, string, or column
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import l2_distance
 
         # With list vector
         result = session.query(Document).filter(
-            l2_distance(Document.embedding, [1, 2, 3]) < 0.5
+        l2_distance(Document.embedding, [1, 2, 3]) < 0.5
         )
 
         # With string vector
         result = session.query(Document).filter(
-            l2_distance(Document.embedding, "[1,2,3]") < 0.5
+        l2_distance(Document.embedding, "[1,2,3]") < 0.5
         )
 
         # With another column
         result = session.query(Document).filter(
-            l2_distance(Document.embedding, Document.query_vector) < 0.5
+        l2_distance(Document.embedding, Document.query_vector) < 0.5
         )
     """
     if isinstance(other, list):
@@ -639,18 +669,20 @@ def l2_distance_sq(column: Column, other: Union[List[float], str, Column]) -> fu
     """
     Calculate squared L2 distance between vectors.
 
-    Args:
+    Args::
+
         column: Vector column to calculate distance from
         other: Target vector as list, string, or column
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import l2_distance_sq
 
         result = session.query(Document).order_by(
-            l2_distance_sq(Document.embedding, [1, 2, 3])
+        l2_distance_sq(Document.embedding, [1, 2, 3])
         )
     """
     if isinstance(other, list):
@@ -666,18 +698,20 @@ def cosine_distance(column: Column, other: Union[List[float], str, Column]) -> f
     """
     Calculate cosine distance between vectors.
 
-    Args:
+    Args::
+
         column: Vector column to calculate distance from
         other: Target vector as list, string, or column
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import cosine_distance
 
         result = session.query(Document).filter(
-            cosine_distance(Document.embedding, [1, 2, 3]) < 0.1
+        cosine_distance(Document.embedding, [1, 2, 3]) < 0.1
         )
     """
     if isinstance(other, list):
@@ -693,18 +727,20 @@ def inner_product(column: Column, other: Union[List[float], str, Column]) -> fun
     """
     Calculate inner product (dot product) between vectors.
 
-    Args:
+    Args::
+
         column: Vector column to calculate distance from
         other: Target vector as list, string, or column
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import inner_product
 
         result = session.query(Document).order_by(
-            inner_product(Document.embedding, [1, 2, 3]).desc()
+        inner_product(Document.embedding, [1, 2, 3]).desc()
         )
     """
     if isinstance(other, list):
@@ -719,20 +755,23 @@ def inner_product(column: Column, other: Union[List[float], str, Column]) -> fun
 def negative_inner_product(column: Column, other: Union[List[float], str, Column]) -> func:
     """
     Calculate negative inner product between vectors.
+
     Note: This is implemented as -inner_product() since MatrixOne doesn't have native support.
 
-    Args:
+    Args::
+
         column: Vector column to calculate distance from
         other: Target vector as list, string, or column
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import negative_inner_product
 
         result = session.query(Document).order_by(
-            negative_inner_product(Document.embedding, [1, 2, 3])
+        negative_inner_product(Document.embedding, [1, 2, 3])
         )
     """
     if isinstance(other, list):
@@ -749,19 +788,21 @@ def create_vector_column(dimension: int, precision: str = VectorPrecision.F32, *
     """
     Create a vector column with distance function support.
 
-    Args:
+    Args::
+
         dimension: Vector dimension
         precision: Vector precision (VectorPrecision.F32 or VectorPrecision.F64)
         **kwargs: Additional column arguments
 
-    Returns:
+    Returns::
+
         VectorColumn instance
 
-    Example:
+    Example
         class Document(Base):
-            id = Column(Integer, primary_key=True)
-            embedding = create_vector_column(128, precision=VectorPrecision.F32)
-            description = Column(String(500))
+        id = Column(Integer, primary_key=True)
+        embedding = create_vector_column(128, precision=VectorPrecision.F32)
+        description = Column(String(500))
     """
     if precision == VectorPrecision.F32:
         return VectorColumn(Vectorf32(dimension=dimension), **kwargs)
@@ -782,26 +823,28 @@ def vector_similarity_search(
 
     This is a convenience function that combines distance calculation with filtering.
 
-    Args:
+    Args::
+
         column: Vector column to search in
         query_vector: Query vector as list, string, or column
         distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
         max_distance: Optional maximum distance threshold
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression for distance calculation
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import vector_similarity_search
 
         # For ordering by similarity
         result = session.query(Document).order_by(
-            vector_similarity_search(Document.embedding, [1, 2, 3])
+        vector_similarity_search(Document.embedding, [1, 2, 3])
         )
 
         # For filtering by distance
         result = session.query(Document).filter(
-            vector_similarity_search(Document.embedding, [1, 2, 3], max_distance=1.0) < 1.0
+        vector_similarity_search(Document.embedding, [1, 2, 3], max_distance=1.0) < 1.0
         )
     """
     if distance_type == "l2":
@@ -825,20 +868,22 @@ def within_distance(
     """
     Create a distance threshold filter expression.
 
-    Args:
+    Args::
+
         column: Vector column to filter
         query_vector: Query vector as list, string, or column
         max_distance: Maximum distance threshold
         distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
 
-    Returns:
+    Returns::
+
         SQLAlchemy boolean expression
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import within_distance
 
         result = session.query(Document).filter(
-            within_distance(Document.embedding, [1, 2, 3], max_distance=1.0)
+        within_distance(Document.embedding, [1, 2, 3], max_distance=1.0)
         )
     """
     if distance_type == "l2":
@@ -856,19 +901,21 @@ def most_similar(column: Column, query_vector: Union[List[float], str, Column], 
     """
     Create an expression for finding most similar vectors.
 
-    Args:
+    Args::
+
         column: Vector column to search in
         query_vector: Query vector as list, string, or column
         distance_type: Type of distance calculation ("l2", "cosine", "inner_product")
 
-    Returns:
+    Returns::
+
         SQLAlchemy function expression for ordering
 
-    Example:
+    Example
         from matrixone.sqlalchemy_ext import most_similar
 
         result = session.query(Document).order_by(
-            most_similar(Document.embedding, [1, 2, 3])
+        most_similar(Document.embedding, [1, 2, 3])
         ).limit(10)
     """
     if distance_type == "l2":
@@ -886,7 +933,8 @@ def vector_distance_functions():
     """
     Return available vector distance functions.
 
-    Returns:
+    Returns::
+
         List of function names
     """
     return ["l2_distance", "l2_distance_sq", "cosine_distance"]

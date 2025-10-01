@@ -42,7 +42,8 @@ class Pitr:
         """
         Initialize PITR object
 
-        Args:
+        Args::
+
             name: PITR name
             created_time: Creation time
             modified_time: Last modification time
@@ -77,6 +78,7 @@ class PitrManager:
     capabilities for data protection and disaster recovery.
 
     Key Features:
+
     - Point-in-time recovery for databases and tables
     - Recovery to specific timestamps
     - Integration with backup and snapshot systems
@@ -88,7 +90,8 @@ class PitrManager:
     - DATABASE: Database-level recovery to a specific point in time
     - TABLE: Table-level recovery to a specific point in time
 
-    Usage Examples:
+    Usage Examples::
+
         # Initialize PITR manager
         pitr = client.pitr
 
@@ -131,21 +134,25 @@ class PitrManager:
     )
     def create_cluster_pitr(self, name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
         """
-        Create cluster-level PITR
+            Create cluster-level PITR
 
-        Args:
-            name: PITR name
-            range_value: Time range value (1-100)
-            range_unit: Time range unit (h, d, mo, y)
+            Args::
 
-        Returns:
-            Pitr: Created PITR object
+                name: PITR name
+                range_value: Time range value (1-100)
+                range_unit: Time range unit (h, d, mo, y)
 
-        Raises:
-            PitrError: If PITR creation fails
+            Returns::
 
-        Example:
-            >>> pitr = client.pitr.create_cluster_pitr("cluster_pitr1", 1, "d")
+                Pitr: Created PITR object
+
+            Raises::
+
+                PitrError: If PITR creation fails
+
+            Example
+
+        >>> pitr = client.pitr.create_cluster_pitr("cluster_pitr1", 1, "d")
         """
         try:
             self._validate_range(range_value, range_unit)
@@ -170,26 +177,30 @@ class PitrManager:
         range_unit: str = "d",
     ) -> Pitr:
         """
-        Create account-level PITR
+            Create account-level PITR
 
-        Args:
-            name: PITR name
-            account_name: Account name (None for current account)
-            range_value: Time range value (1-100)
-            range_unit: Time range unit (h, d, mo, y)
+            Args::
 
-        Returns:
-            Pitr: Created PITR object
+                name: PITR name
+                account_name: Account name (None for current account)
+                range_value: Time range value (1-100)
+                range_unit: Time range unit (h, d, mo, y)
 
-        Raises:
-            PitrError: If PITR creation fails
+            Returns::
 
-        Example:
-            >>> # For current account
-            >>> pitr = client.pitr.create_account_pitr("account_pitr1", range_value=2, range_unit="h")
-            >>>
-            >>> # For specific account (cluster admin only)
-            >>> pitr = client.pitr.create_account_pitr("account_pitr1", "acc1", 1, "d")
+                Pitr: Created PITR object
+
+            Raises::
+
+                PitrError: If PITR creation fails
+
+            Example
+
+        >>> # For current account
+                >>> pitr = client.pitr.create_account_pitr("account_pitr1", range_value=2, range_unit="h")
+                >>>
+                >>> # For specific account (cluster admin only)
+                >>> pitr = client.pitr.create_account_pitr("account_pitr1", "acc1", 1, "d")
         """
         try:
             self._validate_range(range_value, range_unit)
@@ -216,22 +227,26 @@ class PitrManager:
 
     def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
         """
-        Create database-level PITR
+            Create database-level PITR
 
-        Args:
-            name: PITR name
-            database_name: Database name
-            range_value: Time range value (1-100)
-            range_unit: Time range unit (h, d, mo, y)
+            Args::
 
-        Returns:
-            Pitr: Created PITR object
+                name: PITR name
+                database_name: Database name
+                range_value: Time range value (1-100)
+                range_unit: Time range unit (h, d, mo, y)
 
-        Raises:
-            PitrError: If PITR creation fails
+            Returns::
 
-        Example:
-            >>> pitr = client.pitr.create_database_pitr("db_pitr1", "db1", 1, "y")
+                Pitr: Created PITR object
+
+            Raises::
+
+                PitrError: If PITR creation fails
+
+            Example
+
+        >>> pitr = client.pitr.create_database_pitr("db_pitr1", "db1", 1, "y")
         """
         try:
             self._validate_range(range_value, range_unit)
@@ -260,23 +275,27 @@ class PitrManager:
         range_unit: str = "d",
     ) -> Pitr:
         """
-        Create table-level PITR
+            Create table-level PITR
 
-        Args:
-            name: PITR name
-            database_name: Database name
-            table_name: Table name
-            range_value: Time range value (1-100)
-            range_unit: Time range unit (h, d, mo, y)
+            Args::
 
-        Returns:
-            Pitr: Created PITR object
+                name: PITR name
+                database_name: Database name
+                table_name: Table name
+                range_value: Time range value (1-100)
+                range_unit: Time range unit (h, d, mo, y)
 
-        Raises:
-            PitrError: If PITR creation fails
+            Returns::
 
-        Example:
-            >>> pitr = client.pitr.create_table_pitr("tab_pitr1", "db1", "t1", 1, "y")
+                Pitr: Created PITR object
+
+            Raises::
+
+                PitrError: If PITR creation fails
+
+            Example
+
+        >>> pitr = client.pitr.create_table_pitr("tab_pitr1", "db1", "t1", 1, "y")
         """
         try:
             self._validate_range(range_value, range_unit)
@@ -301,13 +320,16 @@ class PitrManager:
         """
         Get PITR by name
 
-        Args:
+        Args::
+
             name: PITR name
 
-        Returns:
+        Returns::
+
             Pitr: PITR object
 
-        Raises:
+        Raises::
+
             PitrError: If PITR not found
         """
         try:
@@ -333,13 +355,15 @@ class PitrManager:
         """
         List PITRs with optional filters
 
-        Args:
+        Args::
+
             level: Filter by PITR level (cluster, account, database, table)
             account_name: Filter by account name
             database_name: Filter by database name
             table_name: Filter by table name
 
-        Returns:
+        Returns::
+
             List[Pitr]: List of PITR objects
         """
         try:
@@ -374,15 +398,18 @@ class PitrManager:
         """
         Alter PITR range
 
-        Args:
+        Args::
+
             name: PITR name
             range_value: New time range value (1-100)
             range_unit: New time range unit (h, d, mo, y)
 
-        Returns:
+        Returns::
+
             Pitr: Updated PITR object
 
-        Raises:
+        Raises::
+
             PitrError: If PITR alteration fails
         """
         try:
@@ -403,13 +430,16 @@ class PitrManager:
         """
         Delete PITR
 
-        Args:
+        Args::
+
             name: PITR name
 
-        Returns:
+        Returns::
+
             bool: True if deletion was successful
 
-        Raises:
+        Raises::
+
             PitrError: If PITR deletion fails
         """
         try:

@@ -38,6 +38,7 @@ Index Types:
 - HNSW (Hierarchical Navigable Small World): Read-only, optimized for search performance
 
 Usage Example:
+
     # Get a Pinecone-compatible index
     index = client.get_pinecone_index("my_table", "embedding_column")
 
@@ -75,6 +76,7 @@ class VectorMatch:
     Represents a single vector search match result.
 
     Attributes:
+
         id: Unique identifier for the vector (primary key value as string)
         score: Similarity score (lower is more similar for L2 distance)
         metadata: Dictionary containing all metadata fields from the table
@@ -93,6 +95,7 @@ class QueryResponse:
     Represents a query response compatible with Pinecone API.
 
     Attributes:
+
         matches: List of VectorMatch objects containing search results
         namespace: Namespace identifier (empty string for MatrixOne)
         usage: Optional usage statistics (e.g., {"read_units": 10})
@@ -124,6 +127,7 @@ class PineconeCompatibleIndex:
     - HNSW (Hierarchical Navigable Small World): Read-only, optimized for search performance
 
     Example:
+
         # Get a Pinecone-compatible index
         index = client.get_pinecone_index("my_table", "embedding_column")
 
@@ -150,11 +154,13 @@ class PineconeCompatibleIndex:
         Initialize PineconeCompatibleIndex.
 
         Args:
+
             client: MatrixOne client instance (Client or AsyncClient)
             table_name: Name of the table containing vectors
             vector_column: Name of the vector column containing embeddings
 
         Note:
+
             The table must already exist and contain a vector column.
             The primary key column will be automatically detected.
             Metadata columns are all non-primary-key, non-vector columns.
@@ -308,9 +314,11 @@ class PineconeCompatibleIndex:
         Parse vector index information from CREATE TABLE statement.
 
         Args:
+
             create_sql: CREATE TABLE SQL statement
 
         Returns:
+
             Dictionary containing index information
         """
         index_info = {
@@ -376,9 +384,11 @@ class PineconeCompatibleIndex:
         Parse Pinecone-compatible filter into SQL WHERE conditions and parameters.
 
         Args:
+
             filter_dict: Pinecone filter dictionary
 
         Returns:
+
             Tuple of (where_conditions, where_params)
         """
         if not filter_dict:
@@ -497,6 +507,7 @@ class PineconeCompatibleIndex:
         based on the configured distance metric (L2, cosine, or inner product).
 
         Args:
+
             vector: Query vector for similarity search. Must match the dimension
                    of vectors in the index.
             top_k: Maximum number of results to return (default: 10)
@@ -517,12 +528,14 @@ class PineconeCompatibleIndex:
             namespace: Namespace identifier (not used in MatrixOne, kept for compatibility)
 
         Returns:
+
             QueryResponse: Object containing:
                 - matches: List of VectorMatch objects with id, score, metadata, and optional values
                 - namespace: Namespace (empty string for MatrixOne)
                 - usage: Dictionary with read_units count
 
         Example:
+
             # Basic similarity search
             results = index.query([0.1, 0.2, 0.3], top_k=5)
 
@@ -568,6 +581,7 @@ class PineconeCompatibleIndex:
             )
 
         Raises:
+
             ValueError: If vector dimension doesn't match index dimension
             RuntimeError: If used with async client (use query_async instead)
         """
@@ -654,6 +668,7 @@ class PineconeCompatibleIndex:
         Async version of query method.
 
         Args:
+
             vector: Query vector
             top_k: Number of results to return
             include_metadata: Whether to include metadata in results
@@ -662,6 +677,7 @@ class PineconeCompatibleIndex:
             namespace: Namespace (not used in MatrixOne)
 
         Returns:
+
             QueryResponse object with matches
         """
         index_info = await self._get_index_info_async()
@@ -748,14 +764,17 @@ class PineconeCompatibleIndex:
         This operation is only supported for IVF indexes, not HNSW indexes.
 
         Args:
+
             ids: List of primary key values to delete. Can be any type (str, int, etc.)
                  that matches the primary key column type.
             namespace: Namespace identifier (not used in MatrixOne, kept for compatibility)
 
         Returns:
+
             None
 
         Example:
+
             # Delete vectors by ID
             index.delete(["doc1", "doc2", "doc3"])
 
@@ -766,10 +785,12 @@ class PineconeCompatibleIndex:
             index.delete(["single_doc_id"])
 
         Raises:
+
             ValueError: If the index type is HNSW (not supported for delete operations)
             RuntimeError: If used with async client (use delete_async instead)
 
         Note:
+
             - Only IVF indexes support delete operations
             - HNSW indexes are read-only and do not support upsert/delete
             - IDs must match the primary key column type and values
@@ -801,10 +822,12 @@ class PineconeCompatibleIndex:
         Async version of delete method.
 
         Args:
+
             ids: List of vector IDs to delete (can be any type: str, int, etc.)
             namespace: Namespace (not used in MatrixOne)
 
         Raises:
+
             ValueError: If the index type is HNSW (not supported for delete operations)
         """
         index_info = await self._get_index_info_async()
@@ -836,6 +859,7 @@ class PineconeCompatibleIndex:
         vector count, and namespace information.
 
         Returns:
+
             Dict: Index statistics containing:
                 - dimension: Vector dimension size
                 - index_fullness: Index fullness ratio (always 0.0 for MatrixOne)
@@ -844,12 +868,14 @@ class PineconeCompatibleIndex:
                     - "": Default namespace with vector_count
 
         Example:
+
             stats = index.describe_index_stats()
             print(f"Index has {stats['total_vector_count']} vectors")
             print(f"Vector dimension: {stats['dimension']}")
             print(f"Namespace vector count: {stats['namespaces']['']['vector_count']}")
 
         Note:
+
             - index_fullness is always 0.0 as MatrixOne doesn't use this concept
             - Only the default namespace ("") is supported
             - Vector count is the total number of rows in the table
@@ -875,6 +901,7 @@ class PineconeCompatibleIndex:
         Async version of describe_index_stats method.
 
         Returns:
+
             Dictionary with index statistics
         """
         # Get table row count using unified SQL builder
@@ -901,6 +928,7 @@ class PineconeCompatibleIndex:
         This operation is only supported for IVF indexes, not HNSW indexes.
 
         Args:
+
             vectors: List of vector dictionaries to upsert. Each vector dict must contain:
                 - Primary key field: Value for the primary key column (required)
                 - Vector field: Vector values as a list of floats (required)
@@ -908,10 +936,12 @@ class PineconeCompatibleIndex:
             namespace: Namespace identifier (not used in MatrixOne, kept for compatibility)
 
         Returns:
+
             Dict: Statistics about the upsert operation:
                 - upserted_count: Number of vectors successfully upserted
 
         Example:
+
             # Upsert vectors with metadata
             vectors = [
                 {
@@ -933,11 +963,13 @@ class PineconeCompatibleIndex:
             print(f"Upserted {result['upserted_count']} vectors")
 
         Raises:
+
             ValueError: If the index type is HNSW (not supported for upsert operations)
             ValueError: If a vector is missing required fields (primary key or vector)
             RuntimeError: If used with async client (use upsert_async instead)
 
         Note:
+
             - Only IVF indexes support upsert operations
             - HNSW indexes are read-only and do not support upsert/delete
             - Vector dimensions must match the index configuration
@@ -998,6 +1030,7 @@ class PineconeCompatibleIndex:
         Async version of upsert method.
 
         Args:
+
             vectors: List of vectors to upsert. Each vector should be a dict with:
                 - Primary key field: Value for the primary key column (required)
                 - Vector field: Vector values (required)
@@ -1005,6 +1038,7 @@ class PineconeCompatibleIndex:
             namespace: Namespace (not used in MatrixOne)
 
         Returns:
+
             Dict with upsert statistics
         """
         if not vectors:
@@ -1062,6 +1096,7 @@ class PineconeCompatibleIndex:
         Batch insert vectors (Pinecone-compatible API).
 
         Args:
+
             vectors: List of vectors to insert. Each vector should be a dict with:
                 - Primary key field: Value for the primary key column (required)
                 - Vector field: Vector values (required)
@@ -1069,6 +1104,7 @@ class PineconeCompatibleIndex:
             namespace: Namespace (not used in MatrixOne)
 
         Returns:
+
             Dict with insert statistics
         """
         if not vectors:
@@ -1102,6 +1138,7 @@ class PineconeCompatibleIndex:
         Async version of batch_insert method.
 
         Args:
+
             vectors: List of vectors to insert. Each vector should be a dict with:
                 - Primary key field: Value for the primary key column (required)
                 - Vector field: Vector values (required)
@@ -1109,6 +1146,7 @@ class PineconeCompatibleIndex:
             namespace: Namespace (not used in MatrixOne)
 
         Returns:
+
             Dict with insert statistics
         """
         if not vectors:

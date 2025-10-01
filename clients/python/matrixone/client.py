@@ -66,6 +66,7 @@ class Client(BaseMatrixOneClient):
     data insertion, querying, vector operations, and transaction management.
 
     Key Features:
+
     - High-level table operations (create_table, drop_table, insert, batch_insert)
     - Query builder interface for complex queries
     - Vector operations (similarity search, range search, indexing)
@@ -75,59 +76,50 @@ class Client(BaseMatrixOneClient):
     - Fulltext search capabilities
     - Connection pooling and SSL support
 
-    Examples:
-        Basic usage::
+    Examples::
 
-            from matrixone import Client
+        from matrixone import Client
 
-            client = Client(
-                host='localhost',
-                port=6001,
-                user='root',
-                password='111',
-                database='test'
-            )
+        # Basic usage
+        client = Client(
+            host='localhost',
+            port=6001,
+            user='root',
+            password='111',
+            database='test'
+        )
 
-            # Create table using high-level API
-            client.create_table("users", {
-                "id": "int primary key",
-                "name": "varchar(100)",
-                "email": "varchar(255)"
-            })
+        # Create table
+        client.create_table("users", {
+            "id": "int primary key",
+            "name": "varchar(100)",
+            "email": "varchar(255)"
+        })
 
-            # Insert data
-            client.insert("users", {"id": 1, "name": "John", "email": "john@example.com"})
+        # Insert and query data
+        client.insert("users", {"id": 1, "name": "John", "email": "john@example.com"})
+        result = client.query("users").where("id = ?", 1).all()
 
-            # Query data
-            result = client.query("users").where("id = ?", 1).all()
-            print(result.rows)
+        # Vector operations
+        client.create_table("documents", {
+            "id": "int primary key",
+            "content": "text",
+            "embedding": "vecf32(384)"
+        })
 
-        Vector operations::
+        results = client.vector_ops.similarity_search(
+            "documents",
+            vector_column="embedding",
+            query_vector=[0.1, 0.2, 0.3, ...],
+            limit=10
+        )
 
-            # Create vector table
-            client.create_table("documents", {
-                "id": "int primary key",
-                "content": "text",
-                "embedding": "vecf32(384)"
-            })
+        # Transaction
+        with client.transaction() as tx:
+            tx.execute("INSERT INTO users (name) VALUES ('John')")
 
-            # Vector similarity search
-            results = client.vector_ops.similarity_search(
-                "documents",
-                vector_column="embedding",
-                query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
-                limit=10,
-                distance_type="l2"
-            )
+    Attributes::
 
-        With transaction::
-
-            with client.transaction() as tx:
-                tx.execute("INSERT INTO users (name) VALUES ('John')")
-                tx.execute("INSERT INTO users (name) VALUES ('Jane')")
-                # Transaction will be committed automatically
-
-    Attributes:
         engine (Engine): SQLAlchemy engine instance
         connected (bool): Connection status
         backend_version (str): Detected backend version
@@ -165,7 +157,8 @@ class Client(BaseMatrixOneClient):
         """
         Initialize MatrixOne client
 
-        Args:
+        Args::
+
             host: Database host (optional, can be set later via connect)
             port: Database port (optional, can be set later via connect)
             user: Username (optional, can be set later via connect)
@@ -267,7 +260,8 @@ class Client(BaseMatrixOneClient):
         """
         Connect to MatrixOne database using SQLAlchemy engine
 
-        Args:
+        Args::
+
             host: Database host
             port: Database port
             user: Username or login info in format "user", "account#user", or "account#user#role"
@@ -279,13 +273,14 @@ class Client(BaseMatrixOneClient):
             ssl_key: SSL client key path
             account: Optional account name (will be combined with user if user doesn't contain '#')
             role: Optional role name (will be combined with user if user doesn't contain '#')
-            on_connect: Connection hook to execute after successful connection.
+                       on_connect: Connection hook to execute after successful connection.
                        Can be:
                        - ConnectionHook instance
                        - List of ConnectionAction or string action names
                        - Custom callback function
 
-        Examples:
+        Examples::
+
             # Enable all features after connection
             client.connect(host, port, user, password, database,
                           on_connect=[ConnectionAction.ENABLE_ALL])
@@ -406,35 +401,39 @@ class Client(BaseMatrixOneClient):
     @classmethod
     def from_engine(cls, engine: Engine, **kwargs) -> "Client":
         """
-        Create Client instance from existing SQLAlchemy Engine
+            Create Client instance from existing SQLAlchemy Engine
 
-        Args:
-            engine: SQLAlchemy Engine instance (must use MySQL driver)
-            **kwargs: Additional client configuration options
+            Args::
 
-        Returns:
-            Client: Configured client instance
+                engine: SQLAlchemy Engine instance (must use MySQL driver)
+                **kwargs: Additional client configuration options
 
-        Raises:
-            ConnectionError: If engine doesn't use MySQL driver
+            Returns::
 
-        Examples:
-            Basic usage::
+                Client: Configured client instance
 
-                from sqlalchemy import create_engine
-                from matrixone import Client
+            Raises::
 
-                engine = create_engine("mysql+pymysql://user:pass@host:port/db")
-                client = Client.from_engine(engine)
+                ConnectionError: If engine doesn't use MySQL driver
 
-            With custom configuration::
+            Examples
 
-                engine = create_engine("mysql+pymysql://user:pass@host:port/db")
-                client = Client.from_engine(
-                    engine,
-                    sql_log_mode='auto',
-                    slow_query_threshold=0.5
-                )
+        Basic usage::
+
+                    from sqlalchemy import create_engine
+                    from matrixone import Client
+
+                    engine = create_engine("mysql+pymysql://user:pass@host:port/db")
+                    client = Client.from_engine(engine)
+
+                With custom configuration::
+
+                    engine = create_engine("mysql+pymysql://user:pass@host:port/db")
+                    client = Client.from_engine(
+                        engine,
+                        sql_log_mode='auto',
+                        slow_query_threshold=0.5
+                    )
         """
         # Check if engine uses MySQL driver
         if not cls._is_mysql_engine(engine):
@@ -471,10 +470,12 @@ class Client(BaseMatrixOneClient):
         """
         Check if the engine uses a MySQL driver
 
-        Args:
+        Args::
+
             engine: SQLAlchemy Engine instance
 
-        Returns:
+        Returns::
+
             bool: True if engine uses MySQL driver, False otherwise
         """
         # Check dialect name
@@ -545,23 +546,25 @@ class Client(BaseMatrixOneClient):
 
     def disconnect(self) -> None:
         """
-        Disconnect from MatrixOne database and dispose engine.
+            Disconnect from MatrixOne database and dispose engine.
 
-        This method properly closes all database connections and disposes of the
-        SQLAlchemy engine. It should be called when the client is no longer needed
-        to free up resources.
+            This method properly closes all database connections and disposes of the
+            SQLAlchemy engine. It should be called when the client is no longer needed
+            to free up resources.
 
-        After calling this method, the client will need to be reconnected using
-        the connect() method before any database operations can be performed.
+            After calling this method, the client will need to be reconnected using
+            the connect() method before any database operations can be performed.
 
-        Raises:
-            Exception: If disconnection fails (logged but re-raised)
+            Raises::
 
-        Example:
-            >>> client = Client('localhost', 6001, 'root', '111', 'test')
-            >>> client.connect()
-            >>> # ... perform database operations ...
-            >>> client.disconnect()  # Clean up resources
+                Exception: If disconnection fails (logged but re-raised)
+
+            Example
+
+        >>> client = Client('localhost', 6001, 'root', '111', 'test')
+                >>> client.connect()
+                >>> # ... perform database operations ...
+                >>> client.disconnect()  # Clean up resources
         """
         if self._engine:
             try:
@@ -575,27 +578,29 @@ class Client(BaseMatrixOneClient):
 
     def get_login_info(self) -> Optional[dict]:
         """
-        Get parsed login information used for database connection.
+            Get parsed login information used for database connection.
 
-        Returns the login information dictionary that was used to establish
-        the database connection. This includes user, account, role, and other
-        authentication details.
+            Returns the login information dictionary that was used to establish
+            the database connection. This includes user, account, role, and other
+            authentication details.
 
-        Returns:
-            Optional[dict]: Dictionary containing login information with keys:
-                - user: Username
-                - account: Account name (if specified)
-                - role: Role name (if specified)
-                - host: Database host
-                - port: Database port
-                - database: Database name
-            Returns None if not connected or no login info available.
+            Returns::
 
-        Example:
-            >>> client = Client('localhost', 6001, 'root', '111', 'test')
-            >>> client.connect()
-            >>> login_info = client.get_login_info()
-            >>> print(f"Connected as {login_info['user']} to {login_info['database']}")
+                Optional[dict]: Dictionary containing login information with keys:
+                    - user: Username
+                    - account: Account name (if specified)
+                    - role: Role name (if specified)
+                    - host: Database host
+                    - port: Database port
+                    - database: Database name
+                Returns None if not connected or no login info available.
+
+            Example
+
+        >>> client = Client('localhost', 6001, 'root', '111', 'test')
+                >>> client.connect()
+                >>> login_info = client.get_login_info()
+                >>> print(f"Connected as {login_info['user']} to {login_info['database']}")
         """
         return self._login_info
 
@@ -611,12 +616,14 @@ class Client(BaseMatrixOneClient):
         """
         Build final login info based on user parameter and optional account/role
 
-        Args:
+        Args::
+
             user: Username or login info in format "user", "account#user", or "account#user#role"
             account: Optional account name
             role: Optional role name
 
-        Returns:
+        Returns::
+
             tuple: (final_user_string, parsed_info_dict)
 
         Rules:
@@ -683,16 +690,19 @@ class Client(BaseMatrixOneClient):
         This is an internal helper method used by all SDK components to ensure
         consistent SQL logging across vector operations, transactions, and other features.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             sql: SQL query string
             context: Context description for error logging (default: "SQL execution")
             override_sql_log_mode: Temporarily override sql_log_mode for this query only
 
-        Returns:
+        Returns::
+
             SQLAlchemy result object
 
         Note:
+
             This method is used internally by VectorManager, TransactionWrapper,
             and other SDK components. External users should use execute() instead.
         """
@@ -730,43 +740,47 @@ class Client(BaseMatrixOneClient):
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> "ResultSet":
         """
-        Execute SQL query using connection pool.
+            Execute SQL query using connection pool.
 
-        This is the primary method for executing SQL statements against the MatrixOne
-        database. It supports both SELECT queries (returning data) and DML operations
-        (INSERT, UPDATE, DELETE) that modify data.
+            This is the primary method for executing SQL statements against the MatrixOne
+            database. It supports both SELECT queries (returning data) and DML operations
+            (INSERT, UPDATE, DELETE) that modify data.
 
-        Args:
-            sql (str): SQL query string. Can include '?' placeholders for parameter binding.
-            params (Optional[Tuple]): Query parameters to replace '?' placeholders in the SQL.
-                                    Parameters are automatically escaped to prevent SQL injection.
+            Args::
 
-        Returns:
-            ResultSet: Object containing query results with the following attributes:
-                - columns: List of column names
-                - rows: List of tuples containing row data
-                - affected_rows: Number of rows affected (for DML operations)
-                - fetchall(): Method to get all rows as a list
-                - fetchone(): Method to get the next row
-                - fetchmany(size): Method to get multiple rows
+                sql (str): SQL query string. Can include '?' placeholders for parameter binding.
+                params (Optional[Tuple]): Query parameters to replace '?' placeholders in the SQL.
+                                        Parameters are automatically escaped to prevent SQL injection.
 
-        Raises:
-            ConnectionError: If not connected to database
-            QueryError: If query execution fails
+            Returns::
 
-        Examples:
-            # SELECT query
-            >>> result = client.execute("SELECT * FROM users WHERE age > ?", (25,))
-            >>> for row in result.fetchall():
-            ...     print(row)
+                ResultSet: Object containing query results with the following attributes:
+                    - columns: List of column names
+                    - rows: List of tuples containing row data
+                    - affected_rows: Number of rows affected (for DML operations)
+                    - fetchall(): Method to get all rows as a list
+                    - fetchone(): Method to get the next row
+                    - fetchmany(size): Method to get multiple rows
 
-            # INSERT query
-            >>> result = client.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("John", 30))
-            >>> print(f"Inserted {result.affected_rows} rows")
+            Raises::
 
-            # UPDATE query
-            >>> result = client.execute("UPDATE users SET age = ? WHERE name = ?", (31, "John"))
-            >>> print(f"Updated {result.affected_rows} rows")
+                ConnectionError: If not connected to database
+                QueryError: If query execution fails
+
+            Examples
+
+        # SELECT query
+                >>> result = client.execute("SELECT * FROM users WHERE age > ?", (25,))
+                >>> for row in result.fetchall():
+                ...     print(row)
+
+                # INSERT query
+                >>> result = client.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("John", 30))
+                >>> print(f"Inserted {result.affected_rows} rows")
+
+                # UPDATE query
+                >>> result = client.execute("UPDATE users SET age = ? WHERE name = ?", (31, "John"))
+                >>> print(f"Updated {result.affected_rows} rows")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -805,91 +819,100 @@ class Client(BaseMatrixOneClient):
 
     def insert(self, table_name: str, data: dict) -> "ResultSet":
         """
-        Insert a single row of data into a table.
+            Insert a single row of data into a table.
 
-        This method provides a convenient way to insert data using a dictionary
-        where keys are column names and values are the data to insert. The method
-        automatically handles SQL generation and parameter binding.
+            This method provides a convenient way to insert data using a dictionary
+            where keys are column names and values are the data to insert. The method
+            automatically handles SQL generation and parameter binding.
 
-        Args:
-            table_name (str): Name of the target table
-            data (dict): Dictionary mapping column names to values. Example:
-                        {'name': 'John', 'age': 30, 'email': 'john@example.com'}
+            Args::
 
-        Returns:
-            ResultSet: Object containing insertion results with:
-                - affected_rows: Number of rows inserted (should be 1)
-                - columns: Empty list (no columns returned for INSERT)
-                - rows: Empty list (no rows returned for INSERT)
+                table_name (str): Name of the target table
+                data (dict): Dictionary mapping column names to values. Example:
 
-        Raises:
-            ConnectionError: If not connected to database
-            QueryError: If insertion fails
+                            {'name': 'John', 'age': 30, 'email': 'john@example.com'}
 
-        Examples:
-            # Insert a single user
-            >>> result = client.insert('users', {
-            ...     'name': 'John Doe',
-            ...     'age': 30,
-            ...     'email': 'john@example.com'
-            ... })
-            >>> print(f"Inserted {result.affected_rows} row")
+            Returns::
 
-            # Insert with NULL values
-            >>> result = client.insert('products', {
-            ...     'name': 'Product A',
-            ...     'price': 99.99,
-            ...     'description': None  # NULL value
-            ... })
+                ResultSet: Object containing insertion results with:
+                    - affected_rows: Number of rows inserted (should be 1)
+                    - columns: Empty list (no columns returned for INSERT)
+                    - rows: Empty list (no rows returned for INSERT)
+
+            Raises::
+
+                ConnectionError: If not connected to database
+                QueryError: If insertion fails
+
+            Examples
+
+        # Insert a single user
+                >>> result = client.insert('users', {
+                ...     'name': 'John Doe',
+                ...     'age': 30,
+                ...     'email': 'john@example.com'
+                ... })
+                >>> print(f"Inserted {result.affected_rows} row")
+
+                # Insert with NULL values
+                >>> result = client.insert('products', {
+                ...     'name': 'Product A',
+                ...     'price': 99.99,
+                ...     'description': None  # NULL value
+                ... })
         """
         executor = ClientExecutor(self)
         return executor.insert(table_name, data)
 
     def batch_insert(self, table_name_or_model, data_list: list) -> "ResultSet":
         """
-        Batch insert multiple rows of data into a table.
+            Batch insert multiple rows of data into a table.
 
-        This method efficiently inserts multiple rows in a single operation,
-        which is much faster than calling insert() multiple times. All rows
-        must have the same column structure.
+            This method efficiently inserts multiple rows in a single operation,
+            which is much faster than calling insert() multiple times. All rows
+            must have the same column structure.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            data_list (list): List of dictionaries, where each dictionary represents
-                a row to insert. All dictionaries must have the same keys.
-                Example: [
-                    {'name': 'John', 'age': 30},
-                    {'name': 'Jane', 'age': 25},
-                    {'name': 'Bob', 'age': 35}
-                ]
+            Args::
 
-        Returns:
-            ResultSet: Object containing insertion results with:
-                - affected_rows: Number of rows inserted
-                - columns: Empty list (no columns returned for INSERT)
-                - rows: Empty list (no rows returned for INSERT)
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                data_list (list): List of dictionaries, where each dictionary represents
+                    a row to insert. All dictionaries must have the same keys.
+                    Example: [
+                        {'name': 'John', 'age': 30},
+                        {'name': 'Jane', 'age': 25},
+                        {'name': 'Bob', 'age': 35}
+                    ]
 
-        Raises:
-            ConnectionError: If not connected to database
-            QueryError: If batch insertion fails
-            ValueError: If data_list is empty or has inconsistent column structure
+            Returns::
 
-        Examples:
-            # Insert multiple users
-            >>> users = [
-            ...     {'name': 'John Doe', 'age': 30, 'email': 'john@example.com'},
-            ...     {'name': 'Jane Smith', 'age': 25, 'email': 'jane@example.com'},
-            ...     {'name': 'Bob Johnson', 'age': 35, 'email': 'bob@example.com'}
-            ... ]
-            >>> result = client.batch_insert('users', users)
-            >>> print(f"Inserted {result.affected_rows} rows")
+                ResultSet: Object containing insertion results with:
+                    - affected_rows: Number of rows inserted
+                    - columns: Empty list (no columns returned for INSERT)
+                    - rows: Empty list (no rows returned for INSERT)
 
-            # Insert with some NULL values
-            >>> products = [
-            ...     {'name': 'Product A', 'price': 99.99, 'description': 'Great product'},
-            ...     {'name': 'Product B', 'price': 149.99, 'description': None}
-            ... ]
-            >>> result = client.batch_insert('products', products)
+            Raises::
+
+                ConnectionError: If not connected to database
+                QueryError: If batch insertion fails
+                ValueError: If data_list is empty or has inconsistent column structure
+
+            Examples
+
+        # Insert multiple users
+                >>> users = [
+                ...     {'name': 'John Doe', 'age': 30, 'email': 'john@example.com'},
+                ...     {'name': 'Jane Smith', 'age': 25, 'email': 'jane@example.com'},
+                ...     {'name': 'Bob Johnson', 'age': 35, 'email': 'bob@example.com'}
+                ... ]
+                >>> result = client.batch_insert('users', users)
+                >>> print(f"Inserted {result.affected_rows} rows")
+
+                # Insert with some NULL values
+                >>> products = [
+                ...     {'name': 'Product A', 'price': 99.99, 'description': 'Great product'},
+                ...     {'name': 'Product B', 'price': 149.99, 'description': None}
+                ... ]
+                >>> result = client.batch_insert('products', products)
         """
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
@@ -907,11 +930,13 @@ class Client(BaseMatrixOneClient):
         Substitute ? placeholders or named parameters with actual values since MatrixOne
         doesn't support prepared statements
 
-        Args:
+        Args::
+
             sql: SQL query string with ? placeholders or named parameters (:name)
             params: Tuple of parameter values or dict of named parameters
 
-        Returns:
+        Returns::
+
             SQL string with parameters substituted
         """
         if not params:
@@ -965,7 +990,8 @@ class Client(BaseMatrixOneClient):
         """
         Get SQLAlchemy engine
 
-        Returns:
+        Returns::
+
             SQLAlchemy Engine
         """
         if not self._engine:
@@ -975,28 +1001,31 @@ class Client(BaseMatrixOneClient):
     def query(self, *columns, snapshot: str = None):
         """Get MatrixOne query builder - SQLAlchemy style
 
-        Args:
-            *columns: Can be:
-                - Single model class: query(Article) - returns all columns from model
-                - Multiple columns: query(Article.id, Article.title) - returns specific columns
-                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
-            snapshot: Optional snapshot name for snapshot queries
+            Args::
 
-        Examples:
-            # Traditional model query (all columns)
-            client.query(Article).filter(...).all()
+                *columns: Can be:
+                    - Single model class: query(Article) - returns all columns from model
+                    - Multiple columns: query(Article.id, Article.title) - returns specific columns
+                    - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+                snapshot: Optional snapshot name for snapshot queries
 
-            # Column-specific query
-            client.query(Article.id, Article.title).filter(...).all()
+            Examples
 
-            # With fulltext score
-            client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
+        # Traditional model query (all columns)
+                client.query(Article).filter(...).all()
 
-            # Snapshot query
-            client.query(Article, snapshot="my_snapshot").filter(...).all()
+                # Column-specific query
+                client.query(Article.id, Article.title).filter(...).all()
 
-        Returns:
-            MatrixOneQuery instance configured for the specified columns
+                # With fulltext score
+                client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
+
+                # Snapshot query
+                client.query(Article, snapshot="my_snapshot").filter(...).all()
+
+            Returns::
+
+                MatrixOneQuery instance configured for the specified columns
         """
         from .orm import MatrixOneQuery
 
@@ -1074,9 +1103,10 @@ class Client(BaseMatrixOneClient):
         """
         Snapshot context manager
 
-        Usage:
+        Usage
+
             with client.snapshot("daily_backup") as snapshot_client:
-                result = snapshot_client.execute("SELECT * FROM users")
+            result = snapshot_client.execute("SELECT * FROM users")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -1090,20 +1120,21 @@ class Client(BaseMatrixOneClient):
         """
         Transaction context manager
 
-        Usage:
+        Usage
+
             with client.transaction() as tx:
-                # MatrixOne operations
-                tx.execute("INSERT INTO users ...")
-                tx.execute("UPDATE users ...")
+            # MatrixOne operations
+            tx.execute("INSERT INTO users ...")
+            tx.execute("UPDATE users ...")
 
-                # Snapshot and clone operations within transaction
-                tx.snapshots.create("snap1", "table", database="db1", table="t1")
-                tx.clone.clone_database("target_db", "source_db")
+            # Snapshot and clone operations within transaction
+            tx.snapshots.create("snap1", "table", database="db1", table="t1")
+            tx.clone.clone_database("target_db", "source_db")
 
-                # SQLAlchemy operations in the same transaction
-                session = tx.get_sqlalchemy_session()
-                session.add(user)
-                session.commit()
+            # SQLAlchemy operations in the same transaction
+            session = tx.get_sqlalchemy_session()
+            session.add(user)
+            session.commit()
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -1170,27 +1201,30 @@ class Client(BaseMatrixOneClient):
 
     def get_pinecone_index(self, table_name_or_model, vector_column: str):
         """
-        Get a PineconeCompatibleIndex object for vector search operations.
+            Get a PineconeCompatibleIndex object for vector search operations.
 
-        This method creates a Pinecone-compatible vector search interface
-        that automatically parses the table schema and vector index configuration.
-        The primary key column is automatically detected, and all other columns
-        except the vector column will be included as metadata.
+            This method creates a Pinecone-compatible vector search interface
+            that automatically parses the table schema and vector index configuration.
+            The primary key column is automatically detected, and all other columns
+            except the vector column will be included as metadata.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            vector_column: Name of the vector column
+            Args::
 
-        Returns:
-            PineconeCompatibleIndex object with Pinecone-compatible API
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                vector_column: Name of the vector column
 
-        Example:
-            >>> index = client.get_pinecone_index("documents", "embedding")
-            >>> index = client.get_pinecone_index(DocumentModel, "embedding")
-            >>> results = index.query([0.1, 0.2, 0.3], top_k=5)
-            >>> for match in results.matches:
-            ...     print(f"ID: {match.id}, Score: {match.score}")
-            ...     print(f"Metadata: {match.metadata}")
+            Returns::
+
+                PineconeCompatibleIndex object with Pinecone-compatible API
+
+            Example
+
+        >>> index = client.get_pinecone_index("documents", "embedding")
+                >>> index = client.get_pinecone_index(DocumentModel, "embedding")
+                >>> results = index.query([0.1, 0.2, 0.3], top_k=5)
+                >>> for match in results.matches:
+                ...     print(f"ID: {match.id}, Score: {match.score}")
+                ...     print(f"Metadata: {match.metadata}")
         """
         from .search_vector_index import PineconeCompatibleIndex
 
@@ -1228,19 +1262,22 @@ class Client(BaseMatrixOneClient):
 
     def version(self) -> str:
         """
-        Get MatrixOne server version
+            Get MatrixOne server version
 
-        Returns:
-            str: MatrixOne server version string
+            Returns::
 
-        Raises:
-            ConnectionError: If not connected to MatrixOne
-            QueryError: If version query fails
+                str: MatrixOne server version string
 
-        Example:
-            >>> client = Client('localhost', 6001, 'root', '111', 'test')
-            >>> version = client.version()
-            >>> print(f"MatrixOne version: {version}")
+            Raises::
+
+                ConnectionError: If not connected to MatrixOne
+                QueryError: If version query fails
+
+            Example
+
+        >>> client = Client('localhost', 6001, 'root', '111', 'test')
+                >>> version = client.version()
+                >>> print(f"MatrixOne version: {version}")
         """
         if not self._engine:
             raise ConnectionError("Not connected to MatrixOne")
@@ -1256,19 +1293,22 @@ class Client(BaseMatrixOneClient):
 
     def git_version(self) -> str:
         """
-        Get MatrixOne git version information
+            Get MatrixOne git version information
 
-        Returns:
-            str: MatrixOne git version string
+            Returns::
 
-        Raises:
-            ConnectionError: If not connected to MatrixOne
-            QueryError: If git version query fails
+                str: MatrixOne git version string
 
-        Example:
-            >>> client = Client('localhost', 6001, 'root', '111', 'test')
-            >>> git_version = client.git_version()
-            >>> print(f"MatrixOne git version: {git_version}")
+            Raises::
+
+                ConnectionError: If not connected to MatrixOne
+                QueryError: If git version query fails
+
+            Example
+
+        >>> client = Client('localhost', 6001, 'root', '111', 'test')
+                >>> git_version = client.git_version()
+                >>> print(f"MatrixOne git version: {git_version}")
         """
         if not self._engine:
             raise ConnectionError("Not connected to MatrixOne")
@@ -1327,10 +1367,12 @@ class Client(BaseMatrixOneClient):
         2. "8.0.30-MatrixOne-v3.0.0" -> "3.0.0" (release version)
         3. "MatrixOne 3.0.1" -> "3.0.1" (fallback format)
 
-        Args:
+        Args::
+
             version_string: Raw version string from MatrixOne
 
-        Returns:
+        Returns::
+
             Semantic version string or None if parsing fails
         """
         import re
@@ -1366,7 +1408,8 @@ class Client(BaseMatrixOneClient):
         """
         Manually set the backend version
 
-        Args:
+        Args::
+
             version: Version string in format "major.minor.patch" (e.g., "3.0.1")
         """
         self._version_manager.set_backend_version(version)
@@ -1377,7 +1420,8 @@ class Client(BaseMatrixOneClient):
         """
         Get current backend version
 
-        Returns:
+        Returns::
+
             Version string or None if not set
         """
         backend_version = self._version_manager.get_backend_version()
@@ -1387,10 +1431,12 @@ class Client(BaseMatrixOneClient):
         """
         Check if a feature is available in current backend version
 
-        Args:
+        Args::
+
             feature_name: Name of the feature to check
 
-        Returns:
+        Returns::
+
             True if feature is available, False otherwise
         """
         return self._version_manager.is_feature_available(feature_name)
@@ -1399,10 +1445,12 @@ class Client(BaseMatrixOneClient):
         """
         Get feature requirement information
 
-        Args:
+        Args::
+
             feature_name: Name of the feature
 
-        Returns:
+        Returns::
+
             Feature information dictionary or None if not found
         """
         requirement = self._version_manager.get_feature_info(feature_name)
@@ -1420,11 +1468,13 @@ class Client(BaseMatrixOneClient):
         """
         Check if current backend version is compatible with required version
 
-        Args:
+        Args::
+
             required_version: Required version string (e.g., "3.0.1")
             operator: Comparison operator (">=", ">", "<=", "<", "==", "!=")
 
-        Returns:
+        Returns::
+
             True if compatible, False otherwise
         """
         return self._version_manager.is_version_compatible(required_version, operator=operator)
@@ -1433,11 +1483,13 @@ class Client(BaseMatrixOneClient):
         """
         Get helpful hint message for version-related errors
 
-        Args:
+        Args::
+
             feature_name: Name of the feature
             error_context: Additional context for the error
 
-        Returns:
+        Returns::
+
             Helpful hint message
         """
         return self._version_manager.get_version_hint(feature_name, error_context)
@@ -1446,7 +1498,8 @@ class Client(BaseMatrixOneClient):
         """
         Check if current backend is a development version
 
-        Returns:
+        Returns::
+
             True if backend is development version (999.x.x), False otherwise
         """
         return self._version_manager.is_development_version()
@@ -1458,7 +1511,8 @@ class Client(BaseMatrixOneClient):
         """
         Create a table with a simplified interface.
 
-        Args:
+        Args::
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             columns: Dictionary mapping column names to their types (required if table_name_or_model is str)
                     Supported formats:
@@ -1470,19 +1524,20 @@ class Client(BaseMatrixOneClient):
                     - 'is_active': 'boolean'
             **kwargs: Additional table parameters
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
 
-        Example::
+        Example
 
             client.create_table("users", {
-                'id': 'bigint',
-                'name': 'varchar(100)',
-                'email': 'varchar(255)',
-                'embedding': 'vecf32(128)',
-                'score': 'float',
-                'created_at': 'datetime',
-                'is_active': 'boolean'
+            'id': 'bigint',
+            'name': 'varchar(100)',
+            'email': 'varchar(255)',
+            'embedding': 'vecf32(128)',
+            'score': 'float',
+            'created_at': 'datetime',
+            'is_active': 'boolean'
             }, primary_key='id')
         """
         from .sqlalchemy_ext import VectorTableBuilder
@@ -1614,13 +1669,15 @@ class Client(BaseMatrixOneClient):
         """
         Create a table with a simplified interface within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             columns: Dictionary mapping column names to their types (same format as create_table)
             connection: SQLAlchemy connection object (required for transaction support)
             **kwargs: Additional table parameters
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
         """
         if connection is None:
@@ -1743,20 +1800,23 @@ class Client(BaseMatrixOneClient):
 
     def drop_table(self, table_name_or_model) -> "Client":
         """
-        Drop a table.
+            Drop a table.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            Args::
 
-        Returns:
-            Client: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
 
-        Example:
-            # Drop table by name
-            client.drop_table("users")
+            Returns::
 
-            # Drop table by model class
-            client.drop_table(UserModel)
+                Client: Self for chaining
+
+            Example
+
+        # Drop table by name
+                client.drop_table("users")
+
+                # Drop table by model class
+                client.drop_table(UserModel)
         """
         from sqlalchemy import text
 
@@ -1777,11 +1837,13 @@ class Client(BaseMatrixOneClient):
         """
         Drop a table within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table to drop
             connection: SQLAlchemy connection object (required for transaction support)
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
         """
         if connection is None:
@@ -1797,7 +1859,8 @@ class Client(BaseMatrixOneClient):
         """
         Create a table with vector indexes using a simplified interface.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             columns: Dictionary mapping column names to their types (same format as create_table)
             indexes: List of index definitions, each containing:
@@ -1807,22 +1870,23 @@ class Client(BaseMatrixOneClient):
                     - 'params': Dictionary of index-specific parameters
             **kwargs: Additional table parameters
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
 
-        Example::
+        Example
 
             client.create_table_with_index("vector_docs", {
-                'id': 'bigint',
-                'title': 'varchar(200)',
-                'embedding': 'vector(128,f32)'
+            'id': 'bigint',
+            'title': 'varchar(200)',
+            'embedding': 'vector(128,f32)'
             }, indexes=[
-                {
-                    'name': 'idx_hnsw',
-                    'column': 'embedding',
-                    'type': 'hnsw',
-                    'params': {'m': 48, 'ef_construction': 64, 'ef_search': 64}
-                }
+            {
+            'name': 'idx_hnsw',
+            'column': 'embedding',
+            'type': 'hnsw',
+            'params': {'m': 48, 'ef_construction': 64, 'ef_search': 64}
+            }
             ], primary_key='id')
         """
 
@@ -1969,14 +2033,16 @@ class Client(BaseMatrixOneClient):
         """
         Create a table with vector indexes within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             columns: Dictionary mapping column names to their types (same format as create_table)
             connection: SQLAlchemy connection object (required for transaction support)
             indexes: List of index definitions (same format as create_table_with_index)
             **kwargs: Additional table parameters
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
         """
         if connection is None:
@@ -2118,12 +2184,14 @@ class Client(BaseMatrixOneClient):
         Create a table using SQLAlchemy ORM-style column definitions.
         Similar to SQLAlchemy Table() constructor but without metadata.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
             **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
 
         Example::
@@ -2137,8 +2205,8 @@ class Client(BaseMatrixOneClient):
                 Column('b', Vectorf32(128)),
                 Column('c', Integer),
                 VectorIndex('idx_hnsw', 'b', index_type=VectorIndexType.HNSW,
-                           m=48, ef_construction=64, ef_search=64,
-                           op_type=VectorOpType.VECTOR_L2_OPS)
+                       m=48, ef_construction=64, ef_search=64,
+                       op_type=VectorOpType.VECTOR_L2_OPS)
             )
         """
         from sqlalchemy import MetaData, Table
@@ -2193,13 +2261,15 @@ class Client(BaseMatrixOneClient):
         """
         Create a table using SQLAlchemy ORM-style definitions within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             connection: SQLAlchemy connection object (required for transaction support)
             *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
             **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
 
-        Returns:
+        Returns::
+
             Client: Self for chaining
         """
         if connection is None:
@@ -2251,7 +2321,8 @@ class Client(BaseMatrixOneClient):
         """
         Create all tables defined in the given base class or default Base.
 
-        Args:
+        Args::
+
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
@@ -2266,7 +2337,8 @@ class Client(BaseMatrixOneClient):
         """
         Drop all tables defined in the given base class or default Base.
 
-        Args:
+        Args::
+
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
@@ -2300,18 +2372,21 @@ class ResultSet:
     SELECT queries (returning data) and DML operations (returning affected row counts).
 
     Key Features:
+
     - Iterator interface for row-by-row access
     - Bulk data access methods (fetchall, fetchmany)
     - Column name access and metadata
     - Affected row count for DML operations
     - Cursor-like positioning for result navigation
 
-    Attributes:
+    Attributes::
+
         columns (List[str]): List of column names in the result set
         rows (List[Tuple[Any, ...]]): List of tuples containing row data
         affected_rows (int): Number of rows affected by DML operations
 
     Usage Examples:
+
         # SELECT query results
         >>> result = client.execute("SELECT id, name, age FROM users WHERE age > ?", (25,))
         >>> print(f"Found {len(result.rows)} users")
@@ -2416,6 +2491,7 @@ class TransactionWrapper:
     within the transaction context.
 
     Key Features:
+
     - Atomic transaction execution with automatic rollback on errors
     - Access to all MatrixOne managers within transaction context
     - SQLAlchemy session integration
@@ -2432,9 +2508,9 @@ class TransactionWrapper:
     - vector: TransactionVectorManager for vector operations
     - fulltext_index: TransactionFulltextIndexManager for fulltext operations
 
-    Usage Examples:
+    Usage Examples
 
-        .. code-block:: python
+    .. code-block:: python
 
             # Basic transaction usage
             with client.transaction() as tx:
@@ -2509,7 +2585,8 @@ class TransactionWrapper:
         """
         Get the underlying SQLAlchemy connection for direct use
 
-        Returns:
+        Returns::
+
             SQLAlchemy Connection instance bound to this transaction
         """
         return self.connection
@@ -2518,7 +2595,8 @@ class TransactionWrapper:
         """
         Get SQLAlchemy session that uses the same transaction
 
-        Returns:
+        Returns::
+
             SQLAlchemy Session instance bound to this transaction
         """
         if self._sqlalchemy_session is None:
@@ -2550,11 +2628,13 @@ class TransactionWrapper:
         """
         Insert data into a table within transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
-        Returns:
+        Returns::
+
             ResultSet object
         """
         sql = self.client._build_insert_sql(table_name, data)
@@ -2564,11 +2644,13 @@ class TransactionWrapper:
         """
         Batch insert data into a table within transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data_list: List of data dictionaries to insert
 
-        Returns:
+        Returns::
+
             ResultSet object
         """
         if not data_list:
@@ -2580,14 +2662,16 @@ class TransactionWrapper:
     def query(self, *columns, snapshot: str = None):
         """Get MatrixOne query builder within transaction - SQLAlchemy style
 
-        Args:
+        Args::
+
             *columns: Can be:
                 - Single model class: query(Article) - returns all columns from model
                 - Multiple columns: query(Article.id, Article.title) - returns specific columns
                 - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
             snapshot: Optional snapshot name for snapshot queries
 
-        Returns:
+        Returns::
+
             MatrixOneQuery instance configured for the specified columns within transaction
         """
         from .orm import MatrixOneQuery
@@ -2664,12 +2748,14 @@ class TransactionWrapper:
         """
         Create a table within MatrixOne transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             columns: Dictionary mapping column names to their types (same format as client.create_table)
             **kwargs: Additional table parameters
 
-        Returns:
+        Returns::
+
             TransactionWrapper: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
@@ -2791,10 +2877,12 @@ class TransactionWrapper:
         """
         Drop a table within MatrixOne transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table to drop
 
-        Returns:
+        Returns::
+
             TransactionWrapper: Self for chaining
         """
         sql = f"DROP TABLE IF EXISTS {table_name}"
@@ -2807,13 +2895,15 @@ class TransactionWrapper:
         """
         Create a table with vector indexes within MatrixOne transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             columns: Dictionary mapping column names to their types (same format as client.create_table)
             indexes: List of index definitions (same format as client.create_table_with_index)
             **kwargs: Additional table parameters
 
-        Returns:
+        Returns::
+
             TransactionWrapper: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
@@ -2951,12 +3041,14 @@ class TransactionWrapper:
         """
         Create a table using SQLAlchemy ORM-style definitions within MatrixOne transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
             **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
 
-        Returns:
+        Returns::
+
             TransactionWrapper: Self for chaining
         """
         from sqlalchemy import MetaData, Table
@@ -3083,6 +3175,7 @@ class VectorManager:
     indexing algorithms for efficient vector similarity search.
 
     Key Features:
+
     - Vector table creation with configurable dimensions and precision
     - Vector index creation and management (IVF, HNSW)
     - Vector data insertion and batch operations
@@ -3101,6 +3194,7 @@ class VectorManager:
     - Inner product: Dot product of vectors
 
     Supported Operations:
+
     - Vector table creation with various column types
     - Vector index creation with configurable parameters
     - Vector data insertion and batch operations
@@ -3108,54 +3202,38 @@ class VectorManager:
     - Vector range search for distance-based filtering
     - Vector index management and optimization
 
-    Usage Examples:
+    Usage Examples::
 
-        .. code-block:: python
+        # Initialize vector manager
+        vector_ops = client.vector_ops
 
-            # Initialize vector manager
-            vector_ops = client.vector_ops
+        # Create IVF index
+        vector_ops.create_ivf(
+            table_name="documents",
+            name="idx_embedding_ivf",
+            column="embedding",
+            lists=100
+        )
 
-            # Create vector table
-            vector.create_table("documents", {
-                "id": "int",
-                "content": "text",
-                "embedding": "vector(384,f32)"
-            })
+        # Create HNSW index
+        vector_ops.create_hnsw(
+            table_name="documents",
+            name="idx_embedding_hnsw",
+            column="embedding",
+            m=16,
+            ef_construction=200
+        )
 
-            # Create IVF index
-            vector.create_ivf(
-                table_name="documents",
-                name="idx_embedding_ivf",
-                column="embedding",
-                lists=100
-            )
+        # Similarity search
+        results = vector_ops.similarity_search(
+            table_name="documents",
+            vector_column="embedding",
+            query_vector=[0.1, 0.2, 0.3, ...],
+            limit=10
+        )
 
-            # Create HNSW index
-            vector.create_hnsw(
-                table_name="documents",
-                name="idx_embedding_hnsw",
-                column="embedding",
-                m=16,
-                ef_construction=200
-            )
-
-            # Insert vector data
-            vector.insert("documents", {
-                "id": 1,
-                "content": "Sample document",
-                "embedding": [0.1, 0.2, 0.3, ...]  # 384-dimensional vector
-            })
-
-            # Batch insert vector data
-            documents = [
-                {"id": 1, "content": "Doc 1", "embedding": [0.1, 0.2, ...]},
-                {"id": 2, "content": "Doc 2", "embedding": [0.3, 0.4, ...]}
-            ]
-            vector.batch_insert("documents", documents)
-
-    Note: Vector operations require appropriate vector data and indexing
-    strategies. Vector dimensions and precision must match your embedding
-    model requirements and indexing parameters.
+    Note: Vector operations require appropriate vector data and indexing strategies. Vector dimensions
+    and precision must match your embedding model requirements.
     """
 
     def __init__(self, client):
@@ -3241,28 +3319,31 @@ class VectorManager:
         op_type: VectorOpType = None,
     ) -> "VectorManager":
         """
-        Create an IVFFLAT vector index using chain operations.
+            Create an IVFFLAT vector index using chain operations.
 
-        IVFFLAT (Inverted File with Flat Compression) is a vector index type
-        that provides good performance for similarity search on large datasets.
-        It supports insert, update, and delete operations.
+            IVFFLAT (Inverted File with Flat Compression) is a vector index type
+            that provides good performance for similarity search on large datasets.
+            It supports insert, update, and delete operations.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Name of the index
-            column: Vector column to index
-            lists: Number of lists for IVFFLAT (default: 100). More lists for larger datasets
-            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
+            Args::
 
-        Returns:
-            VectorManager: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                name: Name of the index
+                column: Vector column to index
+                lists: Number of lists for IVFFLAT (default: 100). More lists for larger datasets
+                op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
-        Example:
-            # Create IVF index by table name
-            client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=50)
+            Returns::
 
-            # Create IVF index by model class
-            client.vector_ops.create_ivf(DocumentModel, "idx_embedding", "embedding", lists=100)
+                VectorManager: Self for chaining
+
+            Example
+
+        # Create IVF index by table name
+                client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=50)
+
+                # Create IVF index by model class
+                client.vector_ops.create_ivf(DocumentModel, "idx_embedding", "embedding", lists=100)
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
@@ -3301,30 +3382,33 @@ class VectorManager:
         op_type: VectorOpType = None,
     ) -> "VectorManager":
         """
-        Create an HNSW vector index using chain operations.
+            Create an HNSW vector index using chain operations.
 
-        HNSW (Hierarchical Navigable Small World) is a vector index type
-        that provides excellent search performance but is read-only.
-        It does not support insert, update, or delete operations.
+            HNSW (Hierarchical Navigable Small World) is a vector index type
+            that provides excellent search performance but is read-only.
+            It does not support insert, update, or delete operations.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Name of the index
-            column: Vector column to index
-            m: Number of bi-directional links for HNSW (default: 16)
-            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
+            Args::
 
-        Returns:
-            VectorManager: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                name: Name of the index
+                column: Vector column to index
+                m: Number of bi-directional links for HNSW (default: 16)
+                ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
+                ef_search: Size of dynamic candidate list for HNSW search (default: 50)
+                op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
-        Example:
-            # Create HNSW index by table name
-            client.vector_ops.create_hnsw("documents", "idx_embedding", "embedding", m=32)
+            Returns::
 
-            # Create HNSW index by model class
-            client.vector_ops.create_hnsw(DocumentModel, "idx_embedding", "embedding", m=16)
+                VectorManager: Self for chaining
+
+            Example
+
+        # Create HNSW index by table name
+                client.vector_ops.create_hnsw("documents", "idx_embedding", "embedding", m=32)
+
+                # Create HNSW index by model class
+                client.vector_ops.create_hnsw(DocumentModel, "idx_embedding", "embedding", m=16)
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
@@ -3366,7 +3450,8 @@ class VectorManager:
         """
         Create an IVFFLAT vector index within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             name: Name of the index
             column: Vector column to index
@@ -3374,10 +3459,12 @@ class VectorManager:
             lists: Number of lists for IVFFLAT (default: 100)
             op_type: Vector operation type (default: vector_l2_ops)
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
 
-        Raises:
+        Raises::
+
             ValueError: If connection is not provided
         """
         if connection is None:
@@ -3414,7 +3501,8 @@ class VectorManager:
         """
         Create an HNSW vector index within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             name: Name of the index
             column: Vector column to index
@@ -3424,10 +3512,12 @@ class VectorManager:
             ef_search: Size of dynamic candidate list for HNSW search (default: 50)
             op_type: Vector operation type (default: vector_l2_ops)
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
 
-        Raises:
+        Raises::
+
             ValueError: If connection is not provided
         """
         if connection is None:
@@ -3457,11 +3547,13 @@ class VectorManager:
         """
         Drop a vector index using chain operations.
 
-        Args:
+        Args::
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import VectorIndex
@@ -3483,10 +3575,12 @@ class VectorManager:
         """
         Enable IVF indexing with chain operations.
 
-        Args:
+        Args::
+
             probe_limit: Probe limit for IVF search
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_ivf_config
@@ -3507,7 +3601,8 @@ class VectorManager:
         """
         Disable IVF indexing with chain operations.
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_ivf_config
@@ -3522,7 +3617,8 @@ class VectorManager:
         """
         Enable HNSW indexing with chain operations.
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_hnsw_config
@@ -3537,7 +3633,8 @@ class VectorManager:
         """
         Disable HNSW indexing with chain operations.
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         from .sqlalchemy_ext import create_hnsw_config
@@ -3553,11 +3650,13 @@ class VectorManager:
         """
         Insert vector data using chain operations.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         self.client.insert(table_name, data)
@@ -3567,15 +3666,18 @@ class VectorManager:
         """
         Insert vector data within an existing SQLAlchemy transaction.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
             connection: SQLAlchemy connection object (required for transaction support)
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
 
-        Raises:
+        Raises::
+
             ValueError: If connection is not provided
         """
         if connection is None:
@@ -3608,11 +3710,13 @@ class VectorManager:
         """
         Batch insert vector data using chain operations.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data_list: List of data dictionaries to insert
 
-        Returns:
+        Returns::
+
             VectorManager: Self for chaining
         """
         self.client.batch_insert(table_name, data_list)
@@ -3634,7 +3738,8 @@ class VectorManager:
         """
         Perform similarity search using chain operations.
 
-        Args:
+        Args::
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             vector_column: Name of the vector column
             query_vector: Query vector as list
@@ -3646,23 +3751,15 @@ class VectorManager:
             connection: Optional existing database connection (for transaction support)
             _log_mode: Override SQL logging mode for this operation ('off', 'auto', 'simple', 'full')
 
-        Returns:
+        Returns::
+
             List of search results
 
-        Example:
+        Example::
+
             # Basic similarity search
             results = client.vector_ops.similarity_search(
                 "documents", "embedding", [0.1, 0.2, 0.3], limit=5
-            )
-
-            # Debug with full SQL logging
-            results = client.vector_ops.similarity_search(
-                "documents", "embedding", [0.1, 0.2, 0.3], limit=5, _log_mode='full'
-            )
-
-            # Search with model class
-            results = client.vector_ops.similarity_search(
-                DocumentModel, "embedding", [0.1, 0.2, 0.3], limit=5
             )
 
             # Search with filtering
@@ -3728,7 +3825,8 @@ class VectorManager:
         """
         Perform range search using chain operations.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             vector_column: Name of the vector column
             query_vector: Query vector as list
@@ -3737,7 +3835,8 @@ class VectorManager:
             select_columns: List of columns to select (None means all columns)
             connection: Optional existing database connection (for transaction support)
 
-        Returns:
+        Returns::
+
             List of search results within range
         """
         # Convert vector to string format
@@ -3783,31 +3882,35 @@ class VectorManager:
 
     def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
         """
-        Get IVF index statistics for a table.
+            Get IVF index statistics for a table.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            column_name: Name of the vector column (optional, will be inferred if not provided)
+            Args::
 
-        Returns:
-            Dict containing IVF index statistics including:
-            - index_tables: Dictionary mapping table types to table names
-            - distribution: Dictionary containing bucket distribution data
-            - database: Database name
-            - table_name: Table name
-            - column_name: Vector column name
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                column_name: Name of the vector column (optional, will be inferred if not provided)
 
-        Raises:
-            Exception: If IVF index is not found or if there are errors retrieving stats
+            Returns::
 
-        Examples:
-            # Get stats for a table with vector column
-            stats = client.vector_ops.get_ivf_stats("my_table", "embedding")
-            print(f"Index tables: {stats['index_tables']}")
-            print(f"Distribution: {stats['distribution']}")
+                Dict containing IVF index statistics including:
+                - index_tables: Dictionary mapping table types to table names
+                - distribution: Dictionary containing bucket distribution data
+                - database: Database name
+                - table_name: Table name
+                - column_name: Vector column name
 
-            # Get stats using model class
-            stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
+            Raises::
+
+                Exception: If IVF index is not found or if there are errors retrieving stats
+
+            Examples
+
+        # Get stats for a table with vector column
+                stats = client.vector_ops.get_ivf_stats("my_table", "embedding")
+                print(f"Index tables: {stats['index_tables']}")
+                print(f"Distribution: {stats['distribution']}")
+
+                # Get stats using model class
+                stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
         """
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
@@ -3955,29 +4058,33 @@ class TransactionVectorIndexManager(VectorManager):
 
     def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
         """
-        Get IVF index statistics for a table within transaction.
+            Get IVF index statistics for a table within transaction.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            column_name: Name of the vector column (optional, will be inferred if not provided)
+            Args::
 
-        Returns:
-            Dict containing IVF index statistics including:
-            - index_tables: Dictionary mapping table types to table names
-            - distribution: Dictionary containing bucket distribution data
-            - database: Database name
-            - table_name: Table name
-            - column_name: Vector column name
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                column_name: Name of the vector column (optional, will be inferred if not provided)
 
-        Raises:
-            Exception: If IVF index is not found or if there are errors retrieving stats
+            Returns::
 
-        Examples:
-            # Get stats for a table with vector column within transaction
-            with client.transaction() as tx:
-                stats = tx.vector_ops.get_ivf_stats("my_table", "embedding")
-                print(f"Index tables: {stats['index_tables']}")
-                print(f"Distribution: {stats['distribution']}")
+                Dict containing IVF index statistics including:
+                - index_tables: Dictionary mapping table types to table names
+                - distribution: Dictionary containing bucket distribution data
+                - database: Database name
+                - table_name: Table name
+                - column_name: Vector column name
+
+            Raises::
+
+                Exception: If IVF index is not found or if there are errors retrieving stats
+
+            Examples
+
+        # Get stats for a table with vector column within transaction
+                with client.transaction() as tx:
+                    stats = tx.vector_ops.get_ivf_stats("my_table", "embedding")
+                    print(f"Index tables: {stats['index_tables']}")
+                    print(f"Distribution: {stats['distribution']}")
         """
         from sqlalchemy import text
 
@@ -4055,6 +4162,7 @@ class FulltextIndexManager:
     index management.
 
     Key Features:
+
     - Fulltext index creation and management
     - Support for multiple fulltext algorithms (TF-IDF, BM25)
     - Multi-column fulltext indexing
@@ -4067,41 +4175,35 @@ class FulltextIndexManager:
     - BM25: Best Matching 25 algorithm for improved relevance scoring
 
     Supported Operations:
+
     - Create fulltext indexes on single or multiple columns
     - Drop fulltext indexes
     - List and query existing fulltext indexes
     - Index optimization and maintenance
     - Integration with fulltext search queries
 
-    Usage Examples:
+    Usage Examples::
 
-        .. code-block:: python
+        # Initialize fulltext index manager
+        fulltext = client.fulltext_index
 
-            # Initialize fulltext index manager
-            fulltext = client.fulltext_index
+        # Create fulltext index on single column
+        fulltext.create(
+            "documents",
+            name="idx_content",
+            columns="content",
+            algorithm="BM25"
+        )
 
-            # Create fulltext index on single column
-            fulltext.create(
-                "documents",
-                name="idx_content",
-                columns="content",
-                algorithm="BM25"
-            )
+        # Create fulltext index on multiple columns
+        fulltext.create(
+            "articles",
+            name="idx_title_content",
+            columns=["title", "content"],
+            algorithm="TF-IDF"
+        )
 
-            # Create fulltext index on multiple columns
-            fulltext.create(
-                "articles",
-                name="idx_title_content",
-                columns=["title", "content"],
-                algorithm="TF-IDF"
-            )
-
-            # Drop fulltext index
-            fulltext.drop("documents", "idx_content")
-
-    Note: Fulltext indexes significantly improve text search performance
-    but require additional storage space. Choose appropriate algorithms
-    based on your search requirements and data characteristics.
+    Note: Fulltext indexes improve text search performance but require additional storage space.
     """
 
     def __init__(self, client: "Client"):
@@ -4112,26 +4214,29 @@ class FulltextIndexManager:
         self, table_name_or_model, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
     ) -> "FulltextIndexManager":
         """
-        Create a fulltext index using chain operations.
+            Create a fulltext index using chain operations.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Index name
-            columns: Column(s) to index
-            algorithm: Fulltext algorithm type (TF-IDF or BM25)
+            Args::
 
-        Returns:
-            FulltextIndexManager: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                name: Index name
+                columns: Column(s) to index
+                algorithm: Fulltext algorithm type (TF-IDF or BM25)
 
-        Example:
-            # Create fulltext index by table name
-            client.fulltext_index.create("articles", "idx_content", ["title", "content"])
+            Returns::
 
-            # Create fulltext index by model class
-            client.fulltext_index.create(ArticleModel, "idx_content", ["title", "content"])
+                FulltextIndexManager: Self for chaining
 
-            # Create with BM25 algorithm
-            client.fulltext_index.create("articles", "idx_bm25", "content", algorithm="BM25")
+            Example
+
+        # Create fulltext index by table name
+                client.fulltext_index.create("articles", "idx_content", ["title", "content"])
+
+                # Create fulltext index by model class
+                client.fulltext_index.create(ArticleModel, "idx_content", ["title", "content"])
+
+                # Create with BM25 algorithm
+                client.fulltext_index.create("articles", "idx_bm25", "content", algorithm="BM25")
         """
         from .sqlalchemy_ext import FulltextIndex
 
@@ -4165,14 +4270,16 @@ class FulltextIndexManager:
         """
         Create a fulltext index within an existing transaction.
 
-        Args:
+        Args::
+
             transaction_wrapper: Transaction wrapper
             table_name: Target table name
             name: Index name
             columns: Column(s) to index
             algorithm: Fulltext algorithm type
 
-        Returns:
+        Returns::
+
             FulltextIndexManager: Self for chaining
         """
         from .sqlalchemy_ext import FulltextIndex
@@ -4194,11 +4301,13 @@ class FulltextIndexManager:
         """
         Drop a fulltext index using chain operations.
 
-        Args:
+        Args::
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             name: Index name
 
-        Returns:
+        Returns::
+
             FulltextIndexManager: Self for chaining
         """
         from .sqlalchemy_ext import FulltextIndex
@@ -4220,7 +4329,8 @@ class FulltextIndexManager:
         """
         Enable fulltext indexing with chain operations.
 
-        Returns:
+        Returns::
+
             FulltextIndexManager: Self for chaining
         """
         try:
@@ -4233,7 +4343,8 @@ class FulltextIndexManager:
         """
         Disable fulltext indexing with chain operations.
 
-        Returns:
+        Returns::
+
             FulltextIndexManager: Self for chaining
         """
         try:

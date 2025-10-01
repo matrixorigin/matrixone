@@ -10,6 +10,7 @@ ResultSet
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 AsyncResultSet
 --------------
@@ -18,3 +19,4 @@ AsyncResultSet
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:

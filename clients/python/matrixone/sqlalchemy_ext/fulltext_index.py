@@ -42,7 +42,7 @@ class FulltextIndex(Index):
 
     Specialized class for fulltext indexes with type safety and clear API.
 
-    Usage Examples:
+    Usage Examples
 
     1. Class Methods (Recommended for one-time operations)::
 
@@ -138,6 +138,7 @@ class FulltextIndex(Index):
         Initialize FulltextIndex.
 
         Args:
+
             name: Index name
             columns: Column(s) to index (string or list of strings)
             algorithm: Fulltext algorithm type (TF-IDF or BM25)
@@ -171,6 +172,7 @@ class FulltextIndex(Index):
         Create a fulltext index using ORM-style method.
 
         Args:
+
             engine: SQLAlchemy engine
             table_name: Target table name
             name: Index name
@@ -178,6 +180,7 @@ class FulltextIndex(Index):
             algorithm: Fulltext algorithm type
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -208,6 +211,7 @@ class FulltextIndex(Index):
         Create a fulltext index within an existing transaction.
 
         Args:
+
             connection: SQLAlchemy connection
             table_name: Target table name
             name: Index name
@@ -215,6 +219,7 @@ class FulltextIndex(Index):
             algorithm: Fulltext algorithm type
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -236,11 +241,13 @@ class FulltextIndex(Index):
         Drop a fulltext index using ORM-style method.
 
         Args:
+
             engine: SQLAlchemy engine
             table_name: Target table name
             name: Index name
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -260,11 +267,13 @@ class FulltextIndex(Index):
         Drop a fulltext index within an existing transaction.
 
         Args:
+
             connection: SQLAlchemy connection
             table_name: Target table name
             name: Index name
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -280,10 +289,12 @@ class FulltextIndex(Index):
         Create this fulltext index using ORM-style method.
 
         Args:
+
             engine: SQLAlchemy engine
             table_name: Target table name
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -302,10 +313,12 @@ class FulltextIndex(Index):
         Drop this fulltext index using ORM-style method.
 
         Args:
+
             engine: SQLAlchemy engine
             table_name: Target table name
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -324,10 +337,12 @@ class FulltextIndex(Index):
         Create this fulltext index within an existing transaction.
 
         Args:
+
             connection: SQLAlchemy connection
             table_name: Target table name
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -343,10 +358,12 @@ class FulltextIndex(Index):
         Drop this fulltext index within an existing transaction.
 
         Args:
+
             connection: SQLAlchemy connection
             table_name: Target table name
 
         Returns:
+
             bool: True if successful, False otherwise
         """
         try:
@@ -370,6 +387,7 @@ class FulltextSearchBuilder:
         Initialize FulltextSearchBuilder.
 
         Args:
+
             table_name: Table to search in
             columns: Column(s) to search in
         """
@@ -405,9 +423,11 @@ class FulltextSearchBuilder:
         Set the search term.
 
         Args:
+
             term: Search term
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.search_term = term
@@ -418,9 +438,11 @@ class FulltextSearchBuilder:
         Set the search mode.
 
         Args:
+
             mode: Search mode (natural language, boolean, query expansion)
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.search_mode = mode
@@ -431,9 +453,11 @@ class FulltextSearchBuilder:
         Include relevance score in results.
 
         Args:
+
             include_score: Whether to include score
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.include_score = include_score
@@ -444,9 +468,11 @@ class FulltextSearchBuilder:
         Add WHERE condition.
 
         Args:
+
             condition: WHERE condition
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.where_conditions.append(condition)
@@ -457,10 +483,12 @@ class FulltextSearchBuilder:
         Set ORDER BY clause.
 
         Args:
+
             column: Column to order by
             direction: Order direction (ASC/DESC)
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.order_clause = f"{column} {direction}"
@@ -471,9 +499,11 @@ class FulltextSearchBuilder:
         Set LIMIT clause.
 
         Args:
+
             count: Number of rows to limit
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.limit_value = count
@@ -484,9 +514,11 @@ class FulltextSearchBuilder:
         Set OFFSET clause.
 
         Args:
+
             count: Number of rows to offset
 
         Returns:
+
             FulltextSearchBuilder: Self for chaining
         """
         self.offset_value = count
@@ -497,6 +529,7 @@ class FulltextSearchBuilder:
         Build the SQL query using unified SQL builder.
 
         Returns:
+
             str: SQL query string
         """
         if not self.search_term:
@@ -553,9 +586,11 @@ class FulltextSearchBuilder:
         Execute the search query.
 
         Args:
+
             connection: Database connection
 
         Returns:
+
             Query result
         """
         sql = self.build_sql()
@@ -574,6 +609,7 @@ def create_fulltext_index(
     Convenience function to create a fulltext index.
 
     Args:
+
         engine: SQLAlchemy engine
         table_name: Target table name
         name: Index name
@@ -581,6 +617,7 @@ def create_fulltext_index(
         algorithm: Fulltext algorithm type
 
     Returns:
+
         bool: True if successful, False otherwise
     """
     return FulltextIndex.create_index(engine, table_name, name, columns, algorithm)
@@ -591,10 +628,12 @@ def fulltext_search_builder(table_name: str, columns: Union[str, List[str]]) -> 
     Convenience function to create a fulltext search builder.
 
     Args:
+
         table_name: Table to search in
         columns: Column(s) to search in
 
     Returns:
+
         FulltextSearchBuilder: Search builder instance
     """
     return FulltextSearchBuilder(table_name, columns)

@@ -111,6 +111,7 @@ class AccountManager:
     assignments, and permission grants.
 
     Key Features:
+
     - Account creation and management
     - User creation and authentication
     - Role-based access control (RBAC)
@@ -119,6 +120,7 @@ class AccountManager:
     - Integration with MatrixOne's security model
 
     Supported Operations:
+
     - Create and manage accounts with administrators
     - Create users within accounts
     - Assign roles to users
@@ -126,7 +128,8 @@ class AccountManager:
     - List accounts, users, and roles
     - Query account and user information
 
-    Usage Examples:
+    Usage Examples::
+
         # Create a new account
         account = client.account.create_account(
             account_name='company_account',
@@ -167,16 +170,19 @@ class AccountManager:
         """
         Create a new account in MatrixOne
 
-        Args:
+        Args::
+
             account_name: Name of the account to create
             admin_name: Name of the admin user for the account
             password: Password for the admin user
             comment: Comment for the account
 
-        Returns:
+        Returns::
+
             Account: Created account object
 
-        Raises:
+        Raises::
+
             AccountError: If account creation fails
         """
         try:
@@ -201,7 +207,8 @@ class AccountManager:
         """
         Drop an account
 
-        Args:
+        Args::
+
             account_name: Name of the account to drop
             if_exists: If True, add IF EXISTS clause to avoid errors when account doesn't exist
         """
@@ -287,15 +294,18 @@ class AccountManager:
         Note: MatrixOne CREATE USER syntax is: CREATE USER user_name IDENTIFIED BY 'password'
         The user is created in the current account context.
 
-        Args:
+        Args::
+
             user_name: Name of the user to create
             password: Password for the user
             comment: Comment for the user (not supported in MatrixOne)
 
-        Returns:
+        Returns::
+
             User: Created user object
 
-        Raises:
+        Raises::
+
             AccountError: If user creation fails
         """
         try:
@@ -329,7 +339,8 @@ class AccountManager:
         Drop a user according to MatrixOne DROP USER syntax:
         DROP USER [IF EXISTS] user [, user] ...
 
-        Args:
+        Args::
+
             user_name: Name of the user to drop
             if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
         """
@@ -471,7 +482,8 @@ class AccountManager:
         """
         Drop a role
 
-        Args:
+        Args::
+
             role_name: Name of the role to drop
             if_exists: If True, add IF EXISTS clause to avoid errors when role doesn't exist
         """
@@ -532,7 +544,8 @@ class AccountManager:
 
         Note: In MatrixOne, users are treated as roles for permission purposes.
 
-        Args:
+        Args::
+
             privilege: Privilege to grant (e.g., 'CREATE DATABASE', 'SELECT')
             object_type: Type of object (e.g., 'ACCOUNT', 'DATABASE', 'TABLE')
             object_name: Name of the object (e.g., 'test_db', '*')

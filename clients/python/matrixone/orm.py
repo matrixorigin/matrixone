@@ -72,13 +72,15 @@ class Query:
     custom MatrixOne models.
 
     Key Features:
+
     - Fluent method chaining for building complex queries
     - Support for SELECT, INSERT, UPDATE, DELETE operations
     - SQLAlchemy expression support in filter(), having(), and other methods
     - Automatic SQL generation and parameter binding
     - Snapshot support for point-in-time queries
 
-    Usage:
+    Usage::
+
         # Basic query building
         query = client.query(User)
         results = query.filter(User.age > 25).order_by(User.name).limit(10).all()
@@ -86,13 +88,13 @@ class Query:
         # Complex queries with joins and aggregations
         query = client.query(User, func.count(Order.id).label('order_count'))
         results = (query
-                  .join(Order, User.id == Order.user_id)
-                  .group_by(User.id)
-                  .having(func.count(Order.id) > 5)
-                  .all())
+            .join(Order, User.id == Order.user_id)
+            .group_by(User.id)
+            .having(func.count(Order.id) > 5)
+            .all())
 
-    Note: This is the legacy query builder. For new code, consider using
-    MatrixOneQuery which provides enhanced SQLAlchemy compatibility.
+    Note: This is the legacy query builder. For new code, consider using MatrixOneQuery which
+    provides enhanced SQLAlchemy compatibility.
     """
 
     def __init__(self, model_class, client, snapshot_name: Optional[str] = None):
@@ -160,14 +162,17 @@ class Query:
         The GROUP BY clause is used to group rows that have the same values in specified columns,
         typically used with aggregate functions like COUNT, SUM, AVG, etc.
 
-        Args:
+        Args::
+
             *columns: Columns to group by as strings.
                     Can include column names, expressions, or functions.
 
-        Returns:
+        Returns::
+
             Query: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # Basic GROUP BY
             query.group_by("department")
             query.group_by("department", "status")
@@ -184,7 +189,8 @@ class Query:
             - Multiple columns can be grouped together
             - For SQLAlchemy expression support, use MatrixOneQuery instead
 
-        Raises:
+        Raises::
+
             ValueError: If columns are not strings
         """
         self._group_by_columns.extend([str(col) for col in columns])
@@ -197,15 +203,18 @@ class Query:
         The HAVING clause is used to filter groups after GROUP BY operations,
         similar to WHERE clause but applied to aggregated results.
 
-        Args:
+        Args::
+
             condition (str): The HAVING condition as a string.
                            Can include '?' placeholders for parameter substitution.
             *params: Parameters to replace '?' placeholders in the condition.
 
-        Returns:
+        Returns::
+
             Query: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # Basic HAVING with placeholders
             query.group_by(User.department)
             query.having("COUNT(*) > ?", 5)
@@ -228,7 +237,8 @@ class Query:
             - Multiple HAVING conditions are combined with AND logic
             - For SQLAlchemy expression support, use MatrixOneQuery instead
 
-        Raises:
+        Raises::
+
             ValueError: If condition is not a string
         """
         self._having_conditions.append(condition)
@@ -242,14 +252,17 @@ class Query:
         The ORDER BY clause is used to sort the result set by one or more columns,
         either in ascending (ASC) or descending (DESC) order.
 
-        Args:
+        Args::
+
             *columns: Columns to order by as strings.
                     Can include column names with optional ASC/DESC keywords.
 
-        Returns:
+        Returns::
+
             Query: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # Basic ORDER BY
             query.order_by("name")
             query.order_by("created_at DESC")
@@ -268,7 +281,8 @@ class Query:
             - Multiple columns are ordered from left to right
             - For SQLAlchemy expression support, use MatrixOneQuery instead
 
-        Raises:
+        Raises::
+
             ValueError: If columns are not strings
         """
         for col in columns:
@@ -504,6 +518,7 @@ class BaseMatrixOneQuery:
     - Method chaining for fluent query building
 
     Key Features:
+
     - SQLAlchemy expression support (e.g., func.count(User.id) > 5)
     - String condition support (e.g., "COUNT(*) > ?", 5)
     - Automatic column name resolution and SQL generation
@@ -581,14 +596,17 @@ class BaseMatrixOneQuery:
     def cte(self, name: str, recursive: bool = False) -> CTE:
         """Create a CTE (Common Table Expression) from this query - SQLAlchemy style
 
-        Args:
+        Args::
+
             name: Name of the CTE
             recursive: Whether this is a recursive CTE
 
-        Returns:
+        Returns::
+
             CTE object that can be used in other queries
 
-        Examples:
+        Examples::
+
             # Create a CTE from a query
             user_stats = client.query(User).filter(User.active == True).cte("user_stats")
 
@@ -603,16 +621,19 @@ class BaseMatrixOneQuery:
     def join(self, target, onclause=None, isouter=False, full=False) -> "BaseMatrixOneQuery":
         """Add JOIN clause - SQLAlchemy style
 
-        Args:
+        Args::
+
             target: Table or model to join with
             onclause: ON condition for the join (optional, will be inferred if not provided)
             isouter: If True, creates LEFT OUTER JOIN (default: False for INNER JOIN)
             full: If True, creates FULL OUTER JOIN (default: False)
 
-        Returns:
+        Returns::
+
             Self for method chaining
 
-        Examples:
+        Examples::
+
             # Basic inner join with explicit condition
             query.join(Address, User.id == Address.user_id)
 
@@ -721,16 +742,19 @@ class BaseMatrixOneQuery:
         The GROUP BY clause is used to group rows that have the same values in specified columns,
         typically used with aggregate functions like COUNT, SUM, AVG, etc.
 
-        Args:
+        Args::
+
             *columns: Columns to group by. Can be:
                 - SQLAlchemy column expressions (e.g., User.department, func.year(User.created_at))
                 - String column names (e.g., "department", "created_at")
                 - SQLAlchemy function expressions (e.g., func.year(User.created_at))
 
-        Returns:
+        Returns::
+
             BaseMatrixOneQuery: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # SQLAlchemy column expressions (recommended)
             query.group_by(User.department)
             query.group_by(User.department, User.status)
@@ -740,11 +764,6 @@ class BaseMatrixOneQuery:
             # String column names
             query.group_by("department")
             query.group_by("department", "status")
-            query.group_by("YEAR(created_at)")
-
-            # Mixed expressions
-            query.group_by(User.department, "status")
-            query.group_by(func.year(User.created_at), "department")
 
             # Complex expressions
             query.group_by(
@@ -760,7 +779,8 @@ class BaseMatrixOneQuery:
             - Column references in SQLAlchemy expressions are automatically
               converted to MatrixOne-compatible format
 
-        Raises:
+        Raises::
+
             ValueError: If invalid column type is provided
             SQLAlchemyError: If SQLAlchemy expression compilation fails
         """
@@ -789,7 +809,8 @@ class BaseMatrixOneQuery:
         The HAVING clause is used to filter groups after GROUP BY operations,
         similar to WHERE clause but applied to aggregated results.
 
-        Args:
+        Args::
+
             condition: The HAVING condition. Can be:
                 - SQLAlchemy expression (e.g., func.count(User.id) > 5)
                 - String condition with placeholders (e.g., "COUNT(*) > ?")
@@ -797,10 +818,12 @@ class BaseMatrixOneQuery:
             *params: Additional parameters for string-based conditions.
                     Used to replace '?' placeholders in condition string.
 
-        Returns:
+        Returns::
+
             BaseMatrixOneQuery: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # SQLAlchemy expression syntax (recommended)
             query.group_by(User.department)
             query.having(func.count(User.id) > 5)
@@ -844,7 +867,8 @@ class BaseMatrixOneQuery:
             - func.max(): Find maximum value
             - func.distinct(): Get distinct values
 
-        Raises:
+        Raises::
+
             ValueError: If invalid condition type is provided
             SQLAlchemyError: If SQLAlchemy expression compilation fails
         """
@@ -1056,7 +1080,8 @@ class BaseMatrixOneQuery:
         - FulltextFilter objects: boolean_match("title", "content").must("python")
         - Subqueries: client.query(User).select(User.id)
 
-        Args:
+        Args::
+
             column: Column to check (can be string or SQLAlchemy column)
             values: Values to check against. Can be:
                 - List of values: [1, 2, 3, "a", "b"]
@@ -1064,10 +1089,12 @@ class BaseMatrixOneQuery:
                 - FulltextFilter object: boolean_match("title", "content").must("python")
                 - Subquery object: client.query(User).select(User.id)
 
-        Returns:
+        Returns::
+
             BaseMatrixOneQuery: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # List of values
             query.logical_in("city", ["北京", "上海", "广州"])
             query.logical_in(User.id, [1, 2, 3, 4])
@@ -1150,17 +1177,20 @@ class BaseMatrixOneQuery:
         The ORDER BY clause is used to sort the result set by one or more columns,
         either in ascending (ASC) or descending (DESC) order.
 
-        Args:
+        Args::
+
             *columns: Columns to order by. Can be:
                 - SQLAlchemy column expressions (e.g., User.name, User.created_at.desc())
                 - String column names (e.g., "name", "created_at DESC")
                 - SQLAlchemy function expressions (e.g., func.count(User.id))
                 - SQLAlchemy desc/asc expressions (e.g., desc(User.name), asc(User.age))
 
-        Returns:
+        Returns::
+
             BaseMatrixOneQuery: Self for method chaining.
 
-        Examples:
+        Examples::
+
             # SQLAlchemy column expressions (recommended)
             query.order_by(User.name)
             query.order_by(User.created_at.desc())
@@ -1200,7 +1230,8 @@ class BaseMatrixOneQuery:
             - Column references in SQLAlchemy expressions are automatically
               converted to MatrixOne-compatible format
 
-        Raises:
+        Raises::
+
             ValueError: If invalid column type is provided
             SQLAlchemyError: If SQLAlchemy expression compilation fails
         """
@@ -1418,13 +1449,16 @@ class BaseMatrixOneQuery:
         similar to SQLAlchemy's update() method. It supports both SQLAlchemy expressions
         and simple key-value pairs for setting column values.
 
-        Args:
+        Args::
+
             **kwargs: Column names and their new values to set
 
-        Returns:
+        Returns::
+
             Self for method chaining
 
-        Examples:
+        Examples::
+
             # Update with simple key-value pairs
             query = client.query(User)
             query.update(name="New Name", email="new@example.com").filter(User.id == 1).execute()
@@ -1476,10 +1510,12 @@ class BaseMatrixOneQuery:
         """
         Build UPDATE SQL query directly to handle SQLAlchemy expressions
 
-        Returns:
+        Returns::
+
             Tuple of (SQL string, parameters list)
 
-        Raises:
+        Raises::
+
             ValueError: If no SET clauses are provided for UPDATE
         """
         if not self._update_set_columns:
@@ -1541,13 +1577,14 @@ class MatrixOneQuery(BaseMatrixOneQuery):
     - Full integration with SQLAlchemy models and functions
 
     Key Features:
+
     - Supports SQLAlchemy expressions (e.g., func.count(User.id) > 5)
     - Supports traditional string conditions (e.g., "COUNT(*) > ?", 5)
     - Automatic column name resolution and SQL generation
     - Method chaining for fluent query building
     - Full compatibility with SQLAlchemy 1.4+ and 2.0+
 
-    Examples:
+    Examples
         # SQLAlchemy expression syntax (recommended)
         query = client.query(User)
         query.group_by(User.department)
@@ -1569,13 +1606,16 @@ class MatrixOneQuery(BaseMatrixOneQuery):
     def with_cte(self, *ctes) -> "MatrixOneQuery":
         """Add CTEs to this query - SQLAlchemy style
 
-        Args:
+        Args::
+
             *ctes: CTE objects to add to the query
 
-        Returns:
+        Returns::
+
             Self for method chaining
 
-        Examples:
+        Examples::
+
             # Add a single CTE
             user_stats = client.query(User).filter(User.active == True).cte("user_stats")
             result = client.query(Article).with_cte(user_stats).join(user_stats, Article.user_id == user_stats.id).all()
@@ -1662,27 +1702,29 @@ class MatrixOneQuery(BaseMatrixOneQuery):
 
     def to_sql(self) -> str:
         """
-        Generate the complete SQL statement for this query.
+            Generate the complete SQL statement for this query.
 
-        Returns the SQL string that would be executed, with parameters
-        properly substituted for better readability.
+            Returns the SQL string that would be executed, with parameters
+            properly substituted for better readability.
 
-        Returns:
-            str: The complete SQL statement as a string.
+            Returns::
 
-        Examples:
-            query = client.query(User).filter(User.age > 25).order_by(User.name)
-            sql = query.to_sql()
-            print(sql)  # "SELECT * FROM users WHERE age > 25 ORDER BY name"
+                str: The complete SQL statement as a string.
 
-            query = client.query(User).update(name="New Name").filter(User.id == 1)
-            sql = query.to_sql()
-            print(sql)  # "UPDATE users SET name = 'New Name' WHERE id = 1"
+            Examples
 
-        Notes:
-            - This method returns the SQL with parameters substituted
-            - Use this for debugging or logging purposes
-            - The returned SQL is ready to be executed directly
+        query = client.query(User).filter(User.age > 25).order_by(User.name)
+                sql = query.to_sql()
+                print(sql)  # "SELECT * FROM users WHERE age > 25 ORDER BY name"
+
+                query = client.query(User).update(name="New Name").filter(User.id == 1)
+                sql = query.to_sql()
+                print(sql)  # "UPDATE users SET name = 'New Name' WHERE id = 1"
+
+            Notes:
+                - This method returns the SQL with parameters substituted
+                - Use this for debugging or logging purposes
+                - The returned SQL is ready to be executed directly
         """
         # Build SQL based on query type
         if self._query_type == "UPDATE":
@@ -1714,14 +1756,17 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         Useful for understanding how MatrixOne will execute the query and
         optimizing query performance.
 
-        Args:
+        Args::
+
             verbose (bool): Whether to include verbose output.
                            Defaults to False.
 
-        Returns:
+        Returns::
+
             Any: The result set containing the execution plan.
 
-        Examples:
+        Examples::
+
             # Basic EXPLAIN
             plan = client.query(User).filter(User.age > 25).explain()
 
@@ -1757,14 +1802,17 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         providing both the plan and actual execution statistics.
         Useful for understanding query performance with real data.
 
-        Args:
+        Args::
+
             verbose (bool): Whether to include verbose output.
                            Defaults to False.
 
-        Returns:
+        Returns::
+
             Any: The result set containing the execution plan and statistics.
 
-        Examples:
+        Examples::
+
             # Basic EXPLAIN ANALYZE
             result = client.query(User).filter(User.age > 25).explain_analyze()
 
@@ -1812,7 +1860,7 @@ class LogicalIn:
     This class provides a way to create IN conditions with support for various
     value types including FulltextFilter objects, lists, and SQLAlchemy expressions.
 
-    Usage:
+    Usage
         # List of values
         query.filter(logical_in("city", ["北京", "上海", "广州"]))
         query.filter(logical_in(User.id, [1, 2, 3, 4]))
@@ -1895,13 +1943,15 @@ def logical_in(column, values):
     based on the input type.
 
     Key Features:
+
     - Support for lists of values with automatic SQL generation
     - Integration with SQLAlchemy expressions
     - FulltextFilter support for complex search conditions
     - Subquery support for dynamic value sets
     - Automatic parameter binding and SQL injection prevention
 
-    Args:
+    Args::
+
         column: Column to check against. Can be:
             - String column name: "user_id"
             - SQLAlchemy column: User.id
@@ -1914,11 +1964,12 @@ def logical_in(column, values):
             - Subquery object: client.query(User).select(User.id)
             - None: Creates "column IN (NULL)" condition
 
-    Returns:
+    Returns::
+
         LogicalIn: A logical IN condition object that can be used in filter().
                    The object automatically compiles to appropriate SQL when used.
 
-    Examples:
+    Examples
         # List of values - generates: WHERE city IN ('北京', '上海', '广州')
         query.filter(logical_in("city", ["北京", "上海", "广州"]))
         query.filter(logical_in(User.id, [1, 2, 3, 4]))

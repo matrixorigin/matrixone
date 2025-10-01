@@ -7,23 +7,29 @@ Getting Started
 ---------------
 
 1. Fork the repository on GitHub
-2. Clone your fork locally::
+2. Clone your fork locally
 
-   git clone https://github.com/matrixorigin/matrixone
-   cd matrixone/clients/python-wrapper
+   .. code-block:: bash
 
-3. Set up development environment::
+      git clone https://github.com/matrixorigin/matrixone
+      cd matrixone/clients/python-wrapper
 
-   # Create virtual environment
-   python -m venv venv
-   source venv/bin/activate  # On macOS/Linux
+3. Set up development environment
 
-   # Install development dependencies
-   make dev-setup
+   .. code-block:: bash
 
-4. Create a feature branch::
+      # Create virtual environment
+      python -m venv venv
+      source venv/bin/activate  # On macOS/Linux
 
-   git checkout -b feature/your-feature-name
+      # Install development dependencies
+      make dev-setup
+
+4. Create a feature branch
+
+   .. code-block:: bash
+
+      git checkout -b feature/your-feature-name
 
 Development Workflow
 --------------------
@@ -38,11 +44,15 @@ We use several tools to maintain code quality:
 * **flake8**: Linting
 * **mypy**: Type checking
 
-Run all checks::
+Run all checks
+
+   .. code-block:: bash
 
    make pre-commit-full
 
-Or run individual checks::
+Or run individual checks
+
+   .. code-block:: bash
 
    make format    # Format code
    make lint      # Run linting
@@ -51,7 +61,9 @@ Or run individual checks::
 Testing
 ~~~~~~~
 
-Write tests for new features and bug fixes::
+Write tests for new features and bug fixes
+
+   .. code-block:: bash
 
    # Run all tests
    make test
@@ -65,7 +77,9 @@ Write tests for new features and bug fixes::
 Documentation
 ~~~~~~~~~~~~~
 
-Update documentation for new features::
+Update documentation for new features
+
+   .. code-block:: bash
 
    # Generate documentation
    make docs
@@ -81,7 +95,9 @@ Documentation Guidelines
 * Update API documentation in ``docs/api/``
 * Add examples to ``docs/examples.rst``
 
-Example docstring::
+Example docstring
+
+   .. code-block:: bash
 
    def create_snapshot(self, name: str, level: str) -> Snapshot:
        """
@@ -102,30 +118,41 @@ Example docstring::
            >>> snapshot = client.snapshots.create('backup', 'cluster')
            >>> print(snapshot.name)
            backup
+
        """
        # Implementation here
 
 Pull Request Process
 --------------------
 
-1. Ensure all tests pass::
+1. Ensure all tests pass
+
+   .. code-block:: bash
 
    make test
 
-2. Run code quality checks::
+2. Run code quality checks
+
+   .. code-block:: bash
 
    make pre-commit-full
 
-3. Update documentation if needed::
+3. Update documentation if needed
+
+   .. code-block:: bash
 
    make docs
 
-4. Commit your changes::
+4. Commit your changes
+
+   .. code-block:: bash
 
    git add .
    git commit -m "Add feature: brief description"
 
-5. Push to your fork::
+5. Push to your fork
+
+   .. code-block:: bash
 
    git push origin feature/your-feature-name
 
@@ -168,14 +195,18 @@ Releases are managed by maintainers:
 1. Update version in ``pyproject.toml``
 2. Update ``CHANGELOG.md``
 3. Create release tag
-4. Build and publish to PyPI::
+4. Build and publish to PyPI
+
+   .. code-block:: bash
 
    make publish
 
 Development Tools
 -----------------
 
-Useful commands for development::
+Useful commands for development
+
+   .. code-block:: bash
 
    make help              # Show all available commands
    make check-env         # Check Python environment
@@ -186,13 +217,17 @@ Useful commands for development::
 Environment Variables
 ~~~~~~~~~~~~~~~~~~~~~
 
-You can override default Python paths::
+You can override default Python paths
+
+   .. code-block:: bash
 
    export PYTHON=/path/to/python3
    export PIP=/path/to/pip
    make test
 
-Or pass them directly::
+Or pass them directly
+
+   .. code-block:: bash
 
    make test PYTHON=/path/to/python3
 

@@ -190,10 +190,12 @@ class FulltextGroup:
         These terms are optional - documents without them can still match,
         but documents containing them will get normal positive scoring boost.
 
-        Args:
+        Args::
+
             *terms: Terms to add with normal positive weight
 
-        Example:
+        Example::
+
             # Documents with 'python' get normal positive boost
             group.encourage("python")  # Generates: python
         """
@@ -280,50 +282,28 @@ class FulltextQueryBuilder:
 
     This class provides a chainable API for building complex fulltext search queries
     that are compatible with MatrixOne's MATCH() AGAINST() syntax.
-    Core Methods (Group-level operators):
+
+    Core Methods:
         - must(): Required terms/groups (+ operator)
         - must_not(): Excluded terms/groups (- operator)
         - encourage(): Optional terms/groups with normal weight (no prefix)
         - discourage(): Optional terms/groups with reduced weight (~ operator)
 
-    Parameter Types:
-        - str: Single term (e.g., "python")
-        - FulltextGroup: Group of terms (e.g., group().medium("java", "kotlin"))
+    Examples::
 
-    Examples:
+        # Basic usage
+        query.must("python")                    # +python
+        query.encourage("tutorial")             # tutorial
+        query.discourage("legacy")              # ~legacy
+        query.must_not("deprecated")            # -deprecated
 
-    .. code-block:: python
+        # Group usage
+        query.must(group().medium("java", "kotlin"))           # +(java kotlin)
+        query.encourage(group().medium("tutorial", "guide"))   # (tutorial guide)
+        query.must_not(group().medium("spam", "junk"))         # -(spam junk)
 
-        Basic usage:
-            query.must("python")                    # +python
-            query.encourage("tutorial")             # tutorial
-            query.discourage("legacy")              # ~legacy
-            query.must_not("deprecated")            # -deprecated
-
-        Group usage:
-            query.must(group().medium("java", "kotlin"))           # +(java kotlin)
-            query.encourage(group().medium("tutorial", "guide"))   # (tutorial guide)
-            query.discourage(group().medium("old", "outdated"))    # ~(old outdated)
-            query.must_not(group().medium("spam", "junk"))         # -(spam junk)
-
-        Complex combinations:
-            query.must("python")\\
-                 .encourage("tutorial")\\
-                 .discourage("legacy")\\
-                 .must_not(group().medium("spam", "junk"))
-            # Result: +python tutorial ~legacy -(spam junk)
-
-    MatrixOne Syntax Mapping:
-        - Group-level: +, -, ~, (no prefix) - applied to entire groups
-        - Element-level: >, < - applied within groups using high(), low()
-
-    Weight Operator Comparison:
-        - encourage("term"): Optional with normal positive weight boost
-        - discourage("term"): Optional with reduced/negative weight boost
-
-    Both are optional (don't filter documents) but affect ranking differently:
-        - encourage() encourages documents containing the term (higher ranking)
-        - discourage() discourages documents containing the term (lower ranking)
+    Note: Group-level operators (+, -, ~) applied to entire groups. Element-level operators (>, <)
+    applied within groups using high(), low()
     """
 
     def __init__(self):
@@ -335,10 +315,12 @@ class FulltextQueryBuilder:
         Documents MUST contain these terms/groups to match. This is equivalent
         to the '+' operator in MatrixOne's boolean mode syntax.
 
-        Args:
+        Args::
+
             *items: Can be strings (terms) or FulltextGroup objects
 
-        Examples:
+        Examples::
+
             # Required term - documents must contain 'python'
             query.must("python")  # Generates: +python
 
@@ -348,7 +330,8 @@ class FulltextQueryBuilder:
             # Multiple required terms
             query.must("python", "programming")  # Generates: +python +programming
 
-        Returns:
+        Returns::
+
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
@@ -365,10 +348,12 @@ class FulltextQueryBuilder:
         Documents MUST NOT contain these terms/groups to match. This is equivalent
         to the '-' operator in MatrixOne's boolean mode syntax.
 
-        Args:
+        Args::
+
             *items: Can be strings (terms) or FulltextGroup objects
 
-        Examples:
+        Examples::
+
             # Excluded term - documents must not contain 'deprecated'
             query.must_not("deprecated")  # Generates: -deprecated
 
@@ -378,7 +363,8 @@ class FulltextQueryBuilder:
             # Multiple excluded terms
             query.must_not("spam", "junk")  # Generates: -spam -junk
 
-        Returns:
+        Returns::
+
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
@@ -395,10 +381,12 @@ class FulltextQueryBuilder:
         Documents can match without these terms, but containing them will
         INCREASE the relevance score. This provides normal positive weight boost.
 
-        Args:
+        Args::
+
             *items: Can be strings (terms) or FulltextGroup objects
 
-        Examples:
+        Examples::
+
             # Encourage documents with 'tutorial'
             query.encourage("tutorial")  # Generates: tutorial
 
@@ -412,7 +400,8 @@ class FulltextQueryBuilder:
             - encourage("term"): Normal positive boost (encourages term)
             - discourage("term"): Reduced/negative boost (discourages term)
 
-        Returns:
+        Returns::
+
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
@@ -430,10 +419,12 @@ class FulltextQueryBuilder:
         DECREASE the relevance score. This provides reduced or negative weight boost,
         effectively discouraging documents that contain these terms.
 
-        Args:
+        Args::
+
             *items: Can be strings (terms) or FulltextGroup objects
 
-        Examples:
+        Examples::
+
             # Discourage documents with 'legacy'
             query.discourage("legacy")  # Generates: ~legacy
 
@@ -454,7 +445,8 @@ class FulltextQueryBuilder:
             # Find tutorials, but avoid outdated content
             query.must("tutorial").discourage(group().medium("old", "deprecated"))
 
-        Returns:
+        Returns::
+
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
@@ -513,7 +505,8 @@ class FulltextQueryBuilder:
         This method generates a full SQL query similar to FulltextSearchBuilder but using
         the query built by FulltextQueryBuilder.
 
-        Args:
+        Args::
+
             table: Table name to search in
             columns: List of columns to search in (must match FULLTEXT index)
             mode: Search mode (BOOLEAN, NATURAL_LANGUAGE, etc.)
@@ -524,12 +517,13 @@ class FulltextQueryBuilder:
             limit: LIMIT value
             offset: OFFSET value
 
-        Returns:
+        Returns::
+
             str: Complete SQL query
 
-        Examples:
+        Examples::
 
-        .. code-block:: python
+            .. code-block:: python
 
             # Basic query with score
             query = FulltextQueryBuilder().must("python").encourage("tutorial")
@@ -608,15 +602,18 @@ class FulltextQueryBuilder:
 
         This is equivalent to calling as_sql() with include_score=True.
 
-        Args:
+        Args::
+
             table: Table name to search in
             columns: List of columns to search in
             mode: Search mode
 
-        Returns:
+        Returns::
+
             str: Complete SQL query with AS score
 
-        Example:
+        Example::
+
             query = FulltextQueryBuilder().must("python").encourage("tutorial")
             sql = query.as_score_sql("articles", ["title", "content"])
             # Generates SQL with AS score automatically included
@@ -665,7 +662,7 @@ class FulltextFilter(ClauseElement):
             .discourage(group().medium("legacy", "deprecated"))
         ).all()
 
-    Weight Operator Examples:
+    Weight Operator Examples
 
     .. code-block:: python
 
@@ -804,15 +801,17 @@ class FulltextFilter(ClauseElement):
 
         This allows using fulltext expressions as selectable columns with aliases:
 
-        Args:
+        Args::
+
             name: The alias name for the column
 
-        Returns:
+        Returns::
+
             A SQLAlchemy labeled expression
 
-        Examples:
+        Examples::
 
-        .. code-block:: python
+            .. code-block:: python
 
             # Use as a SELECT column with score
             query(Article, Article.id,
@@ -902,71 +901,33 @@ def boolean_match(*columns) -> FulltextFilter:
     This is the main entry point for creating fulltext search queries that integrate
     seamlessly with MatrixOne ORM's filter() method.
 
-    Args:
+    Args::
+
         *columns: Column names or SQLAlchemy Column objects to search against
 
-    Returns:
-        FulltextFilter: A chainable filter object with methods:
-            - must(): Required terms/groups (+ operator)
-            - must_not(): Excluded terms/groups (- operator)
-            - encourage(): Optional terms/groups with normal weight (no prefix)
-            - discourage(): Optional terms/groups with reduced weight (~ operator)
+    Returns::
 
-    Quick Start Examples:
+        FulltextFilter: A chainable filter object
 
-    .. code-block:: python
+    Examples::
 
         # Basic search - must contain 'python'
         boolean_match("title", "content").must("python")
 
-        # Multiple conditions - must have 'python', prefer 'tutorial', avoid 'legacy'
+        # Multiple conditions
         boolean_match("title", "content")
             .must("python")
             .encourage("tutorial")
             .discourage("legacy")
 
-        # Group search - must contain either 'python' or 'java'
+        # Group search - either 'python' or 'java'
         boolean_match("title", "content").must(group().medium("python", "java"))
 
-        # Complex combination
-        boolean_match("title", "content", "tags")
-            .must("programming")
-            .must(group().medium("python", "java"))
-            .encourage("tutorial")
-            .discourage(group().medium("legacy", "deprecated"))
-
-    Weight Operators Explained:
-
-    - encourage("term"): Encourages documents with 'term' (higher ranking)
-    - discourage("term"): Discourages documents with 'term' (lower ranking)
-    - Both are optional - documents without these terms can still match
-
-    Important MatrixOne Requirements:
-
-    **Column Matching**: The columns specified in MATCH() must exactly
-    match the columns defined in the FULLTEXT index. For example, if your index
-    is ``FULLTEXT(title, content, tags)``, you must use:
-
-    - ✅ ``boolean_match("title", "content", "tags")`` - Correct (exact match)
-    - ❌ ``boolean_match("title", "content")`` - Error (partial match)
-    - ❌ ``boolean_match("title")`` - Error (single field from multi-field index)
-
-    Examples:
-
-    .. code-block:: python
-
-        # Basic boolean search (assuming index: FULLTEXT(title, content, tags))
-        boolean_match("title", "content", "tags").must("python").must_not("java")
-
-        # Complex boolean search with groups
-        boolean_match("title", "content", "tags").must("red").must(
-            group().medium("blue", "green")
-        ).must_not(
-            group().medium("spam")
-        )
-
         # Using SQLAlchemy Column objects
-        boolean_match(Article.title, Article.content, Article.tags).must("python").must_not("java")
+        boolean_match(Article.title, Article.content).must("python")
+
+    Note: The columns specified must exactly match the FULLTEXT index columns. For example, if your
+    index is FULLTEXT(title, content, tags), you must use boolean_match("title", "content", "tags")
     """
     # Convert columns to strings
     column_names = []
@@ -987,7 +948,8 @@ def boolean_match(*columns) -> FulltextFilter:
 def natural_match(*columns, query: str) -> FulltextFilter:
     """Create a natural language mode fulltext filter for specified columns.
 
-    Args:
+    Args::
+
         *columns: Column names or SQLAlchemy Column objects to search against
         query: Natural language query string
 
@@ -999,7 +961,7 @@ def natural_match(*columns, query: str) -> FulltextFilter:
         - ❌ `natural_match("title", "content", query="...")` - Error (partial match)
         - ❌ `natural_match("title", query="...")` - Error (single field from multi-field index)
 
-    Examples:
+    Examples
         # Natural language search (assuming index: FULLTEXT(title, content, tags))
         natural_match("title", "content", "tags", query="machine learning AI")
 
@@ -1042,7 +1004,7 @@ def group() -> FulltextGroup:
     IMPORTANT: Inside groups, do NOT use must()/must_not() as they add +/- operators.
     Use medium() for plain terms or high()/low() for element-level weight control.
 
-    Examples:
+    Examples
         # Required group - must contain 'java' OR 'kotlin'
         query.must(group().medium("java", "kotlin"))  # +(java kotlin)
 
@@ -1103,70 +1065,45 @@ class FulltextSearchBuilder:
     with support for various search modes, filters, and sorting.
 
     Boolean Mode Operators:
-        +word     : Required term (must contain)
-        -word     : Excluded term (must not contain)
-        ~word     : Lower weight term (reduces relevance score)
-        <word     : Lower weight term (reduces relevance score)
-        >word     : Higher weight term (increases relevance score)
-        word      : Optional term (may contain)
-        "phrase"  : Exact phrase match
-        word*     : Wildcard prefix match
-        (word1 word2) : Grouping (contains any of the words)
+        - ``+word`` : Required term (must contain)
+        - ``-word`` : Excluded term (must not contain)
+        - ``~word`` : Lower weight term (reduces relevance score)
+        - ``<word`` : Lower weight term (reduces relevance score)
+        - ``>word`` : Higher weight term (increases relevance score)
+        - word : Optional term (may contain)
+        - ``"phrase"`` : Exact phrase match
+        - ``word*`` : Wildcard prefix match
+        - (word1 word2) : Grouping (contains any of the words)
 
-    Note: MatrixOne supports +, -, ~, *, "", (), <, > operators.
-          All boolean mode operators are fully supported.
+    Note: MatrixOne supports all boolean mode operators.
 
     Search Modes:
         - NATURAL_LANGUAGE: Automatic stopword removal, stemming, relevance scoring
         - BOOLEAN: Full control with operators, no automatic processing
-        - QUERY_EXPANSION: Not supported in MatrixOne (auto-expands query with related terms)
+        - QUERY_EXPANSION: Not supported in MatrixOne
 
-    Examples:
-
-    .. code-block:: python
+    Examples::
 
         # Natural language search
-        results = client.fulltext_search() \\
-            .table("articles") \\
-            .columns(["title", "content"]) \\
-            .with_mode(FulltextSearchMode.NATURAL_LANGUAGE) \\
-            .query("machine learning") \\
-            .with_score() \\
-            .limit(10) \\
+        results = client.fulltext_search()
+            .table("articles")
+            .columns(["title", "content"])
+            .with_mode(FulltextSearchMode.NATURAL_LANGUAGE)
+            .query("machine learning")
+            .with_score()
+            .limit(10)
             .execute()
 
         # Boolean search with complex terms
-        results = client.fulltext_search() \\
-            .table("articles") \\
-            .columns(["title", "content"]) \\
-            .with_mode(FulltextSearchMode.BOOLEAN) \\
-            .add_term("machine", required=True) \\
-            .add_term("learning", required=True) \\
-            .add_term("python", excluded=True) \\
-            .add_phrase("deep learning") \\
-            .add_wildcard("neural*") \\
-            .where("category = 'AI'") \\
-            .order_by("score", "DESC") \\
-            .limit(20) \\
-            .execute()
-
-        # Complex boolean query equivalent to: +red -(<blue >is)
-        results = client.fulltext_search() \\
-            .table("src") \\
-            .columns(["body", "title"]) \\
-            .with_mode(FulltextSearchMode.BOOLEAN) \\
-            .add_term("red", required=True) \\
-            .add_term("blue", excluded=True) \\
-            .add_term("is", excluded=True) \\
-            .execute()
-
-        # Weight operators example: +machine <java >python
-        results = client.fulltext_search() \\
-            .table("articles") \\
-            .columns(["title", "content"]) \\
-            .with_mode(FulltextSearchMode.BOOLEAN) \\
-            .query("+machine <java >python") \\
-            .with_score() \\
+        results = client.fulltext_search()
+            .table("articles")
+            .columns(["title", "content"])
+            .with_mode(FulltextSearchMode.BOOLEAN)
+            .add_term("machine", required=True)
+            .add_term("learning", required=True)
+            .where("category = 'AI'")
+            .order_by("score", "DESC")
+            .limit(20)
             .execute()
     """
 
@@ -1188,10 +1125,12 @@ class FulltextSearchBuilder:
         """
         Set the target table for the search.
 
-        Args:
+        Args::
+
             table_name: Name of the table to search
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._table_name = table_name
@@ -1201,10 +1140,12 @@ class FulltextSearchBuilder:
         """
         Set the columns to search in.
 
-        Args:
+        Args::
+
             columns: List of column names to search
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._columns = columns
@@ -1214,16 +1155,19 @@ class FulltextSearchBuilder:
         """
         Set the search mode.
 
-        Args:
+        Args::
+
             mode: Search mode
                 - FulltextSearchMode.NATURAL_LANGUAGE: Automatic processing, user-friendly
                 - FulltextSearchMode.BOOLEAN: Full control with operators
                 - FulltextSearchMode.QUERY_EXPANSION: Not supported in MatrixOne
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
 
-        Examples:
+        Examples::
+
             # Natural language mode (default)
             .with_mode(FulltextSearchMode.NATURAL_LANGUAGE)
 
@@ -1237,15 +1181,18 @@ class FulltextSearchBuilder:
         """
         Set the search algorithm.
 
-        Args:
+        Args::
+
             algorithm: Search algorithm
                 - FulltextSearchAlgorithm.TF_IDF: Traditional TF-IDF scoring
                 - FulltextSearchAlgorithm.BM25: Modern BM25 scoring (recommended)
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
 
-        Examples:
+        Examples::
+
             # Use BM25 algorithm (recommended)
             .with_algorithm(FulltextSearchAlgorithm.BM25)
 
@@ -1259,13 +1206,16 @@ class FulltextSearchBuilder:
         """
         Set a simple query string (resets previous terms).
 
-        Args:
+        Args::
+
             query_string: The search query (natural language or boolean syntax)
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
 
-        Examples:
+        Examples::
+
             # Natural language query
             .query("machine learning algorithms")
 
@@ -1288,16 +1238,19 @@ class FulltextSearchBuilder:
         """
         Add a search term to the query.
 
-        Args:
+        Args::
+
             term: The search term
             required: Whether the term is required (+) - must contain this term
             excluded: Whether the term is excluded (-) - must not contain this term
             proximity: Proximity modifier for boolean mode (not supported in MatrixOne)
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
 
-        Examples:
+        Examples::
+
             # Required term: +machine
             .add_term("machine", required=True)
 
@@ -1324,13 +1277,16 @@ class FulltextSearchBuilder:
         """
         Add an exact phrase to the query.
 
-        Args:
+        Args::
+
             phrase: The exact phrase to search for (wrapped in double quotes)
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
 
-        Examples:
+        Examples::
+
             # Exact phrase: "machine learning"
             .add_phrase("machine learning")
 
@@ -1345,13 +1301,16 @@ class FulltextSearchBuilder:
         """
         Add a wildcard pattern to the query.
 
-        Args:
+        Args::
+
             pattern: Wildcard pattern with * suffix (e.g., "test*", "neural*")
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
 
-        Examples:
+        Examples::
+
             # Prefix match: neural*
             .add_wildcard("neural*")
 
@@ -1366,10 +1325,12 @@ class FulltextSearchBuilder:
         """
         Include relevance score in results.
 
-        Args:
+        Args::
+
             include: Whether to include the score
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._include_score = include
@@ -1379,10 +1340,12 @@ class FulltextSearchBuilder:
         """
         Set the columns to select in the result.
 
-        Args:
+        Args::
+
             columns: List of column names to select
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._select_columns = columns
@@ -1392,10 +1355,12 @@ class FulltextSearchBuilder:
         """
         Add a WHERE condition.
 
-        Args:
+        Args::
+
             condition: WHERE condition
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._where_conditions.append(condition)
@@ -1405,11 +1370,13 @@ class FulltextSearchBuilder:
         """
         Set ORDER BY clause.
 
-        Args:
+        Args::
+
             column: Column to order by
             direction: Order direction (ASC/DESC)
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._order_by = f"{column} {direction}"
@@ -1419,10 +1386,12 @@ class FulltextSearchBuilder:
         """
         Set LIMIT clause.
 
-        Args:
+        Args::
+
             count: Number of results to return
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._limit_value = count
@@ -1432,10 +1401,12 @@ class FulltextSearchBuilder:
         """
         Set OFFSET clause.
 
-        Args:
+        Args::
+
             count: Number of results to skip
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: Self for chaining
         """
         self._offset_value = count
@@ -1501,7 +1472,8 @@ class FulltextSearchBuilder:
         """
         Execute the fulltext search query.
 
-        Returns:
+        Returns::
+
             Query results
         """
         sql = self._build_sql()
@@ -1511,7 +1483,8 @@ class FulltextSearchBuilder:
         """
         Get the SQL query that would be executed.
 
-        Returns:
+        Returns::
+
             SQL query string
         """
         return self._build_sql()
@@ -1533,13 +1506,15 @@ class FulltextIndexManager:
         """
         Create a fulltext index.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             name: Name of the index
             columns: List of columns to index
             algorithm: Search algorithm to use
 
-        Returns:
+        Returns::
+
             bool: True if successful
         """
         from .fulltext_index import FulltextIndex
@@ -1562,11 +1537,13 @@ class FulltextIndexManager:
         """
         Drop a fulltext index.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             name: Name of the index
 
-        Returns:
+        Returns::
+
             bool: True if successful
         """
         from .fulltext_index import FulltextIndex
@@ -1579,7 +1556,8 @@ class FulltextIndexManager:
         """
         Create a new fulltext search builder.
 
-        Returns:
+        Returns::
+
             FulltextSearchBuilder: New search builder instance
         """
         return FulltextSearchBuilder(self.client)

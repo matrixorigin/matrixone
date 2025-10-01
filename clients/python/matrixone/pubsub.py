@@ -40,7 +40,8 @@ class Publication:
         """
         Initialize Publication object
 
-        Args:
+        Args::
+
             name: Publication name
             database: Database name
             tables: Tables (can be '*' for all tables or specific table names)
@@ -84,7 +85,8 @@ class Subscription:
         """
         Initialize Subscription object
 
-        Args:
+        Args::
+
             pub_name: Publication name
             pub_account: Publisher account name
             pub_database: Publisher database name
@@ -119,6 +121,7 @@ class PubSubManager:
     and real-time updates across multiple systems.
 
     Key Features:
+
     - Database publication creation and management
     - Subscription management for real-time updates
     - Event-driven data distribution
@@ -127,13 +130,15 @@ class PubSubManager:
     - Transaction-aware pub/sub operations
 
     Supported Operations:
+
     - Create and manage database publications
     - Create and manage table publications
     - Create and manage subscriptions
     - List and query publications and subscriptions
     - Monitor pub/sub status and performance
 
-    Usage Examples:
+    Usage Examples::
+
         # Initialize pub/sub manager
         pubsub = client.pubsub
 
@@ -182,21 +187,25 @@ class PubSubManager:
 
     def create_database_publication(self, name: str, database: str, account: str) -> Publication:
         """
-        Create database-level publication
+            Create database-level publication
 
-        Args:
-            name: Publication name
-            database: Database name to publish
-            account: Subscriber account name
+            Args::
 
-        Returns:
-            Publication: Created publication object
+                name: Publication name
+                database: Database name to publish
+                account: Subscriber account name
 
-        Raises:
-            PubSubError: If publication creation fails
+            Returns::
 
-        Example:
-            >>> pub = client.pubsub.create_database_publication("db_pub", "central_db", "acc1")
+                Publication: Created publication object
+
+            Raises::
+
+                PubSubError: If publication creation fails
+
+            Example
+
+        >>> pub = client.pubsub.create_database_publication("db_pub", "central_db", "acc1")
         """
         try:
             sql = (
@@ -217,22 +226,26 @@ class PubSubManager:
 
     def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """
-        Create table-level publication
+            Create table-level publication
 
-        Args:
-            name: Publication name
-            database: Database name
-            table: Table name to publish
-            account: Subscriber account name
+            Args::
 
-        Returns:
-            Publication: Created publication object
+                name: Publication name
+                database: Database name
+                table: Table name to publish
+                account: Subscriber account name
 
-        Raises:
-            PubSubError: If publication creation fails
+            Returns::
 
-        Example:
-            >>> pub = client.pubsub.create_table_publication("table_pub", "central_db", "products", "acc1")
+                Publication: Created publication object
+
+            Raises::
+
+                PubSubError: If publication creation fails
+
+            Example
+
+        >>> pub = client.pubsub.create_table_publication("table_pub", "central_db", "products", "acc1")
         """
         try:
             sql = (
@@ -255,13 +268,16 @@ class PubSubManager:
         """
         Get publication by name
 
-        Args:
+        Args::
+
             name: Publication name
 
-        Returns:
+        Returns::
+
             Publication: Publication object
 
-        Raises:
+        Raises::
+
             PubSubError: If publication not found
         """
         try:
@@ -286,11 +302,13 @@ class PubSubManager:
         """
         List publications with optional filters
 
-        Args:
+        Args::
+
             account: Filter by subscriber account
             database: Filter by database name
 
-        Returns:
+        Returns::
+
             List[Publication]: List of publication objects
         """
         try:
@@ -325,16 +343,19 @@ class PubSubManager:
         """
         Alter publication
 
-        Args:
+        Args::
+
             name: Publication name
             account: New subscriber account
             database: New database name
             table: New table name (for table-level publications)
 
-        Returns:
+        Returns::
+
             Publication: Updated publication object
 
-        Raises:
+        Raises::
+
             PubSubError: If publication alteration fails
         """
         try:
@@ -362,13 +383,16 @@ class PubSubManager:
         """
         Drop publication
 
-        Args:
+        Args::
+
             name: Publication name
 
-        Returns:
+        Returns::
+
             bool: True if deletion was successful
 
-        Raises:
+        Raises::
+
             PubSubError: If publication deletion fails
         """
         try:
@@ -383,13 +407,16 @@ class PubSubManager:
         """
         Show CREATE PUBLICATION statement for a publication
 
-        Args:
+        Args::
+
             name: Publication name
 
-        Returns:
+        Returns::
+
             str: CREATE PUBLICATION statement
 
-        Raises:
+        Raises::
+
             PubSubError: If publication not found or retrieval fails
         """
         try:
@@ -410,21 +437,25 @@ class PubSubManager:
 
     def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
         """
-        Create subscription from publication
+            Create subscription from publication
 
-        Args:
-            subscription_name: Name for the subscription database
-            publication_name: Name of the publication to subscribe to
-            publisher_account: Publisher account name
+            Args::
 
-        Returns:
-            Subscription: Created subscription object
+                subscription_name: Name for the subscription database
+                publication_name: Name of the publication to subscribe to
+                publisher_account: Publisher account name
 
-        Raises:
-            PubSubError: If subscription creation fails
+            Returns::
 
-        Example:
-            >>> sub = client.pubsub.create_subscription("sub_db", "pub_name", "sys")
+                Subscription: Created subscription object
+
+            Raises::
+
+                PubSubError: If subscription creation fails
+
+            Example
+
+        >>> sub = client.pubsub.create_subscription("sub_db", "pub_name", "sys")
         """
         try:
             sql = (
@@ -446,13 +477,16 @@ class PubSubManager:
         """
         Get subscription by name
 
-        Args:
+        Args::
+
             name: Subscription name
 
-        Returns:
+        Returns::
+
             Subscription: Subscription object
 
-        Raises:
+        Raises::
+
             PubSubError: If subscription not found
         """
         try:
@@ -479,11 +513,13 @@ class PubSubManager:
         """
         List subscriptions with optional filters
 
-        Args:
+        Args::
+
             pub_account: Filter by publisher account
             pub_database: Filter by publisher database
 
-        Returns:
+        Returns::
+
             List[Subscription]: List of subscription objects
         """
         try:

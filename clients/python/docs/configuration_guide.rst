@@ -35,7 +35,7 @@ Get default configuration:
     print_config()
 
 Environment Variables
---------------------
+---------------------
 
 You can override any configuration parameter using environment variables:
 
@@ -124,7 +124,7 @@ Connect using configuration:
     )
 
 Connection Hooks Configuration
------------------------------
+------------------------------
 
 Configure connection hooks for automatic feature enablement:
 

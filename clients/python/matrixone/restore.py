@@ -32,6 +32,7 @@ class RestoreManager:
     recovery scenarios.
 
     Key Features:
+
     - Restore entire clusters from snapshots
     - Restore specific databases from snapshots
     - Restore individual tables from snapshots
@@ -44,7 +45,8 @@ class RestoreManager:
     - DATABASE: Database-level restore from snapshot
     - TABLE: Table-level restore from snapshot
 
-    Usage Examples:
+    Usage Examples::
+
         # Initialize restore manager
         restore = client.restore
 
@@ -70,9 +72,8 @@ class RestoreManager:
         # Get restore status
         status = restore.get_restore_status('restore_job_id')
 
-    Note: Restore operations require appropriate snapshots to be available.
-    Restore operations may take significant time depending on the amount of
-    data being restored and the snapshot size.
+    Note: Restore operations require appropriate snapshots to be available. Restore operations may
+    take significant time depending on the amount of data being restored and the snapshot size.
     """
 
     def __init__(self, client):
@@ -81,21 +82,25 @@ class RestoreManager:
 
     def restore_cluster(self, snapshot_name: str) -> bool:
         """
-        Restore entire cluster from snapshot
+            Restore entire cluster from snapshot
 
-        Args:
-            snapshot_name: Name of the snapshot to restore from
+            Args::
 
-        Returns:
-            bool: True if restore was successful
+                snapshot_name: Name of the snapshot to restore from
 
-        Raises:
-            RestoreError: If restore operation fails
+            Returns::
 
-        Example:
-            >>> client = Client()
-            >>> client.connect(...)
-            >>> success = client.restore.restore_cluster("cluster_snapshot_1")
+                bool: True if restore was successful
+
+            Raises::
+
+                RestoreError: If restore operation fails
+
+            Example
+
+        >>> client = Client()
+                >>> client.connect(...)
+                >>> success = client.restore.restore_cluster("cluster_snapshot_1")
         """
         try:
             sql = f"RESTORE CLUSTER FROM SNAPSHOT {self._client._escape_identifier(snapshot_name)}"
@@ -106,25 +111,29 @@ class RestoreManager:
 
     def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
         """
-        Restore tenant from snapshot
+            Restore tenant from snapshot
 
-        Args:
-            snapshot_name: Name of the snapshot to restore from
-            account_name: Name of the account to restore
-            to_account: Optional target account name (for cross-tenant restore)
+            Args::
 
-        Returns:
-            bool: True if restore was successful
+                snapshot_name: Name of the snapshot to restore from
+                account_name: Name of the account to restore
+                to_account: Optional target account name (for cross-tenant restore)
 
-        Raises:
-            RestoreError: If restore operation fails
+            Returns::
 
-        Example:
-            >>> # Restore tenant to itself
-            >>> success = client.restore.restore_tenant("acc1_snap1", "acc1")
-            >>>
-            >>> # Restore tenant to new tenant
-            >>> success = client.restore.restore_tenant("acc1_snap1", "acc1", "acc2")
+                bool: True if restore was successful
+
+            Raises::
+
+                RestoreError: If restore operation fails
+
+            Example
+
+        >>> # Restore tenant to itself
+                >>> success = client.restore.restore_tenant("acc1_snap1", "acc1")
+                >>>
+                >>> # Restore tenant to new tenant
+                >>> success = client.restore.restore_tenant("acc1_snap1", "acc1", "acc2")
         """
         try:
             if to_account:
@@ -154,22 +163,26 @@ class RestoreManager:
         to_account: Optional[str] = None,
     ) -> bool:
         """
-        Restore database from snapshot
+            Restore database from snapshot
 
-        Args:
-            snapshot_name: Name of the snapshot to restore from
-            account_name: Name of the account
-            database_name: Name of the database to restore
-            to_account: Optional target account name (for cross-tenant restore)
+            Args::
 
-        Returns:
-            bool: True if restore was successful
+                snapshot_name: Name of the snapshot to restore from
+                account_name: Name of the account
+                database_name: Name of the database to restore
+                to_account: Optional target account name (for cross-tenant restore)
 
-        Raises:
-            RestoreError: If restore operation fails
+            Returns::
 
-        Example:
-            >>> success = client.restore.restore_database("acc1_db_snap1", "acc1", "db1")
+                bool: True if restore was successful
+
+            Raises::
+
+                RestoreError: If restore operation fails
+
+            Example
+
+        >>> success = client.restore.restore_database("acc1_db_snap1", "acc1", "db1")
         """
         try:
             if to_account:
@@ -202,23 +215,27 @@ class RestoreManager:
         to_account: Optional[str] = None,
     ) -> bool:
         """
-        Restore table from snapshot
+            Restore table from snapshot
 
-        Args:
-            snapshot_name: Name of the snapshot to restore from
-            account_name: Name of the account
-            database_name: Name of the database
-            table_name: Name of the table to restore
-            to_account: Optional target account name (for cross-tenant restore)
+            Args::
 
-        Returns:
-            bool: True if restore was successful
+                snapshot_name: Name of the snapshot to restore from
+                account_name: Name of the account
+                database_name: Name of the database
+                table_name: Name of the table to restore
+                to_account: Optional target account name (for cross-tenant restore)
 
-        Raises:
-            RestoreError: If restore operation fails
+            Returns::
 
-        Example:
-            >>> success = client.restore.restore_table("acc1_tab_snap1", "acc1", "db1", "t1")
+                bool: True if restore was successful
+
+            Raises::
+
+                RestoreError: If restore operation fails
+
+            Example
+
+        >>> success = client.restore.restore_table("acc1_tab_snap1", "acc1", "db1", "t1")
         """
         try:
             if to_account:
@@ -257,7 +274,8 @@ class RestoreManager:
         """
         Restore with custom executor (for transaction support)
 
-        Args:
+        Args::
+
             restore_type: Type of restore ('cluster', 'tenant', 'database', 'table')
             snapshot_name: Name of the snapshot to restore from
             account_name: Name of the account (required for tenant/database/table)
@@ -266,7 +284,8 @@ class RestoreManager:
             to_account: Optional target account name
             executor: Custom executor (transaction wrapper)
 
-        Returns:
+        Returns::
+
             bool: True if restore was successful
         """
         try:

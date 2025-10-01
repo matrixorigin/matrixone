@@ -45,7 +45,7 @@ class IVFVectorIndex(Index):
 
     Specialized class for IVFFLAT vector indexes with type safety and clear API.
 
-    Usage Examples:
+    Usage Examples
 
     1. Class Methods (Recommended for one-time operations):
 
@@ -139,6 +139,7 @@ class IVFVectorIndex(Index):
         **kwargs: Additional index parameters
 
     Note:
+
         - MatrixOne supports only ONE index per vector column
         - Enable IVF indexing before creating IVFFLAT indexes: SET experimental_ivf_index = 1
         - Set probe limit for search: SET probe_limit = 1
@@ -155,7 +156,8 @@ class IVFVectorIndex(Index):
         """
         Initialize IVFVectorIndex.
 
-        Args:
+        Args::
+
             name: Index name
             column: Vector column to index
             lists: Number of lists for IVFFLAT (default: 100)
@@ -207,7 +209,8 @@ class IVFVectorIndex(Index):
         """
         Create an IVFFLAT vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
             name: Name of the index
@@ -216,7 +219,8 @@ class IVFVectorIndex(Index):
             op_type: Vector operation type (default: vector_l2_ops)
             **kwargs: Additional index parameters
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -247,7 +251,8 @@ class IVFVectorIndex(Index):
         """
         Create an IVFFLAT vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
             name: Name of the index
@@ -256,7 +261,8 @@ class IVFVectorIndex(Index):
             op_type: Vector operation type (default: vector_l2_ops)
             **kwargs: Additional index parameters
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -277,12 +283,14 @@ class IVFVectorIndex(Index):
         """
         Drop an IVFFLAT vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -299,12 +307,14 @@ class IVFVectorIndex(Index):
         """
         Drop an IVFFLAT vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -319,11 +329,13 @@ class IVFVectorIndex(Index):
         """
         Create this IVFFLAT vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -343,11 +355,13 @@ class IVFVectorIndex(Index):
         """
         Drop this IVFFLAT vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -363,11 +377,13 @@ class IVFVectorIndex(Index):
         """
         Create this IVFFLAT vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -386,11 +402,13 @@ class IVFVectorIndex(Index):
         """
         Drop this IVFFLAT vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -408,7 +426,7 @@ class HnswVectorIndex(Index):
 
     Specialized class for HNSW vector indexes with type safety and clear API.
 
-    Usage Examples:
+    Usage Examples
 
     1. Class Methods (Recommended for one-time operations):
 
@@ -508,6 +526,7 @@ class HnswVectorIndex(Index):
         **kwargs: Additional index parameters
 
     Note:
+
         - MatrixOne supports only ONE index per vector column
         - Enable HNSW indexing before creating HNSW indexes: SET experimental_hnsw_index = 1
         - HNSW indexes require BigInteger primary key in the table
@@ -529,7 +548,8 @@ class HnswVectorIndex(Index):
         """
         Initialize HnswVectorIndex.
 
-        Args:
+        Args::
+
             name: Index name
             column: Vector column to index
             m: Number of bi-directional links for HNSW (default: 16)
@@ -589,7 +609,8 @@ class HnswVectorIndex(Index):
         """
         Create an HNSW vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
             name: Name of the index
@@ -600,7 +621,8 @@ class HnswVectorIndex(Index):
             op_type: Vector operation type (default: vector_l2_ops)
             **kwargs: Additional index parameters
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -632,7 +654,8 @@ class HnswVectorIndex(Index):
         """
         Create an HNSW vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
             name: Name of the index
@@ -643,7 +666,8 @@ class HnswVectorIndex(Index):
             op_type: Vector operation type (default: vector_l2_ops)
             **kwargs: Additional index parameters
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -663,12 +687,14 @@ class HnswVectorIndex(Index):
         """
         Drop an HNSW vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -685,12 +711,14 @@ class HnswVectorIndex(Index):
         """
         Drop an HNSW vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -705,11 +733,13 @@ class HnswVectorIndex(Index):
         """
         Create this HNSW vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -728,11 +758,13 @@ class HnswVectorIndex(Index):
         """
         Drop this HNSW vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -748,11 +780,13 @@ class HnswVectorIndex(Index):
         """
         Create this HNSW vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -770,11 +804,13 @@ class HnswVectorIndex(Index):
         """
         Drop this HNSW vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection object
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -795,6 +831,7 @@ class VectorIndex(Index):
     (Hierarchical Navigable Small World) indexing algorithms.
 
     Key Features:
+
     - Support for multiple vector indexing algorithms (IVF, HNSW)
     - Configurable operation types (L2 distance, cosine similarity, inner product)
     - Automatic SQL generation for index creation and management
@@ -810,7 +847,8 @@ class VectorIndex(Index):
     - VECTOR_COSINE_OPS: Cosine similarity
     - VECTOR_INNER_PRODUCT_OPS: Inner product similarity
 
-    Usage Examples:
+    Usage Examples::
+
         # Create IVF index
         index = VectorIndex(
             name='vec_idx_ivf',
@@ -850,7 +888,8 @@ class VectorIndex(Index):
         """
         Initialize VectorIndex.
 
-        Args:
+        Args::
+
             name: Index name
             column: Vector column to index
             index_type: Type of vector index (ivfflat, hnsw, etc.)
@@ -932,7 +971,8 @@ class VectorIndex(Index):
         """
         Create a vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
             name: Name of the index
@@ -945,7 +985,8 @@ class VectorIndex(Index):
             ef_search: Size of dynamic candidate list for HNSW search (optional)
             **kwargs: Additional index parameters
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -971,12 +1012,14 @@ class VectorIndex(Index):
         """
         Drop a vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -992,11 +1035,13 @@ class VectorIndex(Index):
         """
         Create this vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         return self.__class__.create_index(
@@ -1016,11 +1061,13 @@ class VectorIndex(Index):
         """
         Drop this vector index using ORM-style method.
 
-        Args:
+        Args::
+
             engine: SQLAlchemy engine
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         return self.__class__.drop_index(engine, table_name, self.name)
@@ -1044,7 +1091,8 @@ class VectorIndex(Index):
         """
         Create a vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection (within a transaction)
             table_name: Name of the table
             name: Name of the index
@@ -1057,7 +1105,8 @@ class VectorIndex(Index):
             ef_search: Size of dynamic candidate list for HNSW search (optional)
             **kwargs: Additional index parameters
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -1079,12 +1128,14 @@ class VectorIndex(Index):
         """
         Drop a vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection (within a transaction)
             table_name: Name of the table
             name: Name of the index to drop
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         try:
@@ -1099,11 +1150,13 @@ class VectorIndex(Index):
         """
         Create this vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection (within a transaction)
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         return self.__class__.create_index_in_transaction(
@@ -1123,11 +1176,13 @@ class VectorIndex(Index):
         """
         Drop this vector index within an existing transaction.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy connection (within a transaction)
             table_name: Name of the table
 
-        Returns:
+        Returns::
+
             bool: True if successful, False otherwise
         """
         return self.__class__.drop_index_in_transaction(connection, table_name, self.name)
@@ -1265,7 +1320,8 @@ def create_vector_index(
     """
     Create a vector index.
 
-    Args:
+    Args::
+
         name: Index name
         column: Vector column to index
         index_type: Type of vector index (ivfflat, hnsw, etc.)
@@ -1276,28 +1332,29 @@ def create_vector_index(
         ef_search: Size of dynamic candidate list for HNSW search (optional)
         **kwargs: Additional index parameters
 
-    Returns:
+    Returns::
+
         VectorIndex instance
 
-    Example:
+    Example
         # Create IVFFLAT index with 256 lists
         idx = create_vector_index(
-            "idx_vector_l2",
-            "embedding",
-            index_type="ivfflat",
-            lists=256,
-            op_type="vector_l2_ops"
+        "idx_vector_l2",
+        "embedding",
+        index_type="ivfflat",
+        lists=256,
+        op_type="vector_l2_ops"
         )
 
         # Create HNSW index with custom parameters
         idx = create_vector_index(
-            "idx_vector_hnsw",
-            "embedding",
-            index_type="hnsw",
-            m=48,
-            ef_construction=64,
-            ef_search=64,
-            op_type="vector_l2_ops"
+        "idx_vector_hnsw",
+        "embedding",
+        index_type="hnsw",
+        m=48,
+        ef_construction=64,
+        ef_search=64,
+        op_type="vector_l2_ops"
         )
     """
     return VectorIndex(
@@ -1323,26 +1380,28 @@ def create_ivfflat_index(
     """
     Create an IVFFLAT vector index.
 
-    Args:
+    Args::
+
         name: Index name
         column: Vector column to index
         lists: Number of lists (default: 256)
         op_type: Vector operation type (default: vector_l2_ops)
         **kwargs: Additional index parameters
 
-    Returns:
+    Returns::
+
         VectorIndex instance
 
-    Example:
+    Example
         # Create IVFFLAT index with 256 lists for L2 distance
         idx = create_ivfflat_index("idx_embedding_l2", "embedding", lists=256)
 
         # Create IVFFLAT index with 128 lists for cosine similarity
         idx = create_ivfflat_index(
-            "idx_embedding_cosine",
-            "embedding",
-            lists=128,
-            op_type="vector_cosine_ops"
+        "idx_embedding_cosine",
+        "embedding",
+        lists=128,
+        op_type="vector_cosine_ops"
         )
     """
     return create_vector_index(
@@ -1367,7 +1426,8 @@ def create_hnsw_index(
     """
     Create an HNSW vector index.
 
-    Args:
+    Args::
+
         name: Index name
         column: Vector column to index
         m: Number of bi-directional links (default: 48)
@@ -1376,21 +1436,22 @@ def create_hnsw_index(
         op_type: Vector operation type (default: vector_l2_ops)
         **kwargs: Additional index parameters
 
-    Returns:
+    Returns::
+
         VectorIndex instance
 
-    Example:
+    Example
         # Create HNSW index with default parameters
         idx = create_hnsw_index("idx_embedding_hnsw", "embedding")
 
         # Create HNSW index with custom parameters
         idx = create_hnsw_index(
-            "idx_embedding_hnsw_custom",
-            "embedding",
-            m=32,
-            ef_construction=128,
-            ef_search=128,
-            op_type="vector_cosine_ops"
+        "idx_embedding_hnsw_custom",
+        "embedding",
+        m=32,
+        ef_construction=128,
+        ef_search=128,
+        op_type="vector_cosine_ops"
         )
     """
     return create_vector_index(
@@ -1414,7 +1475,8 @@ class VectorIndexBuilder:
         """
         Initialize VectorIndexBuilder.
 
-        Args:
+        Args::
+
             column: Vector column to index
         """
         self.column = column
@@ -1426,13 +1488,15 @@ class VectorIndexBuilder:
         """
         Add an IVFFLAT index.
 
-        Args:
+        Args::
+
             name: Index name
             lists: Number of lists
             op_type: Vector operation type
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         index = create_ivfflat_index(name, self.column, lists, op_type, **kwargs)
@@ -1443,12 +1507,14 @@ class VectorIndexBuilder:
         """
         Add an L2 distance index.
 
-        Args:
+        Args::
+
             name: Index name
             lists: Number of lists for IVFFLAT
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         return self.ivfflat(name, lists, VectorOpType.VECTOR_L2_OPS, **kwargs)
@@ -1457,12 +1523,14 @@ class VectorIndexBuilder:
         """
         Add a cosine similarity index.
 
-        Args:
+        Args::
+
             name: Index name
             lists: Number of lists for IVFFLAT
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         return self.ivfflat(name, lists, VectorOpType.VECTOR_COSINE_OPS, **kwargs)
@@ -1471,12 +1539,14 @@ class VectorIndexBuilder:
         """
         Add an inner product index.
 
-        Args:
+        Args::
+
             name: Index name
             lists: Number of lists for IVFFLAT
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         return self.ivfflat(name, lists, VectorOpType.VECTOR_IP_OPS, **kwargs)
@@ -1493,7 +1563,8 @@ class VectorIndexBuilder:
         """
         Add an HNSW index.
 
-        Args:
+        Args::
+
             name: Index name
             m: Number of bi-directional links
             ef_construction: Size of dynamic candidate list for construction
@@ -1501,7 +1572,8 @@ class VectorIndexBuilder:
             op_type: Vector operation type
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         index = create_hnsw_index(name, self.column, m, ef_construction, ef_search, op_type, **kwargs)
@@ -1519,14 +1591,16 @@ class VectorIndexBuilder:
         """
         Add an HNSW L2 distance index.
 
-        Args:
+        Args::
+
             name: Index name
             m: Number of bi-directional links
             ef_construction: Size of dynamic candidate list for construction
             ef_search: Size of dynamic candidate list for search
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         return self.hnsw(name, m, ef_construction, ef_search, VectorOpType.VECTOR_L2_OPS, **kwargs)
@@ -1542,14 +1616,16 @@ class VectorIndexBuilder:
         """
         Add an HNSW cosine similarity index.
 
-        Args:
+        Args::
+
             name: Index name
             m: Number of bi-directional links
             ef_construction: Size of dynamic candidate list for construction
             ef_search: Size of dynamic candidate list for search
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         return self.hnsw(name, m, ef_construction, ef_search, VectorOpType.VECTOR_COSINE_OPS, **kwargs)
@@ -1565,14 +1641,16 @@ class VectorIndexBuilder:
         """
         Add an HNSW inner product index.
 
-        Args:
+        Args::
+
             name: Index name
             m: Number of bi-directional links
             ef_construction: Size of dynamic candidate list for construction
             ef_search: Size of dynamic candidate list for search
             **kwargs: Additional parameters
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         return self.hnsw(name, m, ef_construction, ef_search, VectorOpType.VECTOR_IP_OPS, **kwargs)
@@ -1581,7 +1659,8 @@ class VectorIndexBuilder:
         """
         Build and return the list of vector indexes.
 
-        Returns:
+        Returns::
+
             List of VectorIndex instances
         """
         return self._indexes.copy()
@@ -1590,10 +1669,12 @@ class VectorIndexBuilder:
         """
         Add indexes to a table.
 
-        Args:
+        Args::
+
             table: SQLAlchemy Table instance
 
-        Returns:
+        Returns::
+
             Self for method chaining
         """
         for index in self._indexes:
@@ -1606,17 +1687,19 @@ def vector_index_builder(column: Union[str, Column]) -> VectorIndexBuilder:
     """
     Create a VectorIndexBuilder for a column.
 
-    Args:
+    Args::
+
         column: Vector column to index
 
-    Returns:
+    Returns::
+
         VectorIndexBuilder instance
 
-    Example:
+    Example
         # Create multiple indexes for a vector column
         indexes = vector_index_builder("embedding") \
-            .l2_index("idx_l2", lists=256) \
-            .cosine_index("idx_cosine", lists=128) \
-            .build()
+        .l2_index("idx_l2", lists=256) \
+        .cosine_index("idx_cosine", lists=128) \
+        .build()
     """
     return VectorIndexBuilder(column)

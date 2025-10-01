@@ -98,12 +98,14 @@ class BaseMetadataManager:
         Build metadata_scan SQL query.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
             indexname: Optional index name
 
         Returns:
+
             SQL query string
         """
         # Build the metadata_scan SQL query based on MatrixOne syntax
@@ -136,10 +138,12 @@ class BaseMetadataManager:
         Process scan result based on columns parameter.
 
         Args:
+
             result: SQLAlchemy Result object
             columns: Optional list of columns to return
 
         Returns:
+
             Processed result based on columns parameter
         """
         # If columns are specified, return structured results
@@ -169,9 +173,11 @@ class BaseMetadataManager:
         Format size in bytes to human-readable format.
 
         Args:
+
             size_bytes: Size in bytes
 
         Returns:
+
             Formatted size string (e.g., "1.5 MB", "500 KB")
         """
         if size_bytes == 0:
@@ -196,9 +202,11 @@ class BaseMetadataManager:
         Execute SQL query. Override in subclasses to use different executors.
 
         Args:
+
             sql: SQL query to execute
 
         Returns:
+
             SQLAlchemy Result object
         """
         return self.client.execute(sql)
@@ -208,9 +216,11 @@ class BaseMetadataManager:
         Execute SQL query asynchronously. Override in subclasses to use different executors.
 
         Args:
+
             sql: SQL query to execute
 
         Returns:
+
             SQLAlchemy Result object
         """
         return await self.client.execute(sql)
@@ -229,6 +239,7 @@ class BaseMetadataManager:
         Common logic for get_table_brief_stats. Used by both sync and async versions.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -238,6 +249,7 @@ class BaseMetadataManager:
             execute_func: Function to execute SQL (sync or async)
 
         Returns:
+
             Dictionary with brief statistics for table, tombstone, and indexes
         """
         result = {}
@@ -322,6 +334,7 @@ class BaseMetadataManager:
         Common async logic for get_table_brief_stats. Used by async versions.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -331,6 +344,7 @@ class BaseMetadataManager:
             execute_func: Async function to execute SQL
 
         Returns:
+
             Dictionary with brief statistics for table, tombstone, and indexes
         """
         result = {}
@@ -415,6 +429,7 @@ class BaseMetadataManager:
         Common async logic for get_table_detail_stats. Used by async versions.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -424,6 +439,7 @@ class BaseMetadataManager:
             execute_func: Async function to execute SQL
 
         Returns:
+
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
         result = {}
@@ -510,6 +526,7 @@ class BaseMetadataManager:
         Get brief statistics for a table, tombstone, and indexes.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -518,6 +535,7 @@ class BaseMetadataManager:
             include_indexes: List of index names to include
 
         Returns:
+
             Dictionary with brief statistics for table, tombstone, and indexes
         """
         return self._get_table_brief_stats_logic(
@@ -538,6 +556,7 @@ class BaseMetadataManager:
         Common logic for get_table_detail_stats. Used by both sync and async versions.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -547,6 +566,7 @@ class BaseMetadataManager:
             execute_func: Function to execute SQL (sync or async)
 
         Returns:
+
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
         result = {}
@@ -633,6 +653,7 @@ class BaseMetadataManager:
         Get detailed statistics for a table, tombstone, and indexes.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -641,6 +662,7 @@ class BaseMetadataManager:
             include_indexes: List of index names to include
 
         Returns:
+
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
         return self._get_table_detail_stats_logic(
@@ -661,6 +683,7 @@ class MetadataManager(BaseMetadataManager):
         Initialize metadata manager.
 
         Args:
+
             client: MatrixOne client instance (Client or AsyncClient)
         """
         self.client = client
@@ -678,6 +701,7 @@ class MetadataManager(BaseMetadataManager):
         Scan table metadata using metadata_scan function.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
@@ -687,10 +711,12 @@ class MetadataManager(BaseMetadataManager):
             distinct_object_name: Optional flag to return distinct object names only.
 
         Returns:
+
             If columns is None: SQLAlchemy Result object containing metadata scan results
             If columns is specified: List[MetadataRow] containing structured metadata
 
         Example:
+
             ```python
             # Scan all columns of a table (returns SQLAlchemy Result)
             result = client.metadata.scan("test_db", "users")
@@ -740,6 +766,7 @@ class TransactionMetadataManager(BaseMetadataManager):
         Initialize transaction metadata manager.
 
         Args:
+
             client: MatrixOne client instance
             transaction_wrapper: Transaction wrapper instance
         """
@@ -751,9 +778,11 @@ class TransactionMetadataManager(BaseMetadataManager):
         Execute SQL query using transaction wrapper.
 
         Args:
+
             sql: SQL query to execute
 
         Returns:
+
             SQLAlchemy Result object
         """
         return self.transaction_wrapper.execute(sql)
@@ -771,12 +800,14 @@ class TransactionMetadataManager(BaseMetadataManager):
         Scan table metadata using metadata_scan function within transaction.
 
         Args:
+
             dbname: Database name
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
             indexname: Optional index name
 
         Returns:
+
             SQLAlchemy Result object containing metadata scan results
         """
         # Build SQL query

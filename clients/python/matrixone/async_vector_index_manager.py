@@ -36,6 +36,7 @@ class AsyncVectorManager:
     indexing algorithms for efficient vector similarity search.
 
     Key Features:
+
     - Async vector table creation with configurable dimensions and precision
     - Async vector index creation and management (IVF, HNSW)
     - Async vector data insertion and batch operations
@@ -54,6 +55,7 @@ class AsyncVectorManager:
     - Inner product: Dot product of vectors
 
     Usage Examples:
+
         # Initialize async vector manager
         vector_ops = client.vector_ops
 
@@ -92,6 +94,7 @@ class AsyncVectorManager:
         Create an IVFFLAT vector index using chain operations.
 
         Args:
+
             table_name: Name of the table
             name: Name of the index
             column: Vector column to index
@@ -99,6 +102,7 @@ class AsyncVectorManager:
             op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
@@ -134,6 +138,7 @@ class AsyncVectorManager:
         Create an HNSW vector index using chain operations.
 
         Args:
+
             table_name: Name of the table
             name: Name of the index
             column: Vector column to index
@@ -143,6 +148,7 @@ class AsyncVectorManager:
             op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
@@ -168,10 +174,12 @@ class AsyncVectorManager:
         Drop a vector index using chain operations.
 
         Args:
+
             table_name: Name of the table
             name: Name of the index
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         try:
@@ -186,9 +194,11 @@ class AsyncVectorManager:
         Enable IVF indexing with probe limit.
 
         Args:
+
             probe_limit: Probe limit for IVF indexing
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         try:
@@ -203,6 +213,7 @@ class AsyncVectorManager:
         Disable IVF indexing.
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         try:
@@ -216,6 +227,7 @@ class AsyncVectorManager:
         Enable HNSW indexing.
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         try:
@@ -229,6 +241,7 @@ class AsyncVectorManager:
         Disable HNSW indexing.
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         try:
@@ -243,10 +256,12 @@ class AsyncVectorManager:
         Insert vector data using chain operations asynchronously.
 
         Args:
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         await self.client.insert(table_name, data)
@@ -257,14 +272,17 @@ class AsyncVectorManager:
         Insert vector data within an existing SQLAlchemy transaction asynchronously.
 
         Args:
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
             connection: SQLAlchemy connection object (required for transaction support)
 
         Returns:
+
             AsyncVectorManager: Self for chaining
 
         Raises:
+
             ValueError: If connection is not provided
         """
         if connection is None:
@@ -295,10 +313,12 @@ class AsyncVectorManager:
         Batch insert vector data using chain operations asynchronously.
 
         Args:
+
             table_name: Name of the table
             data_list: List of data dictionaries to insert
 
         Returns:
+
             AsyncVectorManager: Self for chaining
         """
         await self.client.batch_insert(table_name, data_list)
@@ -320,6 +340,7 @@ class AsyncVectorManager:
         Perform similarity search using chain operations.
 
         Args:
+
             table_name: Name of the table
             vector_column: Name of the vector column
             query_vector: Query vector as list
@@ -331,6 +352,7 @@ class AsyncVectorManager:
             connection: Optional existing database connection (for transaction support)
 
         Returns:
+
             List of search results
         """
         from .sql_builder import DistanceFunction, build_vector_similarity_query
@@ -381,6 +403,7 @@ class AsyncVectorManager:
         Perform range search using chain operations.
 
         Args:
+
             table_name: Name of the table
             vector_column: Name of the vector column
             query_vector: Query vector as list
@@ -390,6 +413,7 @@ class AsyncVectorManager:
             connection: Optional existing database connection (for transaction support)
 
         Returns:
+
             List of search results within range
         """
         # Convert vector to string format
@@ -438,10 +462,12 @@ class AsyncVectorManager:
         Get IVF index statistics for a table.
 
         Args:
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             column_name: Name of the vector column (optional, will be inferred if not provided)
 
         Returns:
+
             Dict containing IVF index statistics including:
             - index_tables: Dictionary mapping table types to table names
             - distribution: Dictionary containing bucket distribution data
@@ -450,9 +476,11 @@ class AsyncVectorManager:
             - column_name: Vector column name
 
         Raises:
+
             Exception: If IVF index is not found or if there are errors retrieving stats
 
         Examples:
+
             # Get stats for a table with vector column
             stats = await client.vector_ops.get_ivf_stats("my_table", "embedding")
             print(f"Index tables: {stats['index_tables']}")

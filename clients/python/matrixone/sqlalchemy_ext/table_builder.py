@@ -51,6 +51,7 @@ class VectorTableBuilder:
     work seamlessly with MatrixOne's vector capabilities and SQLAlchemy.
 
     Key Features:
+
     - Fluent method chaining for table definition
     - Support for all MatrixOne column types including vectors
     - Automatic vector index creation
@@ -62,7 +63,7 @@ class VectorTableBuilder:
     - Vector types: Vectorf32, Vectorf64 with configurable dimensions
     - MatrixOne-specific types: JSON, BLOB variants
 
-    Usage Examples:
+    Usage Examples
 
     .. code-block:: python
 
@@ -94,6 +95,7 @@ class VectorTableBuilder:
         Initialize the table builder.
 
         Args:
+
             table_name: Name of the table to create
             metadata: SQLAlchemy metadata object
         """
@@ -277,10 +279,12 @@ def create_vector_table(table_name: str, metadata: MetaData = None) -> VectorTab
     Create a new vector table builder.
 
     Args:
+
         table_name: Name of the table
         metadata: SQLAlchemy metadata object
 
     Returns:
+
         VectorTableBuilder instance
     """
     return VectorTableBuilder(table_name, metadata)

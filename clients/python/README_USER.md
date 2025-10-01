@@ -4,20 +4,28 @@
 [![Python Support](https://img.shields.io/pypi/pyversions/matrixone-python-sdk.svg)](https://pypi.org/project/matrixone-python-sdk/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, snapshot management, PITR, restore operations, table cloning, and mo-ctl integration.
+A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector similarity search, fulltext search, snapshot management, PITR, restore operations, table cloning, and more.
 
 ## ✨ Features
 
-- 🚀 **High Performance**: Optimized for MatrixOne database operations
-- 🔄 **Async Support**: Full async/await support with AsyncClient
-- 📸 **Snapshot Management**: Create and manage database snapshots
-- ⏰ **Point-in-Time Recovery**: PITR functionality for data recovery
+- 🚀 **High Performance**: Optimized for MatrixOne database operations with connection pooling
+- 🔄 **Async Support**: Full async/await support with AsyncClient for non-blocking operations
+- 🧠 **Vector Search**: Advanced vector similarity search with HNSW and IVF indexing
+  - Support for f32 and f64 precision vectors
+  - Multiple distance metrics (L2, Cosine, Inner Product)
+  - High-performance indexing for AI/ML applications
+- 🔍 **Fulltext Search**: Powerful fulltext indexing and search with BM25 and TF-IDF
+  - Natural language and boolean search modes
+  - Multi-column indexes with relevance scoring
+- 📊 **Metadata Analysis**: Table and column metadata analysis with statistics
+- 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
+- ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently
-- 👥 **Account Management**: User and role management
-- 📊 **Pub/Sub**: Publication and subscription support
-- 🔧 **Version Management**: Automatic backend version detection and compatibility checking
-- 🛡️ **Type Safety**: Full type hints support
-- 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy integration
+- 👥 **Account Management**: Comprehensive user and role management
+- 📊 **Pub/Sub**: Real-time publication and subscription support
+- 🔧 **Version Management**: Automatic backend version detection and compatibility
+- 🛡️ **Type Safety**: Full type hints support with comprehensive documentation
+- 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy ORM integration with enhanced features
 
 ## 🚀 Installation
 
@@ -204,6 +212,115 @@ client.account.grant_privilege(
 )
 ```
 
+### Vector Search Operations
+
+```python
+from matrixone.sqlalchemy_ext import create_vector_column
+from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy.ext.declarative import declarative_base
+import numpy as np
+
+# Define vector table
+Base = declarative_base()
+
+class Document(Base):
+    __tablename__ = 'documents'
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200))
+    content = Column(Text)
+    embedding = create_vector_column(384, 'f32')
+
+# Create table
+client.create_table(Document)
+
+# Create HNSW index for high-accuracy search
+client.vector_ops.enable_hnsw()
+client.vector_ops.create_hnsw(
+    table_name='documents',
+    name='idx_embedding',
+    column='embedding',
+    m=16,
+    ef_construction=200
+)
+
+# Insert vector data
+client.insert('documents', {
+    'id': 1,
+    'title': 'Machine Learning Guide',
+    'content': 'Comprehensive ML tutorial...',
+    'embedding': np.random.rand(384).tolist()
+})
+
+# Search similar documents
+query_vector = np.random.rand(384).tolist()
+results = client.vector_ops.similarity_search(
+    table_name='documents',
+    vector_column='embedding',
+    query_vector=query_vector,
+    limit=5,
+    distance_type='cosine'
+)
+
+for row in results:
+    print(f"Document: {row[1]}, Similarity: {row[-1]}")
+```
+
+### Fulltext Search Operations
+
+```python
+# Create fulltext index
+client.fulltext_index.create(
+    table_name='documents',
+    name='ftidx_content',
+    columns=['title', 'content'],
+    algorithm='BM25'
+)
+
+# Natural language search
+results = client.fulltext_index.fulltext_search(
+    table_name='documents',
+    columns=['title', 'content'],
+    search_term='machine learning tutorial',
+    mode='natural_language',
+    with_score=True,
+    limit=10
+)
+
+# Boolean search with operators
+results = client.fulltext_index.fulltext_search(
+    table_name='documents',
+    columns=['title', 'content'],
+    search_term='machine +learning -basics',
+    mode='boolean',
+    with_score=True,
+    limit=10
+)
+
+for row in results:
+    print(f"Title: {row[1]}, Score: {row[-1]}")
+```
+
+### Metadata Analysis
+
+```python
+# Analyze table metadata
+metadata = client.metadata.metadata_scan(
+    table_name='documents',
+    include_stats=True
+)
+
+for row in metadata:
+    print(f"Column: {row.column_name}")
+    print(f"  Type: {row.data_type}")
+    print(f"  Null count: {row.null_count}")
+    print(f"  Distinct values: {row.distinct_count}")
+
+# Get table statistics
+stats = client.metadata.get_table_brief(table_name='documents')
+print(f"Total rows: {stats.row_count}")
+print(f"Table size: {stats.size_bytes} bytes")
+```
+
 ### Pub/Sub Operations
 
 ```python
@@ -272,21 +389,53 @@ except SnapshotError as e:
     print(f"Snapshot operation failed: {e}")
 ```
 
-## Examples
+## 📖 Documentation
 
-The package includes comprehensive examples:
+For comprehensive documentation, visit:
+- **PyPI Package**: https://pypi.org/project/matrixone-python-sdk/
+- **GitHub Repository**: https://github.com/matrixorigin/matrixone/tree/main/clients/python
+- **MatrixOne Docs**: https://docs.matrixorigin.cn/
 
-- `example_01_basic_connection.py` - Basic database operations
-- `example_02_account_management.py` - User and role management
-- `example_03_async_operations.py` - Async operations
-- `example_04_transaction_management.py` - Transaction handling
-- `example_05_snapshot_restore.py` - Snapshot and restore
-- `example_06_sqlalchemy_integration.py` - SQLAlchemy integration
-- `example_07_advanced_features.py` - Advanced features
-- `example_08_pubsub_operations.py` - Pub/Sub operations
-- `example_09_logger_integration.py` - Logging integration
-- `example_10_version_management.py` - Version management
-- `example_11_matrixone_version_demo.py` - MatrixOne version demo
+### Online Examples
+
+The SDK includes 25+ comprehensive examples covering all features:
+
+**Getting Started:**
+- Basic connection and database operations
+- Async/await operations
+- Transaction management
+- SQLAlchemy ORM integration
+
+**Vector Search:**
+- Vector data types and distance functions
+- IVF and HNSW index creation and tuning
+- Similarity search operations
+- Advanced vector optimizations
+
+**Advanced Features:**
+- Fulltext search with BM25/TF-IDF
+- Table metadata analysis
+- Snapshot and restore operations
+- Account and permission management
+- Pub/Sub operations
+- Connection hooks and logging
+
+### Quick Examples
+
+Clone the repository to access all examples:
+```bash
+git clone https://github.com/matrixorigin/matrixone.git
+cd matrixone/clients/python/examples
+
+# Run basic example
+python example_01_basic_connection.py
+
+# Run vector search example
+python example_12_vector_basics.py
+
+# Run metadata analysis example
+python example_25_metadata_operations.py
+```
 
 
 ## Support

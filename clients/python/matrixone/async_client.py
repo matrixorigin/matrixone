@@ -989,12 +989,14 @@ class AsyncAccountManager:
         CREATE USER [IF NOT EXISTS] user auth_option [, user auth_option] ...
         [DEFAULT ROLE rolename] [COMMENT 'comment_string' | ATTRIBUTE 'json_object']
 
-        Args:
+        Args::
+
             user_name: Name of the user to create
             password: Password for the user
             comment: Comment for the user (not supported in MatrixOne)
 
-        Returns:
+        Returns::
+
             User: Created user object
         """
         try:
@@ -1031,7 +1033,8 @@ class AsyncAccountManager:
         Drop a user asynchronously according to MatrixOne DROP USER syntax:
         DROP USER [IF EXISTS] user [, user] ...
 
-        Args:
+        Args::
+
             user_name: Name of the user to drop
             if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
         """
@@ -1156,23 +1159,26 @@ class AsyncFulltextIndexManager:
         self, table_name_or_model, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
     ) -> "AsyncFulltextIndexManager":
         """
-        Create a fulltext index using chain operations.
+            Create a fulltext index using chain operations.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Index name
-            columns: Column(s) to index
-            algorithm: Fulltext algorithm type (TF-IDF or BM25)
+            Args::
 
-        Returns:
-            AsyncFulltextIndexManager: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                name: Index name
+                columns: Column(s) to index
+                algorithm: Fulltext algorithm type (TF-IDF or BM25)
 
-        Example:
-            # Create fulltext index by table name
-            await client.fulltext_index.create("articles", name="idx_content", columns=["title", "content"])
+            Returns::
 
-            # Create fulltext index by model class
-            await client.fulltext_index.create(ArticleModel, name="idx_content", columns=["title", "content"])
+                AsyncFulltextIndexManager: Self for chaining
+
+            Example
+
+        # Create fulltext index by table name
+                await client.fulltext_index.create("articles", name="idx_content", columns=["title", "content"])
+
+                # Create fulltext index by model class
+                await client.fulltext_index.create(ArticleModel, name="idx_content", columns=["title", "content"])
         """
         from sqlalchemy import text
 
@@ -1198,21 +1204,24 @@ class AsyncFulltextIndexManager:
 
     async def drop(self, table_name_or_model, name: str) -> "AsyncFulltextIndexManager":
         """
-        Drop a fulltext index using chain operations.
+            Drop a fulltext index using chain operations.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Index name
+            Args::
 
-        Returns:
-            AsyncFulltextIndexManager: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                name: Index name
 
-        Example:
-            # Drop fulltext index by table name
-            await client.fulltext_index.drop("articles", "idx_content")
+            Returns::
 
-            # Drop fulltext index by model class
-            await client.fulltext_index.drop(ArticleModel, "idx_content")
+                AsyncFulltextIndexManager: Self for chaining
+
+            Example
+
+        # Drop fulltext index by table name
+                await client.fulltext_index.drop("articles", "idx_content")
+
+                # Drop fulltext index by model class
+                await client.fulltext_index.drop(ArticleModel, "idx_content")
         """
         from sqlalchemy import text
 
@@ -1236,7 +1245,8 @@ class AsyncFulltextIndexManager:
         """
         Enable fulltext indexing with chain operations.
 
-        Returns:
+        Returns::
+
             AsyncFulltextIndexManager: Self for chaining
         """
         try:
@@ -1249,7 +1259,8 @@ class AsyncFulltextIndexManager:
         """
         Disable fulltext indexing with chain operations.
 
-        Returns:
+        Returns::
+
             AsyncFulltextIndexManager: Self for chaining
         """
         try:
@@ -1330,6 +1341,7 @@ class AsyncClient(BaseMatrixOneClient):
     transaction management.
 
     Key Features:
+
     - Asynchronous connection management with connection pooling
     - High-level table operations (create_table, drop_table, insert, batch_insert)
     - Query builder interface for complex async queries
@@ -1341,6 +1353,7 @@ class AsyncClient(BaseMatrixOneClient):
     - Non-blocking I/O operations
 
     Supported Operations:
+
     - Async connection and disconnection
     - Async query execution (SELECT, INSERT, UPDATE, DELETE)
     - Async batch operations
@@ -1349,7 +1362,8 @@ class AsyncClient(BaseMatrixOneClient):
     - Async vector and fulltext operations
     - Async snapshot and restore operations
 
-    Usage Examples:
+    Usage Examples::
+
         Basic async usage::
 
             async def main():
@@ -1407,8 +1421,8 @@ class AsyncClient(BaseMatrixOneClient):
                 await tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
                 # Transaction commits automatically on success
 
-    Note: This class requires asyncio and async database drivers. Use the synchronous
-    Client class for blocking operations or when async support is not needed.
+    Note: This class requires asyncio and async database drivers. Use the synchronous Client class
+    for blocking operations or when async support is not needed.
     """
 
     def __init__(
@@ -1425,7 +1439,8 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Initialize MatrixOne async client
 
-        Args:
+        Args::
+
             connection_timeout: Connection timeout in seconds
             query_timeout: Query timeout in seconds
             auto_commit: Enable auto-commit mode
@@ -1485,7 +1500,8 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Connect to MatrixOne database asynchronously
 
-        Args:
+        Args::
+
             host: Database host
             port: Database port
             user: Username or login info in format "user", "account#user", or "account#user#role"
@@ -1493,13 +1509,14 @@ class AsyncClient(BaseMatrixOneClient):
             database: Database name
             account: Optional account name (will be combined with user if user doesn't contain '#')
             role: Optional role name (will be combined with user if user doesn't contain '#')
-            on_connect: Connection hook to execute after successful connection.
+                       on_connect: Connection hook to execute after successful connection.
                        Can be:
                        - ConnectionHook instance
                        - List of ConnectionAction or string action names
                        - Custom callback function (async or sync)
 
-        Examples:
+        Examples::
+
             # Enable all features after connection
             await client.connect(host, port, user, password, database,
                                on_connect=[ConnectionAction.ENABLE_ALL])
@@ -1612,35 +1629,39 @@ class AsyncClient(BaseMatrixOneClient):
     @classmethod
     def from_engine(cls, engine: AsyncEngine, **kwargs) -> "AsyncClient":
         """
-        Create AsyncClient instance from existing SQLAlchemy AsyncEngine
+            Create AsyncClient instance from existing SQLAlchemy AsyncEngine
 
-        Args:
-            engine: SQLAlchemy AsyncEngine instance (must use MySQL driver)
-            **kwargs: Additional client configuration options
+            Args::
 
-        Returns:
-            AsyncClient: Configured async client instance
+                engine: SQLAlchemy AsyncEngine instance (must use MySQL driver)
+                **kwargs: Additional client configuration options
 
-        Raises:
-            ConnectionError: If engine doesn't use MySQL driver
+            Returns::
 
-        Examples:
-            Basic usage::
+                AsyncClient: Configured async client instance
 
-                from sqlalchemy.ext.asyncio import create_async_engine
-                from matrixone import AsyncClient
+            Raises::
 
-                engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
-                client = AsyncClient.from_engine(engine)
+                ConnectionError: If engine doesn't use MySQL driver
 
-            With custom configuration::
+            Examples
 
-                engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
-                client = AsyncClient.from_engine(
-                    engine,
-                    sql_log_mode='auto',
-                    slow_query_threshold=0.5
-                )
+        Basic usage::
+
+                    from sqlalchemy.ext.asyncio import create_async_engine
+                    from matrixone import AsyncClient
+
+                    engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
+                    client = AsyncClient.from_engine(engine)
+
+                With custom configuration::
+
+                    engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
+                    client = AsyncClient.from_engine(
+                        engine,
+                        sql_log_mode='auto',
+                        slow_query_threshold=0.5
+                    )
         """
         # Check if engine uses MySQL driver
         if not cls._is_mysql_async_engine(engine):
@@ -1666,10 +1687,12 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Check if the async engine uses a MySQL driver
 
-        Args:
+        Args::
+
             engine: SQLAlchemy AsyncEngine instance
 
-        Returns:
+        Returns::
+
             bool: True if engine uses MySQL driver, False otherwise
         """
         # Check dialect name
@@ -1797,7 +1820,8 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Get SQLAlchemy async engine
 
-        Returns:
+        Returns::
+
             SQLAlchemy AsyncEngine
         """
         if not self._engine:
@@ -1808,7 +1832,8 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Create all tables defined in the given base class or default Base.
 
-        Args:
+        Args::
+
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
@@ -1824,7 +1849,8 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Drop all tables defined in the given base class or default Base.
 
-        Args:
+        Args::
+
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
@@ -1854,16 +1880,19 @@ class AsyncClient(BaseMatrixOneClient):
         This is an internal helper method used by all SDK components to ensure
         consistent SQL logging across async vector operations, transactions, and other features.
 
-        Args:
+        Args::
+
             connection: SQLAlchemy async connection object
             sql: SQL query string
             context: Context description for error logging (default: "Async SQL execution")
             override_sql_log_mode: Temporarily override sql_log_mode for this query only
 
-        Returns:
+        Returns::
+
             SQLAlchemy result object
 
         Note:
+
             This method is used internally by AsyncVectorManager, AsyncTransactionWrapper,
             and other SDK components. External users should use execute() instead.
         """
@@ -1903,11 +1932,13 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Execute SQL query asynchronously using SQLAlchemy async engine
 
-        Args:
+        Args::
+
             sql: SQL query string
             params: Query parameters
 
-        Returns:
+        Returns::
+
             AsyncResultSet with query results
         """
         if not self._engine:
@@ -1947,11 +1978,13 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Substitute ? placeholders with actual values since MatrixOne doesn't support prepared statements
 
-        Args:
+        Args::
+
             sql: SQL query string with ? placeholders
             params: Tuple of parameter values
 
-        Returns:
+        Returns::
+
             SQL string with parameters substituted
         """
         if not params:
@@ -1974,12 +2007,14 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Build final login info based on user parameter and optional account/role
 
-        Args:
+        Args::
+
             user: Username or login info in format "user", "account#user", or "account#user#role"
             account: Optional account name
             role: Optional role name
 
-        Returns:
+        Returns::
+
             tuple: (final_user_string, parsed_info_dict)
 
         Rules:
@@ -2052,28 +2087,31 @@ class AsyncClient(BaseMatrixOneClient):
     def query(self, *columns, snapshot: str = None):
         """Get async MatrixOne query builder - SQLAlchemy style
 
-        Args:
-            *columns: Can be:
-                - Single model class: query(Article) - returns all columns from model
-                - Multiple columns: query(Article.id, Article.title) - returns specific columns
-                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
-            snapshot: Optional snapshot name for snapshot queries
+            Args::
 
-        Examples:
-            # Traditional model query (all columns)
-            await client.query(Article).filter(...).all()
+                *columns: Can be:
+                    - Single model class: query(Article) - returns all columns from model
+                    - Multiple columns: query(Article.id, Article.title) - returns specific columns
+                    - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
+                snapshot: Optional snapshot name for snapshot queries
 
-            # Column-specific query
-            await client.query(Article.id, Article.title).filter(...).all()
+            Examples
 
-            # With fulltext score
-            await client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
+        # Traditional model query (all columns)
+                await client.query(Article).filter(...).all()
 
-            # Snapshot query
-            await client.query(Article, snapshot="my_snapshot").filter(...).all()
+                # Column-specific query
+                await client.query(Article.id, Article.title).filter(...).all()
 
-        Returns:
-            AsyncMatrixOneQuery instance configured for the specified columns
+                # With fulltext score
+                await client.query(Article.id, boolean_match("title", "content").must("python").label("score"))
+
+                # Snapshot query
+                await client.query(Article, snapshot="my_snapshot").filter(...).all()
+
+            Returns::
+
+                AsyncMatrixOneQuery instance configured for the specified columns
         """
         from .async_orm import AsyncMatrixOneQuery
 
@@ -2151,9 +2189,10 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Snapshot context manager
 
-        Usage:
+        Usage
+
             async with client.snapshot("daily_backup") as snapshot_client:
-                result = await snapshot_client.execute("SELECT * FROM users")
+            result = await snapshot_client.execute("SELECT * FROM users")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -2168,11 +2207,13 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Insert data into a table asynchronously.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
-        Returns:
+        Returns::
+
             AsyncResultSet object
         """
         executor = AsyncClientExecutor(self)
@@ -2182,11 +2223,13 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Batch insert data into a table asynchronously.
 
-        Args:
+        Args::
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data_list: List of data dictionaries to insert
 
-        Returns:
+        Returns::
+
             AsyncResultSet object
         """
         # Handle model class input
@@ -2205,13 +2248,14 @@ class AsyncClient(BaseMatrixOneClient):
         """
         Async transaction context manager
 
-        Usage:
+        Usage
+
             async with client.transaction() as tx:
-                await tx.execute("INSERT INTO users ...")
-                await tx.execute("UPDATE users ...")
-                # Snapshot and clone operations within transaction
-                await tx.snapshots.create("snap1", "table", database="db1", table="t1")
-                await tx.clone.clone_database("target_db", "source_db")
+            await tx.execute("INSERT INTO users ...")
+            await tx.execute("UPDATE users ...")
+            # Snapshot and clone operations within transaction
+            await tx.snapshots.create("snap1", "table", database="db1", table="t1")
+            await tx.clone.clone_database("target_db", "source_db")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -2284,20 +2328,21 @@ class AsyncClient(BaseMatrixOneClient):
         The primary key column is automatically detected, and all other columns
         except the vector column will be included as metadata.
 
-        Args:
+        Args::
+
             table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             vector_column: Name of the vector column
 
-        Returns:
+        Returns::
+
             PineconeCompatibleIndex object with Pinecone-compatible API
 
-        Example:
-            >>> index = await client.get_pinecone_index("documents", "embedding")
-            >>> index = await client.get_pinecone_index(DocumentModel, "embedding")
-            >>> results = await index.query_async([0.1, 0.2, 0.3], top_k=5)
-            >>> for match in results.matches:
-            ...     print(f"ID: {match.id}, Score: {match.score}")
-            ...     print(f"Metadata: {match.metadata}")
+        Example::
+
+            index = await client.get_pinecone_index("documents", "embedding")
+            results = await index.query_async([0.1, 0.2, 0.3], top_k=5)
+            for match in results.matches:
+                print(f"ID: {match.id}, Score: {match.score}")
         """
         from .search_vector_index import PineconeCompatibleIndex
 
@@ -2320,20 +2365,23 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def version(self) -> str:
         """
-        Get MatrixOne server version asynchronously
+            Get MatrixOne server version asynchronously
 
-        Returns:
-            str: MatrixOne server version string
+            Returns::
 
-        Raises:
-            ConnectionError: If not connected to MatrixOne
-            QueryError: If version query fails
+                str: MatrixOne server version string
 
-        Example:
-            >>> client = AsyncClient()
-            >>> await client.connect('localhost', 6001, 'root', '111', 'test')
-            >>> version = await client.version()
-            >>> print(f"MatrixOne version: {version}")
+            Raises::
+
+                ConnectionError: If not connected to MatrixOne
+                QueryError: If version query fails
+
+            Example
+
+        >>> client = AsyncClient()
+                >>> await client.connect('localhost', 6001, 'root', '111', 'test')
+                >>> version = await client.version()
+                >>> print(f"MatrixOne version: {version}")
         """
         if not self.connected():
             raise ConnectionError("Not connected to MatrixOne")
@@ -2349,20 +2397,23 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def git_version(self) -> str:
         """
-        Get MatrixOne git version information asynchronously
+            Get MatrixOne git version information asynchronously
 
-        Returns:
-            str: MatrixOne git version string
+            Returns::
 
-        Raises:
-            ConnectionError: If not connected to MatrixOne
-            QueryError: If git version query fails
+                str: MatrixOne git version string
 
-        Example:
-            >>> client = AsyncClient()
-            >>> await client.connect('localhost', 6001, 'root', '111', 'test')
-            >>> git_version = await client.git_version()
-            >>> print(f"MatrixOne git version: {git_version}")
+            Raises::
+
+                ConnectionError: If not connected to MatrixOne
+                QueryError: If git version query fails
+
+            Example
+
+        >>> client = AsyncClient()
+                >>> await client.connect('localhost', 6001, 'root', '111', 'test')
+                >>> git_version = await client.git_version()
+                >>> print(f"MatrixOne git version: {git_version}")
         """
         if not self.connected():
             raise ConnectionError("Not connected to MatrixOne")
@@ -2387,22 +2438,25 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def create_table(self, table_name_or_model, columns: dict = None, **kwargs) -> "AsyncClient":
         """
-        Create a table asynchronously
+            Create a table asynchronously
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            columns: Dictionary mapping column names to their definitions (required if table_name_or_model is str)
-            **kwargs: Additional table creation options
+            Args::
 
-        Returns:
-            AsyncClient: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                columns: Dictionary mapping column names to their definitions (required if table_name_or_model is str)
+                **kwargs: Additional table creation options
 
-        Example:
-            >>> await client.create_table("users", {
-            ...     "id": "int primary key",
-            ...     "name": "varchar(100)",
-            ...     "email": "varchar(255)"
-            ... })
+            Returns::
+
+                AsyncClient: Self for chaining
+
+            Example
+
+        >>> await client.create_table("users", {
+                ...     "id": "int primary key",
+                ...     "name": "varchar(100)",
+                ...     "email": "varchar(255)"
+                ... })
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -2438,16 +2492,19 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def drop_table(self, table_name_or_model) -> "AsyncClient":
         """
-        Drop a table asynchronously
+            Drop a table asynchronously
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            Args::
 
-        Returns:
-            AsyncClient: Self for chaining
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
 
-        Example:
-            >>> await client.drop_table("users")
+            Returns::
+
+                AsyncClient: Self for chaining
+
+            Example
+
+        >>> await client.drop_table("users")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -2466,26 +2523,29 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "AsyncClient":
         """
-        Create a table with indexes asynchronously
+            Create a table with indexes asynchronously
 
-        Args:
-            table_name: Name of the table to create
-            columns: Dictionary mapping column names to their definitions
-            indexes: List of index definitions
-            **kwargs: Additional table creation options
+            Args::
 
-        Returns:
-            AsyncClient: Self for chaining
+                table_name: Name of the table to create
+                columns: Dictionary mapping column names to their definitions
+                indexes: List of index definitions
+                **kwargs: Additional table creation options
 
-        Example:
-            >>> await client.create_table_with_index("users", {
-            ...     "id": "int primary key",
-            ...     "name": "varchar(100)",
-            ...     "email": "varchar(255)"
-            ... }, [
-            ...     {"name": "idx_name", "columns": ["name"]},
-            ...     {"name": "idx_email", "columns": ["email"], "unique": True}
-            ... ])
+            Returns::
+
+                AsyncClient: Self for chaining
+
+            Example
+
+        >>> await client.create_table_with_index("users", {
+                ...     "id": "int primary key",
+                ...     "name": "varchar(100)",
+                ...     "email": "varchar(255)"
+                ... }, [
+                ...     {"name": "idx_name", "columns": ["name"]},
+                ...     {"name": "idx_email", "columns": ["email"], "unique": True}
+                ... ])
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -2511,23 +2571,26 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def create_table_orm(self, table_name: str, *columns, **kwargs) -> "AsyncClient":
         """
-        Create a table using SQLAlchemy ORM asynchronously
+            Create a table using SQLAlchemy ORM asynchronously
 
-        Args:
-            table_name: Name of the table to create
-            *columns: SQLAlchemy column definitions
-            **kwargs: Additional table creation options
+            Args::
 
-        Returns:
-            AsyncClient: Self for chaining
+                table_name: Name of the table to create
+                *columns: SQLAlchemy column definitions
+                **kwargs: Additional table creation options
 
-        Example:
-            >>> from sqlalchemy import Column, Integer, String
-            >>> await client.create_table_orm("users",
-            ...     Column("id", Integer, primary_key=True),
-            ...     Column("name", String(100)),
-            ...     Column("email", String(255))
-            ... )
+            Returns::
+
+                AsyncClient: Self for chaining
+
+            Example
+
+        >>> from sqlalchemy import Column, Integer, String
+                >>> await client.create_table_orm("users",
+                ...     Column("id", Integer, primary_key=True),
+                ...     Column("name", String(100)),
+                ...     Column("email", String(255))
+                ... )
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -2562,29 +2625,33 @@ class AsyncTransactionVectorIndexManager(AsyncVectorManager):
 
     async def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
         """
-        Get IVF index statistics for a table within transaction.
+            Get IVF index statistics for a table within transaction.
 
-        Args:
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            column_name: Name of the vector column (optional, will be inferred if not provided)
+            Args::
 
-        Returns:
-            Dict containing IVF index statistics including:
-            - index_tables: Dictionary mapping table types to table names
-            - distribution: Dictionary containing bucket distribution data
-            - database: Database name
-            - table_name: Table name
-            - column_name: Vector column name
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+                column_name: Name of the vector column (optional, will be inferred if not provided)
 
-        Raises:
-            Exception: If IVF index is not found or if there are errors retrieving stats
+            Returns::
 
-        Examples:
-            # Get stats for a table with vector column within transaction
-            async with client.transaction() as tx:
-                stats = await tx.vector_ops.get_ivf_stats("my_table", "embedding")
-                print(f"Index tables: {stats['index_tables']}")
-                print(f"Distribution: {stats['distribution']}")
+                Dict containing IVF index statistics including:
+                - index_tables: Dictionary mapping table types to table names
+                - distribution: Dictionary containing bucket distribution data
+                - database: Database name
+                - table_name: Table name
+                - column_name: Vector column name
+
+            Raises::
+
+                Exception: If IVF index is not found or if there are errors retrieving stats
+
+            Examples
+
+        # Get stats for a table with vector column within transaction
+                async with client.transaction() as tx:
+                    stats = await tx.vector_ops.get_ivf_stats("my_table", "embedding")
+                    print(f"Index tables: {stats['index_tables']}")
+                    print(f"Distribution: {stats['distribution']}")
         """
         from sqlalchemy import text
 
@@ -2702,7 +2769,8 @@ class AsyncTransactionWrapper:
         """
         Get the underlying SQLAlchemy async connection for direct use
 
-        Returns:
+        Returns::
+
             SQLAlchemy AsyncConnection instance bound to this transaction
         """
         return self.connection
@@ -2711,7 +2779,8 @@ class AsyncTransactionWrapper:
         """
         Get async SQLAlchemy session that uses the same transaction asynchronously
 
-        Returns:
+        Returns::
+
             Async SQLAlchemy Session instance bound to this transaction
         """
         if self._sqlalchemy_session is None:
@@ -2779,11 +2848,13 @@ class AsyncTransactionWrapper:
         """
         Insert data into a table within transaction asynchronously.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data: Data to insert (dict with column names as keys)
 
-        Returns:
+        Returns::
+
             AsyncResultSet object
         """
         sql = self.client._build_insert_sql(table_name, data)
@@ -2793,11 +2864,13 @@ class AsyncTransactionWrapper:
         """
         Batch insert data into a table within transaction asynchronously.
 
-        Args:
+        Args::
+
             table_name: Name of the table
             data_list: List of data dictionaries to insert
 
-        Returns:
+        Returns::
+
             AsyncResultSet object
         """
         if not data_list:
@@ -2809,14 +2882,16 @@ class AsyncTransactionWrapper:
     def query(self, *columns, snapshot: str = None):
         """Get async MatrixOne query builder within transaction - SQLAlchemy style
 
-        Args:
+        Args::
+
             *columns: Can be:
                 - Single model class: query(Article) - returns all columns from model
                 - Multiple columns: query(Article.id, Article.title) - returns specific columns
                 - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
             snapshot: Optional snapshot name for snapshot queries
 
-        Returns:
+        Returns::
+
             AsyncMatrixOneQuery instance configured for the specified columns within transaction
         """
         from .async_orm import AsyncMatrixOneQuery
@@ -3542,12 +3617,14 @@ class AsyncTransactionAccountManager:
         CREATE USER [IF NOT EXISTS] user auth_option [, user auth_option] ...
         [DEFAULT ROLE rolename] [COMMENT 'comment_string' | ATTRIBUTE 'json_object']
 
-        Args:
+        Args::
+
             user_name: Name of the user to create
             password: Password for the user
             comment: Comment for the user (not supported in MatrixOne)
 
-        Returns:
+        Returns::
+
             User: Created user object
         """
         try:
@@ -3585,7 +3662,8 @@ class AsyncTransactionAccountManager:
         Drop user within async transaction according to MatrixOne DROP USER syntax:
         DROP USER [IF EXISTS] user [, user] ...
 
-        Args:
+        Args::
+
             user_name: Name of the user to drop
             if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
         """
