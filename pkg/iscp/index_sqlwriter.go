@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 const (
@@ -517,6 +519,10 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension, js)
 
 	return []byte(sql), nil
+}
+
+func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension)
 }
 
 // Implementation of Ivfflat Sql writer

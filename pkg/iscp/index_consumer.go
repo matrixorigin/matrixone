@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -227,137 +226,79 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 
 func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 
-	/*
-		nowTs := c.cnEngine.LatestLogtailAppliedTime()
-		createByOpt := client.WithTxnCreateBy(
-			0,
-			"",
-			"hnsw consumer",
-			0)
-		txnOp, err := c.cnTxnClient.New(ctx, nowTs, createByOpt)
-		if txnOp != nil {
-			defer txnOp.Commit(ctx)
-		}
-		if err != nil {
-			return
-		}
-		err = c.cnEngine.New(ctx, txnOp)
-		if err != nil {
-			return
-		}
-	*/
-
-	// init HnswSync[T]
-
 	datatype := r.GetDataType()
 
-	if datatype == ISCPDataType_Snapshot {
-		// SNAPSHOT
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e2 := <-errch:
-				errch <- e2
-				return
-			case sql, ok := <-c.sqlBufSendCh:
-				if !ok {
-					return
-				}
-				func() {
-					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-					newctx, cancel := context.WithTimeout(newctx, time.Hour)
-					defer cancel()
+	// Suppose we shoult not use transaction here for Snapshot type and commit every time a new batch comes.
+	// However, HNSW only run in local without save to database until Sync.Save().
+	// HNSW is okay to have similar implementation to TAIL
+	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	newctx, cancel := context.WithTimeout(newctx, 24*time.Hour)
+	defer cancel()
 
-					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
-					if err != nil {
-						errch <- err
-					}
-					defer func() {
-						if err != nil {
-							err = txnOp.Rollback(newctx)
-						} else {
-							err = txnOp.Commit(newctx)
-						}
-						if err != nil {
-							errch <- err
-						}
-					}()
-
-					sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(newctx, c.cnUUID, txnOp, r.GetAccountID()))
-
-					sync, err := hnsw.NewHnswSync[float32](sqlproc, "", "", 0, 0)
-					if err != nil {
-						errch <- err
-						return
-					}
-
-					// sql -> cdc
-					_ = sql
-					err = sync.RunOnce(sqlproc, nil)
-					if err != nil {
-						errch <- err
-						return
-					}
-
-				}()
-			}
+	txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
+	if err != nil {
+		errch <- err
+		return
+	}
+	defer func() {
+		if err != nil {
+			err = txnOp.Rollback(newctx)
+		} else {
+			err = txnOp.Commit(newctx)
 		}
-
-	} else {
-		// TAIL
-		newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-		newctx, cancel := context.WithTimeout(newctx, time.Hour)
-		defer cancel()
-
-		txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 		if err != nil {
 			errch <- err
 		}
-		defer func() {
-			if err != nil {
-				err = txnOp.Rollback(newctx)
-			} else {
-				err = txnOp.Commit(newctx)
-			}
+	}()
+
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(newctx, c.cnUUID, txnOp, r.GetAccountID()))
+	w := c.sqlWriter.(*HnswSqlWriter[T])
+	sync, err := w.NewSync(sqlproc)
+	if err != nil {
+		errch <- err
+		return
+	}
+
+	defer func() {
+		if sync != nil {
+			err = sync.Save(sqlproc)
 			if err != nil {
 				errch <- err
+				return
 			}
-		}()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e2 := <-errch:
-				errch <- e2
-				return
-			case sql, ok := <-c.sqlBufSendCh:
-				if !ok {
-					// channel closed
-					err := r.UpdateWatermark(newctx, c.cnUUID, txnOp)
+			sync.Destroy()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e2 := <-errch:
+			errch <- e2
+			return
+		case sql, ok := <-c.sqlBufSendCh:
+			if !ok {
+				// channel closed
+				if datatype == ISCPDataType_Tail {
+					err = r.UpdateWatermark(newctx, c.cnUUID, txnOp)
 					if err != nil {
 						errch <- err
-						return
 					}
 				}
-
-				sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(newctx, c.cnUUID, txnOp, r.GetAccountID()))
-				sync, err := hnsw.NewHnswSync[float32](sqlproc, "", "", 0, 0)
-				if err != nil {
-					errch <- err
-					return
-				}
-
-				// sql -> cdc
-				_ = sql
-				err = sync.RunOnce(sqlproc, nil)
-				if err != nil {
-					errch <- err
-					return
-				}
+				return
 
 			}
+
+			// sql -> cdc
+			_ = sql
+			err = sync.Update(sqlproc, nil)
+			if err != nil {
+				errch <- err
+				return
+			}
+
 		}
 	}
 
