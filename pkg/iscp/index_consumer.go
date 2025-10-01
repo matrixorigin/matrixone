@@ -23,8 +23,6 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,19 +38,6 @@ import (
 type IndexEntry struct {
 	algo    string
 	indexes []*plan.IndexDef
-}
-
-var sqlExecutorFactory = _sqlExecutorFactory
-
-func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
-	// sql executor
-	v, ok := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		//os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", cnUUID))
-		return nil, moerr.NewNotSupportedNoCtx("no implement sqlExecutor")
-	}
-	exec := v.(executor.SQLExecutor)
-	return exec, nil
 }
 
 /* IndexConsumer */
@@ -79,11 +64,6 @@ func NewIndexConsumer(cnUUID string,
 	tableDef *plan.TableDef,
 	jobID JobID,
 	info *ConsumerInfo) (Consumer, error) {
-
-	exec, err := sqlExecutorFactory(cnUUID)
-	if err != nil {
-		return nil, err
-	}
 
 	ie := &IndexEntry{indexes: make([]*plan.IndexDef, 0, 3)}
 
@@ -112,7 +92,6 @@ func NewIndexConsumer(cnUUID string,
 		info:        info,
 		tableDef:    tableDef,
 		sqlWriter:   sqlwriter,
-		exec:        exec,
 		rowdata:     make([]any, len(tableDef.Cols)),
 		rowdelete:   make([]any, 1),
 		algo:        ie.algo,
