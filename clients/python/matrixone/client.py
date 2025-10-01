@@ -817,7 +817,7 @@ class Client(BaseMatrixOneClient):
             self.logger.log_error(e, context="Query execution")
             raise QueryError(f"Query execution failed: {e}")
 
-    def insert(self, table_name: str, data: dict) -> "ResultSet":
+    def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
             Insert a single row of data into a table.
 
@@ -827,7 +827,7 @@ class Client(BaseMatrixOneClient):
 
             Args::
 
-                table_name (str): Name of the target table
+                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
                 data (dict): Dictionary mapping column names to values. Example:
 
                             {'name': 'John', 'age': 30, 'email': 'john@example.com'}
@@ -846,13 +846,27 @@ class Client(BaseMatrixOneClient):
 
             Examples
 
-        # Insert a single user
+        # Insert a single user using table name
                 >>> result = client.insert('users', {
                 ...     'name': 'John Doe',
                 ...     'age': 30,
                 ...     'email': 'john@example.com'
                 ... })
                 >>> print(f"Inserted {result.affected_rows} row")
+
+                # Insert using model class
+                >>> from sqlalchemy import Column, Integer, String
+                >>> from matrixone.orm import declarative_base
+                >>> Base = declarative_base()
+                >>> class User(Base):
+                ...     __tablename__ = 'users'
+                ...     id = Column(Integer, primary_key=True)
+                ...     name = Column(String(50))
+                ...     age = Column(Integer)
+                >>> result = client.insert(User, {
+                ...     'name': 'Jane Doe',
+                ...     'age': 25
+                ... })
 
                 # Insert with NULL values
                 >>> result = client.insert('products', {
@@ -861,6 +875,14 @@ class Client(BaseMatrixOneClient):
                 ...     'description': None  # NULL value
                 ... })
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         executor = ClientExecutor(self)
         return executor.insert(table_name, data)
 
@@ -2326,7 +2348,7 @@ class Client(BaseMatrixOneClient):
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
-            from sqlalchemy.ext.declarative import declarative_base
+            from matrixone.orm import declarative_base
 
             base_class = declarative_base()
 
@@ -2342,7 +2364,7 @@ class Client(BaseMatrixOneClient):
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
-            from sqlalchemy.ext.declarative import declarative_base
+            from matrixone.orm import declarative_base
 
             base_class = declarative_base()
 

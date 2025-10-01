@@ -77,7 +77,7 @@ Advanced Query Building with ORM Models
 .. code-block:: python
 
    from sqlalchemy import Column, Integer, String, DECIMAL, ForeignKey
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from sqlalchemy.orm import sessionmaker, relationship
    from matrixone import Client
    from matrixone.config import get_connection_params
@@ -231,7 +231,7 @@ Vector Operations with ORM
 .. code-block:: python
 
    from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from sqlalchemy.orm import sessionmaker
    from matrixone import Client
    from matrixone.config import get_connection_params
@@ -314,7 +314,7 @@ Async ORM Operations
 
    import asyncio
    from sqlalchemy import Column, Integer, String, DECIMAL
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from sqlalchemy.orm import sessionmaker
    from matrixone import AsyncClient
    from matrixone.config import get_connection_params
@@ -378,7 +378,7 @@ Transaction Management with ORM
 .. code-block:: python
 
    from sqlalchemy import Column, Integer, String, DECIMAL
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from sqlalchemy.orm import sessionmaker
    from matrixone import Client
    from matrixone.config import get_connection_params

@@ -20,7 +20,7 @@ Basic Vector Type Usage
 .. code-block:: python
 
     from sqlalchemy import Column, Integer, String, create_engine
-    from sqlalchemy.ext.declarative import declarative_base
+    from matrixone.orm import declarative_base
     from matrixone.sqlalchemy_ext import VectorType
 
     Base = declarative_base()

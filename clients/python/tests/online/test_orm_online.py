@@ -31,7 +31,7 @@ from sqlalchemy import Column, Integer, String, DECIMAL
 try:
     from sqlalchemy.orm import declarative_base
 except ImportError:
-    from sqlalchemy.ext.declarative import declarative_base
+    from matrixone.orm import declarative_base
 
 Base = declarative_base()
 from matrixone.exceptions import QueryError

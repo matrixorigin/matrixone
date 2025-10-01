@@ -219,19 +219,14 @@ PITR Operations
 
 .. code-block:: python
 
-   # Restore to specific timestamp
-   restore_result = snapshot_manager.restore_to_timestamp(
-       database="production_db",
-       target_timestamp="2024-01-15 14:30:00",
-       target_database="pitr_restore_db"
-   )
+   # Restore cluster from snapshot
+   restore_result = client.restore.restore_cluster("my_snapshot")
 
-   # Restore with transaction log replay
-   restore_result = snapshot_manager.restore_to_timestamp(
-       database="production_db",
-       target_timestamp="2024-01-15 14:30:00",
-       target_database="pitr_restore_db",
-       replay_logs=True
+   # Restore database from snapshot
+   restore_result = client.restore.restore_database(
+       "my_snapshot",
+       "root",
+       "restored_db"
    )
 
    # Get available recovery points
@@ -491,11 +486,10 @@ Disaster Recovery System
            print(f"Point-in-time recovery to: {target_timestamp}")
            print(f"Target database: {target_db}")
            
-           restore_result = self.snapshot_manager.restore_to_timestamp(
-               database=database,
-               target_timestamp=target_timestamp,
-               target_database=target_db,
-               replay_logs=True
+           restore_result = self.client.restore.restore_database(
+               "my_snapshot",
+               "root",
+               target_db
            )
            
            if restore_result.success:

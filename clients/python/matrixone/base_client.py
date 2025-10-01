@@ -73,13 +73,15 @@ class BaseMatrixOneClient:
         # Convert vectors to string format
         formatted_values = []
         for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            if value is None:
+                formatted_values.append("NULL")
+            elif isinstance(value, list):
+                formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
             else:
-                formatted_values.append(str(value))
+                formatted_values.append(f"'{str(value)}'")
 
         columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+        values_str = ", ".join(formatted_values)
 
         return f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
 
@@ -109,11 +111,13 @@ class BaseMatrixOneClient:
             formatted_values = []
             for col in columns:
                 value = data[col]
-                if isinstance(value, list):
-                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
+                if value is None:
+                    formatted_values.append("NULL")
+                elif isinstance(value, list):
+                    formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
                 else:
-                    formatted_values.append(str(value))
-            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
+                    formatted_values.append(f"'{str(value)}'")
+            values_str = "(" + ", ".join(formatted_values) + ")"
             values_list.append(values_str)
 
         values_clause = ", ".join(values_list)

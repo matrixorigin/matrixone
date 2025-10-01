@@ -30,7 +30,7 @@ Creating Vector Tables with Table Models
 
    from matrixone import Client
    from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from matrixone.sqlalchemy_ext import create_vector_column
 
    # Create client and connect (see configuration_guide for connection options)
@@ -126,7 +126,7 @@ Insert vector data using the modern insert API:
    import numpy as np
 
    # Insert single document
-   client.insert("documents", {
+   client.insert(Document, {
        "id": 1,
        "title": "AI Research Paper",
        "content": "Advanced artificial intelligence research",
@@ -152,7 +152,7 @@ Insert vector data using the modern insert API:
        }
    ]
 
-   client.batch_insert("documents", documents)
+   client.batch_insert(Document, documents)
 
 Vector Similarity Search
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -340,7 +340,7 @@ Async Vector Operations
        )
 
        # Insert data using async insert API
-       await client.insert("async_documents", {
+       await client.insert(AsyncDocument, {
            "id": 1,
            "title": "Async Document",
            "embedding": np.random.rand(256).astype(np.float32).tolist()
@@ -372,7 +372,7 @@ ORM with Vector Types
 .. code-block:: python
 
    from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from sqlalchemy.orm import sessionmaker
    from matrixone.sqlalchemy_ext import create_vector_column
 
@@ -495,7 +495,7 @@ Performance Optimization
        })
 
    # Use batch_insert for large datasets
-   client.batch_insert("documents", large_batch)
+   client.batch_insert(Document, large_batch)
 
    # Optimize index parameters for your use case
    client.vector_ops.create_ivf(
@@ -543,7 +543,7 @@ Error Handling
 
            # Insert data with error handling
            try:
-               client.insert("robust_docs", {
+               client.insert(RobustDocument, {
                    "id": 1,
                    "embedding": [0.1] * 128
                })

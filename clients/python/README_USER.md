@@ -110,7 +110,7 @@ async def main():
     )
     
     result = await client.execute("SELECT 1 as test")
-    print(await result.fetchall())
+    print(result.fetchall())
     
     await client.disconnect()
 
@@ -122,8 +122,8 @@ asyncio.run(main())
 ```python
 # Create a snapshot
 snapshot = client.snapshots.create(
-    name='my_snapshot',
-    level='cluster',
+    'my_snapshot',
+    'cluster',
     description='Backup before migration'
 )
 
@@ -133,9 +133,9 @@ for snap in snapshots:
     print(f"Snapshot: {snap.name}, Created: {snap.created_at}")
 
 # Clone database from snapshot
-client.snapshots.clone_database(
-    target_db='new_database',
-    source_db='old_database',
+client.clone.clone_database(
+    'new_database',
+    'old_database',
     snapshot_name='my_snapshot'
 )
 ```
@@ -178,14 +178,13 @@ else:
 ```python
 # Create PITR for cluster
 pitr = client.pitr.create_cluster_pitr(
-    name='cluster_pitr',
+    'cluster_pitr',
     range_value=7,
     range_unit='d'
 )
 
-# Restore to specific time
-restore_point = datetime(2024, 1, 15, 10, 30, 0)
-client.pitr.restore_to_time(restore_point)
+# Restore cluster from snapshot
+client.restore.restore_cluster('my_snapshot')
 ```
 
 ### Account Management
@@ -193,22 +192,23 @@ client.pitr.restore_to_time(restore_point)
 ```python
 # Create user
 user = client.account.create_user(
-    username='newuser',
-    password='password123',
-    description='New user account'
+    'newuser',
+    'password123',
+    comment='New user account'
 )
 
 # Create role
 role = client.account.create_role(
-    role_name='analyst',
-    description='Data analyst role'
+    'analyst',
+    comment='Data analyst role'
 )
 
 # Grant privileges
 client.account.grant_privilege(
-    user='newuser',
-    role='analyst',
-    privileges=['SELECT', 'INSERT']
+    'SELECT',
+    'TABLE',
+    '*',
+    to_user='newuser'
 )
 ```
 
@@ -217,7 +217,7 @@ client.account.grant_privilege(
 ```python
 from matrixone.sqlalchemy_ext import create_vector_column
 from sqlalchemy import Column, Integer, String, Text
-from sqlalchemy.ext.declarative import declarative_base
+from matrixone.orm import declarative_base
 import numpy as np
 
 # Define vector table
@@ -236,15 +236,15 @@ client.create_table(Document)
 # Create HNSW index for high-accuracy search
 client.vector_ops.enable_hnsw()
 client.vector_ops.create_hnsw(
-    table_name='documents',
-    name='idx_embedding',
-    column='embedding',
+    'documents',
+    'idx_embedding',
+    'embedding',
     m=16,
     ef_construction=200
 )
 
 # Insert vector data
-client.insert('documents', {
+client.insert(Document, {
     'id': 1,
     'title': 'Machine Learning Guide',
     'content': 'Comprehensive ML tutorial...',
@@ -254,9 +254,9 @@ client.insert('documents', {
 # Search similar documents
 query_vector = np.random.rand(384).tolist()
 results = client.vector_ops.similarity_search(
-    table_name='documents',
-    vector_column='embedding',
-    query_vector=query_vector,
+    'documents',
+    'embedding',
+    query_vector,
     limit=5,
     distance_type='cosine'
 )
@@ -270,31 +270,28 @@ for row in results:
 ```python
 # Create fulltext index
 client.fulltext_index.create(
-    table_name='documents',
-    name='ftidx_content',
-    columns=['title', 'content'],
+    'documents',
+    'ftidx_content',
+    ['title', 'content'],
     algorithm='BM25'
 )
 
-# Natural language search
-results = client.fulltext_index.fulltext_search(
-    table_name='documents',
-    columns=['title', 'content'],
-    search_term='machine learning tutorial',
-    mode='natural_language',
-    with_score=True,
-    limit=10
-)
+# Natural language search using ORM
+from matrixone.sqlalchemy_ext.fulltext_search import natural_match
 
-# Boolean search with operators
-results = client.fulltext_index.fulltext_search(
-    table_name='documents',
-    columns=['title', 'content'],
-    search_term='machine +learning -basics',
-    mode='boolean',
-    with_score=True,
-    limit=10
-)
+results = client.query(Document).filter(
+    natural_match('title', 'content', query='machine learning tutorial')
+).all()
+
+# Boolean search with operators using ORM
+from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+results = client.query(Document).filter(
+    boolean_match('title', 'content')
+    .must('machine')
+    .must('learning')
+    .discourage('basics')
+).all()
 
 for row in results:
     print(f"Title: {row[1]}, Score: {row[-1]}")
@@ -304,38 +301,34 @@ for row in results:
 
 ```python
 # Analyze table metadata
-metadata = client.metadata.metadata_scan(
-    table_name='documents',
-    include_stats=True
+metadata = client.metadata.scan(
+    dbname='test',
+    tablename='documents'
 )
 
 for row in metadata:
-    print(f"Column: {row.column_name}")
+    print(f"Column: {row.col_name}")
     print(f"  Type: {row.data_type}")
-    print(f"  Null count: {row.null_count}")
-    print(f"  Distinct values: {row.distinct_count}")
+    print(f"  Null count: {row.null_cnt}")
+    print(f"  Rows count: {row.rows_cnt}")
 
 # Get table statistics
-stats = client.metadata.get_table_brief(table_name='documents')
-print(f"Total rows: {stats.row_count}")
-print(f"Table size: {stats.size_bytes} bytes")
+stats = client.metadata.get_table_brief_stats(
+    dbname='test',
+    tablename='documents'
+)
+print(f"Total rows: {stats['total_rows']}")
+print(f"Table size: {stats['total_size']} bytes")
 ```
 
 ### Pub/Sub Operations
 
 ```python
-# Create publication
-publication = client.pubsub.create_publication(
-    name='data_changes',
-    tables=['users', 'orders'],
-    description='User and order changes'
-)
-
-# Create subscription
+# Create subscription (publication must be created separately)
 subscription = client.pubsub.create_subscription(
-    name='data_sync',
-    publication_name='data_changes',
-    target_tables=['users_backup', 'orders_backup']
+    'data_sync',
+    'data_changes',
+    'root'
 )
 ```
 

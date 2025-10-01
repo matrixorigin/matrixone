@@ -1837,7 +1837,7 @@ class AsyncClient(BaseMatrixOneClient):
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
-            from sqlalchemy.ext.declarative import declarative_base
+            from matrixone.orm import declarative_base
 
             base_class = declarative_base()
 
@@ -1854,7 +1854,7 @@ class AsyncClient(BaseMatrixOneClient):
             base_class: SQLAlchemy declarative base class. If None, uses the default Base.
         """
         if base_class is None:
-            from sqlalchemy.ext.declarative import declarative_base
+            from matrixone.orm import declarative_base
 
             base_class = declarative_base()
 
@@ -2203,19 +2203,27 @@ class AsyncClient(BaseMatrixOneClient):
         snapshot_client = SnapshotClient(self, snapshot_name)
         yield snapshot_client
 
-    async def insert(self, table_name: str, data: dict) -> "AsyncResultSet":
+    async def insert(self, table_name_or_model, data: dict) -> "AsyncResultSet":
         """
         Insert data into a table asynchronously.
 
         Args::
 
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data: Data to insert (dict with column names as keys)
 
         Returns::
 
             AsyncResultSet object
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         executor = AsyncClientExecutor(self)
         return await executor.insert(table_name, data)
 
@@ -2844,29 +2852,37 @@ class AsyncTransactionWrapper:
             await self._sqlalchemy_engine.dispose()
             self._sqlalchemy_engine = None
 
-    async def insert(self, table_name: str, data: dict) -> AsyncResultSet:
+    async def insert(self, table_name_or_model, data: dict) -> AsyncResultSet:
         """
         Insert data into a table within transaction asynchronously.
 
         Args::
 
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data: Data to insert (dict with column names as keys)
 
         Returns::
 
             AsyncResultSet object
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         sql = self.client._build_insert_sql(table_name, data)
         return await self.execute(sql)
 
-    async def batch_insert(self, table_name: str, data_list: list) -> AsyncResultSet:
+    async def batch_insert(self, table_name_or_model, data_list: list) -> AsyncResultSet:
         """
         Batch insert data into a table within transaction asynchronously.
 
         Args::
 
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data_list: List of data dictionaries to insert
 
         Returns::
@@ -2875,6 +2891,14 @@ class AsyncTransactionWrapper:
         """
         if not data_list:
             return AsyncResultSet([], [], affected_rows=0)
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
 
         sql = self.client._build_batch_insert_sql(table_name, data_list)
         return await self.execute(sql)

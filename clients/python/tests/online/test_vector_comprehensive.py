@@ -618,9 +618,7 @@ class TestVectorComprehensive:
 
             # Insert data using async_client insert interface
             test_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 6 + [0.1, 0.2, 0.3, 0.4]
-            await test_async_client.insert(
-                table_name=table_name, data={"id": 1, "name": "async_test", "embedding": test_vector}
-            )
+            await test_async_client.insert(table_name, data={"id": 1, "name": "async_test", "embedding": test_vector})
 
             # Verify insertion using query interface
             result = await test_async_client.query(table_name).select("*").where("id = ?", 1).execute()
@@ -667,7 +665,7 @@ class TestVectorComprehensive:
 
             # Try to insert without vector data using insert API
             try:
-                test_client.insert(table_name=table_name, data={"id": 1, "name": "test"})
+                test_client.insert(table_name, data={"id": 1, "name": "test"})
                 # If we get here, check if embedding is NULL
                 result = test_client.query(table_name).select("embedding").where("id = ?", 1).execute()
                 rows = result.fetchall()

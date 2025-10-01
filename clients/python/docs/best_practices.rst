@@ -303,7 +303,7 @@ Model Design Guidelines
 .. code-block:: python
 
    from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, func, Index
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from matrixone import Client
 
    Base = declarative_base()
@@ -574,12 +574,11 @@ Query Optimization
            with self.get_session() as session:
                # Use fulltext search if available
                try:
-                   results = self.client.fulltext_index.fulltext_search(
-                       table_name='users',
-                       columns=['username', 'email', 'full_name'],
-                       search_term=search_term,
-                       limit=limit
-                   )
+                   from matrixone.sqlalchemy_ext.fulltext_search import natural_match
+                   
+                   results = self.client.query(User).filter(
+                       natural_match('username', 'email', 'full_name', query=search_term)
+                   ).limit(limit).all()
                    return results
                except Exception:
                    # Fallback to LIKE search
@@ -723,7 +722,7 @@ Index Configuration
    from matrixone import Client
    from matrixone.sqlalchemy_ext import create_vector_column
    from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
 
    Base = declarative_base()
 
@@ -833,24 +832,19 @@ Index Design and Configuration
            """Search documents with different modes"""
            if mode == 'natural':
                # Natural language search
-               results = self.client.fulltext_index.fulltext_search(
-                   table_name='documents',
-                   columns=['title', 'content', 'tags'],
-                   search_term=search_term,
-                   mode=FulltextModeType.NATURAL_LANGUAGE,
-                   with_score=True,
-                   limit=limit
-               )
+               from matrixone.sqlalchemy_ext.fulltext_search import natural_match
+               
+               results = self.client.query(Document).filter(
+                   natural_match('title', 'content', 'tags', query=search_term)
+               ).limit(limit).all()
            elif mode == 'boolean':
                # Boolean search with operators
-               results = self.client.fulltext_index.fulltext_search(
-                   table_name='documents',
-                   columns=['title', 'content', 'tags'],
-                   search_term=search_term,
-                   mode=FulltextModeType.BOOLEAN,
-                   with_score=True,
-                   limit=limit
-               )
+               from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+               
+               results = self.client.query(Document).filter(
+                   boolean_match('title', 'content', 'tags')
+                   .must(search_term)
+               ).limit(limit).all()
            else:
                raise ValueError("mode must be 'natural' or 'boolean'")
                

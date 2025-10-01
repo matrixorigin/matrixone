@@ -33,7 +33,7 @@ from matrixone.sqlalchemy_ext.fulltext_search import boolean_match, natural_matc
 try:
     from sqlalchemy.orm import declarative_base
 except ImportError:
-    from sqlalchemy.ext.declarative import declarative_base
+    from matrixone.orm import declarative_base
 
 from sqlalchemy import Column, Integer, String, Text
 

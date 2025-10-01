@@ -10,7 +10,7 @@ Basic Usage
 
    from matrixone import Client
    from sqlalchemy import Column, Integer, String, DateTime
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
 
    # Create and connect to MatrixOne
    client = Client()
@@ -71,7 +71,7 @@ Async Usage with Table Models and Modern API
    from matrixone import AsyncClient
    from matrixone.config import get_connection_params
    from sqlalchemy import Column, Integer, String, DECIMAL
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
 
    async def async_quickstart():
        # Get connection parameters
@@ -134,7 +134,7 @@ Vector Operations with Table Models
    from matrixone import Client
    from matrixone.config import get_connection_params
    from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from matrixone.sqlalchemy_ext import Vectorf32
 
    # Get connection parameters
@@ -204,7 +204,7 @@ HNSW Vector Indexing
    from matrixone import Client
    from matrixone.config import get_connection_params
    from sqlalchemy import Column, Integer, String
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from matrixone.sqlalchemy_ext import Vectorf32
 
    # Get connection parameters
@@ -261,7 +261,7 @@ ORM with Modern Patterns
 .. code-block:: python
 
    from sqlalchemy import Column, Integer, String, DECIMAL, DateTime
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    from matrixone import Client
    from matrixone.config import get_connection_params
 

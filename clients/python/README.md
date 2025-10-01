@@ -141,7 +141,7 @@ async def main():
     )
     
     result = await client.execute("SELECT 1 as test")
-    print(await result.fetchall())
+    print(result.fetchall())
     
     await client.disconnect()
 
@@ -164,7 +164,7 @@ for snap in snapshots:
     print(f"Snapshot: {snap.name}, Created: {snap.created_at}")
 
 # Clone database from snapshot
-client.snapshots.clone_database(
+client.clone.clone_database(
     target_db='new_database',
     source_db='old_database',
     snapshot_name='my_snapshot'
@@ -176,7 +176,7 @@ client.snapshots.clone_database(
 ```python
 from matrixone.sqlalchemy_ext import create_vector_column
 from sqlalchemy import Column, Integer, String, Text
-from sqlalchemy.ext.declarative import declarative_base
+from matrixone.orm import declarative_base
 import numpy as np
 
 # Define vector table model
@@ -203,7 +203,7 @@ client.vector_ops.create_hnsw(
 )
 
 # Insert document with vector
-client.insert('documents', {
+client.insert(Document, {
     'id': 1,
     'title': 'AI Research Paper',
     'content': 'Advanced machine learning techniques...',
@@ -226,53 +226,52 @@ results = client.vector_ops.similarity_search(
 ```python
 # Create fulltext index
 client.fulltext_index.create(
-    table_name='documents',
-    name='ftidx_content',
-    columns=['title', 'content'],
+    'documents',
+    'ftidx_content',
+    ['title', 'content'],
     algorithm='BM25'
 )
 
-# Natural language search
-results = client.fulltext_index.fulltext_search(
-    table_name='documents',
-    columns=['title', 'content'],
-    search_term='machine learning techniques',
-    mode='natural_language',
-    with_score=True,
-    limit=10
-)
+# Natural language search using ORM
+from matrixone.sqlalchemy_ext.fulltext_search import natural_match
 
-# Boolean search with operators
-results = client.fulltext_index.fulltext_search(
-    table_name='documents',
-    columns=['title', 'content'],
-    search_term='machine +learning -basic',
-    mode='boolean',
-    with_score=True,
-    limit=10
-)
+results = client.query(Document).filter(
+    natural_match('title', 'content', query='machine learning techniques')
+).all()
+
+# Boolean search with operators using ORM
+from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+results = client.query(Document).filter(
+    boolean_match('title', 'content')
+    .must('machine')
+    .must('learning')
+    .discourage('basic')
+).all()
 ```
 
 ### Metadata Analysis
 
 ```python
 # Get table metadata with statistics
-metadata = client.metadata.metadata_scan(
-    table_name='documents',
-    include_stats=True,
-    columns=['id', 'title', 'created_at']
+metadata = client.metadata.scan(
+    dbname='test',
+    tablename='documents'
 )
 
 for row in metadata:
-    print(f"Column: {row.column_name}")
+    print(f"Column: {row.col_name}")
     print(f"  Type: {row.data_type}")
-    print(f"  Nulls: {row.null_count}")
-    print(f"  Distinct: {row.distinct_count}")
+    print(f"  Nulls: {row.null_cnt}")
+    print(f"  Rows: {row.rows_cnt}")
 
 # Get table statistics
-stats = client.metadata.get_table_brief(table_name='documents')
-print(f"Total rows: {stats.row_count}")
-print(f"Table size: {stats.size_bytes}")
+stats = client.metadata.get_table_brief_stats(
+    dbname='test',
+    tablename='documents'
+)
+print(f"Total rows: {stats['total_rows']}")
+print(f"Table size: {stats['total_size']}")
 ```
 
 ### Version Management

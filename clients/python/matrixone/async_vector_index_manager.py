@@ -251,29 +251,37 @@ class AsyncVectorManager:
             raise Exception(f"Failed to disable HNSW indexing: {e}")
 
     # Data operations
-    async def insert(self, table_name: str, data: dict) -> "AsyncVectorManager":
+    async def insert(self, table_name_or_model, data: dict) -> "AsyncVectorManager":
         """
         Insert vector data using chain operations asynchronously.
 
         Args:
 
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data: Data to insert (dict with column names as keys)
 
         Returns:
 
             AsyncVectorManager: Self for chaining
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         await self.client.insert(table_name, data)
         return self
 
-    async def insert_in_transaction(self, table_name: str, data: dict, connection) -> "AsyncVectorManager":
+    async def insert_in_transaction(self, table_name_or_model, data: dict, connection) -> "AsyncVectorManager":
         """
         Insert vector data within an existing SQLAlchemy transaction asynchronously.
 
         Args:
 
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data: Data to insert (dict with column names as keys)
             connection: SQLAlchemy connection object (required for transaction support)
 
@@ -288,6 +296,14 @@ class AsyncVectorManager:
         if connection is None:
             raise ValueError("connection parameter is required for transaction operations")
 
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         # Build INSERT statement
         columns = list(data.keys())
         values = list(data.values())
@@ -295,32 +311,42 @@ class AsyncVectorManager:
         # Convert vectors to string format
         formatted_values = []
         for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            if value is None:
+                formatted_values.append("NULL")
+            elif isinstance(value, list):
+                formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
             else:
-                formatted_values.append(str(value))
+                formatted_values.append(f"'{str(value)}'")
 
         columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+        values_str = ", ".join(formatted_values)
 
         sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
         await self.client._execute_with_logging(connection, sql, context="Vector insert")
 
         return self
 
-    async def batch_insert(self, table_name: str, data_list: list) -> "AsyncVectorManager":
+    async def batch_insert(self, table_name_or_model, data_list: list) -> "AsyncVectorManager":
         """
         Batch insert vector data using chain operations asynchronously.
 
         Args:
 
-            table_name: Name of the table
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
             data_list: List of data dictionaries to insert
 
         Returns:
 
             AsyncVectorManager: Self for chaining
         """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            # It's a model class
+            table_name = table_name_or_model.__tablename__
+        else:
+            # It's a table name string
+            table_name = table_name_or_model
+
         await self.client.batch_insert(table_name, data_list)
         return self
 

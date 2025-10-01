@@ -86,7 +86,7 @@ Quick Start
 
    from matrixone.sqlalchemy_ext import create_vector_column
    from sqlalchemy import Column, Integer, String, Text
-   from sqlalchemy.ext.declarative import declarative_base
+   from matrixone.orm import declarative_base
    import numpy as np
 
    # Define vector table model
@@ -132,30 +132,27 @@ Quick Start
 
    # Create fulltext index
    client.fulltext_index.create(
-       table_name='documents',
-       name='ftidx_content',
-       columns=['title', 'content'],
+       'documents',
+       'ftidx_content',
+       ['title', 'content'],
        algorithm='BM25'
    )
 
    # Search with natural language
-   results = client.fulltext_index.fulltext_search(
-       table_name='documents',
-       columns=['title', 'content'],
-       search_term='machine learning techniques',
-       mode='natural_language',
-       with_score=True,
-       limit=10
-   )
+   from matrixone.sqlalchemy_ext.fulltext_search import natural_match
+   
+   results = client.query(Document).filter(
+       natural_match('title', 'content', query='machine learning techniques')
+   ).all()
 
 **Metadata Analysis:**
 
 .. code-block:: python
 
    # Analyze table metadata
-   metadata = client.metadata.metadata_scan(
-       table_name='documents',
-       include_stats=True
+   metadata = client.metadata.scan(
+       dbname='test',
+       tablename='documents'
    )
 
    for row in metadata:
@@ -163,7 +160,10 @@ Quick Start
        print(f"  Nulls: {row.null_count}, Distinct: {row.distinct_count}")
 
    # Get table statistics
-   stats = client.metadata.get_table_brief(table_name='documents')
+   stats = client.metadata.get_table_brief_stats(
+       dbname='test',
+       tablename='documents'
+   )
    print(f"Rows: {stats.row_count}, Size: {stats.size_bytes} bytes")
 
 Installation
