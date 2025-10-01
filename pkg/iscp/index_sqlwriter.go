@@ -515,10 +515,14 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// pad extra space at the front and send SQL
-	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension, js)
 
-	return []byte(sql), nil
+	return []byte(js), nil
+	/*
+		// pad extra space at the front and send SQL
+		sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension, js)
+
+		return []byte(sql), nil
+	*/
 }
 
 func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {

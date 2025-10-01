@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -292,13 +293,17 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			}
 
 			// sql -> cdc
-			_ = sql
-			err = sync.Update(sqlproc, nil)
+			var cdc vectorindex.VectorIndexCdc[T]
+			err = sonic.Unmarshal(sql, &cdc)
 			if err != nil {
 				errch <- err
 				return
 			}
-
+			err = sync.Update(sqlproc, &cdc)
+			if err != nil {
+				errch <- err
+				return
+			}
 		}
 	}
 

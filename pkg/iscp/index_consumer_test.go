@@ -282,6 +282,7 @@ func TestConsumer(t *testing.T) {
 	info := newTestConsumerInfo()
 	job := newTestJobID()
 
+	catalog.SetupDefines("")
 	cnEngine, cnClient, _ := testengine.New(ctx)
 
 	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
