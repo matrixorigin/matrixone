@@ -1845,7 +1845,9 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
-    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution"):
+    async def _execute_with_logging(
+        self, connection, sql: str, context: str = "Async SQL execution", override_sql_log_mode: str = None
+    ):
         """
         Execute SQL asynchronously with proper logging through the client's logger.
 
@@ -1856,6 +1858,7 @@ class AsyncClient(BaseMatrixOneClient):
             connection: SQLAlchemy async connection object
             sql: SQL query string
             context: Context description for error logging (default: "Async SQL execution")
+            override_sql_log_mode: Temporarily override sql_log_mode for this query only
 
         Returns:
             SQLAlchemy result object
@@ -1877,18 +1880,22 @@ class AsyncClient(BaseMatrixOneClient):
                 if result.returns_rows:
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
-                    self.logger.log_query(sql, execution_time, None, success=True)
+                    self.logger.log_query(
+                        sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode
+                    )
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
-                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(
+                        sql, execution_time, result.rowcount, success=True, override_sql_log_mode=override_sql_log_mode
+                    )
             except Exception:
                 # Fallback: just log the query without row count
-                self.logger.log_query(sql, execution_time, None, success=True)
+                self.logger.log_query(sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode)
 
             return result
         except Exception as e:
             execution_time = time.time() - start_time
-            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_query(sql, execution_time, success=False, override_sql_log_mode=override_sql_log_mode)
             self.logger.log_error(e, context=context)
             raise
 

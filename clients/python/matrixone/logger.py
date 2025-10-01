@@ -338,7 +338,9 @@ class MatrixOneLogger:
             # Return first 50 characters as fallback
             return sql_stripped[:50] + "..." if len(sql_stripped) > 50 else sql_stripped
 
-    def _format_sql_for_log(self, sql: str, is_error: bool = False, is_slow: bool = False) -> str:
+    def _format_sql_for_log(
+        self, sql: str, is_error: bool = False, is_slow: bool = False, override_mode: Optional[str] = None
+    ) -> str:
         """
         Format SQL query for logging based on mode and query characteristics
 
@@ -346,12 +348,16 @@ class MatrixOneLogger:
             sql: SQL query string
             is_error: Whether this is an error query
             is_slow: Whether this is a slow query
+            override_mode: Optional mode override for this specific query
 
         Returns:
             Formatted SQL string for logging
         """
+        # Use override mode if provided, otherwise use instance mode
+        effective_mode = override_mode if override_mode is not None else self.sql_log_mode
+
         # Mode 'off': Don't log SQL
-        if self.sql_log_mode == 'off':
+        if effective_mode == 'off':
             return ""
 
         # Errors and slow queries always show complete SQL for debugging
@@ -359,15 +365,15 @@ class MatrixOneLogger:
             return sql.strip()
 
         # Mode 'full': Always show complete SQL
-        if self.sql_log_mode == 'full':
+        if effective_mode == 'full':
             return sql.strip()
 
         # Mode 'simple': Only show operation summary
-        if self.sql_log_mode == 'simple':
+        if effective_mode == 'simple':
             return self._extract_sql_summary(sql)
 
         # Mode 'auto': Smart formatting based on length
-        if self.sql_log_mode == 'auto':
+        if effective_mode == 'auto':
             sql_stripped = sql.strip()
             if len(sql_stripped) <= self.max_sql_display_length:
                 # Short SQL: show fully
@@ -379,16 +385,73 @@ class MatrixOneLogger:
 
         return sql.strip()
 
+    def update_config(
+        self,
+        sql_log_mode: Optional[str] = None,
+        slow_query_threshold: Optional[float] = None,
+        max_sql_display_length: Optional[int] = None,
+    ):
+        """
+        Dynamically update logger configuration at runtime.
+
+        Args:
+            sql_log_mode: New SQL logging mode ('off', 'auto', 'simple', 'full')
+            slow_query_threshold: New threshold in seconds for slow query warnings
+            max_sql_display_length: New maximum SQL length in auto mode before summarizing
+
+        Example:
+            # Enable full SQL logging for debugging
+            client.logger.update_config(sql_log_mode='full')
+
+            # Lower slow query threshold
+            client.logger.update_config(slow_query_threshold=0.5)
+
+            # Update multiple settings
+            client.logger.update_config(
+                sql_log_mode='auto',
+                slow_query_threshold=2.0,
+                max_sql_display_length=1000
+            )
+        """
+        if sql_log_mode is not None:
+            valid_modes = ['off', 'auto', 'simple', 'full']
+            if sql_log_mode not in valid_modes:
+                raise ValueError(f"Invalid sql_log_mode '{sql_log_mode}'. Must be one of {valid_modes}")
+            self.sql_log_mode = sql_log_mode
+
+        if slow_query_threshold is not None:
+            if slow_query_threshold < 0:
+                raise ValueError("slow_query_threshold must be non-negative")
+            self.slow_query_threshold = slow_query_threshold
+
+        if max_sql_display_length is not None:
+            if max_sql_display_length < 1:
+                raise ValueError("max_sql_display_length must be positive")
+            self.max_sql_display_length = max_sql_display_length
+
     def log_query(
         self,
         query: str,
         execution_time: Optional[float] = None,
         affected_rows: Optional[int] = None,
         success: bool = True,
+        override_sql_log_mode: Optional[str] = None,
     ):
-        """Log SQL query execution with smart formatting"""
+        """
+        Log SQL query execution with smart formatting.
+
+        Args:
+            query: SQL query string
+            execution_time: Query execution time in seconds
+            affected_rows: Number of rows affected
+            success: Whether the query succeeded
+            override_sql_log_mode: Temporarily override sql_log_mode for this query only
+        """
+        # Use override mode if provided, otherwise use instance mode
+        effective_mode = override_sql_log_mode if override_sql_log_mode is not None else self.sql_log_mode
+
         # Skip logging if mode is 'off'
-        if self.sql_log_mode == 'off':
+        if effective_mode == 'off':
             return
 
         # Determine if this is a slow query or error
@@ -396,7 +459,7 @@ class MatrixOneLogger:
         is_error = not success
 
         # Format SQL based on mode and query characteristics
-        display_sql = self._format_sql_for_log(query, is_error=is_error, is_slow=is_slow)
+        display_sql = self._format_sql_for_log(query, is_error=is_error, is_slow=is_slow, override_mode=effective_mode)
 
         # Skip if no SQL to display
         if not display_sql:

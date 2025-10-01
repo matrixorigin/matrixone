@@ -674,7 +674,9 @@ class Client(BaseMatrixOneClient):
 
         return final_user_string, parsed_info
 
-    def _execute_with_logging(self, connection: "Connection", sql: str, context: str = "SQL execution"):
+    def _execute_with_logging(
+        self, connection: "Connection", sql: str, context: str = "SQL execution", override_sql_log_mode: str = None
+    ):
         """
         Execute SQL with proper logging through the client's logger.
 
@@ -685,6 +687,7 @@ class Client(BaseMatrixOneClient):
             connection: SQLAlchemy connection object
             sql: SQL query string
             context: Context description for error logging (default: "SQL execution")
+            override_sql_log_mode: Temporarily override sql_log_mode for this query only
 
         Returns:
             SQLAlchemy result object
@@ -706,18 +709,22 @@ class Client(BaseMatrixOneClient):
                 if result.returns_rows:
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
-                    self.logger.log_query(sql, execution_time, None, success=True)
+                    self.logger.log_query(
+                        sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode
+                    )
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
-                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(
+                        sql, execution_time, result.rowcount, success=True, override_sql_log_mode=override_sql_log_mode
+                    )
             except Exception:
                 # Fallback: just log the query without row count
-                self.logger.log_query(sql, execution_time, None, success=True)
+                self.logger.log_query(sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode)
 
             return result
         except Exception as e:
             execution_time = time.time() - start_time
-            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_query(sql, execution_time, success=False, override_sql_log_mode=override_sql_log_mode)
             self.logger.log_error(e, context=context)
             raise
 
@@ -3622,6 +3629,7 @@ class VectorManager:
         where_conditions: list = None,
         where_params: list = None,
         connection=None,
+        _log_mode: str = None,
     ) -> list:
         """
         Perform similarity search using chain operations.
@@ -3636,6 +3644,7 @@ class VectorManager:
             where_conditions: List of WHERE conditions
             where_params: List of parameters for WHERE conditions
             connection: Optional existing database connection (for transaction support)
+            _log_mode: Override SQL logging mode for this operation ('off', 'auto', 'simple', 'full')
 
         Returns:
             List of search results
@@ -3644,6 +3653,11 @@ class VectorManager:
             # Basic similarity search
             results = client.vector_ops.similarity_search(
                 "documents", "embedding", [0.1, 0.2, 0.3], limit=5
+            )
+
+            # Debug with full SQL logging
+            results = client.vector_ops.similarity_search(
+                "documents", "embedding", [0.1, 0.2, 0.3], limit=5, _log_mode='full'
             )
 
             # Search with model class
@@ -3689,12 +3703,16 @@ class VectorManager:
 
         if connection is not None:
             # Use existing connection (for transaction support)
-            result = self.client._execute_with_logging(connection, sql, context="Vector similarity search")
+            result = self.client._execute_with_logging(
+                connection, sql, context="Vector similarity search", override_sql_log_mode=_log_mode
+            )
             return result.fetchall()
         else:
             # Create new connection
             with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = self.client._execute_with_logging(conn, sql, context="Vector similarity search")
+                result = self.client._execute_with_logging(
+                    conn, sql, context="Vector similarity search", override_sql_log_mode=_log_mode
+                )
                 return result.fetchall()
 
     def range_search(
