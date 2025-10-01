@@ -370,6 +370,138 @@ class Query:
         results = self.all()
         return results[0] if results else None
 
+    def one(self):
+        """
+        Execute query and return exactly one result.
+
+        This method executes the query and expects exactly one row to be returned.
+        If no rows are found or multiple rows are found, it raises appropriate exceptions.
+
+        Returns::
+            Model instance: The single result row as a model instance.
+
+        Raises::
+            NoResultFound: If no results are found.
+            MultipleResultsFound: If more than one result is found.
+
+        Examples::
+
+            # Get a user by unique ID
+            user = client.query(User).filter(User.id == 1).one()
+
+            # Get a user by unique email
+            user = client.query(User).filter(User.email == "admin@example.com").one()
+
+        Notes::
+            - Use this method when you expect exactly one result
+            - For cases where zero or one result is acceptable, use one_or_none()
+            - For cases where multiple results are acceptable, use all() or first()
+        """
+        results = self.all()
+        if len(results) == 0:
+            from sqlalchemy.exc import NoResultFound
+
+            raise NoResultFound("No row was found for one()")
+        elif len(results) > 1:
+            from sqlalchemy.exc import MultipleResultsFound
+
+            raise MultipleResultsFound("Multiple rows were found for one()")
+        return results[0]
+
+    def one_or_none(self):
+        """
+        Execute query and return exactly one result or None.
+
+        This method executes the query and returns exactly one row if found,
+        or None if no rows are found. If multiple rows are found, it raises an exception.
+
+        Returns::
+            Model instance or None: The single result row as a model instance,
+                                   or None if no results are found.
+
+        Raises::
+            MultipleResultsFound: If more than one result is found.
+
+        Examples::
+
+            # Get a user by ID, return None if not found
+            user = client.query(User).filter(User.id == 999).one_or_none()
+            if user:
+                print(f"Found user: {user.name}")
+
+            # Get a user by email, return None if not found
+            user = client.query(User).filter(User.email == "nonexistent@example.com").one_or_none()
+            if user is None:
+                print("User not found")
+
+        Notes::
+            - Use this method when zero or one result is acceptable
+            - For cases where exactly one result is required, use one()
+            - For cases where multiple results are acceptable, use all() or first()
+        """
+        results = self.all()
+        if len(results) == 0:
+            return None
+        elif len(results) > 1:
+            from sqlalchemy.exc import MultipleResultsFound
+
+            raise MultipleResultsFound("Multiple rows were found for one_or_none()")
+        return results[0]
+
+    def scalar(self):
+        """
+        Execute query and return the first column of the first result.
+
+        This method executes the query and returns the value of the first column
+        from the first row, or None if no results are found. This is useful for
+        getting single values like counts, sums, or specific column values.
+
+        Returns::
+            Any or None: The value of the first column from the first row,
+                        or None if no results are found.
+
+        Examples::
+
+            # Get the count of all users
+            count = client.query(User).select(func.count(User.id)).scalar()
+
+            # Get the name of the first user
+            name = client.query(User).select(User.name).first().scalar()
+
+            # Get the maximum age
+            max_age = client.query(User).select(func.max(User.age)).scalar()
+
+            # Get a specific user's name by ID
+            name = client.query(User).select(User.name).filter(User.id == 1).scalar()
+
+        Notes::
+            - This method is particularly useful with aggregate functions
+            - For custom select queries, returns the first selected column value
+            - For model queries, returns the first column value from the model
+            - Returns None if no results are found
+        """
+        result = self.first()
+        if result is None:
+            return None
+
+        # If result is a model instance, return the first column value
+        if hasattr(result, '__dict__'):
+            # Get the first column value from the model
+            if hasattr(self.model_class, "__table__"):
+                first_column = list(self.model_class.__table__.columns)[0]
+                return getattr(result, first_column.name)
+            else:
+                # For raw queries, return the first attribute
+                attrs = [attr for attr in dir(result) if not attr.startswith('_')]
+                if attrs:
+                    return getattr(result, attrs[0])
+                return None
+        else:
+            # For raw data, return the first element
+            if isinstance(result, (list, tuple)) and len(result) > 0:
+                return result[0]
+            return result
+
     def count(self) -> int:
         """Execute query and return count of results"""
         # Create a new query for counting
@@ -1673,6 +1805,155 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         self._limit_count = 1
         results = self.all()
         return results[0] if results else None
+
+    def one(self):
+        """
+        Execute query and return exactly one result - SQLAlchemy style.
+
+        This method executes the query and expects exactly one row to be returned.
+        If no rows are found or multiple rows are found, it raises appropriate exceptions.
+        This method provides SQLAlchemy-compatible behavior for MatrixOne queries.
+
+        Returns::
+            Model instance: The single result row as a model instance.
+
+        Raises::
+            NoResultFound: If no results are found.
+            MultipleResultsFound: If more than one result is found.
+
+        Examples::
+
+            # Get a user by unique ID using SQLAlchemy expressions
+            from sqlalchemy import and_
+            user = client.query(User).filter(and_(User.id == 1, User.active == True)).one()
+
+            # Get a user by unique email with complex conditions
+            user = client.query(User).filter(User.email == "admin@example.com").one()
+
+        Notes::
+            - Use this method when you expect exactly one result
+            - For cases where zero or one result is acceptable, use one_or_none()
+            - For cases where multiple results are acceptable, use all() or first()
+            - This method supports SQLAlchemy expressions and operators
+        """
+        results = self.all()
+        if len(results) == 0:
+            from sqlalchemy.exc import NoResultFound
+
+            raise NoResultFound("No row was found for one()")
+        elif len(results) > 1:
+            from sqlalchemy.exc import MultipleResultsFound
+
+            raise MultipleResultsFound("Multiple rows were found for one()")
+        return results[0]
+
+    def one_or_none(self):
+        """
+        Execute query and return exactly one result or None - SQLAlchemy style.
+
+        This method executes the query and returns exactly one row if found,
+        or None if no rows are found. If multiple rows are found, it raises an exception.
+        This method provides SQLAlchemy-compatible behavior for MatrixOne queries.
+
+        Returns::
+            Model instance or None: The single result row as a model instance,
+                                   or None if no results are found.
+
+        Raises::
+            MultipleResultsFound: If more than one result is found.
+
+        Examples::
+
+            # Get a user by ID, return None if not found
+            from sqlalchemy import and_
+            user = client.query(User).filter(and_(User.id == 999, User.active == True)).one_or_none()
+            if user:
+                print(f"Found user: {user.name}")
+
+            # Get a user by email with complex conditions
+            user = client.query(User).filter(User.email == "nonexistent@example.com").one_or_none()
+            if user is None:
+                print("User not found")
+
+        Notes::
+            - Use this method when zero or one result is acceptable
+            - For cases where exactly one result is required, use one()
+            - For cases where multiple results are acceptable, use all() or first()
+            - This method supports SQLAlchemy expressions and operators
+        """
+        results = self.all()
+        if len(results) == 0:
+            return None
+        elif len(results) > 1:
+            from sqlalchemy.exc import MultipleResultsFound
+
+            raise MultipleResultsFound("Multiple rows were found for one_or_none()")
+        return results[0]
+
+    def scalar(self):
+        """
+        Execute query and return the first column of the first result - SQLAlchemy style.
+
+        This method executes the query and returns the value of the first column
+        from the first row, or None if no results are found. This is useful for
+        getting single values like counts, sums, or specific column values.
+        This method provides SQLAlchemy-compatible behavior for MatrixOne queries.
+
+        Returns::
+            Any or None: The value of the first column from the first row,
+                        or None if no results are found.
+
+        Examples::
+
+            # Get the count of all users using SQLAlchemy functions
+            from sqlalchemy import func
+            count = client.query(User).select(func.count(User.id)).scalar()
+
+            # Get the name of the first user
+            name = client.query(User).select(User.name).first().scalar()
+
+            # Get the maximum age with complex conditions
+            max_age = client.query(User).select(func.max(User.age)).filter(User.active == True).scalar()
+
+            # Get a specific user's name by ID
+            name = client.query(User).select(User.name).filter(User.id == 1).scalar()
+
+        Notes::
+            - This method is particularly useful with aggregate functions
+            - For custom select queries, returns the first selected column value
+            - For model queries, returns the first column value from the model
+            - Returns None if no results are found
+            - This method supports SQLAlchemy expressions and operators
+        """
+        result = self.first()
+        if result is None:
+            return None
+
+        # If result is a model instance, return the first column value
+        if hasattr(result, '__dict__'):
+            # For custom select queries, check if we have select columns
+            if self._select_columns:
+                # For custom select, return the first selected column value
+                select_cols = self._extract_select_columns()
+                if select_cols:
+                    first_col_name = select_cols[0]
+                    return getattr(result, first_col_name)
+
+            # Get the first column value from the model
+            if hasattr(self.model_class, "__table__"):
+                first_column = list(self.model_class.__table__.columns)[0]
+                return getattr(result, first_column.name)
+            else:
+                # For raw queries, return the first attribute
+                attrs = [attr for attr in dir(result) if not attr.startswith('_')]
+                if attrs:
+                    return getattr(result, attrs[0])
+                return None
+        else:
+            # For raw data, return the first element
+            if isinstance(result, (list, tuple)) and len(result) > 0:
+                return result[0]
+            return result
 
     def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
