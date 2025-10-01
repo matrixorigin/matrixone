@@ -16,13 +16,10 @@ package iscp
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -192,6 +189,7 @@ func newTestJobID() JobID {
 	}
 }
 
+/*
 type MockSQLExecutor struct {
 	txnexec executor.TxnExecutor
 	sqls    []string
@@ -262,6 +260,7 @@ func (exec *MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn exec
 	//fmt.Printf("ExecTxn %v\n", exec.sqls)
 	return err
 }
+*/
 
 func TestConsumer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
