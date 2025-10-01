@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
     from .sqlalchemy_ext import VectorOpType
 
 from sqlalchemy import create_engine, text
@@ -3101,6 +3102,77 @@ class VectorManager:
     def __init__(self, client):
         self.client = client
 
+    def _get_ivf_index_table_names(
+        self,
+        database: str,
+        table_name: str,
+        column_name: str,
+        connection: Connection,
+    ) -> Dict[str, str]:
+        """
+        Get the table names of the IVF index tables.
+        """
+        sql = (
+            f"SELECT i.algo_table_type, i.index_table_name "
+            f"FROM `mo_catalog`.`mo_indexes` AS i "
+            f"JOIN `mo_catalog`.`mo_tables` AS t ON i.table_id = t.rel_id "
+            f"AND i.column_name = '{column_name}' "
+            f"AND t.relname = '{table_name}' "
+            f"AND t.reldatabase = '{database}' "
+            f"AND i.algo='ivfflat'"
+        )
+        result = connection.execute(text(sql))
+        # +-----------------+-----------------------------------------------------------+
+        # | algo_table_type | index_table_name                                          |
+        # +-----------------+-----------------------------------------------------------+
+        # | metadata        | __mo_index_secondary_01999b6b-414c-71dc-ab7f-8399ab06cb64 |
+        # | centroids       | __mo_index_secondary_01999b6b-414c-7311-98d2-9de6a0f591ee |
+        # | entries         | __mo_index_secondary_01999b6b-414c-7324-90f0-695d791d574f |
+        # +-----------------+-----------------------------------------------------------+
+        return {row[0]: row[1] for row in result}
+
+    def _get_ivf_buckets_distribution(
+        self,
+        database: str,
+        table_name: str,
+        connection: Connection,
+    ) -> Dict[str, List[int]]:
+        """
+        Get the buckets distribution of the IVF index tables.
+        """
+        sql = (
+            f"SELECT "
+            f"  COUNT(*) AS centroid_count, "
+            f"  __mo_index_centroid_fk_id AS centroid_id, "
+            f"  __mo_index_centroid_fk_version AS centroid_version "
+            f"FROM `{database}`.`{table_name}` "
+            f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
+        )
+        result = connection.execute(text(sql))
+        rows = result.fetchall()
+        # +----------------+-------------+------------------+
+        # | centroid_count | centroid_id | centroid_version |
+        # +----------------+-------------+------------------+
+        # |             51 |           0 |                0 |
+        # |             32 |           1 |                0 |
+        # |             62 |           2 |                0 |
+        # |             40 |           3 |                0 |
+        # |             60 |           4 |                0 |
+        # +----------------+-------------+------------------+
+
+        # Output:
+        # {
+        # "centroid_count": [51, 32, 62, 40, 60],
+        # "centroid_id": [0, 1, 2, 3, 4],
+        # "centroid_version": [0, 0, 0, 0, 0]
+        # }
+
+        return {
+            "centroid_count": [row[0] for row in rows],
+            "centroid_id": [row[1] for row in rows],
+            "centroid_version": [row[2] for row in rows],
+        }
+
     def create_ivf(
         self,
         table_name_or_model,
@@ -3642,6 +3714,98 @@ class VectorManager:
                 result = conn.execute(text(sql))
                 return result.fetchall()
 
+    def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
+        """
+        Get IVF index statistics for a table.
+
+        Args:
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            column_name: Name of the vector column (optional, will be inferred if not provided)
+
+        Returns:
+            Dict containing IVF index statistics including:
+            - index_tables: Dictionary mapping table types to table names
+            - distribution: Dictionary containing bucket distribution data
+            - database: Database name
+            - table_name: Table name
+            - column_name: Vector column name
+
+        Raises:
+            Exception: If IVF index is not found or if there are errors retrieving stats
+
+        Examples:
+            # Get stats for a table with vector column
+            stats = client.vector_ops.get_ivf_stats("my_table", "embedding")
+            print(f"Index tables: {stats['index_tables']}")
+            print(f"Distribution: {stats['distribution']}")
+
+            # Get stats using model class
+            stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
+        """
+        from sqlalchemy import text
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+
+        # Get database name from connection params
+        database = self.client._connection_params.get('database')
+        if not database:
+            raise Exception("No database connection found. Please connect to a database first.")
+
+        # If column_name is not provided, try to infer it
+        if not column_name:
+            # Query the table schema to find vector columns
+            with self.client.get_sqlalchemy_engine().begin() as conn:
+                schema_sql = text(
+                    f"""
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = '{database}'
+                    AND table_name = '{table_name}'
+                    AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
+                """
+                )
+                result = conn.execute(schema_sql)
+                vector_columns = result.fetchall()
+
+                if not vector_columns:
+                    raise Exception(f"No vector columns found in table {table_name}")
+                elif len(vector_columns) == 1:
+                    column_name = vector_columns[0][0]
+                else:
+                    # Multiple vector columns found, raise error asking user to specify
+                    column_names = [col[0] for col in vector_columns]
+                    raise Exception(
+                        f"Multiple vector columns found in table {table_name}: {column_names}. "
+                        f"Please specify the column_name parameter."
+                    )
+
+        # Get IVF index table names
+        with self.client.get_sqlalchemy_engine().begin() as conn:
+            index_tables = self._get_ivf_index_table_names(database, table_name, column_name, conn)
+
+            if not index_tables:
+                raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+
+            # Get the entries table name for distribution analysis
+            entries_table = index_tables.get('entries')
+            if not entries_table:
+                raise Exception("No entries table found in IVF index")
+
+            # Get bucket distribution
+            distribution = self._get_ivf_buckets_distribution(database, entries_table, conn)
+
+        return {
+            'index_tables': index_tables,
+            'distribution': distribution,
+            'database': database,
+            'table_name': table_name,
+            'column_name': column_name,
+        }
+
 
 class TransactionVectorIndexManager(VectorManager):
     """Vector index manager that executes operations within a transaction"""
@@ -3725,6 +3889,97 @@ class TransactionVectorIndexManager(VectorManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop vector index {name} from table {table_name} in transaction: {e}")
+
+    def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
+        """
+        Get IVF index statistics for a table within transaction.
+
+        Args:
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            column_name: Name of the vector column (optional, will be inferred if not provided)
+
+        Returns:
+            Dict containing IVF index statistics including:
+            - index_tables: Dictionary mapping table types to table names
+            - distribution: Dictionary containing bucket distribution data
+            - database: Database name
+            - table_name: Table name
+            - column_name: Vector column name
+
+        Raises:
+            Exception: If IVF index is not found or if there are errors retrieving stats
+
+        Examples:
+            # Get stats for a table with vector column within transaction
+            with client.transaction() as tx:
+                stats = tx.vector_ops.get_ivf_stats("my_table", "embedding")
+                print(f"Index tables: {stats['index_tables']}")
+                print(f"Distribution: {stats['distribution']}")
+        """
+        from sqlalchemy import text
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+
+        # Get database name from connection params
+        database = self.client._connection_params.get('database')
+        if not database:
+            raise Exception("No database connection found. Please connect to a database first.")
+
+        # If column_name is not provided, try to infer it
+        if not column_name:
+            # Query the table schema to find vector columns using transaction connection
+            schema_sql = text(
+                f"""
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = '{database}'
+                AND table_name = '{table_name}'
+                AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
+            """
+            )
+            result = self.transaction_wrapper.execute(schema_sql)
+            vector_columns = result.fetchall()
+
+            if not vector_columns:
+                raise Exception(f"No vector columns found in table {table_name}")
+            elif len(vector_columns) == 1:
+                column_name = vector_columns[0][0]
+            else:
+                # Multiple vector columns found, raise error asking user to specify
+                column_names = [col[0] for col in vector_columns]
+                raise Exception(
+                    f"Multiple vector columns found in table {table_name}: {column_names}. "
+                    f"Please specify the column_name parameter."
+                )
+
+        # Get connection from transaction wrapper
+        connection = self.transaction_wrapper.get_connection()
+
+        # Get IVF index table names
+        index_tables = self._get_ivf_index_table_names(database, table_name, column_name, connection)
+
+        if not index_tables:
+            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+
+        # Get the entries table name for distribution analysis
+        entries_table = index_tables.get('entries')
+        if not entries_table:
+            raise Exception("No entries table found in IVF index")
+
+        # Get bucket distribution
+        distribution = self._get_ivf_buckets_distribution(database, entries_table, connection)
+
+        return {
+            'index_tables': index_tables,
+            'distribution': distribution,
+            'database': database,
+            'table_name': table_name,
+            'column_name': column_name,
+        }
 
 
 class FulltextIndexManager:

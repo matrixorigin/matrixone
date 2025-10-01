@@ -2511,6 +2511,97 @@ class AsyncTransactionVectorIndexManager(AsyncVectorManager):
         """Execute SQL within transaction"""
         return await self.transaction_wrapper.execute(sql, params)
 
+    async def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
+        """
+        Get IVF index statistics for a table within transaction.
+
+        Args:
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            column_name: Name of the vector column (optional, will be inferred if not provided)
+
+        Returns:
+            Dict containing IVF index statistics including:
+            - index_tables: Dictionary mapping table types to table names
+            - distribution: Dictionary containing bucket distribution data
+            - database: Database name
+            - table_name: Table name
+            - column_name: Vector column name
+
+        Raises:
+            Exception: If IVF index is not found or if there are errors retrieving stats
+
+        Examples:
+            # Get stats for a table with vector column within transaction
+            async with client.transaction() as tx:
+                stats = await tx.vector_ops.get_ivf_stats("my_table", "embedding")
+                print(f"Index tables: {stats['index_tables']}")
+                print(f"Distribution: {stats['distribution']}")
+        """
+        from sqlalchemy import text
+
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+
+        # Get database name from connection params
+        database = self.client._connection_params.get('database')
+        if not database:
+            raise Exception("No database connection found. Please connect to a database first.")
+
+        # If column_name is not provided, try to infer it
+        if not column_name:
+            # Query the table schema to find vector columns using transaction connection
+            schema_sql = text(
+                f"""
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = '{database}'
+                AND table_name = '{table_name}'
+                AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
+            """
+            )
+            result = await self.transaction_wrapper.execute(schema_sql)
+            vector_columns = result.fetchall()
+
+            if not vector_columns:
+                raise Exception(f"No vector columns found in table {table_name}")
+            elif len(vector_columns) == 1:
+                column_name = vector_columns[0][0]
+            else:
+                # Multiple vector columns found, raise error asking user to specify
+                column_names = [col[0] for col in vector_columns]
+                raise Exception(
+                    f"Multiple vector columns found in table {table_name}: {column_names}. "
+                    f"Please specify the column_name parameter."
+                )
+
+        # Get connection from transaction wrapper
+        connection = self.transaction_wrapper.connection
+
+        # Get IVF index table names
+        index_tables = await self._get_ivf_index_table_names(database, table_name, column_name, connection)
+
+        if not index_tables:
+            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+
+        # Get the entries table name for distribution analysis
+        entries_table = index_tables.get('entries')
+        if not entries_table:
+            raise Exception("No entries table found in IVF index")
+
+        # Get bucket distribution
+        distribution = await self._get_ivf_buckets_distribution(database, entries_table, connection)
+
+        return {
+            'index_tables': index_tables,
+            'distribution': distribution,
+            'database': database,
+            'table_name': table_name,
+            'column_name': column_name,
+        }
+
 
 class AsyncTransactionWrapper:
     """Async transaction wrapper for executing queries within a transaction"""
