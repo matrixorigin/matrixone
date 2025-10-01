@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -603,4 +604,69 @@ func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testin
 
 func TestSyncUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
 	runSyncUpdateInsertShuffle2FilesWithSmallCap[float32](t)
+}
+
+func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return int64(10), nil
+		case "hnsw_threads_build":
+			return int64(8), nil
+		default:
+			return int64(0), nil
+		}
+	})
+
+	runSql = mock_runSql_2files
+	runSql_streaming = mock_runSql_streaming_2files
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[T]{Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, 100)}
+
+	key := int64(0)
+	v := []T{0.1, 0.2, 0.3}
+
+	// 0 - 199 key exists, 200 - 399 new insert
+	for i := 0; i < 400; i++ {
+		e := vectorindex.VectorIndexCdcEntry[T]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	rand.Seed(uint64(time.Now().UnixNano()))
+	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+
+	var err error
+	var sync *HnswSync[T]
+
+	var ff T
+	switch any(ff).(type) {
+	case float32:
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+		require.Nil(t, err)
+
+	case float64:
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float64), 3)
+		require.Nil(t, err)
+	}
+
+	defer sync.Destroy()
+	for i := 0; i < 10; i++ {
+		fmt.Printf("round %d\n", i)
+		err = sync.Update(sqlproc, &cdc)
+		require.Nil(t, err)
+	}
+
+	err = sync.Save(sqlproc)
+	require.NoError(t, err)
+}
+
+func TestSyncContinuousUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
+	runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[float32](t)
 }

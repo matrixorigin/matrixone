@@ -46,6 +46,7 @@ type HnswModel[T types.RealNumbers] struct {
 
 	// info required for build
 	MaxCapacity uint
+	NThread     uint
 
 	// from metadata.  info required for search
 	Timestamp int64
@@ -66,29 +67,48 @@ func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexC
 	idx := &HnswModel[T]{}
 
 	idx.Id = id
+	idx.NThread = uint(nthread)
+	idx.MaxCapacity = max_capacity
 
-	idx.Index, err = usearch.NewIndex(cfg.Usearch)
+	err = idx.initIndex(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	idx.MaxCapacity = max_capacity
+	return idx, nil
+}
+
+func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
+	idx.Index, err = usearch.NewIndex(cfg.Usearch)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			if idx.Index != nil {
+				idx.Index.Destroy()
+				idx.Index = nil
+			}
+		}
+	}()
 
 	err = idx.Index.Reserve(idx.MaxCapacity)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = idx.Index.ChangeThreadsAdd(uint(nthread))
+	err = idx.Index.ChangeThreadsAdd(idx.NThread)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = idx.Index.ChangeThreadsSearch(uint(nthread))
+	err = idx.Index.ChangeThreadsSearch(idx.NThread)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return idx, nil
+
+	return nil
 }
 
 // Destroy the struct
@@ -189,6 +209,15 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	}
 	idx.Index = nil
 	idx.Path = f.Name()
+
+	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
+	/*
+		fi, err := os.Stat(idx.Path)
+		if err != nil {
+			return err
+		}
+		idx.FileSize := fi.Size()
+	*/
 
 	return nil
 }
@@ -498,7 +527,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 
 	chksum := vectorindex.CheckSumFromBuffer(idx.buffer)
 	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with the index file")
+		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index buffer")
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -610,7 +639,18 @@ func (idx *HnswModel[T]) LoadIndex(
 		return nil
 	}
 
+	if idx.FileSize == 0 && len(idx.Path) == 0 {
+		// indx is newly created and not save to file yet so simply create a usearch index here
+		return idx.initIndex(idxcfg)
+	}
+
+	if len(idx.Checksum) == 0 {
+		// Checksum is empty.  We shouldn't get the file from database
+		return moerr.NewInternalErrorNoCtx("checksum is empty.  Cannot read index file from database")
+	}
+
 	if len(idx.Path) == 0 {
+
 		// create tempfile for writing
 		fp, err = os.CreateTemp("", "hnsw")
 		if err != nil {
@@ -690,6 +730,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
+
 	}
 
 	// check checksum
