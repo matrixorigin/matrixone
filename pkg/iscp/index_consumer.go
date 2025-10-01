@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -49,7 +48,6 @@ type IndexConsumer struct {
 	info         *ConsumerInfo
 	tableDef     *plan.TableDef
 	sqlWriter    IndexSqlWriter
-	exec         executor.SQLExecutor
 	rowdata      []any
 	rowdelete    []any
 	sqlBufSendCh chan []byte
