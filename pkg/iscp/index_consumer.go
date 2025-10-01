@@ -152,8 +152,6 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 
 		func() {
 			newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
-			newctx, cancel := context.WithTimeout(newctx, time.Hour)
-			defer cancel()
 
 			txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 			if err != nil {
@@ -210,8 +208,6 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	// However, HNSW only run in local without save to database until Sync.Save().
 	// HNSW is okay to have similar implementation to TAIL
 	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	newctx, cancel := context.WithTimeout(newctx, 24*time.Hour)
-	defer cancel()
 
 	txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 	if err != nil {
@@ -266,10 +262,10 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 					err = r.UpdateWatermark(newctx, c.cnUUID, txnOp)
 					if err != nil {
 						errch <- err
+						return
 					}
 				}
 				return
-
 			}
 
 			// sql -> cdc
@@ -279,6 +275,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				errch <- err
 				return
 			}
+
 			err = sync.Update(sqlproc, &cdc)
 			if err != nil {
 				errch <- err
