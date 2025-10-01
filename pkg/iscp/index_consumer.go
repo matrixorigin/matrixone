@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -116,6 +117,8 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				}
 				err := func() (err error) {
 					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
+					newctx, cancel := context.WithTimeout(newctx, time.Hour)
+					defer cancel()
 					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 					if err != nil {
 						return err
@@ -152,6 +155,8 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 
 		func() {
 			newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
+			newctx, cancel := context.WithTimeout(newctx, 24*time.Hour)
+			defer cancel()
 
 			txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 			if err != nil {
@@ -207,7 +212,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	// Suppose we shoult not use transaction here for Snapshot type and commit every time a new batch comes.
 	// However, HNSW only run in local without save to database until Sync.Save().
 	// HNSW is okay to have similar implementation to TAIL
-	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
+	newctx, cancel := context.WithTimeout(newctx, 24*time.Hour)
+	defer cancel()
 
 	txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 	if err != nil {
