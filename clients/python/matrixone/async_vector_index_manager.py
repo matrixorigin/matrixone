@@ -270,9 +270,6 @@ class AsyncVectorManager:
         if connection is None:
             raise ValueError("connection parameter is required for transaction operations")
 
-        # Use client's insert method but execute within transaction
-        from sqlalchemy import text
-
         # Build INSERT statement
         columns = list(data.keys())
         values = list(data.values())
@@ -289,7 +286,7 @@ class AsyncVectorManager:
         values_str = ", ".join([f"'{v}'" for v in formatted_values])
 
         sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        await connection.execute(text(sql))
+        await self.client._execute_with_logging(connection, sql, context="Vector insert")
 
         return self
 
@@ -336,8 +333,6 @@ class AsyncVectorManager:
         Returns:
             List of search results
         """
-        from sqlalchemy import text
-
         from .sql_builder import DistanceFunction, build_vector_similarity_query
 
         # Convert distance type to enum
@@ -364,12 +359,12 @@ class AsyncVectorManager:
 
         if connection is not None:
             # Use existing connection (for transaction support)
-            result = await connection.execute(text(sql))
+            result = await self.client._execute_with_logging(connection, sql, context="Async vector similarity search")
             return result.fetchall()
         else:
             # Create new connection
             async with self.client._engine.begin() as conn:
-                result = await conn.execute(text(sql))
+                result = await self.client._execute_with_logging(conn, sql, context="Async vector similarity search")
                 return result.fetchall()
 
     async def range_search(
@@ -397,8 +392,6 @@ class AsyncVectorManager:
         Returns:
             List of search results within range
         """
-        from sqlalchemy import text
-
         # Convert vector to string format
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
@@ -432,12 +425,12 @@ class AsyncVectorManager:
 
         if connection is not None:
             # Use existing connection (for transaction support)
-            result = await connection.execute(text(sql))
+            result = await self.client._execute_with_logging(connection, sql, context="Async vector range search")
             return result.fetchall()
         else:
             # Create new connection
             async with self.client._engine.begin() as conn:
-                result = await conn.execute(text(sql))
+                result = await self.client._execute_with_logging(conn, sql, context="Async vector range search")
                 return result.fetchall()
 
     async def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
@@ -468,8 +461,6 @@ class AsyncVectorManager:
             # Get stats using model class
             stats = await client.vector_ops.get_ivf_stats(MyModel, "vector_col")
         """
-        from sqlalchemy import text
-
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
             table_name = table_name_or_model.__tablename__
@@ -485,16 +476,14 @@ class AsyncVectorManager:
         if not column_name:
             # Query the table schema to find vector columns
             async with self.client._engine.begin() as conn:
-                schema_sql = text(
-                    f"""
-                    SELECT column_name, data_type
-                    FROM information_schema.columns
-                    WHERE table_schema = '{database}'
-                    AND table_name = '{table_name}'
-                    AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
-                """
+                schema_sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM information_schema.columns "
+                    f"WHERE table_schema = '{database}' "
+                    f"AND table_name = '{table_name}' "
+                    f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
                 )
-                result = await conn.execute(schema_sql)
+                result = await self.client._execute_with_logging(conn, schema_sql, context="Auto-detect vector column")
                 vector_columns = result.fetchall()
 
                 if not vector_columns:
@@ -551,7 +540,7 @@ class AsyncVectorManager:
             f"AND t.reldatabase = '{database}' "
             f"AND i.algo='ivfflat'"
         )
-        result = await connection.execute(text(sql))
+        result = await self.client._execute_with_logging(connection, sql, context="Get IVF index table names")
         return {row[0]: row[1] for row in result}
 
     async def _get_ivf_buckets_distribution(
@@ -571,7 +560,7 @@ class AsyncVectorManager:
             f"FROM `{database}`.`{table_name}` "
             f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
         )
-        result = await connection.execute(text(sql))
+        result = await self.client._execute_with_logging(connection, sql, context="Get IVF buckets distribution")
         rows = result.fetchall()
         return {
             "centroid_count": [row[0] for row in rows],

@@ -674,6 +674,53 @@ class Client(BaseMatrixOneClient):
 
         return final_user_string, parsed_info
 
+    def _execute_with_logging(self, connection: "Connection", sql: str, context: str = "SQL execution"):
+        """
+        Execute SQL with proper logging through the client's logger.
+
+        This is an internal helper method used by all SDK components to ensure
+        consistent SQL logging across vector operations, transactions, and other features.
+
+        Args:
+            connection: SQLAlchemy connection object
+            sql: SQL query string
+            context: Context description for error logging (default: "SQL execution")
+
+        Returns:
+            SQLAlchemy result object
+
+        Note:
+            This method is used internally by VectorManager, TransactionWrapper,
+            and other SDK components. External users should use execute() instead.
+        """
+        import time
+        from sqlalchemy import text
+
+        start_time = time.time()
+        try:
+            result = connection.execute(text(sql))
+            execution_time = time.time() - start_time
+
+            # Try to get row count if available
+            try:
+                if result.returns_rows:
+                    # For SELECT queries, we can't consume the result to count rows
+                    # So we just log without row count
+                    self.logger.log_query(sql, execution_time, None, success=True)
+                else:
+                    # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+            except Exception:
+                # Fallback: just log the query without row count
+                self.logger.log_query(sql, execution_time, None, success=True)
+
+            return result
+        except Exception as e:
+            execution_time = time.time() - start_time
+            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_error(e, context=context)
+            raise
+
     def execute(self, sql: str, params: Optional[Tuple] = None) -> "ResultSet":
         """
         Execute SQL query using connection pool.
@@ -2428,17 +2475,27 @@ class TransactionWrapper:
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
         """Execute SQL within transaction"""
+        import time
+
+        start_time = time.time()
+
         try:
             result = self.connection.execute(text(sql), params or {})
+            execution_time = time.time() - start_time
 
             if result.returns_rows:
                 columns = list(result.keys())
                 rows = result.fetchall()
+                self.client.logger.log_query(sql, execution_time, len(rows), success=True)
                 return ResultSet(columns, rows)
             else:
+                self.client.logger.log_query(sql, execution_time, result.rowcount, success=True)
                 return ResultSet([], [], affected_rows=result.rowcount)
 
         except Exception as e:
+            execution_time = time.time() - start_time
+            self.client.logger.log_query(sql, execution_time, success=False)
+            self.client.logger.log_error(e, context="Transaction query execution")
             raise QueryError(f"Transaction query execution failed: {e}")
 
     def get_connection(self):
@@ -3116,7 +3173,7 @@ class VectorManager:
             f"AND t.reldatabase = '{database}' "
             f"AND i.algo='ivfflat'"
         )
-        result = connection.execute(text(sql))
+        result = self.client._execute_with_logging(connection, sql, context="Get IVF index table names")
         # +-----------------+-----------------------------------------------------------+
         # | algo_table_type | index_table_name                                          |
         # +-----------------+-----------------------------------------------------------+
@@ -3143,7 +3200,7 @@ class VectorManager:
             f"FROM `{database}`.`{table_name}` "
             f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
         )
-        result = connection.execute(text(sql))
+        result = self.client._execute_with_logging(connection, sql, context="Get IVF buckets distribution")
         rows = result.fetchall()
         # +----------------+-------------+------------------+
         # | centroid_count | centroid_id | centroid_version |
@@ -3600,7 +3657,6 @@ class VectorManager:
                 where_conditions=["category = ?"], where_params=["AI"]
             )
         """
-        from sqlalchemy import text
         from .sql_builder import DistanceFunction, build_vector_similarity_query
 
         # Handle model class input
@@ -3633,12 +3689,12 @@ class VectorManager:
 
         if connection is not None:
             # Use existing connection (for transaction support)
-            result = connection.execute(text(sql))
+            result = self.client._execute_with_logging(connection, sql, context="Vector similarity search")
             return result.fetchall()
         else:
             # Create new connection
             with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = conn.execute(text(sql))
+                result = self.client._execute_with_logging(conn, sql, context="Vector similarity search")
                 return result.fetchall()
 
     def range_search(
@@ -3666,8 +3722,6 @@ class VectorManager:
         Returns:
             List of search results within range
         """
-        from sqlalchemy import text
-
         # Convert vector to string format
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
@@ -3701,12 +3755,12 @@ class VectorManager:
 
         if connection is not None:
             # Use existing connection (for transaction support)
-            result = connection.execute(text(sql))
+            result = self.client._execute_with_logging(connection, sql, context="Vector range search")
             return result.fetchall()
         else:
             # Create new connection
             with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = conn.execute(text(sql))
+                result = self.client._execute_with_logging(conn, sql, context="Vector range search")
                 return result.fetchall()
 
     def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
@@ -3737,8 +3791,6 @@ class VectorManager:
             # Get stats using model class
             stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
         """
-        from sqlalchemy import text
-
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
             table_name = table_name_or_model.__tablename__
@@ -3754,16 +3806,14 @@ class VectorManager:
         if not column_name:
             # Query the table schema to find vector columns
             with self.client.get_sqlalchemy_engine().begin() as conn:
-                schema_sql = text(
-                    f"""
-                    SELECT column_name, data_type
-                    FROM information_schema.columns
-                    WHERE table_schema = '{database}'
-                    AND table_name = '{table_name}'
-                    AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
-                """
+                schema_sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM information_schema.columns "
+                    f"WHERE table_schema = '{database}' "
+                    f"AND table_name = '{table_name}' "
+                    f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
                 )
-                result = conn.execute(schema_sql)
+                result = self.client._execute_with_logging(conn, schema_sql, context="Auto-detect vector column")
                 vector_columns = result.fetchall()
 
                 if not vector_columns:

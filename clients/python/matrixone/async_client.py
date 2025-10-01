@@ -1845,6 +1845,53 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
+    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution"):
+        """
+        Execute SQL asynchronously with proper logging through the client's logger.
+
+        This is an internal helper method used by all SDK components to ensure
+        consistent SQL logging across async vector operations, transactions, and other features.
+
+        Args:
+            connection: SQLAlchemy async connection object
+            sql: SQL query string
+            context: Context description for error logging (default: "Async SQL execution")
+
+        Returns:
+            SQLAlchemy result object
+
+        Note:
+            This method is used internally by AsyncVectorManager, AsyncTransactionWrapper,
+            and other SDK components. External users should use execute() instead.
+        """
+        import time
+        from sqlalchemy import text
+
+        start_time = time.time()
+        try:
+            result = await connection.execute(text(sql))
+            execution_time = time.time() - start_time
+
+            # Try to get row count if available
+            try:
+                if result.returns_rows:
+                    # For SELECT queries, we can't consume the result to count rows
+                    # So we just log without row count
+                    self.logger.log_query(sql, execution_time, None, success=True)
+                else:
+                    # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+            except Exception:
+                # Fallback: just log the query without row count
+                self.logger.log_query(sql, execution_time, None, success=True)
+
+            return result
+        except Exception as e:
+            execution_time = time.time() - start_time
+            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_error(e, context=context)
+            raise
+
     async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
         """
         Execute SQL query asynchronously using SQLAlchemy async engine
@@ -2619,19 +2666,29 @@ class AsyncTransactionWrapper:
 
     async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
         """Execute SQL within transaction asynchronously"""
+        import time
+
+        start_time = time.time()
+
         try:
             # Handle parameter substitution for MatrixOne compatibility
             final_sql = self.client._substitute_parameters(sql, params)
             result = await self.connection.execute(text(final_sql))
+            execution_time = time.time() - start_time
 
             if result.returns_rows:
                 rows = result.fetchall()
                 columns = list(result.keys()) if hasattr(result, "keys") else []
+                self.client.logger.log_query(sql, execution_time, len(rows), success=True)
                 return AsyncResultSet(columns, rows)
             else:
+                self.client.logger.log_query(sql, execution_time, result.rowcount, success=True)
                 return AsyncResultSet([], [], affected_rows=result.rowcount)
 
         except Exception as e:
+            execution_time = time.time() - start_time
+            self.client.logger.log_query(sql, execution_time, success=False)
+            self.client.logger.log_error(e, context="Async transaction query execution")
             raise QueryError(f"Transaction query execution failed: {e}")
 
     def get_connection(self):

@@ -345,7 +345,7 @@ class LoggerIntegrationDemo:
 
             for mode in modes:
                 print(f"\n--- Mode: {mode} ---")
-                
+
                 # Create client with specific mode
                 client = Client(
                     host=host,
@@ -355,29 +355,22 @@ class LoggerIntegrationDemo:
                     database=database,
                     sql_log_mode=mode,
                     slow_query_threshold=0.5,
-                    max_sql_display_length=500
+                    max_sql_display_length=500,
                 )
 
                 table_name = f"log_mode_demo_{mode}"
-                
+
                 try:
                     # Short SQL
                     client.execute("SELECT 1")
-                    
+
                     # Create table and batch insert (long SQL)
-                    client.create_table(
-                        table_name,
-                        columns={"id": "int", "embedding": "vecf32(128)"},
-                        primary_key="id"
-                    )
-                    
+                    client.create_table(table_name, columns={"id": "int", "embedding": "vecf32(128)"}, primary_key="id")
+
                     # Batch insert with vectors (creates VERY long SQL)
-                    data_list = [
-                        {"id": i + 1, "embedding": [random.random() for _ in range(128)]}
-                        for i in range(20)
-                    ]
+                    data_list = [{"id": i + 1, "embedding": [random.random() for _ in range(128)]} for i in range(20)]
                     client.batch_insert(table_name, data_list)
-                    
+
                 except Exception as e:
                     print(f"Note: {e}")
                 finally:
@@ -412,7 +405,7 @@ class LoggerIntegrationDemo:
                 password=password,
                 database=database,
                 sql_log_mode="auto",
-                slow_query_threshold=0.05  # Very low threshold
+                slow_query_threshold=0.05,  # Very low threshold
             )
 
             try:
@@ -505,7 +498,7 @@ def main():
         print("- ✅ Async client logging")
         print("- ✅ Different logger levels")
         print("- ✅ Error tracking and reporting")
-        
+
         print("\n📖 SQL Log Modes Guide:")
         print("  • 'off'    - No SQL logging (only connection events)")
         print("  • 'simple' - Operation summary only (very concise)")
