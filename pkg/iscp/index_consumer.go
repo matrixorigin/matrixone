@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -115,15 +114,11 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				if !ok {
 					return
 				}
-				func() {
-
+				err := func() (err error) {
 					newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, r.GetAccountID())
-					newctx, cancel := context.WithTimeout(newctx, time.Hour)
-					defer cancel()
-
 					txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
 					if err != nil {
-						errch <- err
+						return err
 					}
 					defer func() {
 						if err != nil {
@@ -141,10 +136,15 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
 						os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
 						os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
-						errch <- err
+						return err
 					}
 					res.Close()
+					return nil
 				}()
+				if err != nil {
+					errch <- err
+					return
+				}
 			}
 		}
 
