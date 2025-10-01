@@ -49,9 +49,7 @@ class TestLoggerIntegration:
 
         # Create custom logger
         custom_logger_instance = logging.getLogger("test_custom_logger")
-        custom_logger = create_custom_logger(
-            logger=custom_logger_instance, enable_performance_logging=True, enable_sql_logging=True
-        )
+        custom_logger = create_custom_logger(logger=custom_logger_instance, sql_log_mode="auto")
 
         # Create client with custom logger
         client = Client(logger=custom_logger)
@@ -74,11 +72,11 @@ class TestLoggerIntegration:
         """Test performance logging"""
         host, port, user, password, database = connection_params
 
-        # Create logger with performance logging enabled
-        logger = create_default_logger(enable_performance_logging=True)
+        # Create logger with SQL logging enabled
+        logger = create_default_logger(sql_log_mode="auto")
 
-        # Create client with performance logging
-        client = Client(logger=logger, enable_performance_logging=True)
+        # Create client with SQL logging
+        client = Client(logger=logger)
         client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
@@ -98,11 +96,11 @@ class TestLoggerIntegration:
         """Test SQL query logging"""
         host, port, user, password, database = connection_params
 
-        # Create logger with SQL logging enabled
-        logger = create_default_logger(enable_sql_logging=True)
+        # Create logger with full SQL logging enabled
+        logger = create_default_logger(sql_log_mode="full")
 
-        # Create client with SQL logging
-        client = Client(logger=logger, enable_sql_logging=True, enable_full_sql_logging=True)
+        # Create client with full SQL logging
+        client = Client(logger=logger)
         client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
@@ -126,8 +124,7 @@ class TestLoggerIntegration:
         structured_logger_instance = logging.getLogger("structured_logger")
         logger = create_custom_logger(
             logger=structured_logger_instance,
-            enable_performance_logging=True,
-            enable_sql_logging=True,
+            sql_log_mode="auto",
         )
 
         # Create client with structured logger
@@ -155,7 +152,7 @@ class TestLoggerIntegration:
         host, port, user, password, database = connection_params
 
         # Create logger for error tracking
-        logger = create_default_logger(enable_performance_logging=True)
+        logger = create_default_logger(sql_log_mode="auto")
 
         # Create client with error tracking
         client = Client(logger=logger)
@@ -189,7 +186,7 @@ class TestLoggerIntegration:
         host, port, user, password, database = connection_params
 
         # Create logger
-        logger = create_default_logger(enable_sql_logging=True)
+        logger = create_default_logger(sql_log_mode="auto")
 
         # Create client with logging
         client = Client(logger=logger)
@@ -220,7 +217,7 @@ class TestLoggerIntegration:
         host, port, user, password, database = connection_params
 
         # Create logger
-        logger = create_default_logger(enable_performance_logging=True)
+        logger = create_default_logger(sql_log_mode="auto")
 
         # Create async client with logging
         client = AsyncClient(logger=logger)
@@ -250,7 +247,7 @@ class TestLoggerIntegration:
         # Test different log levels
         for level in [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR]:
             logger_instance = logging.getLogger(f"test_logger_{level}")
-            logger = create_custom_logger(logger=logger_instance, enable_performance_logging=True)
+            logger = create_custom_logger(logger=logger_instance, sql_log_mode="auto")
 
             client = Client(logger=logger)
             client.connect(host=host, port=port, user=user, password=password, database=database)
@@ -275,7 +272,7 @@ class TestLoggerIntegration:
 
         for i, format_string in enumerate(formats):
             logger_instance = logging.getLogger(f"format_test_{i}")
-            logger = create_custom_logger(logger=logger_instance, enable_performance_logging=True)
+            logger = create_custom_logger(logger=logger_instance, sql_log_mode="auto")
 
             client = Client(logger=logger)
             client.connect(host=host, port=port, user=user, password=password, database=database)
@@ -291,7 +288,7 @@ class TestLoggerIntegration:
         host, port, user, password, database = connection_params
 
         # Create MatrixOneLogger instance
-        matrixone_logger = MatrixOneLogger(level=logging.INFO, enable_performance_logging=True, enable_sql_logging=True)
+        matrixone_logger = MatrixOneLogger(level=logging.INFO, sql_log_mode="auto")
 
         # Create client with MatrixOneLogger
         client = Client(logger=matrixone_logger)

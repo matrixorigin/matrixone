@@ -45,12 +45,9 @@ class MatrixOneLogger:
         logger: Optional[logging.Logger] = None,
         level: int = logging.INFO,
         format_string: Optional[str] = None,
-        enable_performance_logging: bool = False,
-        enable_sql_logging: bool = False,
-        enable_full_sql_logging: bool = False,
-        enable_slow_sql_logging: bool = False,
-        enable_error_sql_logging: bool = False,
-        slow_sql_threshold: float = 1.0,
+        sql_log_mode: str = "auto",
+        slow_query_threshold: float = 1.0,
+        max_sql_display_length: int = 500,
     ):
         """
         Initialize MatrixOne logger
@@ -59,19 +56,22 @@ class MatrixOneLogger:
             logger: Custom logger instance. If None, creates a default logger
             level: Logging level (default: INFO)
             format_string: Custom format string for log messages
-            enable_performance_logging: Enable performance logging
-            enable_sql_logging: Enable basic SQL query logging
-            enable_full_sql_logging: Enable full SQL query logging (no truncation)
-            enable_slow_sql_logging: Enable slow SQL query logging
-            enable_error_sql_logging: Enable error SQL query logging
-            slow_sql_threshold: Threshold in seconds for slow SQL logging
+            sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
+                - 'off': No SQL logging
+                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (default)
+                - 'simple': Show operation summary only (e.g., "INSERT INTO table (5 rows)")
+                - 'full': Show complete SQL regardless of length
+            slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
+            max_sql_display_length: Maximum SQL length in auto mode before summarizing (default: 500)
         """
-        self.enable_performance_logging = enable_performance_logging
-        self.enable_sql_logging = enable_sql_logging
-        self.enable_full_sql_logging = enable_full_sql_logging
-        self.enable_slow_sql_logging = enable_slow_sql_logging
-        self.enable_error_sql_logging = enable_error_sql_logging
-        self.slow_sql_threshold = slow_sql_threshold
+        # Validate sql_log_mode
+        valid_modes = ['off', 'auto', 'simple', 'full']
+        if sql_log_mode not in valid_modes:
+            raise ValueError(f"Invalid sql_log_mode '{sql_log_mode}'. Must be one of {valid_modes}")
+
+        self.sql_log_mode = sql_log_mode
+        self.slow_query_threshold = slow_query_threshold
+        self.max_sql_display_length = max_sql_display_length
 
         if logger is not None:
             # Use provided logger
@@ -261,6 +261,124 @@ class MatrixOneLogger:
         )
         self.logger.handle(record)
 
+    def _extract_sql_summary(self, sql: str) -> str:
+        """
+        Extract operation summary from SQL query
+
+        Args:
+            sql: SQL query string
+
+        Returns:
+            Summary string describing the operation
+        """
+        sql_stripped = sql.strip()
+        sql_upper = sql_stripped.upper()
+
+        # Extract operation type and key details
+        import re
+
+        # SELECT operations
+        if sql_upper.startswith('SELECT'):
+            match = re.search(r'FROM\s+([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+            table = match.group(1).strip('`"') if match else '?'
+            return f"SELECT FROM {table}"
+
+        # INSERT operations
+        elif sql_upper.startswith('INSERT'):
+            match = re.search(r'INSERT\s+INTO\s+([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+            table = match.group(1).strip('`"') if match else '?'
+            # Count rows in batch insert by counting VALUES groups
+            if 'VALUES' in sql_upper:
+                # Count the number of value groups by counting '),' patterns
+                values_count = sql_stripped.count('),(') + 1
+                if values_count > 1:
+                    return f"BATCH INSERT INTO {table} ({values_count} rows)"
+            return f"INSERT INTO {table}"
+
+        # UPDATE operations
+        elif sql_upper.startswith('UPDATE'):
+            match = re.search(r'UPDATE\s+([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+            table = match.group(1).strip('`"') if match else '?'
+            return f"UPDATE {table}"
+
+        # DELETE operations
+        elif sql_upper.startswith('DELETE'):
+            match = re.search(r'DELETE\s+FROM\s+([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+            table = match.group(1).strip('`"') if match else '?'
+            return f"DELETE FROM {table}"
+
+        # CREATE operations
+        elif sql_upper.startswith('CREATE'):
+            if 'INDEX' in sql_upper:
+                match = re.search(r'ON\s+([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+                table = match.group(1).strip('`"') if match else '?'
+                return f"CREATE INDEX ON {table}"
+            elif 'TABLE' in sql_upper:
+                match = re.search(r'CREATE\s+TABLE\s+([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+                table = match.group(1).strip('`"') if match else '?'
+                return f"CREATE TABLE {table}"
+            return "CREATE"
+
+        # DROP operations
+        elif sql_upper.startswith('DROP'):
+            if 'TABLE' in sql_upper:
+                match = re.search(r'DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([`"]?\w+[`"]?)', sql_upper, re.IGNORECASE)
+                table = match.group(1).strip('`"') if match else '?'
+                return f"DROP TABLE {table}"
+            elif 'INDEX' in sql_upper:
+                return "DROP INDEX"
+            return "DROP"
+
+        # SET operations
+        elif sql_upper.startswith('SET'):
+            return "SET VARIABLE"
+
+        # Other operations
+        else:
+            # Return first 50 characters as fallback
+            return sql_stripped[:50] + "..." if len(sql_stripped) > 50 else sql_stripped
+
+    def _format_sql_for_log(self, sql: str, is_error: bool = False, is_slow: bool = False) -> str:
+        """
+        Format SQL query for logging based on mode and query characteristics
+
+        Args:
+            sql: SQL query string
+            is_error: Whether this is an error query
+            is_slow: Whether this is a slow query
+
+        Returns:
+            Formatted SQL string for logging
+        """
+        # Mode 'off': Don't log SQL
+        if self.sql_log_mode == 'off':
+            return ""
+
+        # Errors and slow queries always show complete SQL for debugging
+        if is_error or is_slow:
+            return sql.strip()
+
+        # Mode 'full': Always show complete SQL
+        if self.sql_log_mode == 'full':
+            return sql.strip()
+
+        # Mode 'simple': Only show operation summary
+        if self.sql_log_mode == 'simple':
+            return self._extract_sql_summary(sql)
+
+        # Mode 'auto': Smart formatting based on length
+        if self.sql_log_mode == 'auto':
+            sql_stripped = sql.strip()
+            if len(sql_stripped) <= self.max_sql_display_length:
+                # Short SQL: show fully
+                return sql_stripped
+            else:
+                # Long SQL: show summary with length indicator
+                summary = self._extract_sql_summary(sql)
+                return f"{summary} [SQL length: {len(sql_stripped)} chars]"
+
+        return sql.strip()
+
     def log_query(
         self,
         query: str,
@@ -268,59 +386,23 @@ class MatrixOneLogger:
         affected_rows: Optional[int] = None,
         success: bool = True,
     ):
-        """Log SQL query execution"""
-        # Determine if we should log this query and what type
-        should_log = False
-        log_types = []
-
-        # Check error SQL logging (highest priority)
-        if self.enable_error_sql_logging and not success:
-            should_log = True
-            log_types.append("ERROR_SQL")
-
-        # Check slow SQL logging (high priority)
-        if self.enable_slow_sql_logging and execution_time is not None and execution_time >= self.slow_sql_threshold:
-            should_log = True
-            log_types.append("SLOW_SQL")
-
-        # Check full SQL logging
-        if self.enable_full_sql_logging:
-            should_log = True
-            log_types.append("FULL_SQL")
-
-        # Check basic SQL logging
-        if self.enable_sql_logging:
-            should_log = True
-            log_types.append("SQL")
-
-        # Determine the primary log type (use the highest priority one)
-        if "ERROR_SQL" in log_types:
-            log_type = "ERROR_SQL"
-        elif "SLOW_SQL" in log_types:
-            log_type = "SLOW_SQL"
-        elif "FULL_SQL" in log_types:
-            log_type = "FULL_SQL"
-        else:
-            log_type = "SQL"
-
-        if not should_log:
+        """Log SQL query execution with smart formatting"""
+        # Skip logging if mode is 'off'
+        if self.sql_log_mode == 'off':
             return
 
-        # Determine query display format based on log type
-        if log_type == "FULL_SQL":
-            # For full SQL logging, show complete query with better formatting
-            display_query = query.strip()
-        elif log_type == "SLOW_SQL":
-            # For slow SQL, show complete query since it's important
-            display_query = query.strip()
-        elif log_type == "ERROR_SQL":
-            # For error SQL, show complete query for debugging
-            display_query = query.strip()
-        else:
-            # For basic SQL logging, truncate long queries
-            display_query = query[:150] + "..." if len(query) > 150 else query.strip()
+        # Determine if this is a slow query or error
+        is_slow = execution_time is not None and execution_time >= self.slow_query_threshold
+        is_error = not success
 
-        # Create more intuitive log message format
+        # Format SQL based on mode and query characteristics
+        display_sql = self._format_sql_for_log(query, is_error=is_error, is_slow=is_slow)
+
+        # Skip if no SQL to display
+        if not display_sql:
+            return
+
+        # Build log message
         status_icon = "✓" if success else "✗"
         message_parts = [status_icon]
 
@@ -332,19 +414,15 @@ class MatrixOneLogger:
         if affected_rows is not None:
             message_parts.append(f"{affected_rows} rows")
 
-        # Add SQL query with log type indicator
-        if log_type == "FULL_SQL":
-            message_parts.append(f"[FULL SQL]: {display_query}")
-        elif log_type == "SLOW_SQL":
-            message_parts.append(f"[SLOW SQL]: {display_query}")
-        elif log_type == "ERROR_SQL":
-            message_parts.append(f"[ERROR SQL]: {display_query}")
+        # Add SQL with appropriate prefix
+        if is_error:
+            message_parts.append(f"[ERROR] {display_sql}")
+        elif is_slow:
+            message_parts.append(f"[SLOW] {display_sql}")
         else:
-            message_parts.append(f"SQL: {display_query}")
+            message_parts.append(display_sql)
 
         message = " | ".join(message_parts)
-
-        kwargs = {}
 
         # Use findCaller to get the actual caller's file and line
         import sys
@@ -352,22 +430,22 @@ class MatrixOneLogger:
         frame = sys._getframe(1)
         filename = frame.f_code.co_filename
         lineno = frame.f_lineno
+
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
             self.logger.name,
-            logging.INFO,
+            logging.ERROR if is_error else logging.INFO,
             filename,
             lineno,
-            self._format_message(message, **kwargs),
+            self._format_message(message),
             (),
             None,
         )
+
         self.logger.handle(record)
 
     def log_performance(self, operation: str, duration: float, **kwargs):
-        """Log performance metrics"""
-        if not self.enable_performance_logging:
-            return
+        """Log performance metrics (always enabled, control via log level)"""
 
         # Use findCaller to get the actual caller's file and line
         import sys
@@ -563,12 +641,9 @@ class MatrixOneLogger:
 def create_default_logger(
     level: int = logging.INFO,
     format_string: Optional[str] = None,
-    enable_performance_logging: bool = False,
-    enable_sql_logging: bool = False,
-    enable_full_sql_logging: bool = False,
-    enable_slow_sql_logging: bool = False,
-    enable_error_sql_logging: bool = False,
-    slow_sql_threshold: float = 1.0,
+    sql_log_mode: str = "auto",
+    slow_query_threshold: float = 1.0,
+    max_sql_display_length: int = 500,
 ) -> MatrixOneLogger:
     """
     Create a default MatrixOne logger
@@ -576,12 +651,9 @@ def create_default_logger(
     Args:
         level: Logging level
         format_string: Custom format string
-        enable_performance_logging: Enable performance logging
-        enable_sql_logging: Enable basic SQL logging
-        enable_full_sql_logging: Enable full SQL logging (no truncation)
-        enable_slow_sql_logging: Enable slow SQL logging
-        enable_error_sql_logging: Enable error SQL logging
-        slow_sql_threshold: Threshold in seconds for slow SQL logging
+        sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
+        slow_query_threshold: Threshold in seconds for slow query warnings
+        max_sql_display_length: Maximum SQL length in auto mode before summarizing
 
     Returns:
         MatrixOneLogger instance
@@ -590,45 +662,33 @@ def create_default_logger(
         logger=None,
         level=level,
         format_string=format_string,
-        enable_performance_logging=enable_performance_logging,
-        enable_sql_logging=enable_sql_logging,
-        enable_full_sql_logging=enable_full_sql_logging,
-        enable_slow_sql_logging=enable_slow_sql_logging,
-        enable_error_sql_logging=enable_error_sql_logging,
-        slow_sql_threshold=slow_sql_threshold,
+        sql_log_mode=sql_log_mode,
+        slow_query_threshold=slow_query_threshold,
+        max_sql_display_length=max_sql_display_length,
     )
 
 
 def create_custom_logger(
     logger: logging.Logger,
-    enable_performance_logging: bool = False,
-    enable_sql_logging: bool = False,
-    enable_full_sql_logging: bool = False,
-    enable_slow_sql_logging: bool = False,
-    enable_error_sql_logging: bool = False,
-    slow_sql_threshold: float = 1.0,
+    sql_log_mode: str = "auto",
+    slow_query_threshold: float = 1.0,
+    max_sql_display_length: int = 500,
 ) -> MatrixOneLogger:
     """
     Create MatrixOne logger from custom logger
 
     Args:
         logger: Custom logger instance
-        enable_performance_logging: Enable performance logging
-        enable_sql_logging: Enable basic SQL logging
-        enable_full_sql_logging: Enable full SQL logging (no truncation)
-        enable_slow_sql_logging: Enable slow SQL logging
-        enable_error_sql_logging: Enable error SQL logging
-        slow_sql_threshold: Threshold in seconds for slow SQL logging
+        sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
+        slow_query_threshold: Threshold in seconds for slow query warnings
+        max_sql_display_length: Maximum SQL length in auto mode before summarizing
 
     Returns:
         MatrixOneLogger instance
     """
     return MatrixOneLogger(
         logger=logger,
-        enable_performance_logging=enable_performance_logging,
-        enable_sql_logging=enable_sql_logging,
-        enable_full_sql_logging=enable_full_sql_logging,
-        enable_slow_sql_logging=enable_slow_sql_logging,
-        enable_error_sql_logging=enable_error_sql_logging,
-        slow_sql_threshold=slow_sql_threshold,
+        sql_log_mode=sql_log_mode,
+        slow_query_threshold=slow_query_threshold,
+        max_sql_display_length=max_sql_display_length,
     )

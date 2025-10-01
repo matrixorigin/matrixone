@@ -261,8 +261,8 @@ client = Client(
     query_timeout=300,
     auto_commit=True,
     charset='utf8mb4',
-    enable_performance_logging=True,
-    enable_sql_logging=True
+    sql_log_mode='auto',  # 'off', 'simple', 'auto', 'full'
+    slow_query_threshold=1.0
 )
 ```
 
@@ -273,9 +273,9 @@ from matrixone import MatrixOneLogger
 
 logger = MatrixOneLogger(
     level=logging.INFO,
-    enable_performance_logging=True,
-    enable_slow_sql_logging=True,
-    slow_sql_threshold=1.0
+    sql_log_mode='auto',  # 'off', 'simple', 'auto', 'full'
+    slow_query_threshold=1.0,
+    max_sql_display_length=500
 )
 
 client = Client(logger=logger)

@@ -52,7 +52,7 @@ class MetadataOperationsDemo:
     """Demonstrates comprehensive metadata operations with ORM and structured examples."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.connection_params = get_connection_params()
         self.Base = declarative_base()
         self.engine = None

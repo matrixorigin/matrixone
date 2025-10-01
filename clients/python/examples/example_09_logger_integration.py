@@ -17,19 +17,21 @@
 """
 Example 09: Logger Integration - Comprehensive Logging Operations
 
-This example demonstrates how to use the MatrixOne Python SDK with custom logging:
-1. Default logger configuration
-2. Custom logger integration
-3. Performance logging
-4. SQL query logging
-5. Structured logging
+This example demonstrates how to use the MatrixOne Python SDK with different logging modes:
+1. SQL logging modes ('off', 'simple', 'auto', 'full')
+2. Default logger configuration
+3. Custom logger integration
+4. Slow query detection
+5. Smart SQL formatting for long queries (e.g., batch inserts)
 6. Error tracking
 
-This example shows how to integrate MatrixOne SDK logging with your business application.
+The new simplified logging system replaces the previous 5 boolean flags with a single
+sql_log_mode parameter that is more intuitive and user-friendly.
 """
 
 import logging
 import asyncio
+import random
 from matrixone import Client, AsyncClient
 from matrixone.logger import MatrixOneLogger, create_default_logger, create_custom_logger
 from matrixone.config import get_connection_params, print_config
@@ -43,7 +45,7 @@ class LoggerIntegrationDemo:
     """Demonstrates logger integration capabilities with comprehensive testing."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.results = {
             'tests_run': 0,
             'tests_passed': 0,
@@ -62,12 +64,8 @@ class LoggerIntegrationDemo:
             # Get connection parameters from config
             host, port, user, password, database = get_connection_params()
 
-            # Create client with default logger
-            client = Client(
-                enable_performance_logging=True,
-                enable_sql_logging=True,
-                enable_full_sql_logging=True,
-            )
+            # Create client with auto SQL logging mode (default, recommended)
+            client = Client(sql_log_mode="auto")
 
             # Test default logger
             self.logger.info("Test: Default Logger Configuration")
@@ -121,8 +119,7 @@ class LoggerIntegrationDemo:
 
             custom_logger = create_custom_logger(
                 logger=custom_logger_instance,
-                enable_performance_logging=True,
-                enable_sql_logging=True,
+                sql_log_mode="auto",
             )
 
             # Test custom logger
@@ -177,8 +174,7 @@ class LoggerIntegrationDemo:
 
                 structured_logger = create_custom_logger(
                     logger=structured_logger_instance,
-                    enable_performance_logging=True,
-                    enable_sql_logging=True,
+                    sql_log_mode="auto",
                 )
 
                 # Test structured logging with context
@@ -278,8 +274,8 @@ class LoggerIntegrationDemo:
             # Test performance logging
             self.logger.info("Test: Performance Logging")
             try:
-                # Create client with performance logging
-                client = Client(enable_performance_logging=True, enable_sql_logging=True)
+                # Create client with auto SQL logging
+                client = Client(sql_log_mode="auto")
                 client.connect(host, port, user, password, database)
 
                 # Execute queries to test performance logging
@@ -314,8 +310,8 @@ class LoggerIntegrationDemo:
             # Test async logger
             self.logger.info("Test: Async Logger")
             try:
-                # Create async client with logging
-                client = AsyncClient(enable_performance_logging=True, enable_sql_logging=True)
+                # Create async client with auto SQL logging
+                client = AsyncClient(sql_log_mode="auto")
                 await client.connect(host, port, user, password, database)
 
                 # Execute async queries
@@ -336,6 +332,107 @@ class LoggerIntegrationDemo:
             self.logger.error(f"❌ Async logger test failed: {e}")
             self.results['tests_failed'] += 1
             self.results['unexpected_results'].append({'test': 'Async Logger', 'error': str(e)})
+
+    def test_sql_log_modes(self):
+        """Test different SQL logging modes"""
+        print("\n=== SQL Log Modes Comparison ===")
+
+        self.results['tests_run'] += 1
+
+        try:
+            host, port, user, password, database = get_connection_params()
+            modes = ['off', 'simple', 'auto', 'full']
+
+            for mode in modes:
+                print(f"\n--- Mode: {mode} ---")
+                
+                # Create client with specific mode
+                client = Client(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    database=database,
+                    sql_log_mode=mode,
+                    slow_query_threshold=0.5,
+                    max_sql_display_length=500
+                )
+
+                table_name = f"log_mode_demo_{mode}"
+                
+                try:
+                    # Short SQL
+                    client.execute("SELECT 1")
+                    
+                    # Create table and batch insert (long SQL)
+                    client.create_table(
+                        table_name,
+                        columns={"id": "int", "embedding": "vecf32(128)"},
+                        primary_key="id"
+                    )
+                    
+                    # Batch insert with vectors (creates VERY long SQL)
+                    data_list = [
+                        {"id": i + 1, "embedding": [random.random() for _ in range(128)]}
+                        for i in range(20)
+                    ]
+                    client.batch_insert(table_name, data_list)
+                    
+                except Exception as e:
+                    print(f"Note: {e}")
+                finally:
+                    try:
+                        client.drop_table(table_name)
+                    except:
+                        pass
+                    client.disconnect()
+
+            self.logger.info("✅ SQL log modes test completed")
+            self.results['tests_passed'] += 1
+
+        except Exception as e:
+            self.logger.error(f"❌ SQL log modes test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'SQL Log Modes', 'error': str(e)})
+
+    def test_slow_query_detection(self):
+        """Test slow query detection"""
+        print("\n=== Slow Query Detection Test ===")
+
+        self.results['tests_run'] += 1
+
+        try:
+            host, port, user, password, database = get_connection_params()
+
+            print("\nConfiguring client with slow_query_threshold=0.05s")
+            client = Client(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=database,
+                sql_log_mode="auto",
+                slow_query_threshold=0.05  # Very low threshold
+            )
+
+            try:
+                print("Executing slow query (SLEEP 0.1s)...")
+                client.execute("SELECT SLEEP(0.1)")
+                print("✓ Query completed - check log for [SLOW] marker")
+
+                self.logger.info("✅ Slow query detection test completed")
+                self.results['tests_passed'] += 1
+
+            except Exception as e:
+                self.logger.error(f"❌ Slow query test failed: {e}")
+                self.results['tests_failed'] += 1
+
+            client.disconnect()
+
+        except Exception as e:
+            self.logger.error(f"❌ Slow query detection test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'Slow Query Detection', 'error': str(e)})
 
     def generate_summary_report(self):
         """Generate comprehensive summary report."""
@@ -380,7 +477,7 @@ def main():
         print("🚀 MatrixOne Logger Integration Examples")
         print("=" * 60)
 
-        # Run tests
+        # Run basic tests
         demo.test_default_logger()
         demo.test_custom_logger()
         demo.test_structured_logging()
@@ -390,20 +487,31 @@ def main():
         # Run async tests
         asyncio.run(demo.test_async_logger())
 
+        # Run new SQL log modes tests
+        demo.test_sql_log_modes()
+        demo.test_slow_query_detection()
+
         # Generate report
         results = demo.generate_summary_report()
 
         print("\n🎉 All logger integration examples completed!")
         print("\nKey features demonstrated:")
+        print("- ✅ SQL Log Modes ('off', 'simple', 'auto', 'full')")
+        print("- ✅ Smart SQL formatting for long queries")
+        print("- ✅ Slow query detection")
         print("- ✅ Default logger configuration")
         print("- ✅ Custom logger integration")
         print("- ✅ Structured logging with context")
         print("- ✅ Async client logging")
         print("- ✅ Different logger levels")
-        print("- ✅ Business application integration")
-        print("- ✅ Performance monitoring")
-        print("- ✅ SQL query logging")
         print("- ✅ Error tracking and reporting")
+        
+        print("\n📖 SQL Log Modes Guide:")
+        print("  • 'off'    - No SQL logging (only connection events)")
+        print("  • 'simple' - Operation summary only (very concise)")
+        print("  • 'auto'   - ⭐ RECOMMENDED - Smart (short SQL: full, long SQL: summary)")
+        print("  • 'full'   - Complete SQL (useful for debugging, can be verbose)")
+        print("\n  Note: Slow queries and errors ALWAYS show complete SQL for debugging")
 
         return results
 

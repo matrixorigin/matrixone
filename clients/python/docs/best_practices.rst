@@ -137,8 +137,8 @@ Environment Configuration
            query_timeout=300,           # 5 minute query timeout
            auto_commit=True,            # Enable auto-commit
            charset='utf8mb4',           # Support international characters
-           enable_performance_logging=True,  # Monitor performance
-           enable_sql_logging=False     # Disable in production
+           sql_log_mode='simple',       # Simple mode for production
+           slow_query_threshold=1.0     # Alert on slow queries
        )
        
        client.connect(host=host, port=port, user=user, password=password, database=database)
@@ -1130,8 +1130,8 @@ Configuration Management
                    'connection_timeout': int(os.getenv('CONNECTION_TIMEOUT', '30')),
                    'query_timeout': int(os.getenv('QUERY_TIMEOUT', '300')),
                    'auto_commit': os.getenv('AUTO_COMMIT', 'true').lower() == 'true',
-                   'enable_performance_logging': os.getenv('ENABLE_PERFORMANCE_LOGGING', 'true').lower() == 'true',
-                   'enable_sql_logging': os.getenv('ENABLE_SQL_LOGGING', 'false').lower() == 'true'
+                   'sql_log_mode': os.getenv('SQL_LOG_MODE', 'auto'),
+                   'slow_query_threshold': float(os.getenv('SLOW_QUERY_THRESHOLD', '1.0'))
                }
            }
            

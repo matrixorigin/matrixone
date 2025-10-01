@@ -1418,12 +1418,9 @@ class AsyncClient(BaseMatrixOneClient):
         auto_commit: bool = True,
         charset: str = "utf8mb4",
         logger: Optional[MatrixOneLogger] = None,
-        enable_performance_logging: bool = False,
-        enable_sql_logging: bool = False,
-        enable_full_sql_logging: bool = False,
-        enable_slow_sql_logging: bool = False,
-        enable_error_sql_logging: bool = False,
-        slow_sql_threshold: float = 1.0,
+        sql_log_mode: str = "auto",
+        slow_query_threshold: float = 1.0,
+        max_sql_display_length: int = 500,
     ):
         """
         Initialize MatrixOne async client
@@ -1434,12 +1431,13 @@ class AsyncClient(BaseMatrixOneClient):
             auto_commit: Enable auto-commit mode
             charset: Character set for connection
             logger: Custom logger instance. If None, creates a default logger
-            enable_performance_logging: Enable performance logging
-            enable_sql_logging: Enable basic SQL query logging
-            enable_full_sql_logging: Enable full SQL query logging (no truncation)
-            enable_slow_sql_logging: Enable slow SQL query logging
-            enable_error_sql_logging: Enable error SQL query logging
-            slow_sql_threshold: Threshold in seconds for slow SQL logging
+            sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
+                - 'off': No SQL logging
+                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (default)
+                - 'simple': Show operation summary only
+                - 'full': Show complete SQL regardless of length
+            slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
+            max_sql_display_length: Maximum SQL length in auto mode before summarizing (default: 500)
         """
         self.connection_timeout = connection_timeout
         self.query_timeout = query_timeout
@@ -1451,12 +1449,9 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger = logger
         else:
             self.logger = create_default_logger(
-                enable_performance_logging=enable_performance_logging,
-                enable_sql_logging=enable_sql_logging,
-                enable_full_sql_logging=enable_full_sql_logging,
-                enable_slow_sql_logging=enable_slow_sql_logging,
-                enable_error_sql_logging=enable_error_sql_logging,
-                slow_sql_threshold=slow_sql_threshold,
+                sql_log_mode=sql_log_mode,
+                slow_query_threshold=slow_query_threshold,
+                max_sql_display_length=max_sql_display_length,
             )
 
         # Connection management - using SQLAlchemy async engine instead of direct aiomysql connection
@@ -1643,8 +1638,8 @@ class AsyncClient(BaseMatrixOneClient):
                 engine = create_async_engine("mysql+aiomysql://user:pass@host:port/db")
                 client = AsyncClient.from_engine(
                     engine,
-                    enable_sql_logging=True,
-                    slow_sql_threshold=0.5
+                    sql_log_mode='auto',
+                    slow_query_threshold=0.5
                 )
         """
         # Check if engine uses MySQL driver

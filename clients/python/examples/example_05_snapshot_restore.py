@@ -41,7 +41,7 @@ class SnapshotRestoreDemo:
     """Demonstrates snapshot and restore capabilities with comprehensive testing."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.results = {
             'tests_run': 0,
             'tests_passed': 0,
@@ -58,7 +58,7 @@ class SnapshotRestoreDemo:
             # Get connection parameters from config
             host, port, user, password, database = get_connection_params()
 
-            client = Client(logger=self.logger, enable_full_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="full")
             client.connect(host, port, user, password, database)
 
             # Test 1: Create test data
@@ -185,7 +185,7 @@ class SnapshotRestoreDemo:
             # Get connection parameters from config
             host, port, user, password, database = get_connection_params()
 
-            client = Client(logger=self.logger, enable_full_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="full")
             client.connect(host, port, user, password, database)
 
             # Test snapshot enumeration
@@ -222,7 +222,7 @@ class SnapshotRestoreDemo:
             # Get connection parameters from config
             host, port, user, password, database = get_connection_params()
 
-            client = Client(logger=self.logger, enable_full_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="full")
             client.connect(host, port, user, password, database)
 
             # Test error handling
@@ -265,7 +265,7 @@ class SnapshotRestoreDemo:
             # Get connection parameters from config
             host, port, user, password, database = get_connection_params()
 
-            client = AsyncClient(logger=self.logger, enable_full_sql_logging=True)
+            client = AsyncClient(logger=self.logger, sql_log_mode="full")
             await client.connect(host, port, user, password, database)
 
             # Test async snapshot operations

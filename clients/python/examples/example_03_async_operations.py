@@ -41,7 +41,7 @@ class AsyncOperationsDemo:
     """Demonstrates async operations capabilities with comprehensive testing."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.results = {
             'tests_run': 0,
             'tests_passed': 0,
@@ -66,7 +66,7 @@ class AsyncOperationsDemo:
             # Test 1: Basic async connection
             self.logger.info("Test 1: Basic Async Connection")
             try:
-                client = AsyncClient(logger=self.logger, enable_full_sql_logging=True)
+                client = AsyncClient(logger=self.logger, sql_log_mode="full")
                 await client.connect(host, port, user, password, database)
                 self.logger.info("✅ Async connection successful")
 
@@ -106,7 +106,7 @@ class AsyncOperationsDemo:
             # Test async query execution
             self.logger.info("Test: Async Query Execution")
             try:
-                client = AsyncClient(logger=self.logger, enable_full_sql_logging=True)
+                client = AsyncClient(logger=self.logger, sql_log_mode="full")
                 await client.connect(host, port, user, password, database)
 
                 # Test various query types
@@ -148,7 +148,7 @@ class AsyncOperationsDemo:
             # Test async transaction management
             self.logger.info("Test: Async Transaction Management")
             try:
-                client = AsyncClient(logger=self.logger, enable_full_sql_logging=True)
+                client = AsyncClient(logger=self.logger, sql_log_mode="full")
                 await client.connect(host, port, user, password, database)
 
                 # Test transaction operations
@@ -192,7 +192,7 @@ class AsyncOperationsDemo:
                 # Create multiple async connections
                 clients = []
                 for i in range(3):
-                    client = AsyncClient(logger=self.logger, enable_full_sql_logging=True)
+                    client = AsyncClient(logger=self.logger, sql_log_mode="full")
                     await client.connect(host, port, user, password, database)
                     clients.append(client)
                     self.logger.info(f"   ✅ Created async connection {i+1}")
@@ -238,7 +238,7 @@ class AsyncOperationsDemo:
             # Test async error handling
             self.logger.info("Test: Async Error Handling")
             try:
-                client = AsyncClient(logger=self.logger, enable_full_sql_logging=True)
+                client = AsyncClient(logger=self.logger, sql_log_mode="full")
                 await client.connect(host, port, user, password, database)
 
                 # Test invalid query (should raise error)

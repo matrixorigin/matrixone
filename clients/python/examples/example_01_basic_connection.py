@@ -40,8 +40,7 @@ class BasicConnectionDemo:
 
     def __init__(self):
         self.logger = create_default_logger(
-            enable_performance_logging=True,
-            enable_sql_logging=True,
+            sql_log_mode="auto",
         )
         self.results = {
             'tests_run': 0,
@@ -66,7 +65,7 @@ class BasicConnectionDemo:
 
             # Test 1: Simple connection
             self.logger.info("Test 1: Simple Connection")
-            client = Client(logger=self.logger, enable_full_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="full")
             client.connect(host, port, user, password, database)
             self.logger.info("✅ Basic connection successful")
 
@@ -99,7 +98,7 @@ class BasicConnectionDemo:
 
             # Format 1: Legacy format (simple username)
             self.logger.info("Format 1: Legacy format (simple username)")
-            client = Client(logger=self.logger, enable_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="auto")
             client.connect(host, port, user, password, database)
             login_info = client.get_login_info()
             self.logger.info(f"   ✅ Login info: {login_info}")
@@ -107,7 +106,7 @@ class BasicConnectionDemo:
 
             # Format 2: Direct format (account#user)
             self.logger.info("Format 2: Direct format (account#user)")
-            client = Client(logger=self.logger, enable_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="auto")
             client.connect(host, port, 'sys#root', password, database)
             login_info = client.get_login_info()
             self.logger.info(f"   ✅ Login info: {login_info}")
@@ -116,7 +115,7 @@ class BasicConnectionDemo:
             # Format 3: User with role (separate parameters)
             self.logger.info("Format 3: User with role (separate parameters)")
             try:
-                client = Client(logger=self.logger, enable_sql_logging=True)
+                client = Client(logger=self.logger, sql_log_mode="auto")
                 client.connect(host, port, user, password, database, role='admin')
                 # Try to execute a query to trigger role validation
                 client.execute("SELECT 1")
@@ -128,7 +127,7 @@ class BasicConnectionDemo:
 
             # Format 4: Account with separate parameters
             self.logger.info("Format 4: Account with separate parameters")
-            client = Client(logger=self.logger, enable_sql_logging=True)
+            client = Client(logger=self.logger, sql_log_mode="auto")
             client.connect(host, port, user, password, database, account='sys')
             login_info = client.get_login_info()
             self.logger.info(f"   ✅ Login info: {login_info}")
@@ -154,7 +153,7 @@ class BasicConnectionDemo:
             # Test invalid credentials
             self.logger.info("Test invalid credentials")
             try:
-                client = Client(logger=self.logger, enable_error_sql_logging=True)
+                client = Client(logger=self.logger, sql_log_mode="auto")
                 client.connect(host, port, 'invalid_user', 'invalid_pass', database)
                 # Try to execute a query to trigger authentication
                 client.execute("SELECT 1")
@@ -165,7 +164,7 @@ class BasicConnectionDemo:
             # Test invalid host
             self.logger.info("Test invalid host")
             try:
-                client = Client(logger=self.logger, enable_error_sql_logging=True)
+                client = Client(logger=self.logger, sql_log_mode="auto")
                 client.connect('192.168.1.999', port, user, password, database)
                 # Try to execute a query to trigger connection validation
                 client.execute("SELECT 1")
@@ -176,7 +175,7 @@ class BasicConnectionDemo:
             # Test invalid port
             self.logger.info("Test invalid port")
             try:
-                client = Client(logger=self.logger, enable_error_sql_logging=True)
+                client = Client(logger=self.logger, sql_log_mode="auto")
                 client.connect(host, 9999, user, password, database)
                 # Try to execute a query to trigger connection validation
                 client.execute("SELECT 1")
@@ -234,7 +233,7 @@ def demo_connection_info():
     host, port, user, password, database = get_connection_params()
 
     try:
-        client = Client(logger=logger, enable_sql_logging=True)
+        client = Client(logger=logger, sql_log_mode="auto")
         client.connect(host, port, user, password, database)
 
         # Get login info
@@ -300,7 +299,7 @@ def demo_connection_pooling():
     try:
         # Create multiple connections
         for i in range(3):
-            client = Client(logger=logger, enable_sql_logging=True)
+            client = Client(logger=logger, sql_log_mode="auto")
             client.connect(host, port, user, password, database)
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")

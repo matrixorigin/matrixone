@@ -82,7 +82,7 @@ class VectorAdvancedDemo:
         logger = create_default_logger()
 
         # Create client and connect
-        self.client = Client(logger=logger, enable_full_sql_logging=True)
+        self.client = Client(logger=logger, sql_log_mode="full")
         self.client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Get SQLAlchemy engine

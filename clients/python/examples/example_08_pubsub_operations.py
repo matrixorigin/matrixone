@@ -41,8 +41,7 @@ class PubSubOperationsDemo:
         self.logger = create_default_logger(
             level=logging.INFO,
             format_string='%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s',
-            enable_performance_logging=True,
-            enable_sql_logging=True,
+            sql_log_mode="auto",
         )
         self.results = {
             'tests_run': 0,
@@ -62,7 +61,7 @@ class PubSubOperationsDemo:
             # Get connection parameters from config
             host, port, user, password, database = get_connection_params()
 
-            client = Client(enable_full_sql_logging=True)
+            client = Client(sql_log_mode="full")
             client.connect(host, port, user, password, database)
 
             # Test basic PubSub operations
@@ -142,7 +141,7 @@ def demo_cross_account_pubsub():
     host, port, user, password, database = get_connection_params()
 
     # Main client for account management
-    admin_client = Client(enable_full_sql_logging=True)
+    admin_client = Client(sql_log_mode="full")
 
     try:
         # Connect as admin
@@ -191,14 +190,14 @@ def demo_cross_account_pubsub():
 
         # Setup publisher side
         logger.info("\n📤 Setup Publisher Side")
-        publisher_client = Client(enable_full_sql_logging=True)
+        publisher_client = Client(sql_log_mode="full")
 
         # Connect as publisher account admin
         publisher_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
         logger.info("   ✅ Connected as publisher account admin")
 
         # Create publisher database
-        pub_admin_client = Client(enable_full_sql_logging=True)
+        pub_admin_client = Client(sql_log_mode="full")
         pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
         pub_admin_client.execute("CREATE DATABASE IF NOT EXISTS publisher_data")
         pub_admin_client.disconnect()
@@ -209,7 +208,7 @@ def demo_cross_account_pubsub():
         logger.info("   ✅ Connected to publisher database")
 
         # Create tables for publishing
-        pub_admin_client = Client(enable_full_sql_logging=True)
+        pub_admin_client = Client(sql_log_mode="full")
         pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
 
         pub_admin_client.execute(
@@ -279,7 +278,7 @@ def demo_cross_account_pubsub():
 
         # Setup subscriber side
         logger.info("\n📥 Setup Subscriber Side")
-        subscriber_client = Client(enable_full_sql_logging=True)
+        subscriber_client = Client(sql_log_mode="full")
 
         # Connect as subscriber account admin
         subscriber_client.connect(host, port, "pub_subscriber#sub_admin", "sub_pass", "mo_catalog")
@@ -300,7 +299,7 @@ def demo_cross_account_pubsub():
         logger.info("\n🔄 Demonstrate Cross-Account Data Synchronization")
 
         # Add new data as publisher
-        pub_admin_client = Client(enable_full_sql_logging=True)
+        pub_admin_client = Client(sql_log_mode="full")
         pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
 
         pub_admin_client.execute(f"INSERT INTO sales_data (product_name, quantity, price) VALUES ('Apple Watch', 3, 399.99)")
@@ -334,7 +333,7 @@ def demo_cross_account_pubsub():
         # Drop databases
         try:
             # Create new connection for cleanup
-            cleanup_client = Client(enable_full_sql_logging=True)
+            cleanup_client = Client(sql_log_mode="full")
             cleanup_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
             cleanup_client.execute("DROP DATABASE publisher_data")
             cleanup_client.disconnect()
@@ -373,7 +372,7 @@ async def demo_async_pubsub_operations():
     # Get connection parameters from config
     host, port, user, password, database = get_connection_params()
 
-    client = AsyncClient(logger=logger, enable_full_sql_logging=True)
+    client = AsyncClient(logger=logger, sql_log_mode="full")
 
     try:
         # Connect to MatrixOne
@@ -494,7 +493,7 @@ def demo_pubsub_best_practices():
     # Get connection parameters from config
     host, port, user, password, database = get_connection_params()
 
-    client = Client(logger=logger, enable_full_sql_logging=True)
+    client = Client(logger=logger, sql_log_mode="full")
 
     try:
         # Connect to MatrixOne
@@ -670,7 +669,7 @@ def demo_pubsub_best_practices():
         # Product performance
         result = client.execute(
             """
-            SELECT p.name, p.price, p.stock_quantity, 
+            SELECT p.name, p.price, p.stock_quantity,
                    COALESCE(SUM(o.quantity), 0) as total_ordered,
                    COALESCE(SUM(o.total_amount), 0) as total_revenue
             FROM products p
@@ -686,8 +685,8 @@ def demo_pubsub_best_practices():
         # Inventory status
         result = client.execute(
             """
-            SELECT name, stock_quantity, 
-                   CASE 
+            SELECT name, stock_quantity,
+                   CASE
                        WHEN stock_quantity > 50 THEN 'High'
                        WHEN stock_quantity > 20 THEN 'Medium'
                        ELSE 'Low'

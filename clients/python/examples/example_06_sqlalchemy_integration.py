@@ -38,7 +38,7 @@ from matrixone import Client, AsyncClient
 from matrixone.logger import create_default_logger
 
 # Create MatrixOne logger for all logging
-logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+logger = create_default_logger(sql_log_mode="auto")
 
 
 # Get connection parameters
@@ -88,7 +88,7 @@ class SQLAlchemyIntegrationDemo:
     """Demonstrates SQLAlchemy integration capabilities with comprehensive testing."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.results = {
             'tests_run': 0,
             'tests_passed': 0,

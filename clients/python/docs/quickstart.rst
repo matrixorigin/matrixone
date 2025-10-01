@@ -586,8 +586,8 @@ Configuration Best Practices
            query_timeout=300,           # Query timeout in seconds
            auto_commit=True,            # Enable auto-commit for better performance
            charset='utf8mb4',           # Support for international characters
-           enable_performance_logging=True,  # Monitor query performance
-           enable_sql_logging=False     # Disable SQL logging in production
+           sql_log_mode='simple',       # Simple SQL logging for production
+           slow_query_threshold=1.0     # Alert on queries > 1s
        )
 
        client.connect(host=host, port=port, user=user, password=password, database=database)

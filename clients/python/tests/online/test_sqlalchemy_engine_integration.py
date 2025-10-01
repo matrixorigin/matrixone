@@ -106,7 +106,7 @@ class TestSQLAlchemyEngineIntegration:
 
         try:
             # Create Client from engine with custom configuration
-            client = Client.from_engine(engine, enable_sql_logging=True, slow_sql_threshold=0.1)
+            client = Client.from_engine(engine, sql_log_mode="auto", slow_query_threshold=0.1)
 
             # Test basic functionality
             assert client.connected() is True
@@ -188,7 +188,7 @@ class TestSQLAlchemyEngineIntegration:
 
         try:
             # Create AsyncClient from engine with custom configuration
-            client = AsyncClient.from_engine(engine, enable_sql_logging=True, slow_sql_threshold=0.1)
+            client = AsyncClient.from_engine(engine, sql_log_mode="auto", slow_query_threshold=0.1)
 
             # Test basic functionality
             assert client.connected() is True

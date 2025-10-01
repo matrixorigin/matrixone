@@ -40,7 +40,7 @@ class AccountManagementDemo:
     """Demonstrates account management capabilities with comprehensive testing."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.results = {
             'tests_run': 0,
             'tests_passed': 0,
@@ -66,7 +66,7 @@ class AccountManagementDemo:
             host, port, user, password, database = get_connection_params()
 
             # Connect as root for account management
-            root_client = Client(logger=self.logger, enable_full_sql_logging=True)
+            root_client = Client(logger=self.logger, sql_log_mode="full")
             root_client.connect(host, port, user, password, database)
             account_manager = AccountManager(root_client)
 
@@ -111,7 +111,7 @@ class AccountManagementDemo:
             self.logger.info("Test 2: User Management")
             try:
                 # Connect as demo account admin
-                demo_admin_client = Client(enable_full_sql_logging=True)
+                demo_admin_client = Client(sql_log_mode="full")
                 demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
                 demo_account_manager = AccountManager(demo_admin_client)
 
@@ -144,7 +144,7 @@ class AccountManagementDemo:
             self.logger.info("Test 3: Role Management")
             try:
                 # Connect as demo account admin
-                demo_admin_client = Client(enable_full_sql_logging=True)
+                demo_admin_client = Client(sql_log_mode="full")
                 demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
                 demo_account_manager = AccountManager(demo_admin_client)
 
@@ -218,7 +218,7 @@ class AccountManagementDemo:
             host, port, user, password, database = get_connection_params()
 
             # Connect as root
-            root_client = AsyncClient(enable_full_sql_logging=True)
+            root_client = AsyncClient(sql_log_mode="full")
             await root_client.connect(host, port, user, password, database)
             self.logger.info("✅ Async connection successful")
 

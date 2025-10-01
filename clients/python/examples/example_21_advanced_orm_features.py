@@ -46,7 +46,7 @@ from sqlalchemy import func, Column, Integer, String, DECIMAL, TIMESTAMP
 Base = declarative_base()
 
 # Create MatrixOne logger for all logging
-logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+logger = create_default_logger(sql_log_mode="auto")
 
 
 # Define models for the example
@@ -91,7 +91,7 @@ class AdvancedORMFeaturesDemo:
     """Demonstrates advanced ORM features capabilities with comprehensive testing."""
 
     def __init__(self):
-        self.logger = create_default_logger(enable_performance_logging=True, enable_sql_logging=True)
+        self.logger = create_default_logger(sql_log_mode="auto")
         self.results = {
             'tests_run': 0,
             'tests_passed': 0,
