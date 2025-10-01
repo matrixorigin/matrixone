@@ -401,12 +401,14 @@ class VectorColumn(Column):
                     Document.embedding.l2_distance([1, 2, 3]) < 0.5
                 )
         """
+        from sqlalchemy import literal
+
         if isinstance(other, list):
-            # Convert list to MatrixOne vector format
+            # Convert list to MatrixOne vector format and use literal() to preserve formatting
             vector_str = "[" + ",".join(map(str, other)) + "]"
-            return func.l2_distance(self, vector_str)
+            return func.l2_distance(self, literal(vector_str))
         elif isinstance(other, str):
-            return func.l2_distance(self, other)
+            return func.l2_distance(self, literal(other))
         else:
             return func.l2_distance(self, other)
 
@@ -428,11 +430,13 @@ class VectorColumn(Column):
                     Document.embedding.l2_distance_sq([1, 2, 3])
                 )
         """
+        from sqlalchemy import literal
+
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
-            return func.l2_distance_sq(self, vector_str)
+            return func.l2_distance_sq(self, literal(vector_str))
         elif isinstance(other, str):
-            return func.l2_distance_sq(self, other)
+            return func.l2_distance_sq(self, literal(other))
         else:
             return func.l2_distance_sq(self, other)
 
@@ -454,11 +458,13 @@ class VectorColumn(Column):
                     Document.embedding.cosine_distance([1, 2, 3]) < 0.1
                 )
         """
+        from sqlalchemy import literal
+
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
-            return func.cosine_distance(self, vector_str)
+            return func.cosine_distance(self, literal(vector_str))
         elif isinstance(other, str):
-            return func.cosine_distance(self, other)
+            return func.cosine_distance(self, literal(other))
         else:
             return func.cosine_distance(self, other)
 
@@ -507,11 +513,13 @@ class VectorColumn(Column):
                     Document.embedding.inner_product([1, 2, 3]).desc()
                 )
         """
+        from sqlalchemy import literal
+
         if isinstance(other, list):
             vector_str = "[" + ",".join(map(str, other)) + "]"
-            return func.inner_product(self, vector_str)
+            return func.inner_product(self, literal(vector_str))
         elif isinstance(other, str):
-            return func.inner_product(self, other)
+            return func.inner_product(self, literal(other))
         else:
             return func.inner_product(self, other)
 

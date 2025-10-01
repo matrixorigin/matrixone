@@ -680,7 +680,7 @@ class BaseMatrixOneQuery:
 
                 on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
                 # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-                on_condition = re.sub(r"\w+\.(\w+)", r"\1", on_condition)
+                on_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", on_condition)
             else:
                 # String condition
                 on_condition = str(onclause)
@@ -714,7 +714,7 @@ class BaseMatrixOneQuery:
                 import re
 
                 on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
-                on_condition = re.sub(r"\w+\.(\w+)", r"\1", on_condition)
+                on_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", on_condition)
             else:
                 on_condition = str(onclause)
 
@@ -796,7 +796,7 @@ class BaseMatrixOneQuery:
 
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
                 # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
                 self._group_by_columns.append(sql_str)
             else:
                 self._group_by_columns.append(str(col))
@@ -888,7 +888,7 @@ class BaseMatrixOneQuery:
             formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
 
             # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-            formatted_condition = re.sub(r"\w+\.(\w+)", r"\1", formatted_condition)
+            formatted_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", formatted_condition)
 
             self._having_conditions.append(formatted_condition)
         else:
@@ -963,7 +963,7 @@ class BaseMatrixOneQuery:
             formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
 
             # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-            formatted_condition = re.sub(r"\w+\.(\w+)", r"\1", formatted_condition)
+            formatted_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", formatted_condition)
 
             self._where_conditions.append(formatted_condition)
         else:
@@ -1141,7 +1141,7 @@ class BaseMatrixOneQuery:
                 import re
 
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
                 condition = f"{column_name} IN ({sql_str})"
                 self._where_conditions.append(condition)
         elif hasattr(values, "_build_sql"):
@@ -1247,7 +1247,7 @@ class BaseMatrixOneQuery:
 
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
                 # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
                 self._order_by_columns.append(sql_str)
             else:
                 self._order_by_columns.append(str(col))
@@ -1905,7 +1905,7 @@ class LogicalIn:
                 import re
 
                 sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-                sql_str = re.sub(r"\w+\.(\w+)", r"\1", sql_str)
+                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
                 return f"{column_name} IN ({sql_str})"
         elif hasattr(self.values, "_build_sql"):
             # This is a subquery object

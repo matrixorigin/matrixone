@@ -29,6 +29,7 @@ from matrixone.sqlalchemy_ext import (
     MatrixOneDialect,
     VectorTableBuilder,
 )
+from sqlalchemy.orm import declarative_base
 
 pytestmark = pytest.mark.vector
 
@@ -265,3 +266,169 @@ class TestSQLAlchemyVectorIntegration:
         no_dim_vec = VectorType(precision="f32")
         assert no_dim_vec.dimension is None
         assert no_dim_vec.get_col_spec() == "vecf32"
+
+
+class TestVectorDistanceFunctionBugFixes:
+    """Test cases to catch vector distance function bugs found during validation."""
+
+    def test_vector_distance_with_decimal_preservation(self):
+        """
+        Test that vector distance expressions preserve decimal points in filter conditions.
+
+        Bug: orm.py's table prefix regex was removing decimal points from vectors.
+        Example: [0.374, 0.950] became [0374, 0950]
+        """
+        from matrixone.sqlalchemy_ext import create_vector_column
+        from sqlalchemy import Column, Integer, String, Text
+
+        Base = declarative_base()
+
+        class TestDoc(Base):
+            __tablename__ = 'test_doc'
+            id = Column(Integer, primary_key=True)
+            title = Column(String(200))
+            embedding = create_vector_column(8, precision='f32')
+
+        # Create a filter condition with vector distance
+        query_vector = [0.374, 0.950, 0.731, 0.598, 0.156, 0.155, 0.058, 0.866]
+
+        # Compile the condition
+        condition = TestDoc.embedding.l2_distance(query_vector) < 0.5
+        compiled = condition.compile(compile_kwargs={"literal_binds": True})
+        sql_str = str(compiled)
+
+        # Verify decimals are preserved
+        assert "0.374" in sql_str or "0.3745" in sql_str, f"Decimal points should be preserved in vector: {sql_str}"
+        assert "0374" not in sql_str, f"Decimal points should not be removed: {sql_str}"
+
+        # Verify the vector is properly quoted
+        assert "[" in sql_str and "]" in sql_str, f"Vector array brackets should be present: {sql_str}"
+
+    def test_sqlalchemy_reserved_field_names(self):
+        """
+        Test that SQLAlchemy reserved field names are avoided.
+
+        Bug: Using 'metadata' as column name causes:
+        "Attribute name 'metadata' is reserved when using the Declarative API"
+        """
+        from sqlalchemy import Column, Integer, String
+        from sqlalchemy.exc import InvalidRequestError
+
+        Base = declarative_base()
+
+        # This should NOT raise an error
+        class GoodDoc(Base):
+            __tablename__ = 'good_doc'
+            id = Column(Integer, primary_key=True)
+            doc_metadata = Column(String(500))  # Use doc_metadata instead
+
+        assert hasattr(GoodDoc, 'doc_metadata')
+
+        # This SHOULD raise an error (reserved name)
+        with pytest.raises(InvalidRequestError, match="reserved"):
+
+            class BadDoc(Base):
+                __tablename__ = 'bad_doc'
+                id = Column(Integer, primary_key=True)
+                metadata = Column(String(500))  # Reserved name!
+
+    def test_vector_distance_in_filter_with_literal_binds(self):
+        """
+        Test that vector distance in filter() preserves vector format with literal_binds.
+
+        Bug: When using literal_binds=True, vector parameters lose proper formatting.
+        """
+        from matrixone.sqlalchemy_ext import create_vector_column
+        from sqlalchemy import Column, Integer, String
+
+        Base = declarative_base()
+
+        class TestVec(Base):
+            __tablename__ = 'test_vec'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            embedding = create_vector_column(4, precision='f32')
+
+        # Test vector with decimal values
+        query_vector = [0.1, 0.2, 0.3, 0.4]
+
+        # Create filter expression
+        filter_expr = TestVec.embedding.l2_distance(query_vector) < 1.0
+
+        # Compile with literal_binds (this is what orm.py does)
+        compiled = filter_expr.compile(compile_kwargs={"literal_binds": True})
+        sql_str = str(compiled)
+
+        # Verify vector format is correct
+        assert "[0.1" in sql_str or "[0.1," in sql_str, f"Vector should contain decimal values: {sql_str}"
+        assert "l2_distance" in sql_str, f"Function name should be present: {sql_str}"
+        assert "< 1.0" in sql_str or "< 1" in sql_str, f"Comparison should be present: {sql_str}"
+
+    def test_multiple_vector_distance_calls_in_query(self):
+        """
+        Test that multiple vector distance calls in same query work correctly.
+
+        Bug: When vector distance is used in both SELECT and WHERE,
+        parameters might be duplicated or incorrectly formatted.
+        """
+        from matrixone.sqlalchemy_ext import create_vector_column
+        from sqlalchemy import Column, Integer, String
+
+        Base = declarative_base()
+
+        class MultiVec(Base):
+            __tablename__ = 'multi_vec'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(4, precision='f32')
+
+        query_vector = [0.5, 0.6, 0.7, 0.8]
+
+        # Use distance in both select and filter
+        dist_expr = MultiVec.embedding.l2_distance(query_vector)
+        filter_expr = MultiVec.embedding.l2_distance(query_vector) < 2.0
+
+        # Compile both expressions
+        select_compiled = dist_expr.compile(compile_kwargs={"literal_binds": True})
+        filter_compiled = filter_expr.compile(compile_kwargs={"literal_binds": True})
+
+        select_sql = str(select_compiled)
+        filter_sql = str(filter_compiled)
+
+        # Both should have valid vector format
+        for sql_str in [select_sql, filter_sql]:
+            assert "[0.5" in sql_str or "[0.5," in sql_str, f"Vector should contain decimal values: {sql_str}"
+            assert "l2_distance" in sql_str, f"Function should be present: {sql_str}"
+
+    def test_vector_distance_with_different_types(self):
+        """
+        Test vector distance functions with different distance types.
+
+        Ensures all distance functions (l2, cosine, inner_product) properly
+        handle vector parameters.
+        """
+        from matrixone.sqlalchemy_ext import create_vector_column
+        from sqlalchemy import Column, Integer
+
+        Base = declarative_base()
+
+        class DistTest(Base):
+            __tablename__ = 'dist_test'
+            id = Column(Integer, primary_key=True)
+            vec = create_vector_column(3, precision='f32')
+
+        query_vec = [0.1, 0.2, 0.3]
+
+        # Test all distance functions
+        distances = {
+            'l2': DistTest.vec.l2_distance(query_vec),
+            'cosine': DistTest.vec.cosine_distance(query_vec),
+            'inner': DistTest.vec.inner_product(query_vec),
+        }
+
+        for dist_name, dist_expr in distances.items():
+            compiled = dist_expr.compile(compile_kwargs={"literal_binds": True})
+            sql_str = str(compiled)
+
+            # Verify vector format
+            assert "[0.1" in sql_str or "[0.1," in sql_str, f"{dist_name}: Vector should contain decimals: {sql_str}"
+            assert "0.2" in sql_str, f"{dist_name}: All vector elements should be present: {sql_str}"

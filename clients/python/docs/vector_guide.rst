@@ -29,9 +29,9 @@ Creating Vector Tables with Table Models
 .. code-block:: python
 
    from matrixone import Client
-   from sqlalchemy import Column, Integer, String, Text, JSON
+   from sqlalchemy import Column, Integer, String, Text
    from sqlalchemy.ext.declarative import declarative_base
-   from matrixone.sqlalchemy_ext import Vectorf32, Vectorf64
+   from matrixone.sqlalchemy_ext import create_vector_column
 
    # Create client and connect (see configuration_guide for connection options)
    client = Client()
@@ -45,16 +45,18 @@ Creating Vector Tables with Table Models
        id = Column(Integer, primary_key=True)
        title = Column(String(200))
        content = Column(Text)
-       embedding = Column(Vectorf32(384))  # 384-dimensional f32 vector
-       metadata = Column(JSON)
+       category = Column(String(50))
+       # Use create_vector_column for ORM with distance methods (l2_distance, cosine_distance, etc.)
+       embedding = create_vector_column(384, precision='f32')
 
    class Product(Base):
        __tablename__ = 'products'
        id = Column(Integer, primary_key=True)
        name = Column(String(200))
        description = Column(Text)
-       features = Column(Vectorf64(512))  # 512-dimensional f64 vector
        category = Column(String(50))
+       # Use create_vector_column for ORM with distance methods
+       features = create_vector_column(512, precision='f64')
 
    # Create tables using models
    client.create_table(Document)
@@ -65,8 +67,8 @@ Creating Vector Tables with Table Models
        "id": "int",
        "title": "varchar(200)",
        "content": "text",
-       "embedding": "vecf32(384)",  # 384-dimensional f32 vector
-       "metadata": "json"
+       "category": "varchar(50)",
+       "embedding": "vecf32(384)"  # 384-dimensional f32 vector
    }, primary_key="id")
 
 Vector Index Management
@@ -125,11 +127,11 @@ Insert vector data using the modern insert API:
 
    # Insert single document
    client.insert("documents", {
-           "id": 1,
-           "title": "AI Research Paper",
-           "content": "Advanced artificial intelligence research",
-           "embedding": np.random.rand(384).astype(np.float32).tolist(),
-       "metadata": '{"category": "research", "year": 2024}'
+       "id": 1,
+       "title": "AI Research Paper",
+       "content": "Advanced artificial intelligence research",
+       "category": "research",
+       "embedding": np.random.rand(384).astype(np.float32).tolist()
    })
 
    # Batch insert multiple documents
@@ -138,15 +140,15 @@ Insert vector data using the modern insert API:
            "id": 2,
            "title": "Machine Learning Guide",
            "content": "Comprehensive machine learning tutorial",
-           "embedding": np.random.rand(384).astype(np.float32).tolist(),
-           "metadata": '{"category": "tutorial", "level": "beginner"}'
+           "category": "tutorial",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
        },
        {
            "id": 3,
            "title": "Data Science Handbook",
            "content": "Complete data science reference",
-           "embedding": np.random.rand(384).astype(np.float32).tolist(),
-           "metadata": '{"category": "reference", "pages": 500}'
+           "category": "reference",
+           "embedding": np.random.rand(384).astype(np.float32).tolist()
        }
    ]
 
@@ -162,7 +164,7 @@ The `vector_query` API provides powerful similarity search capabilities:
    # Perform vector similarity search
    query_vector = np.random.rand(384).astype(np.float32).tolist()
    
-   # L2 distance search
+   # L2 distance search (returns list of tuples)
    results = client.vector_ops.similarity_search(
        "documents",
        vector_column="embedding",
@@ -172,10 +174,10 @@ The `vector_query` API provides powerful similarity search capabilities:
    )
 
    print("L2 Distance Search Results:")
-   for result in results.rows:
-       print(f"  {result[1]} (Distance: {result[-1]:.4f})")
+   for result in results:
+       print(f"  ID: {result[0]}, Title: {result[1]}, Distance: {result[-1]:.4f}")
 
-   # Cosine distance search
+   # Cosine distance search (returns list of tuples)
    cosine_results = client.vector_ops.similarity_search(
        "documents",
        vector_column="embedding",
@@ -185,8 +187,8 @@ The `vector_query` API provides powerful similarity search capabilities:
    )
 
    print("Cosine Distance Search Results:")
-   for result in cosine_results.rows:
-       print(f"  {result[1]} (Similarity: {1 - result[-1]:.4f})")
+   for result in cosine_results:
+       print(f"  ID: {result[0]}, Title: {result[1]}, Distance: {result[-1]:.4f}")
 
 Advanced Vector Search
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -213,14 +215,14 @@ Advanced Vector Search
        select_columns=["id", "title", "content"]  # Only return these columns
    )
 
-   # Search with metadata filtering
+   # Search with category filtering
    results = client.vector_ops.similarity_search(
        "documents",
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
        distance_type="l2",
-       where_conditions=["JSON_EXTRACT(metadata, '$.category') = ?"],
+       where_conditions=["category = ?"],
        where_params=["research"]
    )
 
@@ -232,53 +234,76 @@ For complex vector queries, use the query builder with vector functions:
 .. code-block:: python
 
    # Complex vector query with JOIN
-   result = client.query("documents d").select(
-       "d.id", "d.title", "d.content",
-       "l2_distance(d.embedding, ?) as distance"
-   ).join(
-       "categories c", "d.category_id = c.id"
-   ).where(
-       "l2_distance(d.embedding, ?) < ?", 
-       (query_vector, query_vector, 0.5)
-   ).and_where(
-       "c.name = ?", "AI"
+  # ORM-style query with JOIN and vector filtering using client.query
+  from sqlalchemy import and_
+  
+  results = client.query(Document).select(
+      Document.id,
+      Document.title,
+      Document.content,
+      Document.embedding.l2_distance(query_vector).label('distance')
+  ).join(
+      Category, Document.category_id == Category.id
+  ).filter(
+      and_(
+          Document.embedding.l2_distance(query_vector) < 0.5,
+          Category.name == 'AI'
+      )
+  ).order_by(
+      Document.embedding.l2_distance(query_vector)
+  ).limit(10).all()
+
+  # ORM-style subquery for complex vector filtering
+  from sqlalchemy import select
+  
+  # Create subquery for similar documents
+  similar_docs = select(
+      Document.id,
+      Document.title,
+      Document.embedding.l2_distance(query_vector).label('distance')
+  ).where(
+      Document.embedding.l2_distance(query_vector) < 0.8
+  ).order_by('distance').limit(20).subquery('similar_docs')
+  
+  # Join subquery with full document data (use session.query for subquery joins)
+  results = session.query(
+      similar_docs.c.id,
+      similar_docs.c.title,
+      similar_docs.c.distance,
+      Document.content
+  ).join(
+      Document, similar_docs.c.id == Document.id
+  ).all()
+
+  # ORM-style vector query with aggregation using client.query
+  from sqlalchemy import func
+  
+  results = client.query(Document).select(
+      Document.category,
+      func.count(Document.id).label('doc_count'),
+      func.avg(Document.embedding.l2_distance(query_vector)).label('avg_distance')
+  ).filter(
+      Document.embedding.l2_distance(query_vector) < 1.0
+  ).group_by(
+      Document.category
+  ).having(
+      func.count(Document.id) > 5
+  ).all()
+
+   # ORM-style IN subquery for top-k vector results using client.query
+   from sqlalchemy import select
+   
+   # Create subquery to get top-k similar document IDs
+   top_ids = select(Document.id).where(
+       Document.embedding.l2_distance(query_vector) < 0.5
    ).order_by(
-       "l2_distance(d.embedding, ?)", query_vector
-   ).limit(10).execute()
-
-   # Vector query with CTE (Common Table Expression)
-   result = client.query().select("*").from_(
-       """
-       WITH similar_docs AS (
-           SELECT id, title, l2_distance(embedding, ?) as distance
-           FROM documents
-           WHERE l2_distance(embedding, ?) < ?
-           ORDER BY distance
-           LIMIT 20
-       )
-       SELECT sd.*, d.content
-       FROM similar_docs sd
-       JOIN documents d ON sd.id = d.id
-       """, (query_vector, query_vector, 0.8)
-   ).execute()
-
-   # Vector query with aggregation
-   result = client.query("documents").select(
-       "category",
-       "COUNT(*) as doc_count",
-       "AVG(l2_distance(embedding, ?)) as avg_distance"
-   ).where(
-       "l2_distance(embedding, ?) < ?",
-       (query_vector, query_vector, 1.0)
-   ).group_by("category").having(
-       "COUNT(*) > ?", 5
-   ).execute()
-
-   # Vector query with subquery
-   result = client.query("documents").select("*").where(
-       "id IN (SELECT id FROM documents WHERE l2_distance(embedding, ?) < ? ORDER BY l2_distance(embedding, ?) LIMIT 10)",
-       (query_vector, 0.5, query_vector)
-   ).execute()
+       Document.embedding.l2_distance(query_vector)
+   ).limit(10).scalar_subquery()
+   
+   # Query full documents using IN clause
+   results = client.query(Document).filter(
+       Document.id.in_(top_ids)
+   ).all()
 
 Async Vector Operations
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -360,6 +385,7 @@ ORM with Vector Types
        id = Column(Integer, primary_key=True, autoincrement=True)
        title = Column(String(200), nullable=False)
        content = Column(Text)
+       category = Column(String(50))
        embedding = create_vector_column(384, "f32")  # 384-dimensional f32 vector
 
    # Create table using ORM model
@@ -373,15 +399,16 @@ ORM with Vector Types
    doc = Document(
        title="ORM Document",
        content="This is a document created using ORM",
+       category="tutorial",
        embedding=np.random.rand(384).astype(np.float32).tolist()
    )
    session.add(doc)
    session.commit()
 
-   # Query using ORM
-   documents = session.query(Document).all()
+   # Query using ORM with filtering
+   documents = session.query(Document).filter(Document.category == "tutorial").all()
    for doc in documents:
-       print(f"Document: {doc.title}")
+       print(f"Document: {doc.title}, Category: {doc.category}")
 
    # Clean up
    client.drop_table(Document)
@@ -426,22 +453,31 @@ Vector Data Management
 
 .. code-block:: python
 
-   # Update vector data
-   client.query("documents").update({
-       "embedding": new_embedding_vector
-   }).where("id = ?", 1).execute()
+   from sqlalchemy import func
+   
+   # Update vector data using client.query
+   doc = client.query(Document).filter(Document.id == 1).first()
+   if doc:
+       doc.embedding = new_embedding_vector
+       # Note: Changes are automatically committed with client.query
+   
+   # Or use bulk update
+   client.query(Document).filter(Document.id == 1).update(
+       {Document.embedding: new_embedding_vector}
+   )
 
-   # Delete vector data
-   client.query("documents").where("id = ?", 1).delete()
+   # Delete vector data using client.query
+   client.query(Document).filter(Document.id == 1).delete()
 
    # Query vector data with conditions
-   result = client.query("documents").select("*").where("id > ?", 5).execute()
-   for row in result.fetchall():
-       print(f"Document: {row[1]}")
+   results = client.query(Document).filter(Document.id > 5).all()
+   for doc in results:
+       print(f"Document: {doc.title}")
 
-   # Get vector statistics
-   result = client.query("documents").select("COUNT(*)").execute()
-   total_docs = result.fetchall()[0][0]
+   # Get vector statistics using client.query
+   total_docs = client.query(Document).select(
+       func.count(Document.id)
+   ).scalar()
    print(f"Total documents: {total_docs}")
 
 Performance Optimization
