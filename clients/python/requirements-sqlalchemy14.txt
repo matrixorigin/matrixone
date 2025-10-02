@@ -1,0 +1,20 @@
+# SQLAlchemy 1.4.x compatibility requirements
+SQLAlchemy>=1.4.0,<2.0.0
+PyMySQL>=1.0.0
+aiomysql>=0.1.0
+typing-extensions>=4.0.0
+python-dateutil>=2.8.0
+
+# Vector operations dependencies
+numpy>=1.20.0
+
+# Development dependencies
+pytest>=6.0
+pytest-asyncio>=0.18.0
+pytest-cov>=3.0
+black>=22.0
+flake8>=4.0
+mypy>=0.950
+isort>=5.0
+sphinx>=4.0
+sphinx-rtd-theme>=1.0

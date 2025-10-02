@@ -52,3 +52,7 @@ test/distributed/resources/json/export_*.csv
 
 # docker compose bvt generate files
 docker-compose-log/
+
+# python 
+**/__pycache__/
+*.pyc

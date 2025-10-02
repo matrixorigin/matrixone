@@ -1,0 +1,103 @@
+name: MatrixOne Python SDK Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'clients/python/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'clients/python/**'
+
+jobs:
+  test-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sqlalchemy-version: [1.4, 2.0]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.10
+    
+    - name: Install dependencies
+      run: |
+        cd clients/python
+        pip install --upgrade pip
+        if [ "${{ matrix.sqlalchemy-version }}" = "1.4" ]; then
+          pip install -r requirements-sqlalchemy14.txt
+        else
+          pip install -r requirements-sqlalchemy20.txt
+        fi
+    
+    - name: Run offline tests
+      run: |
+        cd clients/python
+        python -m pytest tests/offline/ -v --tb=short
+    
+    - name: Run online tests
+      run: |
+        cd clients/python
+        python -m pytest tests/online/ -v --tb=short --maxfail=3
+      continue-on-error: true
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.10
+    
+    - name: Install dependencies
+      run: |
+        cd clients/python
+        pip install --upgrade pip
+        pip install -r requirements-test.txt
+    
+    - name: Run linting
+      run: |
+        cd clients/python
+        python -m flake8 matrixone/ --max-line-length=120 --ignore=E203,W503
+        python -m isort matrixone/ --check-only --diff
+        python -m black matrixone/ --check --diff
+    
+    - name: Run type checking
+      run: |
+        cd clients/python
+        python -m mypy matrixone/ --ignore-missing-imports
+
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.10
+    
+    - name: Install dependencies
+      run: |
+        cd clients/python
+        pip install --upgrade pip
+        pip install -r requirements-test.txt
+    
+    - name: Build package
+      run: |
+        cd clients/python
+        python -m build --wheel --sdist --outdir dist
+    
+    - name: Check package
+      run: |
+        cd clients/python
+        python -m twine check dist/*
