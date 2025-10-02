@@ -255,6 +255,9 @@ class Client(BaseMatrixOneClient):
         ssl_key: Optional[str] = None,
         account: Optional[str] = None,
         role: Optional[str] = None,
+        charset: str = "utf8mb4",
+        connection_timeout: int = 30,
+        auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
     ) -> None:
         """
@@ -273,7 +276,10 @@ class Client(BaseMatrixOneClient):
             ssl_key: SSL client key path
             account: Optional account name (will be combined with user if user doesn't contain '#')
             role: Optional role name (will be combined with user if user doesn't contain '#')
-                       on_connect: Connection hook to execute after successful connection.
+            charset: Character set for the connection (default: utf8mb4)
+            connection_timeout: Connection timeout in seconds (default: 30)
+            auto_commit: Enable autocommit (default: True)
+            on_connect: Connection hook to execute after successful connection.
                        Can be:
                        - ConnectionHook instance
                        - List of ConnectionAction or string action names
@@ -285,8 +291,9 @@ class Client(BaseMatrixOneClient):
             client.connect(host, port, user, password, database,
                           on_connect=[ConnectionAction.ENABLE_ALL])
 
-            # Enable only vector operations
+            # Enable only vector operations with custom charset
             client.connect(host, port, user, password, database,
+                          charset="utf8mb4",
                           on_connect=[ConnectionAction.ENABLE_VECTOR])
 
             # Custom callback
@@ -308,9 +315,9 @@ class Client(BaseMatrixOneClient):
             "user": final_user,
             "password": password,
             "database": database,
-            "charset": self.charset,
-            "connect_timeout": self.connection_timeout,
-            "autocommit": self.auto_commit,
+            "charset": charset,
+            "connect_timeout": connection_timeout,
+            "autocommit": auto_commit,
             "ssl_disabled": ssl_mode == "disabled",
             "ssl_verify_cert": ssl_mode == "required",
             "ssl_verify_identity": ssl_mode == "required",

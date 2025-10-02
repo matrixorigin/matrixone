@@ -247,12 +247,13 @@ class MatrixOneConfig:
             from matrixone import Client
             from matrixone.connection_hooks import ConnectionAction
 
-            # Get complete configuration
-            config = MatrixOneConfig.get_connection_kwargs(
+            # Get complete configuration and use directly with Client constructor
+            client = Client(**MatrixOneConfig.get_connection_kwargs(
                 on_connect=[ConnectionAction.ENABLE_ALL]
-            )
+            ))
 
-            # Use with Client
+            # Or use with connect method
+            config = MatrixOneConfig.get_connection_kwargs()
             client = Client()
             client.connect(
                 host=config['host'],
@@ -260,6 +261,7 @@ class MatrixOneConfig:
                 user=config['user'],
                 password=config['password'],
                 database=config['database'],
+                charset=config['charset'],
                 on_connect=config['on_connect']
             )
         """
@@ -388,6 +390,46 @@ def get_connection_kwargs(**overrides) -> Dict[str, Any]:
 
     """
     return MatrixOneConfig.get_connection_kwargs(**overrides)
+
+
+def get_client_kwargs(**overrides) -> Dict[str, Any]:
+    """
+    Get connection parameters suitable for Client constructor.
+
+    This method returns connection parameters that can be directly passed
+    to the Client() constructor, excluding parameters that are only used
+    by the connect() method.
+
+    Args::
+
+        **overrides: Additional parameter overrides
+
+    Returns::
+
+        Dict[str, Any]: Client constructor parameters dictionary
+
+    Example::
+
+        from matrixone import Client
+        from matrixone.config import get_client_kwargs
+
+        # Create client with all configuration in one line
+        client = Client(**get_client_kwargs())
+
+        # Or with overrides
+        client = Client(**get_client_kwargs(host="production-server"))
+    """
+    config = MatrixOneConfig.get_config(**overrides)
+    return {
+        "host": config["host"],
+        "port": config["port"],
+        "user": config["user"],
+        "password": config["password"],
+        "database": config["database"],
+        "charset": config["charset"],
+        "connection_timeout": config["connect_timeout"],
+        "auto_commit": config["autocommit"],
+    }
 
 
 def print_config(**overrides):

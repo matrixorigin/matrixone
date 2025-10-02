@@ -1495,6 +1495,9 @@ class AsyncClient(BaseMatrixOneClient):
         database: str = None,
         account: Optional[str] = None,
         role: Optional[str] = None,
+        charset: str = "utf8mb4",
+        connection_timeout: int = 30,
+        auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
     ):
         """
@@ -1509,7 +1512,10 @@ class AsyncClient(BaseMatrixOneClient):
             database: Database name
             account: Optional account name (will be combined with user if user doesn't contain '#')
             role: Optional role name (will be combined with user if user doesn't contain '#')
-                       on_connect: Connection hook to execute after successful connection.
+            charset: Character set for the connection (default: utf8mb4)
+            connection_timeout: Connection timeout in seconds (default: 30)
+            auto_commit: Enable autocommit (default: True)
+            on_connect: Connection hook to execute after successful connection.
                        Can be:
                        - ConnectionHook instance
                        - List of ConnectionAction or string action names
@@ -1521,8 +1527,9 @@ class AsyncClient(BaseMatrixOneClient):
             await client.connect(host, port, user, password, database,
                                on_connect=[ConnectionAction.ENABLE_ALL])
 
-            # Enable only vector operations
+            # Enable only vector operations with custom charset
             await client.connect(host, port, user, password, database,
+                               charset="utf8mb4",
                                on_connect=[ConnectionAction.ENABLE_VECTOR])
 
             # Custom async callback
@@ -1546,9 +1553,9 @@ class AsyncClient(BaseMatrixOneClient):
                 "user": final_user,
                 "password": password,
                 "database": database,
-                "charset": self.charset,
-                "autocommit": self.auto_commit,
-                "connect_timeout": self.connection_timeout,
+                "charset": charset,
+                "autocommit": auto_commit,
+                "connect_timeout": connection_timeout,
             }
 
             # Create SQLAlchemy async engine instead of direct aiomysql connection

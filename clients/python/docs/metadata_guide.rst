@@ -34,7 +34,7 @@ Synchronous Operations
     client.connect(**get_connection_kwargs())
 
     # Basic table metadata scan
-    result = client.metadata.scan("database_name", "table_name")
+    result = client.metadata.scan("mo_catalog", "mo_columns")
     rows = result.fetchall()
     
     for row in rows:
@@ -42,6 +42,8 @@ Synchronous Operations
         print(f"Rows: {row._mapping['rows_cnt']}")
         print(f"Nulls: {row._mapping['null_cnt']}")
         print(f"Size: {row._mapping['origin_size']}")
+
+    client.disconnect()
 
 Metadata Schema and Column Selection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -82,7 +84,7 @@ To get all columns as structured data objects:
     from matrixone.metadata import MetadataColumn
     
     # Get all columns as structured MetadataRow objects
-    rows = client.metadata.scan("database_name", "table_name", columns="*")
+    rows = client.metadata.scan("mo_catalog", "mo_columns", columns="*")
     
     for row in rows:
         print(f"Column: {row.col_name}")
@@ -102,7 +104,7 @@ To get only specific columns:
     from matrixone.metadata import MetadataColumn
     
     # Get only column name and row count
-    rows = client.metadata.scan("database_name", "table_name", 
+    rows = client.metadata.scan("mo_catalog", "mo_columns", 
                                columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT])
     
     for row in rows:
@@ -110,7 +112,7 @@ To get only specific columns:
         print(f"Rows: {row['rows_cnt']}")
     
     # Or using string column names
-    rows = client.metadata.scan("database_name", "table_name", 
+    rows = client.metadata.scan("mo_catalog", "mo_columns", 
                                columns=['col_name', 'origin_size'])
     
     for row in rows:
@@ -127,13 +129,13 @@ To get only distinct object names from metadata scan:
     from matrixone.metadata import MetadataColumn
     
     # Get distinct object names only
-    rows = client.metadata.scan("database_name", "table_name", distinct_object_name=True)
+    rows = client.metadata.scan("mo_catalog", "mo_columns", distinct_object_name=True)
     
     for row in rows:
         print(f"Object: {row._mapping['object_name']}")
     
     # Get distinct object names with structured data
-    rows = client.metadata.scan("database_name", "table_name", 
+    rows = client.metadata.scan("mo_catalog", "mo_columns", 
                                distinct_object_name=True, columns="*")
     
     for row in rows:
@@ -154,7 +156,7 @@ Asynchronous Operations
         await client.connect(**get_connection_kwargs())
 
         # Basic async table metadata scan (raw SQLAlchemy Result)
-        result = await client.metadata.scan("database_name", "table_name")
+        result = await client.metadata.scan("mo_catalog", "mo_columns")
         rows = result.fetchall()
         
         for row in rows:
@@ -164,7 +166,7 @@ Asynchronous Operations
             print(f"Size: {row._mapping['origin_size']}")
         
         # Get structured data with all columns
-        rows = await client.metadata.scan("database_name", "table_name", columns="*")
+        rows = await client.metadata.scan("mo_catalog", "mo_columns", columns="*")
         
         for row in rows:
             print(f"Column: {row.col_name}")
@@ -173,13 +175,15 @@ Asynchronous Operations
             print(f"Size: {row.origin_size}")
         
         # Get only specific columns
-        rows = await client.metadata.scan("database_name", "table_name", 
+        rows = await client.metadata.scan("mo_catalog", "mo_columns", 
                                          columns=['col_name', 'rows_cnt', 'origin_size'])
         
         for row in rows:
             print(f"Column: {row['col_name']}")
             print(f"Rows: {row['rows_cnt']}")
             print(f"Size: {row['origin_size']}")
+
+        await client.disconnect()
 
     asyncio.run(main())
 
@@ -194,9 +198,9 @@ Basic Table Scan
 .. code-block:: python
 
     # Scan all columns of a table
-    result = client.metadata.scan("db_name", "table_name")
+    result = client.metadata.scan("mo_catalog", "mo_columns")
     
-    # Equivalent SQL: SELECT * FROM metadata_scan('db_name.table_name', '*')
+    # Equivalent SQL: SELECT * FROM metadata_scan('mo_catalog.mo_columns', '*')
 
 Index-Specific Scan
 ~~~~~~~~~~~~~~~~~~~
@@ -204,9 +208,9 @@ Index-Specific Scan
 .. code-block:: python
 
     # Scan specific index
-    result = client.metadata.scan("db_name", "table_name", indexname="index_name")
+    result = client.metadata.scan("mo_catalog", "mo_columns", indexname="index_name")
     
-    # Equivalent SQL: SELECT * FROM metadata_scan('db_name.table_name.?index_name', '*')
+    # Equivalent SQL: SELECT * FROM metadata_scan('mo_catalog.mo_columns.?index_name', '*')
 
 Tombstone Scan
 ~~~~~~~~~~~~~~
@@ -214,9 +218,9 @@ Tombstone Scan
 .. code-block:: python
 
     # Scan tombstone objects
-    result = client.metadata.scan("db_name", "table_name", is_tombstone=True)
+    result = client.metadata.scan("mo_catalog", "mo_columns", is_tombstone=True)
     
-    # Equivalent SQL: SELECT * FROM metadata_scan('db_name.table_name.#', '*')
+    # Equivalent SQL: SELECT * FROM metadata_scan('mo_catalog.mo_columns.#', '*')
 
 Index Tombstone Scan
 ~~~~~~~~~~~~~~~~~~~~
@@ -224,71 +228,44 @@ Index Tombstone Scan
 .. code-block:: python
 
     # Scan tombstone objects for specific index
-    result = client.metadata.scan("db_name", "table_name", indexname="index_name", is_tombstone=True)
+    result = client.metadata.scan("mo_catalog", "mo_columns", indexname="index_name", is_tombstone=True)
     
-    # Equivalent SQL: SELECT * FROM metadata_scan('db_name.table_name.?index_name.#', '*')
+    # Equivalent SQL: SELECT * FROM metadata_scan('mo_catalog.mo_columns.?index_name.#', '*')
 
 High-Level Methods
 ------------------
 
-Column Statistics
-~~~~~~~~~~~~~~~~~
+Table Brief Statistics
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    # Get statistics for all columns
-    stats = client.metadata.get_column_stats("database_name", "table_name")
+    # Get brief statistics for a table
+    stats = client.metadata.get_table_brief_stats("mo_catalog", "mo_columns")
     
-    for stat in stats:
-        print(f"Column: {stat['name']}")
-        print(f"Rows: {stat['rows_count']}")
-        print(f"Nulls: {stat['null_count']}")
-        print(f"Size: {stat['size']}")
-        print(f"Min: {stat['min_value']}")
-        print(f"Max: {stat['max_value']}")
-        print(f"Sum: {stat['sum_value']}")
+    for table_name, table_stats in stats.items():
+        print(f"Table: {table_name}")
+        print(f"  Total objects: {table_stats['total_objects']}")
+        print(f"  Total rows: {table_stats['row_cnt']}")
+        print(f"  Total nulls: {table_stats['null_cnt']}")
+        print(f"  Original size: {table_stats['original_size']}")
+        print(f"  Compressed size: {table_stats['compress_size']}")
 
-    # Get statistics for specific column
-    stats = client.metadata.get_column_stats("database_name", "table_name", "column_name")
-
-Table Information
-~~~~~~~~~~~~~~~~~
+Table Detailed Statistics
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    # Get comprehensive table information
-    info = client.metadata.get_table_info("database_name", "table_name")
+    # Get detailed statistics for a table
+    detail_stats = client.metadata.get_table_detail_stats("mo_catalog", "mo_columns")
     
-    print(f"Total rows: {info['total_rows']}")
-    print(f"Total size: {info['total_size']} bytes")
-    print(f"Columns: {len(info['columns'])}")
-    
-    for column in info['columns']:
-        print(f"  - {column['name']}: {column['rows_count']} rows, {column['size']} bytes")
-
-Row Count
-~~~~~~~~~
-
-.. code-block:: python
-
-    # Get total row count
-    count = client.metadata.get_row_count("database_name", "table_name")
-    print(f"Total rows: {count}")
-    
-    # Get non-tombstone row count
-    count = client.metadata.get_row_count("database_name", "table_name", is_tombstone=False)
-    print(f"Active rows: {count}")
-
-Size Information
-~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    # Get size information
-    size_info = client.metadata.get_size_info("database_name", "table_name")
-    
-    print(f"Total size: {size_info['total_size']} bytes")
-    print(f"Column count: {size_info['column_count']}")
+    for table_name, table_details in detail_stats.items():
+        print(f"Table: {table_name}")
+        for detail in table_details:
+            print(f"  Object: {detail['object_name']}")
+            print(f"    Created: {detail['create_ts']}")
+            print(f"    Rows: {detail['row_cnt']}, Nulls: {detail['null_cnt']}")
+            print(f"    Size: {detail['original_size']} -> {detail['compress_size']}")
 
 Transaction Operations
 ----------------------
@@ -298,14 +275,14 @@ Metadata operations can also be performed within transactions:
 .. code-block:: python
 
     with client.transaction() as tx:
-        # Get table info within transaction
-        info = tx.metadata.get_table_info("database_name", "table_name")
+        # Get table brief stats within transaction
+        stats = tx.metadata.get_table_brief_stats("mo_catalog", "mo_columns")
         
-        # Get column stats within transaction
-        stats = tx.metadata.get_column_stats("database_name", "table_name")
+        # Get table detailed stats within transaction
+        detail_stats = tx.metadata.get_table_detail_stats("mo_catalog", "mo_columns")
         
-        # Get row count within transaction
-        count = tx.metadata.get_row_count("database_name", "table_name")
+        # Scan metadata within transaction
+        result = tx.metadata.scan("mo_catalog", "mo_columns")
 
 Async Transaction Operations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -313,11 +290,14 @@ Async Transaction Operations
 .. code-block:: python
 
     async with client.transaction() as tx:
-        # Get table info within async transaction
-        info = await tx.metadata.get_table_info("database_name", "table_name")
+        # Get table brief stats within async transaction
+        stats = await tx.metadata.get_table_brief_stats("mo_catalog", "mo_columns")
         
-        # Get column stats within async transaction
-        stats = await tx.metadata.get_column_stats("database_name", "table_name")
+        # Get table detailed stats within async transaction
+        detail_stats = await tx.metadata.get_table_detail_stats("mo_catalog", "mo_columns")
+        
+        # Scan metadata within async transaction
+        result = await tx.metadata.scan("mo_catalog", "mo_columns")
 
 Metadata Fields
 ---------------
@@ -352,14 +332,15 @@ Database Analysis
         total_rows = 0
         
         for table in tables:
-            info = client.metadata.get_table_info(database_name, table)
-            total_size += info['total_size']
-            total_rows += info['total_rows']
+            stats = client.metadata.get_table_brief_stats(database_name, table)
+            table_stats = stats.get(table, {})
+            total_size += table_stats.get('original_size', 0)
+            total_rows += table_stats.get('row_cnt', 0)
             
             print(f"Table: {table}")
-            print(f"  Rows: {info['total_rows']}")
-            print(f"  Size: {info['total_size']} bytes")
-            print(f"  Columns: {len(info['columns'])}")
+            print(f"  Rows: {table_stats.get('row_cnt', 0)}")
+            print(f"  Size: {table_stats.get('original_size', 0)} bytes")
+            print(f"  Objects: {table_stats.get('total_objects', 0)}")
         
         print(f"\nDatabase Summary:")
         print(f"Total tables: {len(tables)}")
@@ -379,13 +360,15 @@ Storage Optimization
         large_tables = []
         
         for table in tables:
-            size_info = client.metadata.get_size_info(database_name, table)
+            stats = client.metadata.get_table_brief_stats(database_name, table)
+            table_stats = stats.get(table, {})
+            table_size = table_stats.get('original_size', 0)
             
-            if size_info['total_size'] > size_threshold:
+            if table_size > size_threshold:
                 large_tables.append({
                     'table': table,
-                    'size': size_info['total_size'],
-                    'columns': size_info['column_count']
+                    'size': table_size,
+                    'objects': table_stats.get('total_objects', 0)
                 })
         
         # Sort by size
@@ -393,7 +376,7 @@ Storage Optimization
         
         print("Large tables:")
         for table_info in large_tables:
-            print(f"  {table_info['table']}: {table_info['size']} bytes, {table_info['columns']} columns")
+            print(f"  {table_info['table']}: {table_info['size']} bytes, {table_info['objects']} objects")
 
 Data Quality Analysis
 ~~~~~~~~~~~~~~~~~~~~~
@@ -402,14 +385,15 @@ Data Quality Analysis
 
     def analyze_data_quality(client, database_name, table_name):
         """Analyze data quality metrics"""
-        stats = client.metadata.get_column_stats(database_name, table_name)
+        result = client.metadata.scan(database_name, table_name)
+        rows = result.fetchall()
         
         print(f"Data Quality Analysis for {table_name}:")
         
-        for stat in stats:
-            column_name = stat['col_name']
-            total_rows = stat['rows_cnt']
-            null_count = stat['null_cnt']
+        for row in rows:
+            column_name = row._mapping['col_name']
+            total_rows = row._mapping['rows_cnt']
+            null_count = row._mapping['null_cnt']
             null_percentage = (null_count / total_rows * 100) if total_rows > 0 else 0
             
             print(f"  {column_name}:")
@@ -427,11 +411,12 @@ Performance Monitoring
         import time
         
         while True:
-            info = client.metadata.get_table_info(database_name, table_name)
+            stats = client.metadata.get_table_brief_stats(database_name, table_name)
+            table_stats = stats.get(table_name, {})
             
             print(f"Table: {table_name}")
-            print(f"  Rows: {info['total_rows']}")
-            print(f"  Size: {info['total_size']} bytes")
+            print(f"  Rows: {table_stats.get('row_cnt', 0)}")
+            print(f"  Size: {table_stats.get('original_size', 0)} bytes")
             print(f"  Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             print("-" * 40)
             
@@ -441,10 +426,9 @@ Best Practices
 --------------
 
 1. **Use Appropriate Methods**: Choose the right method for your use case:
-   - Use `scan()` for raw metadata access
-   - Use `get_table_info()` for comprehensive table analysis
-   - Use `get_column_stats()` for column-specific analysis
-   - Use `get_row_count()` for simple row counting
+   - Use `scan()` for raw metadata access and column-specific analysis
+   - Use `get_table_brief_stats()` for quick table overview
+   - Use `get_table_detail_stats()` for comprehensive table analysis with object details
 
 2. **Handle Tombstone Data**: Be aware of tombstone objects when analyzing data:
    - Use `is_tombstone=False` to exclude deleted data
@@ -469,13 +453,13 @@ Error Handling
 .. code-block:: python
 
     try:
-        info = client.metadata.get_table_info("database_name", "table_name")
+        stats = client.metadata.get_table_brief_stats("mo_catalog", "mo_columns")
     except Exception as e:
-        print(f"Error getting table info: {e}")
+        print(f"Error getting table stats: {e}")
         # Handle error appropriately
 
     try:
-        result = client.metadata.scan("database_name", "nonexistent_table")
+        result = client.metadata.scan("mo_catalog", "nonexistent_table")
     except Exception as e:
         print(f"Table does not exist: {e}")
         # Handle missing table

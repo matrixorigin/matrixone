@@ -3,6 +3,9 @@ MOCTL Command Line Interface Guide
 
 This guide covers the MOCTL command line interface in the MatrixOne Python SDK, providing programmatic access to MatrixOne control operations.
 
+⚠️ **CRITICAL REQUIREMENT**: All MOCTL operations require 'sys' account privileges.
+These operations cannot be executed with regular user accounts.
+
 Overview
 --------
 
@@ -11,6 +14,25 @@ MOCTL (MatrixOne Control) provides:
 * **Table Flushing**: Force flush table data to disk
 * **Incremental Checkpoint**: Generate incremental checkpoints and truncate WAL
 * **Global Checkpoint**: Generate global checkpoints across all nodes
+
+Prerequisites
+~~~~~~~~~~~~~
+
+Before using MOCTL operations, you must:
+
+1. Connect with 'sys' account privileges
+2. Ensure proper administrative permissions
+3. Have access to the target database and tables
+
+Connection Examples:
+
+.. code-block:: python
+
+   # Method 1: Use sys#root format
+   client.connect(host, port, 'sys#root', password, database)
+   
+   # Method 2: Use account parameter
+   client.connect(host, port, 'root', password, database, account='sys')
 
 Getting Started
 ---------------
@@ -23,10 +45,11 @@ Basic Setup
    from matrixone import Client
    from matrixone.config import get_connection_params
 
-   # Connect to MatrixOne
+   # Connect to MatrixOne with sys account
    connection_params = get_connection_params()
-   client = Client(*connection_params)
-   client.connect(*connection_params)
+   client = Client()
+   client.connect(host, port, 'sys#root', password, database)
+   # Alternative: client.connect(host, port, 'root', password, database, account='sys')
 
    # Get MOCTL manager
    moctl = client.moctl
@@ -165,10 +188,11 @@ Full async/await support for high-performance applications:
    from matrixone import AsyncClient
 
    async def async_moctl_operations():
-       # Connect asynchronously
+       # Connect asynchronously with sys account
        connection_params = get_connection_params()
-       async_client = AsyncClient(*connection_params)
-       await async_client.connect(*connection_params)
+       async_client = AsyncClient()
+       await async_client.connect(host, port, 'sys#root', password, database)
+       # Alternative: await async_client.connect(host, port, 'root', password, database, account='sys')
 
        # Get async MOCTL manager
        moctl = async_client.moctl
@@ -386,6 +410,46 @@ Performance Monitoring System
    # Usage
    monitor = PerformanceMonitoringSystem()
    monitor.monitor_and_optimize()
+
+Sys Account Requirements
+------------------------
+
+All MOCTL operations require 'sys' account privileges. Here's how to handle permission issues:
+
+Common Permission Errors
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   try:
+       result = moctl.flush_table("database", "table")
+   except MoCtlError as e:
+       if "permission" in str(e).lower() or "privilege" in str(e).lower():
+           print("❌ Permission denied. Ensure you're connected with sys account:")
+           print("   client.connect(host, port, 'sys#root', password, database)")
+           print("   # or")
+           print("   client.connect(host, port, 'root', password, database, account='sys')")
+       else:
+           print(f"MOCTL operation failed: {e}")
+
+Verification
+~~~~~~~~~~~~
+
+Verify your connection has sys privileges:
+
+.. code-block:: python
+
+   # Check current user and account
+   result = client.execute("SELECT USER(), CURRENT_USER()")
+   user_info = result.rows[0]
+   print(f"Connected as: {user_info[0]}")
+   print(f"Current user: {user_info[1]}")
+   
+   # Verify sys account access
+   if 'sys' in user_info[0].lower() or 'sys' in user_info[1].lower():
+       print("✅ Connected with sys account - MOCTL operations available")
+   else:
+       print("❌ Not connected with sys account - MOCTL operations will fail")
 
 Error Handling
 --------------

@@ -14,7 +14,21 @@
 
 """
 MatrixOne Control Operations (mo_ctl) Manager
-Provides access to MatrixOne control operations that require sys tenant privileges
+
+Provides access to MatrixOne control operations that require sys tenant privileges.
+
+IMPORTANT: All mo_ctl operations require 'sys' account privileges. 
+These operations cannot be executed with regular user accounts.
+
+To use mo_ctl operations:
+1. Connect with 'sys' account (e.g., 'sys#root' or account='sys')
+2. Ensure proper administrative privileges
+3. Operations may require specific tenant permissions
+
+Example connection with sys account:
+    client.connect(host, port, 'sys#root', password, database)
+    # or
+    client.connect(host, port, 'root', password, database, account='sys')
 """
 
 import json
@@ -34,45 +48,53 @@ class MoCtlManager:
     Manager for MatrixOne control operations (mo_ctl).
 
     This class provides access to MatrixOne's control operations through the
-    mo_ctl command-line tool. It allows programmatic execution of various
+    mo_ctl SQL function. It allows programmatic execution of various
     MatrixOne administrative and maintenance operations.
+
+    ⚠️  CRITICAL REQUIREMENT: All mo_ctl operations require 'sys' account privileges.
+    These operations cannot be executed with regular user accounts.
 
     Key Features:
 
     - Programmatic access to mo_ctl commands
-    - Database and cluster management operations
-    - Configuration and maintenance tasks
+    - Table flush operations for data persistence
+    - Checkpoint operations for data consistency
     - Integration with MatrixOne client operations
     - Error handling and result parsing
 
     Supported Operations:
 
-    - Database creation and management
-    - Cluster configuration and maintenance
-    - User and account management
-    - Backup and restore operations
-    - Performance monitoring and tuning
-    - System health checks and diagnostics
+    - Table flush operations (flush_table)
+    - Incremental checkpoints (increment_checkpoint)
+    - Global checkpoints (global_checkpoint)
 
     Usage Examples:
 
+        # IMPORTANT: Connect with sys account first
+        client = Client()
+        client.connect(host, port, 'sys#root', password, database)
+        
         # Initialize mo_ctl manager
         moctl = client.moctl
 
-        # Create a new database
-        result = moctl.create_database("new_database")
+        # Flush a specific table
+        result = moctl.flush_table("database_name", "table_name")
 
-        # List all databases
-        databases = moctl.list_databases()
+        # Force incremental checkpoint
+        result = moctl.increment_checkpoint()
 
-        # Get cluster status
-        status = moctl.get_cluster_status()
+        # Force global checkpoint
+        result = moctl.global_checkpoint()
 
-        # Perform maintenance operations
-        moctl.optimize_database("my_database")
+    Requirements:
+    - Must connect with 'sys' account (e.g., 'sys#root' or account='sys')
+    - Requires appropriate administrative privileges
+    - Operations may require specific tenant permissions
 
-    Note: This manager requires mo_ctl to be installed and accessible in the
-    system PATH. Some operations may require appropriate administrative privileges.
+    Note: If you get permission errors, ensure you're connected with sys account:
+        client.connect(host, port, 'sys#root', password, database)
+        # or
+        client.connect(host, port, 'root', password, database, account='sys')
     """
 
     def __init__(self, client):
@@ -135,9 +157,11 @@ class MoCtlManager:
 
     def flush_table(self, database: str, table: str) -> Dict[str, Any]:
         """
-        Force flush table
+        Force flush table.
 
         Force flush table `table` in database `database`. It returns after all blks in the table are flushed.
+
+        ⚠️  Requires 'sys' account privileges.
 
         Args:
 
@@ -158,9 +182,11 @@ class MoCtlManager:
 
     def increment_checkpoint(self) -> Dict[str, Any]:
         """
-        Force incremental checkpoint
+        Force incremental checkpoint.
 
         Flush all blks in DN, generate an Incremental Checkpoint and truncate WAL.
+
+        ⚠️  Requires 'sys' account privileges.
 
         Returns:
 
@@ -175,9 +201,11 @@ class MoCtlManager:
 
     def global_checkpoint(self) -> Dict[str, Any]:
         """
-        Force global checkpoint
+        Force global checkpoint.
 
         Generate a global checkpoint across all nodes.
+
+        ⚠️  Requires 'sys' account privileges.
 
         Returns:
 
