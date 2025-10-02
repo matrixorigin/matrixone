@@ -221,6 +221,13 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	ts := time.Now().Unix()
 	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts}
+
+	// save all model to local by LoadIndex and Unload
+	err = sync.DownloadAll(sqlproc)
+	if err != nil {
+		return nil, err
+	}
+
 	return sync, nil
 }
 
@@ -229,6 +236,22 @@ func (s *HnswSync[T]) Destroy() {
 		m.Destroy()
 	}
 	s.indexes = nil
+}
+
+func (s *HnswSync[T]) DownloadAll(sqlproc *sqlexec.SqlProcess) (err error) {
+
+	for _, m := range s.indexes {
+		err = m.LoadIndex(sqlproc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
+		if err != nil {
+			return
+		}
+		err = m.Unload()
+		if err != nil {
+			return
+		}
+	}
+
+	return
 }
 
 func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (maxcap uint, midx []int, err error) {

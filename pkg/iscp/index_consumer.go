@@ -187,7 +187,7 @@ func runTxnAndCommit(c *IndexConsumer, ctx context.Context, accountId uint32, du
 	newctx, cancel := context.WithTimeout(newctx, duration)
 	defer cancel()
 
-	txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "hnsw consumer")
+	txnOp, err := getTxn(newctx, c.cnEngine, c.cnTxnClient, "index consumer")
 	if err != nil {
 		return err
 	}
@@ -213,8 +213,8 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	var err error
 	var sync *hnsw.HnswSync[T]
 
-	// read-only sql so no need transaction here
-	err = runTxnAndCommit(c, ctx, r.GetAccountID(), 5*time.Minute,
+	// read-only sql so no need transaction here.  All models are loaded at startup.
+	err = runTxnAndCommit(c, ctx, r.GetAccountID(), 30*time.Minute,
 		func(sqlproc *sqlexec.SqlProcess) (err error) {
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
@@ -286,8 +286,8 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				return
 			}
 
-			// hnsw Update should not require a db connection so no need transaction
-			err = runTxnAndCommit(c, ctx, r.GetAccountID(), 5*time.Minute,
+			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
+			err = runTxnAndCommit(c, ctx, r.GetAccountID(), 30*time.Minute,
 				func(sqlproc *sqlexec.SqlProcess) (err error) {
 					return sync.Update(sqlproc, &cdc)
 				})
