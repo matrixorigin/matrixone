@@ -16,11 +16,14 @@ package sqlexec
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -233,4 +236,55 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithAccountID(accountId)
 		return exec.ExecTxn(sqlctx.Ctx, execFunc, opts)
 	}
+}
+
+func getTxn(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	info string,
+) (client.TxnOperator, error) {
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		info,
+		0)
+	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if err != nil {
+		return nil, err
+	}
+	err = cnEngine.New(ctx, op)
+	if err != nil {
+		return nil, err
+	}
+	return op, nil
+}
+
+// run SQL with SqlContext
+func RunTxnWithSqlContext(ctx context.Context,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
+	accountId uint32,
+	duration time.Duration,
+	f func(sqlproc *SqlProcess) error) (err error) {
+
+	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	newctx, cancel := context.WithTimeout(newctx, duration)
+	defer cancel()
+
+	txnOp, err := getTxn(newctx, cnEngine, cnTxnClient, "runTxnWithSqlContext")
+	if err != nil {
+		return err
+	}
+
+	sqlproc := NewSqlProcessWithContext(NewSqlContext(newctx, cnUUID, txnOp, accountId))
+	err = f(sqlproc)
+	if err != nil {
+		err = errors.Join(err, txnOp.Rollback(sqlproc.GetContext()))
+	} else {
+		err = txnOp.Commit(sqlproc.GetContext())
+	}
+	return
 }
