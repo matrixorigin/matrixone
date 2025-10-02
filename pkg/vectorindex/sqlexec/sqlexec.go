@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// SqlContext stores required information for background SQLInternalExecutor
 type SqlContext struct {
 	Ctx         context.Context
 	CNUuid      string
@@ -43,7 +44,14 @@ func (s *SqlContext) Txn() client.TxnOperator {
 	return s.TxnOperator
 }
 
-// Either process or SqlContext
+// SqlProcess is the wrapper for both process.Process and background SQLContext
+// SqlProcess enable the API to run in both frontend and background with InternalSQLExecutor
+// process.Process always exists in frontend.
+// However, process.Process does not exist in background job.
+// SqlContext with required infos such as context.Context, CNUUID, TxnOperator and AccountId enable
+// to run SQL with InternalSQLExecutor.
+// Either process.Process or SqlContext is used in SqlProcess.
+// We will look for process.Process first before SqlContext
 type SqlProcess struct {
 	Proc   *process.Process
 	SqlCtx *SqlContext
