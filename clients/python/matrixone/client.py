@@ -3911,7 +3911,31 @@ class VectorManager:
 
     def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
         """
-            Get IVF index statistics for a table.
+            Get IVF index statistics for monitoring and optimization.
+
+            This method provides critical insights into IVF index health and performance.
+            It helps evaluate whether the current IVF index configuration is optimal
+            and whether the index needs to be rebuilt.
+
+            Key Use Cases:
+
+            - **Index Health Monitoring**: Check if centroid count matches expected lists parameter
+            - **Load Balancing Analysis**: Evaluate if vectors are evenly distributed across centroids
+            - **Performance Optimization**: Identify when to rebuild the index for better performance
+            - **Capacity Planning**: Understand data distribution patterns
+
+            Critical Metrics to Monitor:
+
+            - **Centroid Count**: Should match the 'lists' parameter used during index creation
+            - **Load Distribution**: Each centroid should have roughly equal numbers of vectors
+            - **Centroid Versions**: Should be consistent (usually all 0 for stable indexes)
+
+            When to Rebuild Index:
+
+            - Centroid count doesn't match expected lists parameter
+            - Significant imbalance in centroid load distribution (>2x difference between min/max)
+            - Performance degradation in similarity search queries
+            - After major data changes (bulk inserts, updates, deletes)
 
             Args::
 
@@ -3922,7 +3946,10 @@ class VectorManager:
 
                 Dict containing IVF index statistics including:
                 - index_tables: Dictionary mapping table types to table names
-                - distribution: Dictionary containing bucket distribution data
+                - distribution: Dictionary containing:
+                    - centroid_count: List of row counts per centroid
+                    - centroid_id: List of centroid identifiers
+                    - centroid_version: List of centroid versions
                 - database: Database name
                 - table_name: Table name
                 - column_name: Vector column name
@@ -3931,13 +3958,30 @@ class VectorManager:
 
                 Exception: If IVF index is not found or if there are errors retrieving stats
 
-            Examples
+            Examples::
 
-        # Get stats for a table with vector column
-                stats = client.vector_ops.get_ivf_stats("my_table", "embedding")
-                print(f"Index tables: {stats['index_tables']}")
-                print(f"Distribution: {stats['distribution']}")
-
+                # Monitor index health
+                stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+                
+                # Check centroid distribution
+                centroid_counts = stats['distribution']['centroid_count']
+                total_centroids = len(centroid_counts)
+                min_count = min(centroid_counts)
+                max_count = max(centroid_counts)
+                
+                print(f"Total centroids: {total_centroids}")
+                print(f"Min vectors per centroid: {min_count}")
+                print(f"Max vectors per centroid: {max_count}")
+                print(f"Load balance ratio: {max_count/min_count:.2f}")
+                
+                # Check if index needs rebuilding
+                expected_centroids = 100  # Original lists parameter
+                if total_centroids != expected_centroids:
+                    print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
+                
+                if max_count / min_count > 2.0:
+                    print("⚠️  Poor load balance! Consider rebuilding index.")
+                
                 # Get stats using model class
                 stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
         """

@@ -597,7 +597,43 @@ Best Practices
 5. **Monitor performance**:
    - Use performance logging
    - Monitor query execution times
+   - Monitor IVF index health and distribution
    - Optimize based on usage patterns
+
+IVF Index Health Monitoring
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Monitor IVF index health to ensure optimal performance:
+
+.. code-block:: python
+
+   # Get IVF index statistics
+   stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+   
+   # Analyze centroid distribution
+   centroid_counts = stats['distribution']['centroid_count']
+   total_centroids = len(centroid_counts)
+   min_count = min(centroid_counts)
+   max_count = max(centroid_counts)
+   
+   print(f"Total centroids: {total_centroids}")
+   print(f"Min vectors per centroid: {min_count}")
+   print(f"Max vectors per centroid: {max_count}")
+   print(f"Load balance ratio: {max_count/min_count:.2f}")
+   
+   # Check index health
+   expected_centroids = 100  # Original lists parameter
+   if total_centroids != expected_centroids:
+       print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
+   
+   if max_count / min_count > 2.0:
+       print("⚠️  Poor load balance! Consider rebuilding index.")
+   
+   # When to rebuild IVF index:
+   # 1. Centroid count doesn't match expected lists parameter
+   # 2. Significant imbalance in centroid load distribution (>2x difference)
+   # 3. Performance degradation in similarity search queries
+   # 4. After major data changes (bulk inserts, updates, deletes)
 
 6. **Handle errors gracefully**:
    - Always use try-catch blocks
