@@ -1509,7 +1509,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName)
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, false)
 				if err != nil {
 					return err
 				}
@@ -2144,7 +2144,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type)
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type, false)
 		if err != nil {
 			return err
 		}

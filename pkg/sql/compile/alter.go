@@ -303,7 +303,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 10. register ISCP job again
-	err = CreateAllIndexCdcTasks(c, newTableDef.Indexes, dbName, tblName)
+	err = CreateAllIndexCdcTasks(c, newTableDef.Indexes, dbName, tblName, false)
 	if err != nil {
 		return err
 	}

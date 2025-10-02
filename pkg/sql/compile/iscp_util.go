@@ -30,10 +30,10 @@ var (
 )
 
 /* CDC APIs */
-func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
+func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID, startFromNow bool) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	return iscpRegisterJobFunc(ctx, cnUUID, txn, spec, job, false)
+	return iscpRegisterJobFunc(ctx, cnUUID, txn, spec, job, startFromNow)
 }
 
 func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {
@@ -41,10 +41,10 @@ func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, j
 }
 
 /* start here */
-func CreateCdcTask(c *Compile, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
+func CreateCdcTask(c *Compile, spec *iscp.JobSpec, job *iscp.JobID, startFromNow bool) (bool, error) {
 	logutil.Infof("Create Index Task %v", spec)
 
-	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), spec, job)
+	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), spec, job, startFromNow)
 }
 
 func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
@@ -92,7 +92,7 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) (bool, error)
 }
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
-func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8) error {
+func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool) error {
 	var err error
 
 	spec := &iscp.JobSpec{
@@ -104,7 +104,7 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname s
 	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 
 	// create index cdc task
-	ok, err := CreateCdcTask(c, spec, job)
+	ok, err := CreateCdcTask(c, spec, job, startFromNow)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 }
 
 // NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef
-func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string) error {
+func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, startFromNow bool) error {
 	idxmap := make(map[string]bool)
 	for _, idx := range indexes {
 		_, ok := idxmap[idx.IndexName]
@@ -198,7 +198,7 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		if valid {
 			idxmap[idx.IndexName] = true
 			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type)
+			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type, startFromNow)
 			if e != nil {
 				return e
 			}
