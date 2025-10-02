@@ -2084,6 +2084,11 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		}
 	}
 
+	async, err := catalog.IsIndexAsync(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+
 	// remove the cache with version 0
 	key := fmt.Sprintf("%s:0", indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 	cache.Cache.Remove(key)
@@ -2108,12 +2113,14 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	// 4.c populate entries table
-	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-	if err != nil {
-		return err
+	if !async {
+		// 4.c populate entries table
+		err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// 4.d delete older entries in index table.
@@ -2126,13 +2133,14 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	async, err := catalog.IsIndexAsync(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-
 	// create ISCP job when Async is true
 	if async {
+		// unregister ISCP job so that it can restart index update from ts=0
+		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName)
+		if err != nil {
+			return err
+		}
+
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,

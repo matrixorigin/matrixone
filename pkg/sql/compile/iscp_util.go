@@ -33,7 +33,7 @@ var (
 func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	return iscpRegisterJobFunc(ctx, cnUUID, txn, spec, job, true)
+	return iscpRegisterJobFunc(ctx, cnUUID, txn, spec, job, false)
 }
 
 func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {

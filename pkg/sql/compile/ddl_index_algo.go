@@ -154,18 +154,6 @@ func (s *Scope) handleFullTextIndexTable(
 		}
 	}
 
-	insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
-	if err != nil {
-		return err
-	}
-
-	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
-		if err != nil {
-			return err
-		}
-	}
-
 	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
@@ -178,6 +166,19 @@ func (s *Scope) handleFullTextIndexTable(
 			indexDef.IndexName, sinker_type)
 		if err != nil {
 			return err
+		}
+	} else {
+
+		insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+		if err != nil {
+			return err
+		}
+
+		for _, insertSQL := range insertSQLs {
+			err = c.runSql(insertSQL)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -589,24 +590,39 @@ func (s *Scope) handleVectorHnswIndex(
 		}
 	}
 
-	// 3. build hnsw index
-	sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+	async, err := catalog.IsIndexAsync(indexDefs[catalog.Hnsw_TblType_Metadata].IndexAlgoParams)
 	if err != nil {
 		return err
 	}
 
-	for _, sql := range sqls {
-		err = c.runSql(sql)
+	if !async {
+		// 3. build hnsw index
+		sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
 		if err != nil {
 			return err
 		}
+
+		for _, sql := range sqls {
+			err = c.runSql(sql)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	// 4. register ISCP job for async update
-	sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-	err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type)
-	if err != nil {
-		return err
+	if async {
+		// unregister ISCP job
+		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName)
+		if err != nil {
+			return err
+		}
+
+		// 4. register ISCP job for async update
+		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
+		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
