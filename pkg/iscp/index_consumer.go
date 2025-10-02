@@ -121,7 +121,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				}
 
 				// no transaction required and commit every time.
-				err := runSqlAndCommit(c, r.GetAccountID(), 5*time.Minute,
+				err := runTxnAndCommit(c, ctx, r.GetAccountID(), 5*time.Minute,
 					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
@@ -146,7 +146,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	} else {
 
 		// all updates under same transaction and transaction can last very long so set timeout to 24 hours
-		err := runSqlAndCommit(c, r.GetAccountID(), 24*time.Hour,
+		err := runTxnAndCommit(c, ctx, r.GetAccountID(), 24*time.Hour,
 			func(sqlproc *sqlexec.SqlProcess) (err error) {
 				sqlctx := sqlproc.SqlCtx
 
@@ -182,7 +182,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	}
 }
 
-func runSqlAndCommit(c *IndexConsumer, accountId uint32, duration time.Duration, f func(sqlproc *sqlexec.SqlProcess) error) (err error) {
+func runTxnAndCommit(c *IndexConsumer, ctx context.Context, accountId uint32, duration time.Duration, f func(sqlproc *sqlexec.SqlProcess) error) (err error) {
 	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
 	newctx, cancel := context.WithTimeout(newctx, duration)
 	defer cancel()
@@ -214,7 +214,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	var sync *hnsw.HnswSync[T]
 
 	// read-only sql so no need transaction here
-	err = runSqlAndCommit(c, r.GetAccountID(), 5*time.Minute,
+	err = runTxnAndCommit(c, ctx, r.GetAccountID(), 5*time.Minute,
 		func(sqlproc *sqlexec.SqlProcess) (err error) {
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
@@ -250,7 +250,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				// channel closed
 
 				// we need a transaction here to save model files and update watermark
-				err = runSqlAndCommit(c, r.GetAccountID(), time.Hour,
+				err = runTxnAndCommit(c, ctx, r.GetAccountID(), time.Hour,
 					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
@@ -287,7 +287,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			}
 
 			// hnsw Update should not require a db connection so no need transaction
-			err = runSqlAndCommit(c, r.GetAccountID(), 5*time.Minute,
+			err = runTxnAndCommit(c, ctx, r.GetAccountID(), 5*time.Minute,
 				func(sqlproc *sqlexec.SqlProcess) (err error) {
 					return sync.Update(sqlproc, &cdc)
 				})
