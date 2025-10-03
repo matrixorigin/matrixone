@@ -233,8 +233,20 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	{
 		// 9. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
+		unaffectedIndexProcessed := make(map[string]bool)
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
+
+		isAffectedIndex := func(indexDef *plan.IndexDef, affectedCols []string) bool {
+			affected := false
+			for _, part := range indexDef.Parts {
+				if slices.Index(affectedCols, part) != -1 {
+					affected = true
+					break
+				}
+			}
+			return affected
+		}
 
 		for _, indexDef := range newTableDef.Indexes {
 
@@ -242,19 +254,51 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
 			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
 			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
-			affected := false
-			for _, part := range indexDef.Parts {
-				if slices.Index(qry.AffectedCols, part) != -1 {
-					affected = true
-					break
-				}
-			}
 
-			if !affected {
-				// column not affected means index already cloned in cloneUnaffectedIndexes()
+			if !indexDef.Unique && (catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo)) {
+				// ivf/hnsw/fulltext index
+
+				if !isAffectedIndex(indexDef, qry.AffectedCols) {
+					// column not affected means index already cloned in cloneUnaffectedIndexes()
+
+					if unaffectedIndexProcessed[indexDef.IndexName] {
+						// unaffectedIndex already processed.
+						continue
+					}
+
+					valid, err := checkValidIndexCdc(newTableDef, indexDef.IndexName)
+					if err != nil {
+						return err
+					}
+
+					if valid {
+						// register ISCP job after clone for fulltext/hnsw/ivfflat index with startFromNow = true
+						// because the index is already cloned and no need to build index again
+						//
+						// FIXME: Since insert data and register ISCP job perform in same transaction,
+						// startFromNow = true DO NOT WORK here and always update index start from ZERO.
+						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
+						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, true)
+						if err != nil {
+							return err
+						}
+
+						logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+					}
+
+					unaffectedIndexProcessed[indexDef.IndexName] = true
+
+					continue
+				}
+
+			} else {
+				// ignore regular/master/unique index
 				continue
 			}
 
+			// only affected ivf/hnsw/fulltext index will go here
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
 				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -263,6 +307,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						IndexDefs: make(map[string]*plan.IndexDef),
 					}
 				}
+
 				ty := catalog.ToLower(indexDef.IndexAlgoTableType)
 				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
 			}
@@ -279,6 +324,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 		}
 		for _, multiTableIndex := range multiTableIndexes {
+
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(
@@ -300,12 +346,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				return err
 			}
 		}
-	}
-
-	// 10. register ISCP job again
-	err = CreateAllIndexCdcTasks(c, newTableDef.Indexes, dbName, tblName, false)
-	if err != nil {
-		return err
 	}
 
 	// get and update the change mapping information of table colIds
@@ -600,6 +640,12 @@ func cloneUnaffectedIndexes(
 		AlgoTableType  string
 	}
 
+	type IndexTableInfo struct {
+		Unique    bool
+		IndexAlgo string
+		Indexes   []IndexTypeInfo
+	}
+
 	var (
 		clone *table_clone.TableClone
 
@@ -608,8 +654,8 @@ func cloneUnaffectedIndexes(
 
 		newTblDef = newRel.GetTableDef(c.proc.Ctx)
 
-		oriIdxColNameToTblName = make(map[string][]IndexTypeInfo)
-		newIdxColNameToTblName = make(map[string][]IndexTypeInfo)
+		oriIdxColNameToTblName = make(map[string]*IndexTableInfo)
+		newIdxColNameToTblName = make(map[string]*IndexTableInfo)
 	)
 
 	logutil.Infof("cloneUnaffectedIndex: affected cols %v\n", affectedCols)
@@ -675,10 +721,17 @@ func cloneUnaffectedIndexes(
 
 		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
-			m = make([]IndexTypeInfo, 0, 3)
+			m = &IndexTableInfo{
+				Unique:    idxTbl.Unique,
+				IndexAlgo: idxTbl.IndexAlgo,
+				Indexes:   make([]IndexTypeInfo, 0, 3),
+			}
+
 		}
 
-		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		m.Indexes = append(m.Indexes,
+			IndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
+				AlgoTableType: idxTbl.IndexAlgoTableType})
 		oriIdxColNameToTblName[idxTbl.IndexName] = m
 	}
 
@@ -689,10 +742,16 @@ func cloneUnaffectedIndexes(
 
 		m, ok := newIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
-			m = make([]IndexTypeInfo, 0, 3)
+			m = &IndexTableInfo{
+				Unique:    idxTbl.Unique,
+				IndexAlgo: idxTbl.IndexAlgo,
+				Indexes:   make([]IndexTypeInfo, 0, 3),
+			}
 		}
 
-		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		m.Indexes = append(m.Indexes,
+			IndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
+				AlgoTableType: idxTbl.IndexAlgoTableType})
 		newIdxColNameToTblName[idxTbl.IndexName] = m
 		logutil.Infof("cloneUnaffectedIndex: new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 	}
@@ -710,11 +769,11 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		for _, oriIdxTblName := range oriIdxTblNames {
+		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
 
 			var newIdxTblName IndexTypeInfo
 			found := false
-			for _, idxinfo := range newIdxTblNames {
+			for _, idxinfo := range newIdxTblNames.Indexes {
 				if oriIdxTblName.AlgoTableType == idxinfo.AlgoTableType {
 					newIdxTblName = idxinfo
 					found = true
