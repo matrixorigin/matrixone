@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var runSql = sqlexec.RunSql
@@ -69,7 +68,7 @@ func (s *HnswSearch[T]) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
 	query, ok := anyquery.([]T)
 	if !ok {
@@ -131,7 +130,7 @@ func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorind
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
-			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
+			return nil, nil, moerr.NewInternalError(sqlproc.GetContext(), "heap return key is not int64")
 		}
 		reskeys = append(reskeys, sr.Id)
 		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, s.Idxcfg.OpType, s.Idxcfg.Usearch.Metric)
@@ -170,10 +169,10 @@ func (s *HnswSearch[T]) Destroy() {
 }
 
 // load metadata from database
-func LoadMetadata[T types.RealNumbers](proc *process.Process, dbname string, metatbl string) ([]*HnswModel[T], error) {
+func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], error) {
 
 	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
-	res, err := runSql(proc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -205,11 +204,11 @@ func LoadMetadata[T types.RealNumbers](proc *process.Process, dbname string, met
 }
 
 // load index from database
-func (s *HnswSearch[T]) LoadIndex(proc *process.Process, indexes []*HnswModel[T]) ([]*HnswModel[T], error) {
+func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswModel[T]) ([]*HnswModel[T], error) {
 	var err error
 
 	for _, idx := range indexes {
-		err = idx.LoadIndexFromBuffer(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
+		err = idx.LoadIndexFromBuffer(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
 		if err != nil {
 			break
 		}
@@ -226,16 +225,16 @@ func (s *HnswSearch[T]) LoadIndex(proc *process.Process, indexes []*HnswModel[T]
 }
 
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
-func (s *HnswSearch[T]) Load(proc *process.Process) error {
+func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	// load metadata
-	indexes, err := LoadMetadata[T](proc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
 
 	if len(indexes) > 0 {
 		// load index model
-		indexes, err = s.LoadIndex(proc, indexes)
+		indexes, err = s.LoadIndex(sqlproc, indexes)
 		if err != nil {
 			return err
 		}

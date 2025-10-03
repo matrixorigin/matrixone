@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 const (
@@ -339,8 +341,9 @@ func NewGenericHnswSqlWriter[T types.RealNumbers](algo string, jobID JobID, info
 
 	// get the first indexdef as they are the same
 	idxdef := indexdef[0]
+	writer_capacity := 8192
 
-	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T]()}
+	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T](writer_capacity)}
 
 	paramstr := idxdef.IndexAlgoParams
 	var meta, storage string
@@ -512,10 +515,12 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// pad extra space at the front and send SQL
-	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension, js)
 
-	return []byte(sql), nil
+	return []byte(js), nil
+}
+
+func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension)
 }
 
 // Implementation of Ivfflat Sql writer
