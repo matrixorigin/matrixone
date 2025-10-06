@@ -679,14 +679,6 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 		result.Release()
 	}
 
-	// post-commit
-	// NOTE: post-commit event cannot use the TxnOperator tc because tc already committed
-	// callback should run in different thread so that it won't block the commit
-	err = tc.triggerEvent(ctx, newEvent(PostCommitEvent, txnMeta, tc.reset.commitSeq, nil))
-	if err != nil {
-		return
-	}
-
 	return
 }
 
