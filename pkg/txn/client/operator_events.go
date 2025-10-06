@@ -15,6 +15,7 @@
 package client
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -62,18 +63,18 @@ func (tc *txnOperator) AppendEventCallback(
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
 }
 
-func (tc *txnOperator) triggerEvent(event TxnEvent) {
+func (tc *txnOperator) triggerEvent(ctx context.Context, event TxnEvent) {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
-	tc.triggerEventLocked(event)
+	tc.triggerEventLocked(ctx, event)
 }
 
-func (tc *txnOperator) triggerEventLocked(event TxnEvent) {
+func (tc *txnOperator) triggerEventLocked(ctx context.Context, event TxnEvent) {
 	if tc.mu.callbacks == nil {
 		return
 	}
 	for _, cb := range tc.mu.callbacks[event.Event] {
-		cb.Func(tc, event, cb.Value)
+		cb.Func(ctx, tc, event, cb.Value)
 	}
 }
 

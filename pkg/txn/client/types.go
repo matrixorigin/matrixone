@@ -328,16 +328,16 @@ func (e TxnEvent) Aborted() bool {
 }
 
 type TxnEventCallback struct {
-	Func  func(TxnOperator, TxnEvent, any)
+	Func  func(context.Context, TxnOperator, TxnEvent, any)
 	Value any
 }
 
-func NewTxnEventCallback(f func(TxnOperator, TxnEvent, any)) TxnEventCallback {
+func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any)) TxnEventCallback {
 	return TxnEventCallback{
 		Func: f,
 	}
 }
-func NewTxnEventCallbackWithValue(f func(TxnOperator, TxnEvent, any), v any) TxnEventCallback {
+func NewTxnEventCallbackWithValue(f func(context.Context, TxnOperator, TxnEvent, any), v any) TxnEventCallback {
 	return TxnEventCallback{
 		Func:  f,
 		Value: v,
