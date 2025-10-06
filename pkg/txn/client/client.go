@@ -425,7 +425,7 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) {
+func (client *txnClient) updateLastCommitTS(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) (err error) {
 	if event.Txn.CommitTS.IsEmpty() {
 		return
 	}
@@ -442,6 +442,7 @@ func (client *txnClient) updateLastCommitTS(ctx context.Context, txnOp TxnOperat
 			return
 		}
 	}
+	return
 }
 
 // determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
@@ -541,7 +542,7 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	return nil
 }
 
-func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) {
+func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) (err error) {
 	txn := event.Txn
 
 	client.mu.Lock()
@@ -587,6 +588,8 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 			zap.String("txn ID", hex.EncodeToString(txn.ID)),
 			zap.String("stack", string(debug.Stack())))
 	}
+
+	return
 }
 
 func (client *txnClient) addActiveTxnLocked(op *txnOperator) {

@@ -182,7 +182,7 @@ func (s *service) Create(
 		txnOp.AppendEventCallback(
 			client.ClosedEvent,
 			client.NewTxnEventCallback(
-				func(ctx context.Context, _txnOp client.TxnOperator, txn client.TxnEvent, v any) {
+				func(ctx context.Context, _txnOp client.TxnOperator, txn client.TxnEvent, v any) error {
 					if txn.Committed() {
 						s.logger.Info("sharding table created",
 							zap.Uint64("table", table),
@@ -196,6 +196,7 @@ func (s *service) Create(
 					} else {
 						s.atomic.abort.Add(1)
 					}
+					return nil
 				}),
 		)
 	}
@@ -222,12 +223,13 @@ func (s *service) Delete(
 		txnOp.AppendEventCallback(
 			client.ClosedEvent,
 			client.NewTxnEventCallback(
-				func(ctx context.Context, _txnOp client.TxnOperator, txn client.TxnEvent, v any) {
+				func(ctx context.Context, _txnOp client.TxnOperator, txn client.TxnEvent, v any) error {
 					if txn.Committed() {
 						s.deleteC <- table
 					} else {
 						s.atomic.abort.Add(1)
 					}
+					return nil
 				}),
 		)
 	}

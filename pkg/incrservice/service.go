@@ -345,12 +345,13 @@ func (s *service) getCommittedTableCache(
 	return c, nil
 }
 
-func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) {
+func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.handleCreatesLocked(event.Txn)
 	s.handleDeletesLocked(event.Txn)
+	return nil
 }
 
 func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {

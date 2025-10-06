@@ -61,7 +61,7 @@ func (s *memStore) Create(
 		txnOp.AppendEventCallback(
 			client.ClosedEvent,
 			client.NewTxnEventCallback(
-				func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) {
+				func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
 					txnMeta := event.Txn
 					s.Lock()
 					defer s.Unlock()
@@ -71,6 +71,7 @@ func (s *memStore) Create(
 							s.caches[k] = v
 						}
 					}
+					return nil
 				}))
 	}
 

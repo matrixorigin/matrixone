@@ -117,7 +117,7 @@ func (s *memStorage) Create(
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		client.NewTxnEventCallback(
-			func(ctx context.Context, txnOp client.TxnOperator, txn client.TxnEvent, cbdata any) {
+			func(ctx context.Context, txnOp client.TxnOperator, txn client.TxnEvent, cbdata any) error {
 				s.Lock()
 				defer s.Unlock()
 
@@ -128,6 +128,7 @@ func (s *memStorage) Create(
 					}
 				}
 				delete(s.uncommitted, def.TblId)
+				return nil
 			}),
 	)
 	return nil
@@ -156,7 +157,7 @@ func (s *memStorage) Delete(
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		client.NewTxnEventCallback(
-			func(ctx context.Context, txnOp client.TxnOperator, txn client.TxnEvent, v any) {
+			func(ctx context.Context, txnOp client.TxnOperator, txn client.TxnEvent, v any) error {
 				s.Lock()
 				defer s.Unlock()
 
@@ -164,6 +165,7 @@ func (s *memStorage) Delete(
 				if txn.Committed() {
 					delete(s.committed, table)
 				}
+				return nil
 			}),
 	)
 	return nil

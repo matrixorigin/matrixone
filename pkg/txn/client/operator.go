@@ -633,7 +633,10 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	}
 
 	// pre-commit
-	tc.triggerEvent(ctx, newEvent(PreCommitEvent, txnMeta, nextSeq, nil))
+	err = tc.triggerEvent(ctx, newEvent(PreCommitEvent, txnMeta, nextSeq, nil))
+	if err != nil {
+		return
+	}
 
 	// check running SQL and aborted again after pre-commit
 	if tc.reset.runningSQL.Load() && !tc.markAborted() {
@@ -643,14 +646,18 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
-		tc.reset.commitSeq = nextSeq // tc.NextSequence()
-		tc.reset.commitAt = now      // use now instead of time.Now()
+		tc.reset.commitSeq = tc.NextSequence()
+		tc.reset.commitAt = now // use now instead of time.Now()
 
-		tc.triggerEvent(ctx, newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
+		err = tc.triggerEvent(ctx, newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
+		if err != nil {
+			return
+		}
 		defer func() {
 			cost := time.Since(tc.reset.commitAt)
 			v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
 			tc.triggerEvent(ctx, newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.reset.commitSeq, err, cost))
+
 		}()
 	}
 
@@ -673,10 +680,12 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	}
 
 	// post-commit
-	defer func() {
-		// NOTE: post-commit event cannot use the TxnOperator tc because tc already committed
-		tc.triggerEvent(ctx, newEvent(PostCommitEvent, txnMeta, tc.reset.commitSeq, nil))
-	}()
+	// NOTE: post-commit event cannot use the TxnOperator tc because tc already committed
+	// callback should run in different thread so that it won't block the commit
+	err = tc.triggerEvent(ctx, newEvent(PostCommitEvent, txnMeta, tc.reset.commitSeq, nil))
+	if err != nil {
+		return
+	}
 
 	return
 }

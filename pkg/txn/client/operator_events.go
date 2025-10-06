@@ -63,19 +63,23 @@ func (tc *txnOperator) AppendEventCallback(
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
 }
 
-func (tc *txnOperator) triggerEvent(ctx context.Context, event TxnEvent) {
+func (tc *txnOperator) triggerEvent(ctx context.Context, event TxnEvent) error {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
-	tc.triggerEventLocked(ctx, event)
+	return tc.triggerEventLocked(ctx, event)
 }
 
-func (tc *txnOperator) triggerEventLocked(ctx context.Context, event TxnEvent) {
+func (tc *txnOperator) triggerEventLocked(ctx context.Context, event TxnEvent) (err error) {
 	if tc.mu.callbacks == nil {
 		return
 	}
 	for _, cb := range tc.mu.callbacks[event.Event] {
-		cb.Func(ctx, tc, event, cb.Value)
+		err = cb.Func(ctx, tc, event, cb.Value)
+		if err != nil {
+			return
+		}
 	}
+	return
 }
 
 func newCostEvent(

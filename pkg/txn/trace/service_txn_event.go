@@ -482,7 +482,7 @@ func (s *service) TxnEventEnabled() bool {
 	return s.atomic.txnEventEnabled.Load()
 }
 
-func (s *service) handleTxnActive(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
+func (s *service) handleTxnActive(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) (err error) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -496,9 +496,11 @@ func (s *service) handleTxnActive(ctx context.Context, txnOp client.TxnOperator,
 	if s.atomic.txnActionEventEnabled.Load() {
 		s.doTxnEventAction(e)
 	}
+
+	return
 }
 
-func (s *service) handleTxnUpdateSnapshot(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
+func (s *service) handleTxnUpdateSnapshot(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) (err error) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -512,9 +514,10 @@ func (s *service) handleTxnUpdateSnapshot(ctx context.Context, txnOp client.TxnO
 	if s.atomic.txnActionEventEnabled.Load() {
 		s.doTxnEventAction(e)
 	}
+	return
 }
 
-func (s *service) handleTxnCommit(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
+func (s *service) handleTxnCommit(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) (err error) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -534,9 +537,10 @@ func (s *service) handleTxnCommit(ctx context.Context, txnOp client.TxnOperator,
 	if s.atomic.txnActionEventEnabled.Load() {
 		s.doTxnEventAction(e)
 	}
+	return
 }
 
-func (s *service) handleTxnRollback(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
+func (s *service) handleTxnRollback(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) (err error) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -556,9 +560,10 @@ func (s *service) handleTxnRollback(ctx context.Context, txnOp client.TxnOperato
 	if s.atomic.txnActionEventEnabled.Load() {
 		s.doTxnEventAction(e)
 	}
+	return
 }
 
-func (s *service) handleTxnActionEvent(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) {
+func (s *service) handleTxnActionEvent(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) (err error) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -566,6 +571,7 @@ func (s *service) handleTxnActionEvent(ctx context.Context, txnOp client.TxnOper
 	if s.atomic.txnActionEventEnabled.Load() {
 		s.doTxnEventAction(event)
 	}
+	return
 }
 
 func (s *service) TxnError(
