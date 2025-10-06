@@ -637,8 +637,8 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
-		tc.reset.commitSeq = tc.NextSequence()
-		tc.reset.commitAt = now // use now instead of time.Now()
+		tc.reset.commitSeq = nextSeq // tc.NextSequence()
+		tc.reset.commitAt = now      // use now instead of time.Now()
 
 		tc.triggerEvent(ctx, newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
 		defer func() {
