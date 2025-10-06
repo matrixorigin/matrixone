@@ -48,14 +48,14 @@ var (
 
 func (tc *txnOperator) AppendEventCallback(
 	event EventType,
-	callbacks ...func(TxnEvent)) {
+	callbacks ...TxnEventCallback) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
 	if tc.mu.callbacks == nil {
-		tc.mu.callbacks = make(map[EventType][]func(TxnEvent), 1)
+		tc.mu.callbacks = make(map[EventType][]TxnEventCallback, 1)
 	}
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
 }
@@ -71,7 +71,7 @@ func (tc *txnOperator) triggerEventLocked(event TxnEvent) {
 		return
 	}
 	for _, cb := range tc.mu.callbacks[event.Event] {
-		cb(event)
+		cb.Func(tc, event, cb.Value)
 	}
 }
 

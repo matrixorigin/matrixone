@@ -327,8 +327,12 @@ func (client *txnClient) doCreateTxn(
 	op.timestampWaiter = client.timestampWaiter
 	op.AppendEventCallback(
 		ClosedEvent,
-		client.updateLastCommitTS,
-		client.closeTxn,
+		TxnEventCallback{
+			Func: client.updateLastCommitTS,
+		},
+		TxnEventCallback{
+			Func: client.closeTxn,
+		},
 	)
 
 	if err := client.openTxn(op); err != nil {
@@ -421,7 +425,7 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(event TxnEvent) {
+func (client *txnClient) updateLastCommitTS(txnOp TxnOperator, event TxnEvent, value any) {
 	if event.Txn.CommitTS.IsEmpty() {
 		return
 	}
@@ -476,7 +480,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}})
+	client.updateLastCommitTS(nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseSyncLatestCommitT)
 		defer cancel()
@@ -537,7 +541,7 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	return nil
 }
 
-func (client *txnClient) closeTxn(event TxnEvent) {
+func (client *txnClient) closeTxn(txnOp TxnOperator, event TxnEvent, value any) {
 	txn := event.Txn
 
 	client.mu.Lock()
