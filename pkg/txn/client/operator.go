@@ -627,9 +627,15 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	nextSeq := tc.NextSequence()
 	now := time.Now()
 
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
+	}
+
 	// pre-commit
 	tc.triggerEvent(ctx, newEvent(PreCommitEvent, txnMeta, nextSeq, nil))
 
+	// check running SQL and aborted again after pre-commit
 	if tc.reset.runningSQL.Load() && !tc.markAborted() {
 		tc.logger.Fatal("commit on running txn",
 			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
