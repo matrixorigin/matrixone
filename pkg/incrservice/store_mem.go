@@ -60,17 +60,18 @@ func (s *memStore) Create(
 		s.uncommitted[string(txnOp.Txn().ID)] = m
 		txnOp.AppendEventCallback(
 			client.ClosedEvent,
-			func(event client.TxnEvent) {
-				txnMeta := event.Txn
-				s.Lock()
-				defer s.Unlock()
-				delete(s.uncommitted, string(txnMeta.ID))
-				if txnMeta.Status == txn.TxnStatus_Committed {
-					for k, v := range m {
-						s.caches[k] = v
+			client.NewTxnEventCallback(
+				func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) {
+					txnMeta := event.Txn
+					s.Lock()
+					defer s.Unlock()
+					delete(s.uncommitted, string(txnMeta.ID))
+					if txnMeta.Status == txn.TxnStatus_Committed {
+						for k, v := range m {
+							s.caches[k] = v
+						}
 					}
-				}
-			})
+				}))
 	}
 
 	caches := m[tableID]

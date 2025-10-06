@@ -70,21 +70,21 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	}
 
 	if register {
-		op.AppendEventCallback(client.WaitActiveEvent, s.handleTxnActive)
-		op.AppendEventCallback(client.UpdateSnapshotEvent, s.handleTxnUpdateSnapshot)
-		op.AppendEventCallback(client.CommitEvent, s.handleTxnCommit)
-		op.AppendEventCallback(client.RollbackEvent, s.handleTxnRollback)
+		op.AppendEventCallback(client.WaitActiveEvent, client.NewTxnEventCallback(s.handleTxnActive))
+		op.AppendEventCallback(client.UpdateSnapshotEvent, client.NewTxnEventCallback(s.handleTxnUpdateSnapshot))
+		op.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(s.handleTxnCommit))
+		op.AppendEventCallback(client.RollbackEvent, client.NewTxnEventCallback(s.handleTxnRollback))
 
-		op.AppendEventCallback(client.CommitResponseEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.CommitWaitApplyEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.UnlockEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.RangesEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.BuildPlanEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.ExecuteSQLEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.CompileEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.TableScanEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.WorkspaceWriteEvent, s.handleTxnActionEvent)
-		op.AppendEventCallback(client.WorkspaceAdjustEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.CommitResponseEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.CommitWaitApplyEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.UnlockEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.RangesEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.BuildPlanEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.ExecuteSQLEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.CompileEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.TableScanEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.WorkspaceWriteEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
+		op.AppendEventCallback(client.WorkspaceAdjustEvent, client.NewTxnEventCallback(s.handleTxnActionEvent))
 	}
 }
 
@@ -482,7 +482,7 @@ func (s *service) TxnEventEnabled() bool {
 	return s.atomic.txnEventEnabled.Load()
 }
 
-func (s *service) handleTxnActive(e client.TxnEvent) {
+func (s *service) handleTxnActive(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -498,7 +498,7 @@ func (s *service) handleTxnActive(e client.TxnEvent) {
 	}
 }
 
-func (s *service) handleTxnUpdateSnapshot(e client.TxnEvent) {
+func (s *service) handleTxnUpdateSnapshot(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -514,7 +514,7 @@ func (s *service) handleTxnUpdateSnapshot(e client.TxnEvent) {
 	}
 }
 
-func (s *service) handleTxnCommit(e client.TxnEvent) {
+func (s *service) handleTxnCommit(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -536,7 +536,7 @@ func (s *service) handleTxnCommit(e client.TxnEvent) {
 	}
 }
 
-func (s *service) handleTxnRollback(e client.TxnEvent) {
+func (s *service) handleTxnRollback(ctx context.Context, txnOp client.TxnOperator, e client.TxnEvent, v any) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -558,7 +558,7 @@ func (s *service) handleTxnRollback(e client.TxnEvent) {
 	}
 }
 
-func (s *service) handleTxnActionEvent(event client.TxnEvent) {
+func (s *service) handleTxnActionEvent(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) {
 	if s.atomic.closed.Load() {
 		return
 	}

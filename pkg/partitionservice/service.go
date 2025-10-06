@@ -113,11 +113,12 @@ func (s *Service) Delete(
 	if txnOp != nil {
 		txnOp.AppendEventCallback(
 			client.CommitEvent,
-			func(te client.TxnEvent) {
-				s.mu.Lock()
-				delete(s.mu.tables, tableID)
-				s.mu.Unlock()
-			},
+			client.NewTxnEventCallback(
+				func(ctx context.Context, txnOp client.TxnOperator, te client.TxnEvent, v any) {
+					s.mu.Lock()
+					delete(s.mu.tables, tableID)
+					s.mu.Unlock()
+				}),
 		)
 	}
 

@@ -125,15 +125,16 @@ func (s *MemShardStorage) Create(
 	}
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
-		func(txn client.TxnEvent) {
-			s.Lock()
-			defer s.Unlock()
+		client.NewTxnEventCallback(
+			func(ctx context.Context, txnOp client.TxnOperator, txn client.TxnEvent, cbdata any) {
+				s.Lock()
+				defer s.Unlock()
 
-			if txn.Committed() {
-				s.committed[table] = v
-			}
-			delete(s.uncommittedAdd, table)
-		},
+				if txn.Committed() {
+					s.committed[table] = v
+				}
+				delete(s.uncommittedAdd, table)
+			}),
 	)
 	return true, nil
 }
@@ -158,15 +159,16 @@ func (s *MemShardStorage) Delete(
 	s.uncommittedDelete[table] = struct{}{}
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
-		func(txn client.TxnEvent) {
-			s.Lock()
-			defer s.Unlock()
+		client.NewTxnEventCallback(
+			func(ctx context.Context, txnOp client.TxnOperator, txn client.TxnEvent, v any) {
+				s.Lock()
+				defer s.Unlock()
 
-			if txn.Committed() {
-				delete(s.committed, table)
-			}
-			delete(s.uncommittedDelete, table)
-		},
+				if txn.Committed() {
+					delete(s.committed, table)
+				}
+				delete(s.uncommittedDelete, table)
+			}),
 	)
 	return true, nil
 }
