@@ -614,20 +614,28 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if tc.reset.runningSQL.Load() && !tc.markAborted() {
-		tc.logger.Fatal("commit on running txn",
-			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
-	}
 
 	tc.reset.commitCounter.addEnter()
 	defer tc.reset.commitCounter.addExit()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnCommit(tc.logger, txnMeta)
 
+	// set commitTs to now and use the same commitTS with pre-commit
+	nextSeq := tc.NextSequence()
+	now := time.Now()
+
+	// pre-commit
+	tc.triggerEvent(newEvent(PreCommitEvent, txnMeta, nextSeq, nil))
+
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
+	}
+
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
 		tc.reset.commitSeq = tc.NextSequence()
-		tc.reset.commitAt = time.Now()
+		tc.reset.commitAt = now // use now instead of time.Now()
 
 		tc.triggerEvent(newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
 		defer func() {
@@ -654,6 +662,13 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if result != nil {
 		result.Release()
 	}
+
+	// post-commit
+	defer func() {
+		// NOTE: post-commit event cannot use the TxnOperator tc because tc already committed
+		tc.triggerEvent(newEvent(PostCommitEvent, txnMeta, tc.reset.commitSeq, nil))
+	}()
+
 	return
 }
 
