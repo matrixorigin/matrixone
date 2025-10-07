@@ -15,6 +15,7 @@
 package client
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -44,35 +45,40 @@ var (
 	CommitWaitApplyEvent = EventType{97, "wait-applied"}
 	RollbackEvent        = EventType{98, "rollback"}
 	ClosedEvent          = EventType{99, "closed"}
+	PreCommitEvent       = EventType{100, "pre-commit"}
 )
 
 func (tc *txnOperator) AppendEventCallback(
 	event EventType,
-	callbacks ...func(TxnEvent)) {
+	callbacks ...TxnEventCallback) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
 	if tc.mu.callbacks == nil {
-		tc.mu.callbacks = make(map[EventType][]func(TxnEvent), 1)
+		tc.mu.callbacks = make(map[EventType][]TxnEventCallback, 1)
 	}
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
 }
 
-func (tc *txnOperator) triggerEvent(event TxnEvent) {
+func (tc *txnOperator) triggerEvent(ctx context.Context, event TxnEvent) error {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
-	tc.triggerEventLocked(event)
+	return tc.triggerEventLocked(ctx, event)
 }
 
-func (tc *txnOperator) triggerEventLocked(event TxnEvent) {
+func (tc *txnOperator) triggerEventLocked(ctx context.Context, event TxnEvent) (err error) {
 	if tc.mu.callbacks == nil {
 		return
 	}
 	for _, cb := range tc.mu.callbacks[event.Event] {
-		cb(event)
+		err = cb.Func(ctx, tc, event, cb.Value)
+		if err != nil {
+			return
+		}
 	}
+	return
 }
 
 func newCostEvent(
