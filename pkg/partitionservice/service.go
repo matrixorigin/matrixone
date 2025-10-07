@@ -17,12 +17,10 @@ package partitionservice
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -35,13 +33,6 @@ var (
 type Service struct {
 	cfg   Config
 	store PartitionStorage
-
-	mu struct {
-		sync.RWMutex
-		// FIXME: MVCC cache instead. Alter table add/drop partition. Or delete cache if main table has ddl while
-		// log tail applied.
-		tables map[uint64]metadataCache
-	}
 }
 
 func NewService(
@@ -52,7 +43,6 @@ func NewService(
 		cfg:   cfg,
 		store: store,
 	}
-	s.mu.tables = make(map[uint64]metadataCache)
 	return s
 }
 
@@ -219,7 +209,7 @@ func (s *Service) AddPartitions(
 		panic("BUG: unsupported partition method")
 	}
 
-	var values []partition.Partition
+	values := make([]partition.Partition, 0, len(partitions))
 	n := len(metadata.Partitions)
 	for i, p := range partitions {
 		values = append(values,
@@ -361,28 +351,11 @@ func (s *Service) Delete(
 		return nil
 	}
 
-	if txnOp != nil {
-		txnOp.AppendEventCallback(
-			client.CommitEvent,
-			func(te client.TxnEvent) {
-				s.mu.Lock()
-				delete(s.mu.tables, tableID)
-				s.mu.Unlock()
-			},
-		)
-	}
-
-	err = s.store.Delete(
+	return s.store.Delete(
 		ctx,
 		metadata,
 		txnOp,
 	)
-	if err == nil && txnOp == nil {
-		s.mu.Lock()
-		delete(s.mu.tables, tableID)
-		s.mu.Unlock()
-	}
-	return err
 }
 
 func (s *Service) GetPartitionMetadata(
@@ -493,21 +466,6 @@ func (s *Service) getManualPartitions(
 		)
 	}
 	return metadata, nil
-}
-
-type metadataCache struct {
-	metadata partition.PartitionMetadata
-	ts       timestamp.Timestamp
-}
-
-func newMetadataCache(
-	metadata partition.PartitionMetadata,
-	ts timestamp.Timestamp,
-) metadataCache {
-	return metadataCache{
-		metadata: metadata,
-		ts:       ts,
-	}
 }
 
 func GetPartitionTableName(

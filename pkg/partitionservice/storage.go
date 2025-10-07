@@ -442,8 +442,6 @@ func (s *Storage) Rename(
 					return err
 				}
 				res.Close()
-
-				return nil
 			}
 			return nil
 		},

@@ -404,7 +404,7 @@ func ConstructCreateTableSQL(
 			partitionBy := " partition by "
 
 			txn := ctx.GetProcess().GetTxnOperator()
-			if snapshot != nil && snapshot.TS != nil {
+			if snapshot != nil && snapshot.TS != nil && !snapshot.TS.IsEmpty() {
 				txn = txn.CloneSnapshotOp(*snapshot.TS)
 			}
 

@@ -51,7 +51,6 @@ func TestDelete(t *testing.T) {
 			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
 			require.NoError(t, txnOp.Commit(ctx))
-			require.Empty(t, s.mu.tables)
 
 			require.NoError(t, s.Delete(ctx, tableID, nil))
 		},
