@@ -299,7 +299,8 @@ func RunTxnWithSqlContext(ctx context.Context,
 	accountId uint32,
 	duration time.Duration,
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
-	f func(sqlproc *SqlProcess) error) (err error) {
+	cbdata any,
+	f func(sqlproc *SqlProcess, data any) error) (err error) {
 
 	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
 	newctx, cancel := context.WithTimeout(newctx, duration)
@@ -311,7 +312,7 @@ func RunTxnWithSqlContext(ctx context.Context,
 	}
 
 	sqlproc := NewSqlProcessWithContext(NewSqlContext(newctx, cnUUID, txnOp, accountId, resolveVariableFunc))
-	err = f(sqlproc)
+	err = f(sqlproc, cbdata)
 	if err != nil {
 		err = errors.Join(err, txnOp.Rollback(sqlproc.GetContext()))
 	} else {

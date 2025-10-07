@@ -223,9 +223,39 @@ type TxnCallbackData struct {
 	sinker_type         int8
 	startFromNow        bool
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	sql                 string
 }
 
-func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool) error {
+func iscpRegisterEventCallbackFn(sqlproc *sqlexec.SqlProcess, data any) (err error) {
+	sqlctx := sqlproc.SqlCtx
+	cbdata := data.(TxnCallbackData)
+
+	// if sql is not empty, execute the SQL
+	if len(cbdata.sql) > 0 {
+		res, err := sqlexec.RunSql(sqlproc, cbdata.sql)
+		if err != nil {
+			return err
+		}
+		res.Close()
+	}
+
+	// register ISCP job
+	spec := &iscp.JobSpec{
+		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: cbdata.sinker_type,
+			DBName:    cbdata.dbname,
+			TableName: cbdata.tablename,
+			IndexName: cbdata.indexname},
+	}
+	job := &iscp.JobID{DBName: cbdata.dbname, TableName: cbdata.tablename, JobName: genCdcTaskJobID(cbdata.indexname)}
+
+	_, err = RegisterJob(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn(), spec, job, cbdata.startFromNow)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool, sql string) error {
 
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -242,6 +272,7 @@ func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexn
 		sinker_type:         sinker_type,
 		startFromNow:        startFromNow,
 		resolveVariableFunc: c.proc.GetResolveVariableFunc(),
+		sql:                 sql,
 	}
 	txnop := c.proc.GetTxnOperator()
 	txnop.AppendEventCallback(client.ClosedEvent,
@@ -255,30 +286,33 @@ func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexn
 					return
 				}
 
-				return sqlexec.RunTxnWithSqlContext(ctx,
-					cbdata.cnEngine,
-					cbdata.txnClient,
-					cbdata.cnUUID,
-					cbdata.accountId,
-					5*time.Minute,
-					cbdata.resolveVariableFunc,
-					func(sqlproc *sqlexec.SqlProcess) (err error) {
-						sqlctx := sqlproc.SqlCtx
+				if len(cbdata.sql) > 0 {
+					// long running SQL so run in separate thread
+					go func() {
+						sqlexec.RunTxnWithSqlContext(ctx,
+							cbdata.cnEngine,
+							cbdata.txnClient,
+							cbdata.cnUUID,
+							cbdata.accountId,
+							24*time.Hour,
+							cbdata.resolveVariableFunc,
+							cbdata,
+							iscpRegisterEventCallbackFn)
 
-						spec := &iscp.JobSpec{
-							ConsumerInfo: iscp.ConsumerInfo{ConsumerType: cbdata.sinker_type,
-								DBName:    cbdata.dbname,
-								TableName: cbdata.tablename,
-								IndexName: cbdata.indexname},
-						}
-						job := &iscp.JobID{DBName: cbdata.dbname, TableName: cbdata.tablename, JobName: genCdcTaskJobID(cbdata.indexname)}
+					}()
+					return
 
-						_, err = RegisterJob(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn(), spec, job, cbdata.startFromNow)
-						if err != nil {
-							return
-						}
-						return
-					})
+				} else {
+					return sqlexec.RunTxnWithSqlContext(ctx,
+						cbdata.cnEngine,
+						cbdata.txnClient,
+						cbdata.cnUUID,
+						cbdata.accountId,
+						5*time.Minute,
+						cbdata.resolveVariableFunc,
+						cbdata,
+						iscpRegisterEventCallbackFn)
+				}
 
 			}, cbdata))
 

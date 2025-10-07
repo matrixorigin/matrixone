@@ -280,7 +280,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						// Append Closed event to TxnOperator and wait for CLOSED event
 						// Register the job inside the closed event callback to make sure the new TxnOperator ts > closed Txn commitTs
 						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-						err = AppendIscpRegisterEvent(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, true)
+						err = AppendIscpRegisterEvent(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, true, "")
 						if err != nil {
 							return err
 						}
