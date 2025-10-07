@@ -45,7 +45,6 @@ var (
 	CommitWaitApplyEvent = EventType{97, "wait-applied"}
 	RollbackEvent        = EventType{98, "rollback"}
 	ClosedEvent          = EventType{99, "closed"}
-	PreCommitEvent       = EventType{100, "pre-commit"}
 )
 
 func (tc *txnOperator) AppendEventCallback(
