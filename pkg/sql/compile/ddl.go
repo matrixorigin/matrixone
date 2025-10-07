@@ -2133,22 +2133,24 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	// create ISCP job when Async is true
-	if async {
-		// unregister ISCP job so that it can restart index update from ts=0
-		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName)
-		if err != nil {
-			return err
-		}
+	/*
+		// create ISCP job when Async is true
+		if async {
+			// unregister ISCP job so that it can restart index update from ts=0
+			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName)
+			if err != nil {
+				return err
+			}
 
-		logutil.Infof("Ivfflat index Async is true")
-		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type, false)
-		if err != nil {
-			return err
+			logutil.Infof("Ivfflat index Async is true")
+			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
+				indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type, false)
+			if err != nil {
+				return err
+			}
 		}
-	}
+	*/
 	return nil
 
 }

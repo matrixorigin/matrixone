@@ -269,10 +269,11 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 
+	var sql string
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
 	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+		sql = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
 			"SELECT "+
 			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
 			"1, NULL;",
@@ -287,60 +288,78 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 			metadataTableName,
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		)
-		err := c.runSql(initSQL)
+	} else {
+
+		val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
 		if err != nil {
 			return err
 		}
-		return nil
+		cfg.ThreadsBuild = val.(int64)
+
+		val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+		if err != nil {
+			return err
+		}
+		cfg.KmeansTrainPercent = val.(int64)
+
+		val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+		if err != nil {
+			return err
+		}
+		cfg.KmeansMaxIteration = val.(int64)
+
+		params_str := indexDef.IndexAlgoParams
+
+		cfgbytes, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+
+		part := src_alias + "." + indexDef.Parts[0]
+		insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
+		sql = fmt.Sprintf(insertIntoIvfIndexTableFormat,
+			qryDatabase, originalTableDef.Name,
+			src_alias,
+			params_str,
+			string(cfgbytes),
+			part)
 	}
 
-	val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	cfg.ThreadsBuild = val.(int64)
+	if async {
 
-	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
-	if err != nil {
-		return err
-	}
-	cfg.KmeansTrainPercent = val.(int64)
+		// create ISCP job when Async is true
+		// unregister ISCP job so that it can restart index update from ts=0
+		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName)
+		if err != nil {
+			return err
+		}
 
-	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
-	if err != nil {
-		return err
-	}
-	cfg.KmeansMaxIteration = val.(int64)
+		logutil.Infof("Ivfflat index Async is true")
+		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+		err = AppendIscpRegisterEvent(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, false, sql)
+		if err != nil {
+			return err
+		}
 
-	params_str := indexDef.IndexAlgoParams
+	} else {
+		err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
+		if err != nil {
+			return err
+		}
 
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 
-	part := src_alias + "." + indexDef.Parts[0]
-	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
-	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
-		params_str,
-		string(cfgbytes),
-		part)
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
-	if err != nil {
-		return err
-	}
-
-	err = c.runSql(sql)
-	if err != nil {
-		return err
-	}
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
-	if err != nil {
-		return err
+		err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
