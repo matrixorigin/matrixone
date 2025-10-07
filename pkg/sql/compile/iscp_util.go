@@ -244,16 +244,16 @@ func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexn
 	txnop := c.proc.GetTxnOperator()
 	txnop.AppendEventCallback(client.ClosedEvent,
 		client.NewTxnEventCallbackWithValue(
-			func(ctx context.Context, _ client.TxnOperator, evt client.TxnEvent, data any) error {
+			func(ctx context.Context, _ client.TxnOperator, evt client.TxnEvent, data any) (err error) {
 				//commitTs := evt.Txn.CommitTS
 
 				cbdata := data.(TxnCallbackData)
 				logutil.Infof("AppendIscpRegisterEvent: closed event detected\n %v", cbdata)
 				if evt.Txn.Status != txn.TxnStatus_Committed {
-					return nil
+					return
 				}
 
-				sqlexec.RunTxnWithSqlContext(ctx,
+				return sqlexec.RunTxnWithSqlContext(ctx,
 					cbdata.cnEngine,
 					cbdata.txnClient,
 					cbdata.cnUUID,
@@ -277,7 +277,6 @@ func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexn
 						return
 					})
 
-				return nil
 			}, cbdata))
 
 	return nil
