@@ -442,7 +442,6 @@ func (client *txnClient) updateLastCommitTS(ctx context.Context, txnOp TxnOperat
 			return
 		}
 	}
-	return
 }
 
 // determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
@@ -481,7 +480,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(nil, nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
+	client.updateLastCommitTS(context.TODO(), nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseSyncLatestCommitT)
 		defer cancel()
