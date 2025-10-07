@@ -109,6 +109,10 @@ func (l *localLockTable) doLock(
 			err = l.doAcquireLock(c)
 			if err != nil {
 				logLocalLockFailed(l.logger, c.txn, table, c.rows, c.opts, err)
+				if c.w == nil && old != nil {
+					old.disableNotify()
+					old.close("doLock, doAcquireLock old err", l.logger)
+				}
 				if c.w != nil {
 					c.w.disableNotify()
 					c.w.close("doLock, doAcquireLock err", l.logger)

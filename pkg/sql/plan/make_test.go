@@ -48,3 +48,9 @@ func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {
 	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
 	require.Equal(t, "[1,2,3]", actual)
 }
+
+func Test_MakePlan2Vecf64ConstExprWithType(t *testing.T) {
+	t1 := MakePlan2Vecf64ConstExprWithType("[1,2,3]", 3)
+	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
+	require.Equal(t, "[1,2,3]", actual)
+}

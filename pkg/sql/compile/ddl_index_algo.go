@@ -133,20 +133,23 @@ func (s *Scope) handleFullTextIndexTable(
 	qryDatabase string,
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
-) error {
+) (err error) {
 	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
 		return err
 	} else if !ok {
 		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
 	}
-	if len(indexInfo.GetIndexTables()) != 1 {
-		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-	}
 
-	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
-	if err != nil {
-		return err
+	if indexInfo != nil {
+		if len(indexInfo.GetIndexTables()) != 1 {
+			return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
+		}
+
+		def := indexInfo.GetIndexTables()[0]
+		err = indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
+		if err != nil {
+			return err
+		}
 	}
 
 	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)

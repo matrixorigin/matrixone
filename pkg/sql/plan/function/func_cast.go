@@ -4388,6 +4388,8 @@ func strToArray[T types.RealNumbers](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
 
+	toType := to.GetType()
+
 	var i uint64
 	var l = uint64(length)
 	for i = 0; i < l; i++ {
@@ -4397,11 +4399,18 @@ func strToArray[T types.RealNumbers](
 				return err
 			}
 		} else {
-
-			b, err := types.StringToArrayToBytes[T](convertByteSliceToString(v))
+			arr, err := types.StringToArray[T](convertByteSliceToString(v))
 			if err != nil {
 				return err
 			}
+
+			// bypass the dimension check if width is max dimension
+			if int(toType.Width) != types.MaxArrayDimension && int(toType.Width) != len(arr) {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			}
+
+			b := types.ArrayToBytes[T](arr)
+
 			if err = to.AppendBytes(b, false); err != nil {
 				return err
 			}
