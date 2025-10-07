@@ -119,7 +119,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				}
 
 				// no transaction required and commit every time.
-				err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute,
+				err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil,
 					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
@@ -144,7 +144,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	} else {
 
 		// all updates under same transaction and transaction can last very long so set timeout to 24 hours
-		err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour,
+		err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil,
 			func(sqlproc *sqlexec.SqlProcess) (err error) {
 				sqlctx := sqlproc.SqlCtx
 
@@ -192,7 +192,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	var sync *hnsw.HnswSync[T]
 
 	// read-only sql so no need transaction here.  All models are loaded at startup.
-	err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute,
+	err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil,
 		func(sqlproc *sqlexec.SqlProcess) (err error) {
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
@@ -228,7 +228,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				// channel closed
 
 				// we need a transaction here to save model files and update watermark
-				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour,
+				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil,
 					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
@@ -265,7 +265,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			}
 
 			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
-			err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute,
+			err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil,
 				func(sqlproc *sqlexec.SqlProcess) (err error) {
 					return sync.Update(sqlproc, &cdc)
 				})

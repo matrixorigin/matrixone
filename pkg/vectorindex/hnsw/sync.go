@@ -120,15 +120,14 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	idxtblcfg.SrcTable = tbl
 
 	// GetResolveVariableFunc() is nil because of internal SQL proc don't have ResolveVariableFunc().
-	if sqlproc.Proc != nil && sqlproc.Proc.GetResolveVariableFunc() != nil {
-		proc := sqlproc.Proc
-		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
+	if sqlproc.GetResolveVariableFunc() != nil {
+		val, err := sqlproc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
 		if err != nil {
 			return nil, err
 		}
 		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(val.(int64))
 
-		idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
+		idxcap, err := sqlproc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
 		if err != nil {
 			return nil, err
 		}

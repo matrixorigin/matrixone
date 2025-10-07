@@ -29,14 +29,20 @@ import (
 
 // SqlContext stores required information for background SQLInternalExecutor
 type SqlContext struct {
-	Ctx         context.Context
-	CNUuid      string
-	TxnOperator client.TxnOperator
-	AccountId   uint32
+	Ctx                 context.Context
+	CNUuid              string
+	TxnOperator         client.TxnOperator
+	AccountId           uint32
+	ResolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 }
 
-func NewSqlContext(ctx context.Context, cnuuid string, txnOperator client.TxnOperator, accountid uint32) *SqlContext {
-	return &SqlContext{Ctx: ctx, CNUuid: cnuuid, TxnOperator: txnOperator, AccountId: accountid}
+func NewSqlContext(ctx context.Context,
+	cnuuid string,
+	txnOperator client.TxnOperator,
+	accountid uint32,
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+) *SqlContext {
+	return &SqlContext{Ctx: ctx, CNUuid: cnuuid, TxnOperator: txnOperator, AccountId: accountid, ResolveVariableFunc: resolveVariableFunc}
 }
 
 func (s *SqlContext) GetService() string {
@@ -45,6 +51,14 @@ func (s *SqlContext) GetService() string {
 
 func (s *SqlContext) Txn() client.TxnOperator {
 	return s.TxnOperator
+}
+
+func (s *SqlContext) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return s.ResolveVariableFunc
+}
+
+func (s *SqlContext) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
+	s.ResolveVariableFunc = f
 }
 
 // SqlProcess is the wrapper for both process.Process and background SQLContext
@@ -82,6 +96,16 @@ func (s *SqlProcess) GetTopContext() context.Context {
 	return s.SqlCtx.Ctx
 }
 
+func (s *SqlProcess) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if s.Proc != nil {
+		return s.Proc.GetResolveVariableFunc()
+	}
+	if s.SqlCtx != nil {
+		return s.SqlCtx.GetResolveVariableFunc()
+	}
+	return nil
+}
+
 // run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
 func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 	if sqlproc.Proc != nil {
@@ -107,7 +131,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithTxn(proc.GetTxnOperator()).
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
-			WithAccountID(accountId)
+			WithAccountID(accountId).
+			WithResolveVariableFunc(proc.GetResolveVariableFunc())
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -125,7 +150,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
-			WithAccountID(accountId)
+			WithAccountID(accountId).
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
 		return exec.Exec(sqlctx.Ctx, sql, opts)
 
 	}
@@ -162,7 +188,8 @@ func RunStreamingSql(
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithStreaming(stream_chan, error_chan)
+			WithStreaming(stream_chan, error_chan).
+			WithResolveVariableFunc(proc.GetResolveVariableFunc())
 		return exec.Exec(ctx, sql, opts)
 	} else {
 
@@ -182,7 +209,8 @@ func RunStreamingSql(
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
-			WithStreaming(stream_chan, error_chan)
+			WithStreaming(stream_chan, error_chan).
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
 		return exec.Exec(ctx, sql, opts)
 
 	}
@@ -215,7 +243,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithTxn(proc.GetTxnOperator()).
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
-			WithAccountID(accountId)
+			WithAccountID(accountId).
+			WithResolveVariableFunc(proc.GetResolveVariableFunc())
 		return exec.ExecTxn(topContext, execFunc, opts)
 	} else {
 
@@ -233,7 +262,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
-			WithAccountID(accountId)
+			WithAccountID(accountId).
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
 		return exec.ExecTxn(sqlctx.Ctx, execFunc, opts)
 	}
 }
@@ -268,6 +298,7 @@ func RunTxnWithSqlContext(ctx context.Context,
 	cnUUID string,
 	accountId uint32,
 	duration time.Duration,
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
 	f func(sqlproc *SqlProcess) error) (err error) {
 
 	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
@@ -279,7 +310,7 @@ func RunTxnWithSqlContext(ctx context.Context,
 		return err
 	}
 
-	sqlproc := NewSqlProcessWithContext(NewSqlContext(newctx, cnUUID, txnOp, accountId))
+	sqlproc := NewSqlProcessWithContext(NewSqlContext(newctx, cnUUID, txnOp, accountId, resolveVariableFunc))
 	err = f(sqlproc)
 	if err != nil {
 		err = errors.Join(err, txnOp.Rollback(sqlproc.GetContext()))

@@ -213,15 +213,16 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 }
 
 type TxnCallbackData struct {
-	cnUUID       string
-	txnClient    client.TxnClient
-	cnEngine     engine.Engine
-	accountId    uint32
-	dbname       string
-	tablename    string
-	indexname    string
-	sinker_type  int8
-	startFromNow bool
+	cnUUID              string
+	txnClient           client.TxnClient
+	cnEngine            engine.Engine
+	accountId           uint32
+	dbname              string
+	tablename           string
+	indexname           string
+	sinker_type         int8
+	startFromNow        bool
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 }
 
 func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool) error {
@@ -232,14 +233,15 @@ func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexn
 	}
 
 	cbdata := TxnCallbackData{cnUUID: c.proc.GetService(),
-		txnClient:    c.proc.Base.TxnClient,
-		cnEngine:     c.proc.Base.SessionInfo.StorageEngine,
-		accountId:    accountId,
-		dbname:       dbname,
-		tablename:    tablename,
-		indexname:    indexname,
-		sinker_type:  sinker_type,
-		startFromNow: startFromNow,
+		txnClient:           c.proc.Base.TxnClient,
+		cnEngine:            c.proc.Base.SessionInfo.StorageEngine,
+		accountId:           accountId,
+		dbname:              dbname,
+		tablename:           tablename,
+		indexname:           indexname,
+		sinker_type:         sinker_type,
+		startFromNow:        startFromNow,
+		resolveVariableFunc: c.proc.GetResolveVariableFunc(),
 	}
 	txnop := c.proc.GetTxnOperator()
 	txnop.AppendEventCallback(client.ClosedEvent,
@@ -259,6 +261,7 @@ func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexn
 					cbdata.cnUUID,
 					cbdata.accountId,
 					5*time.Minute,
+					cbdata.resolveVariableFunc,
 					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
