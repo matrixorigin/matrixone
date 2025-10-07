@@ -16,12 +16,17 @@ package compile
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 var (
@@ -205,4 +210,76 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		}
 	}
 	return nil
+}
+
+type TxnCallbackData struct {
+	cnUUID       string
+	txnClient    client.TxnClient
+	cnEngine     engine.Engine
+	accountId    uint32
+	dbname       string
+	tablename    string
+	indexname    string
+	sinker_type  int8
+	startFromNow bool
+}
+
+func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool) error {
+
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
+	cbdata := TxnCallbackData{cnUUID: c.proc.GetService(),
+		txnClient:    c.proc.Base.TxnClient,
+		cnEngine:     c.proc.Base.SessionInfo.StorageEngine,
+		accountId:    accountId,
+		dbname:       dbname,
+		tablename:    tablename,
+		indexname:    indexname,
+		sinker_type:  sinker_type,
+		startFromNow: startFromNow,
+	}
+	txnop := c.proc.GetTxnOperator()
+	txnop.AppendEventCallback(client.ClosedEvent,
+		client.NewTxnEventCallbackWithValue(
+			func(ctx context.Context, _ client.TxnOperator, evt client.TxnEvent, data any) error {
+				//commitTs := evt.Txn.CommitTS
+
+				cbdata := data.(TxnCallbackData)
+				logutil.Infof("AppendIscpRegisterEvent: closed event detected\n %v", cbdata)
+				if evt.Txn.Status != txn.TxnStatus_Committed {
+					return nil
+				}
+
+				sqlexec.RunTxnWithSqlContext(ctx,
+					cbdata.cnEngine,
+					cbdata.txnClient,
+					cbdata.cnUUID,
+					cbdata.accountId,
+					5*time.Minute,
+					func(sqlproc *sqlexec.SqlProcess) (err error) {
+						sqlctx := sqlproc.SqlCtx
+
+						spec := &iscp.JobSpec{
+							ConsumerInfo: iscp.ConsumerInfo{ConsumerType: cbdata.sinker_type,
+								DBName:    cbdata.dbname,
+								TableName: cbdata.tablename,
+								IndexName: cbdata.indexname},
+						}
+						job := &iscp.JobID{DBName: cbdata.dbname, TableName: cbdata.tablename, JobName: genCdcTaskJobID(cbdata.indexname)}
+
+						_, err = RegisterJob(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn(), spec, job, cbdata.startFromNow)
+						if err != nil {
+							return
+						}
+						return
+					})
+
+				return nil
+			}, cbdata))
+
+	return nil
+
 }
