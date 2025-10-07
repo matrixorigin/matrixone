@@ -618,36 +618,20 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
+	}
+
 	tc.reset.commitCounter.addEnter()
 	defer tc.reset.commitCounter.addExit()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnCommit(tc.logger, txnMeta)
 
-	// set commitTs to now and use the same commitTS with pre-commit
-	nextSeq := tc.NextSequence()
-	now := time.Now()
-
-	if tc.reset.runningSQL.Load() && !tc.markAborted() {
-		tc.logger.Fatal("commit on running txn",
-			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
-	}
-
-	// pre-commit
-	err = tc.triggerEvent(ctx, newEvent(PreCommitEvent, txnMeta, nextSeq, nil))
-	if err != nil {
-		return
-	}
-
-	// check running SQL and aborted again after pre-commit
-	if tc.reset.runningSQL.Load() && !tc.markAborted() {
-		tc.logger.Fatal("commit on running txn",
-			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
-	}
-
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
 		tc.reset.commitSeq = tc.NextSequence()
-		tc.reset.commitAt = now // use now instead of time.Now()
+		tc.reset.commitAt = time.Now()
 
 		err = tc.triggerEvent(ctx, newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
 		if err != nil {
