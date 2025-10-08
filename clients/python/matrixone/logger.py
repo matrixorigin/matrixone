@@ -535,8 +535,15 @@ class MatrixOneLogger:
         )
         self.logger.handle(record)
 
-    def log_error(self, error: Exception, context: Optional[str] = None):
-        """Log errors with context"""
+    def log_error(self, error: Exception, context: Optional[str] = None, include_traceback: bool = False):
+        """
+        Log errors with context and optional traceback.
+
+        Args:
+            error: The exception object
+            context: Optional context description (e.g., "Query execution", "Table creation")
+            include_traceback: If True, include full traceback in log (useful for debugging)
+        """
         error_type = type(error).__name__
         error_message = str(error)
 
@@ -550,15 +557,24 @@ class MatrixOneLogger:
         frame = sys._getframe(1)
         filename = frame.f_code.co_filename
         lineno = frame.f_lineno
+
+        # Prepare error message
+        error_msg = self._format_message(f"Error occurred: {error_type}", **kwargs)
+
+        # Add traceback if requested (useful for debugging)
+        exc_info = None
+        if include_traceback:
+            exc_info = sys.exc_info()
+
         # Create a new record with the caller's info
         record = self.logger.makeRecord(
             self.logger.name,
             logging.ERROR,
             filename,
             lineno,
-            self._format_message(f"Error occurred: {error_type}", **kwargs),
+            error_msg,
             (),
-            None,
+            exc_info,  # Include exception info if requested
         )
         self.logger.handle(record)
 

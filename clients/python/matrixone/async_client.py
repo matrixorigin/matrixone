@@ -1987,8 +1987,17 @@ class AsyncClient(BaseMatrixOneClient):
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.logger.log_query(final_sql, execution_time, success=False)
-            self.logger.log_error(e, context="Async query execution")
+
+            # Log error FIRST, before any error processing
+            # Wrap in try-except to ensure logging failure doesn't hide the real error
+            try:
+                self.logger.log_query(final_sql, execution_time, success=False)
+                self.logger.log_error(e, context="Async query execution")
+            except Exception as log_err:
+                # If logging fails, print to stderr as fallback but continue with error handling
+                import sys
+
+                print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
             # Extract user-friendly error message
             error_msg = str(e)
