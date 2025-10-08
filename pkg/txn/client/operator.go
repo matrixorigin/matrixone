@@ -640,7 +640,10 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 		defer func() {
 			cost := time.Since(tc.reset.commitAt)
 			v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
-			tc.triggerEvent(ctx, newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.reset.commitSeq, err, cost))
+			e := tc.triggerEvent(ctx, newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.reset.commitSeq, err, cost))
+			if e != nil {
+				err = e
+			}
 
 		}()
 	}
