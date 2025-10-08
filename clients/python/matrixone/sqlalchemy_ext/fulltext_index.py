@@ -42,37 +42,37 @@ def _exec_sql_safe(connection, sql: str):
 class FulltextAlgorithmType:
     """
     Enum-like class for fulltext algorithm types.
-    
+
     MatrixOne supports two main fulltext relevancy algorithms:
-    
+
     Attributes:
         TF_IDF (str): Term Frequency-Inverse Document Frequency
-        
+
             * Traditional information retrieval algorithm
             * Good for specific use cases with proven reliability
             * Formula: TF(term) × IDF(term)
             * Use case: Academic search, technical documentation
-            
+
         BM25 (str): Best Matching 25 (Okapi BM25)
-        
+
             * Modern probabilistic ranking algorithm
             * Generally superior to TF-IDF for diverse content
             * Handles document length normalization better
             * Use case: General-purpose search, modern applications
             * Recommended as default for new applications
-    
+
     Note:
         The algorithm is set at runtime via SQL command, not in the index DDL.
-    
+
     Examples::
-    
+
         # Set algorithm to BM25
         client.execute('SET ft_relevancy_algorithm = "BM25"')
-        
+
         # Create index with BM25 reference
         index = FulltextIndex("ftidx_content", ["title", "content"],
                              algorithm=FulltextAlgorithmType.BM25)
-        
+
         # Perform searches with BM25 scoring
         result = client.query(Article).filter(
             boolean_match(Article.content).must("search term")
@@ -86,45 +86,45 @@ class FulltextAlgorithmType:
 class FulltextParserType:
     """
     Enum-like class for fulltext parser types.
-    
+
     MatrixOne supports specialized parsers for different content types.
-    
+
     Attributes:
         JSON (str): Parser for JSON documents
-        
+
             * Indexes JSON values (not keys)
             * Suitable for text/varchar/json columns containing JSON data
             * Use case: Product details, user profiles, metadata
             * Example SQL: CREATE FULLTEXT INDEX idx ON table (col) WITH PARSER json
-            
+
         NGRAM (str): Parser for Chinese and Asian languages
-        
+
             * N-gram based tokenization for languages without word delimiters
             * Better word segmentation for Chinese, Japanese, Korean, etc.
             * Use case: Chinese articles, mixed language content
             * Example SQL: CREATE FULLTEXT INDEX idx ON table (col) WITH PARSER ngram
-    
+
     Examples::
-    
+
         # Using JSON parser in ORM
         class Product(Base):
             __tablename__ = "products"
             details = Column(Text)
             __table_args__ = (
-                FulltextIndex("ftidx_json", "details", 
+                FulltextIndex("ftidx_json", "details",
                              parser=FulltextParserType.JSON),
             )
-        
+
         # Using NGRAM parser for Chinese content
         class ChineseArticle(Base):
             __tablename__ = "chinese_articles"
             title = Column(String(200))
             body = Column(Text)
             __table_args__ = (
-                FulltextIndex("ftidx_chinese", ["title", "body"], 
+                FulltextIndex("ftidx_chinese", ["title", "body"],
                              parser=FulltextParserType.NGRAM),
             )
-        
+
         # Using parser in create_index method
         FulltextIndex.create_index(
             engine, 'products', 'ftidx_json', 'details',
@@ -248,43 +248,43 @@ class FulltextIndex(Index):
 
         Args:
             name (str): Index name (e.g., 'ftidx_content', 'idx_search')
-            
+
             columns (str or list): Column(s) to index
-            
+
                 * Single column: "content" or ["content"]
                 * Multiple columns: ["title", "content"]
-            
+
             algorithm (str): Fulltext algorithm type (stored but not part of DDL)
-            
+
                 * FulltextAlgorithmType.TF_IDF (default): Traditional TF-IDF
                 * FulltextAlgorithmType.BM25: Modern BM25 ranking
                 * Note: Set via SET ft_relevancy_algorithm at runtime
-            
+
             parser (str, optional): Parser type for specialized content
-            
+
                 * None (default): Standard text parser
                 * FulltextParserType.JSON: Parse JSON documents
                 * FulltextParserType.NGRAM: N-gram for Chinese/Asian languages
-                
+
         Examples::
-        
+
             # Basic fulltext index (no parser)
             index = FulltextIndex("ftidx_content", "content")
-            
+
             # Multiple columns with BM25
-            index = FulltextIndex("ftidx_search", ["title", "content"], 
+            index = FulltextIndex("ftidx_search", ["title", "content"],
                                  algorithm=FulltextAlgorithmType.BM25)
-            
+
             # JSON parser for JSON content
-            index = FulltextIndex("ftidx_json", "json_data", 
+            index = FulltextIndex("ftidx_json", "json_data",
                                  parser=FulltextParserType.JSON)
-            
+
             # NGRAM parser for Chinese content
-            index = FulltextIndex("ftidx_chinese", ["title", "body"], 
+            index = FulltextIndex("ftidx_chinese", ["title", "body"],
                                  parser=FulltextParserType.NGRAM)
-            
+
             # Combined: Multiple columns with JSON parser
-            index = FulltextIndex("ftidx_multi_json", ["json1", "json2"], 
+            index = FulltextIndex("ftidx_multi_json", ["json1", "json2"],
                                  parser=FulltextParserType.JSON)
         """
         if isinstance(columns, str):
@@ -328,18 +328,18 @@ class FulltextIndex(Index):
             table_name (str): Target table name (e.g., 'articles', 'documents')
             name (str): Index name (e.g., 'ftidx_content', 'idx_search')
             columns (str or list): Column(s) to index
-            
+
                 * Single: "content" or ["content"]
                 * Multiple: ["title", "content", "summary"]
-            
+
             algorithm (str): Algorithm type (stored for reference, not in DDL)
-            
+
                 * FulltextAlgorithmType.TF_IDF (default)
                 * FulltextAlgorithmType.BM25
                 * Set via: SET ft_relevancy_algorithm = "BM25"
-            
+
             parser (str, optional): Parser type for specialized content
-            
+
                 * None (default): Standard parser
                 * FulltextParserType.JSON: For JSON documents
                 * FulltextParserType.NGRAM: For Chinese/Asian languages
@@ -348,24 +348,24 @@ class FulltextIndex(Index):
             bool: True if succeeded, False otherwise
 
         Examples::
-        
+
             # Basic fulltext index
             FulltextIndex.create_index(
                 engine, 'articles', 'ftidx_content', 'content'
             )
-            
+
             # Multiple columns with BM25
             FulltextIndex.create_index(
                 engine, 'articles', 'ftidx_search', ['title', 'content'],
                 algorithm=FulltextAlgorithmType.BM25
             )
-            
+
             # JSON parser
             FulltextIndex.create_index(
                 engine, 'products', 'ftidx_json', 'details',
                 parser=FulltextParserType.JSON
             )
-            
+
             # NGRAM parser
             FulltextIndex.create_index(
                 engine, 'chinese_articles', 'ftidx_chinese', ['title', 'body'],
@@ -410,17 +410,17 @@ class FulltextIndex(Index):
             table_name (str): Target table name
             name (str): Index name
             columns (str or list): Column(s) to index
-            
+
                 * Single: "content" or ["content"]
                 * Multiple: ["title", "content"]
-            
+
             algorithm (str): Algorithm type (stored for reference)
-            
+
                 * FulltextAlgorithmType.TF_IDF (default)
                 * FulltextAlgorithmType.BM25
-            
+
             parser (str, optional): Parser type
-            
+
                 * None (default): Standard parser
                 * FulltextParserType.JSON: For JSON documents
                 * FulltextParserType.NGRAM: For Chinese/Asian languages
@@ -429,20 +429,20 @@ class FulltextIndex(Index):
             bool: True if succeeded, False otherwise
 
         Examples::
-        
+
             # Basic usage within transaction
             with engine.begin() as conn:
                 FulltextIndex.create_index_in_transaction(
                     conn, 'articles', 'ftidx_content', 'content'
                 )
-            
+
             # With JSON parser
             with engine.begin() as conn:
                 FulltextIndex.create_index_in_transaction(
                     conn, 'products', 'ftidx_json', 'details',
                     parser=FulltextParserType.JSON
                 )
-            
+
             # With NGRAM parser
             with engine.begin() as conn:
                 FulltextIndex.create_index_in_transaction(

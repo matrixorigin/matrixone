@@ -1989,7 +1989,83 @@ class AsyncClient(BaseMatrixOneClient):
             execution_time = time.time() - start_time
             self.logger.log_query(final_sql, execution_time, success=False)
             self.logger.log_error(e, context="Async query execution")
-            raise QueryError(f"Query execution failed: {e}")
+
+            # Extract user-friendly error message
+            error_msg = str(e)
+
+            # Handle common database errors with helpful messages
+            # Check for "does not exist" first before "syntax error"
+            if (
+                'does not exist' in error_msg.lower()
+                or 'no such table' in error_msg.lower()
+                or 'doesn\'t exist' in error_msg.lower()
+            ):
+                # Table doesn't exist
+                import re
+
+                match = re.search(r"(?:table|database)\s+[\"']?(\w+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
+                if match:
+                    obj_name = match.group(1)
+                    raise QueryError(
+                        f"Table or database '{obj_name}' does not exist. "
+                        f"Create it first using client.create_table() or CREATE TABLE/DATABASE statement."
+                    ) from None
+                else:
+                    raise QueryError(f"Object not found: {error_msg}") from None
+
+            elif 'already exists' in error_msg.lower() and '1050' in error_msg:
+                # Table already exists
+                import re
+
+                match = re.search(r"table\s+(\w+)\s+already\s+exists", error_msg, re.IGNORECASE)
+                if match:
+                    table_name = match.group(1)
+                    raise QueryError(
+                        f"Table '{table_name}' already exists. "
+                        f"Use DROP TABLE {table_name} or client.drop_table() to remove it first."
+                    ) from None
+                else:
+                    raise QueryError(f"Object already exists: {error_msg}") from None
+
+            elif 'duplicate' in error_msg.lower() and ('1062' in error_msg or '1061' in error_msg):
+                # Duplicate key/entry
+                raise QueryError(
+                    f"Duplicate entry error: {error_msg}. "
+                    f"Check for duplicate primary key or unique constraint violations."
+                ) from None
+
+            elif 'syntax error' in error_msg.lower() or '1064' in error_msg:
+                # SQL syntax error
+                sql_preview = final_sql[:200] + '...' if len(final_sql) > 200 else final_sql
+                raise QueryError(f"SQL syntax error: {error_msg}\n" f"Query: {sql_preview}") from None
+
+            elif 'column' in error_msg.lower() and ('unknown' in error_msg.lower() or 'not found' in error_msg.lower()):
+                # Column doesn't exist
+                raise QueryError(f"Column not found: {error_msg}. " f"Check your column names and table schema.") from None
+
+            elif 'cannot be null' in error_msg.lower() or '1048' in error_msg:
+                # NULL constraint violation
+                raise QueryError(
+                    f"NULL constraint violation: {error_msg}. " f"Some columns require non-NULL values."
+                ) from None
+
+            elif 'not supported' in error_msg.lower() and '20105' in error_msg:
+                # MatrixOne-specific: feature not supported
+                raise QueryError(
+                    f"MatrixOne feature limitation: {error_msg}. "
+                    f"This feature may require additional configuration or is not yet supported."
+                ) from None
+
+            elif 'bind parameter' in error_msg.lower() or 'InvalidRequestError' in error_msg:
+                # SQLAlchemy bind parameter error
+                raise QueryError(
+                    f"Parameter binding error: {error_msg}. "
+                    f"This might be caused by special characters in your data (colons in JSON, etc.)"
+                ) from None
+
+            else:
+                # Generic error - cleaner message without full SQLAlchemy stack
+                raise QueryError(f"Query execution failed: {error_msg}") from None
 
     def _substitute_parameters(self, sql: str, params: Optional[Tuple] = None) -> str:
         """

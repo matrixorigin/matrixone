@@ -1052,22 +1052,22 @@ def natural_match(*columns, query: str) -> FulltextFilter:
         FulltextFilter: A fulltext filter object for use in queries
 
     Examples::
-    
+
         # Basic natural language search
         result = client.query("articles.id", "articles.title", "articles.content").filter(
             natural_match("title", "content", query="machine learning")
         ).execute()
-        
+
         # Using with ORM models
         result = client.query(Article).filter(
             natural_match(Article.title, Article.content, query="artificial intelligence")
         ).execute()
-        
+
         # Single column search
         result = client.query(Article).filter(
             natural_match(Article.content, query="python programming")
         ).execute()
-        
+
         # With relevance scoring
         result = client.query(
             Article.id,
@@ -1075,17 +1075,17 @@ def natural_match(*columns, query: str) -> FulltextFilter:
             Article.content,
             natural_match(Article.content, query="deep learning").label("score")
         ).execute()
-        
+
         # JSON parser - searching within JSON documents
         result = client.query(Product).filter(
             natural_match(Product.details, query="Dell laptop")
         ).execute()
-        
+
         # NGRAM parser - Chinese content search
         result = client.query(ChineseArticle).filter(
             natural_match(ChineseArticle.title, ChineseArticle.body, query="神雕侠侣")
         ).execute()
-        
+
         # Combined with SQL filters
         result = client.query(Article).filter(
             natural_match(Article.content, query="programming tutorial")
