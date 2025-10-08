@@ -23,11 +23,34 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.schema import CreateIndex
 
 
+def _exec_sql_safe(connection, sql: str):
+    """
+    Execute SQL safely, bypassing SQLAlchemy's bind parameter parsing.
+
+    This prevents JSON strings like {"a":1} from being incorrectly parsed as :1 bind params.
+    Uses exec_driver_sql() when available, falls back to text() for testing/compatibility.
+    """
+    if hasattr(connection, 'exec_driver_sql'):
+        # Escape % to %% for pymysql's format string handling
+        escaped_sql = sql.replace('%', '%%')
+        return connection.exec_driver_sql(escaped_sql)
+    else:
+        # Fallback for testing or older SQLAlchemy versions
+        return connection.execute(text(sql))
+
+
 class FulltextAlgorithmType:
     """Enum-like class for fulltext algorithm types."""
 
     TF_IDF = "TF-IDF"
     BM25 = "BM25"
+
+
+class FulltextParserType:
+    """Enum-like class for fulltext parser types."""
+
+    JSON = "json"
+    NGRAM = "ngram"
 
 
 class FulltextModeType:
@@ -135,6 +158,7 @@ class FulltextIndex(Index):
         name: str,
         columns: Union[str, List[str]],
         algorithm: str = FulltextAlgorithmType.TF_IDF,
+        parser: str = None,
     ):
         """
         Initialize FulltextIndex.
@@ -144,11 +168,13 @@ class FulltextIndex(Index):
             name: Index name
             columns: Column(s) to index (string or list of strings)
             algorithm: Fulltext algorithm type (TF-IDF or BM25)
+            parser: Parser type for fulltext index (json, ngram, or None for default)
         """
         if isinstance(columns, str):
             columns = [columns]
 
         self.algorithm = algorithm
+        self.parser = parser
         self._column_names = columns.copy()  # Store column names for easy access
         super().__init__(name, *columns)
 
@@ -159,7 +185,10 @@ class FulltextIndex(Index):
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for fulltext index."""
         columns_str = ", ".join(self._column_names)
-        return f"CREATE FULLTEXT INDEX {self.name} ON {table_name} ({columns_str})"
+        sql = f"CREATE FULLTEXT INDEX {self.name} ON {table_name} ({columns_str})"
+        if self.parser:
+            sql += f" WITH PARSER {self.parser}"
+        return sql
 
     @classmethod
     def create_index(
@@ -169,6 +198,7 @@ class FulltextIndex(Index):
         name: str,
         columns: Union[str, List[str]],
         algorithm: str = FulltextAlgorithmType.TF_IDF,
+        parser: str = None,
     ) -> bool:
         """
         Create a fulltext index using ORM-style method.
@@ -180,6 +210,7 @@ class FulltextIndex(Index):
             name: Index name
             columns: Column(s) to index
             algorithm: Fulltext algorithm type
+            parser: Parser type for fulltext index (json, ngram, or None)
 
         Returns:
 
@@ -191,9 +222,11 @@ class FulltextIndex(Index):
 
             columns_str = ", ".join(columns)
             sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
+            if parser:
+                sql += f" WITH PARSER {parser}"
 
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
 
             return True
         except Exception as e:
@@ -208,6 +241,7 @@ class FulltextIndex(Index):
         name: str,
         columns: Union[str, List[str]],
         algorithm: str = FulltextAlgorithmType.TF_IDF,
+        parser: str = None,
     ) -> bool:
         """
         Create a fulltext index within an existing transaction.
@@ -219,6 +253,7 @@ class FulltextIndex(Index):
             name: Index name
             columns: Column(s) to index
             algorithm: Fulltext algorithm type
+            parser: Parser type for fulltext index (json, ngram, or None)
 
         Returns:
 
@@ -230,8 +265,10 @@ class FulltextIndex(Index):
 
             columns_str = ", ".join(columns)
             sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
+            if parser:
+                sql += f" WITH PARSER {parser}"
 
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create fulltext index in transaction: {e}")
@@ -256,7 +293,7 @@ class FulltextIndex(Index):
             sql = f"DROP INDEX {name} ON {table_name}"
 
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
 
             return True
         except Exception as e:
@@ -280,7 +317,7 @@ class FulltextIndex(Index):
         """
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop fulltext index in transaction: {e}")
@@ -303,7 +340,7 @@ class FulltextIndex(Index):
             sql = self._create_index_sql(table_name)
 
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
 
             return True
         except Exception as e:
@@ -327,7 +364,7 @@ class FulltextIndex(Index):
             sql = f"DROP INDEX {self.name} ON {table_name}"
 
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
 
             return True
         except Exception as e:
@@ -349,7 +386,7 @@ class FulltextIndex(Index):
         """
         try:
             sql = self._create_index_sql(table_name)
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create fulltext index in transaction: {e}")
@@ -370,7 +407,7 @@ class FulltextIndex(Index):
         """
         try:
             sql = f"DROP INDEX {self.name} ON {table_name}"
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop fulltext index in transaction: {e}")
@@ -596,7 +633,7 @@ class FulltextSearchBuilder:
             Query result
         """
         sql = self.build_sql()
-        return connection.execute(text(sql))
+        return _exec_sql_safe(connection, sql)
 
 
 # Convenience functions
@@ -606,6 +643,7 @@ def create_fulltext_index(
     name: str,
     columns: Union[str, List[str]],
     algorithm: str = FulltextAlgorithmType.TF_IDF,
+    parser: str = None,
 ) -> bool:
     """
     Convenience function to create a fulltext index.
@@ -617,12 +655,13 @@ def create_fulltext_index(
         name: Index name
         columns: Column(s) to index
         algorithm: Fulltext algorithm type
+        parser: Parser type for fulltext index (json, ngram, or None)
 
     Returns:
 
         bool: True if successful, False otherwise
     """
-    return FulltextIndex.create_index(engine, table_name, name, columns, algorithm)
+    return FulltextIndex.create_index(engine, table_name, name, columns, algorithm, parser)
 
 
 def fulltext_search_builder(table_name: str, columns: Union[str, List[str]]) -> FulltextSearchBuilder:
@@ -648,7 +687,7 @@ def compile_create_index(element, compiler, **kw):
     Custom compiler for CREATE INDEX that handles FulltextIndex specially.
 
     This function intercepts SQLAlchemy's CREATE INDEX statement generation
-    and adds the FULLTEXT keyword for FulltextIndex instances.
+    and adds the FULLTEXT keyword and parser clause for FulltextIndex instances.
     """
     index = element.element
 
@@ -656,7 +695,10 @@ def compile_create_index(element, compiler, **kw):
     if isinstance(index, FulltextIndex):
         # Generate FULLTEXT index DDL
         columns_str = ", ".join(col.name for col in index.columns)
-        return f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
+        sql = f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
+        if hasattr(index, 'parser') and index.parser:
+            sql += f" WITH PARSER {index.parser}"
+        return sql
 
     # Default behavior for regular indexes
     return compiler.visit_create_index(element, **kw)

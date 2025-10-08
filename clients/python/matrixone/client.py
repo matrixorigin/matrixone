@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
     from .sqlalchemy_ext import VectorOpType
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 from .account import AccountManager, TransactionAccountManager
@@ -714,11 +714,19 @@ class Client(BaseMatrixOneClient):
             and other SDK components. External users should use execute() instead.
         """
         import time
-        from sqlalchemy import text
 
         start_time = time.time()
         try:
-            result = connection.execute(text(sql))
+            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+            if hasattr(connection, 'exec_driver_sql'):
+                # Escape % to %% for pymysql's format string handling
+                escaped_sql = sql.replace('%', '%%')
+                result = connection.exec_driver_sql(escaped_sql)
+            else:
+                # Fallback for testing or older SQLAlchemy versions
+                from sqlalchemy import text
+
+                result = connection.execute(text(sql))
             execution_time = time.time() - start_time
 
             # Try to get row count if available
@@ -801,7 +809,17 @@ class Client(BaseMatrixOneClient):
             final_sql = self._substitute_parameters(sql, params)
 
             with self._engine.begin() as conn:
-                result = conn.execute(text(final_sql))
+                # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+                # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+                if hasattr(conn, 'exec_driver_sql'):
+                    # Escape % to %% for pymysql's format string handling in exec_driver_sql
+                    escaped_sql = final_sql.replace('%', '%%')
+                    result = conn.exec_driver_sql(escaped_sql)
+                else:
+                    # Fallback for testing or older SQLAlchemy versions
+                    from sqlalchemy import text
+
+                    result = conn.execute(text(final_sql))
 
                 execution_time = time.time() - start_time
 
@@ -1580,13 +1598,22 @@ class Client(BaseMatrixOneClient):
 
             from .sqlalchemy_ext import FulltextIndex, VectorIndex
             from sqlalchemy.schema import CreateTable, CreateIndex
-            from sqlalchemy import text
 
             with self.get_sqlalchemy_engine().begin() as conn:
                 # Create table without indexes first
                 # Build CREATE TABLE statement without indexes
                 create_table_sql = str(CreateTable(table).compile(dialect=conn.dialect))
-                conn.execute(text(create_table_sql))
+
+                # Helper to execute SQL with fallback for testing
+                def _exec_sql(sql_str):
+                    if hasattr(conn, 'exec_driver_sql'):
+                        return conn.exec_driver_sql(sql_str)
+                    else:
+                        from sqlalchemy import text
+
+                        return conn.execute(text(sql_str))
+
+                _exec_sql(create_table_sql)
 
                 # Create indexes separately with proper types
                 for index in table.indexes:
@@ -1594,22 +1621,24 @@ class Client(BaseMatrixOneClient):
                         # Create fulltext index using custom DDL
                         columns_str = ", ".join(col.name for col in index.columns)
                         fulltext_sql = f"CREATE FULLTEXT INDEX {index.name} ON {table_name} ({columns_str})"
+                        if hasattr(index, 'parser') and index.parser:
+                            fulltext_sql += f" WITH PARSER {index.parser}"
                         try:
-                            conn.execute(text(fulltext_sql))
+                            _exec_sql(fulltext_sql)
                         except Exception as e:
                             self.logger.warning(f"Failed to create fulltext index {index.name}: {e}")
                     elif isinstance(index, VectorIndex):
                         # Create vector index using custom method
                         try:
                             vector_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
-                            conn.execute(text(vector_sql))
+                            _exec_sql(vector_sql)
                         except Exception as e:
                             self.logger.warning(f"Failed to create vector index {index.name}: {e}")
                     else:
                         # Create regular index
                         try:
                             index_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
-                            conn.execute(text(index_sql))
+                            _exec_sql(index_sql)
                         except Exception as e:
                             self.logger.warning(f"Failed to create index {index.name}: {e}")
 
@@ -1882,8 +1911,6 @@ class Client(BaseMatrixOneClient):
                 # Drop table by model class
                 client.drop_table(UserModel)
         """
-        from sqlalchemy import text
-
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
             # It's a model class
@@ -1893,7 +1920,13 @@ class Client(BaseMatrixOneClient):
             table_name = table_name_or_model
 
         with self.get_sqlalchemy_engine().begin() as conn:
-            conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+            sql = f"DROP TABLE IF EXISTS {table_name}"
+            if hasattr(conn, 'exec_driver_sql'):
+                conn.exec_driver_sql(sql)
+            else:
+                from sqlalchemy import text
+
+                conn.execute(text(sql))
 
         return self
 
@@ -1913,9 +1946,13 @@ class Client(BaseMatrixOneClient):
         if connection is None:
             raise ValueError("connection parameter is required for transaction operations")
 
-        from sqlalchemy import text
+        sql = f"DROP TABLE IF EXISTS {table_name}"
+        if hasattr(connection, 'exec_driver_sql'):
+            connection.exec_driver_sql(sql)
+        else:
+            from sqlalchemy import text
 
-        connection.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+            connection.execute(text(sql))
 
         return self
 
@@ -2627,7 +2664,17 @@ class TransactionWrapper:
         start_time = time.time()
 
         try:
-            result = self.connection.execute(text(sql), params or {})
+            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+            # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+            if hasattr(self.connection, 'exec_driver_sql'):
+                # Escape % to %% for pymysql's format string handling
+                escaped_sql = sql.replace('%', '%%')
+                result = self.connection.exec_driver_sql(escaped_sql)
+            else:
+                # Fallback for testing or older SQLAlchemy versions
+                from sqlalchemy import text
+
+                result = self.connection.execute(text(sql), params or {})
             execution_time = time.time() - start_time
 
             if result.returns_rows:
@@ -3534,8 +3581,6 @@ class VectorManager:
         if connection is None:
             raise ValueError("connection parameter is required for transaction operations")
 
-        from sqlalchemy import text
-
         # Enable IVF indexing if needed
         from .sqlalchemy_ext import create_ivf_config
 
@@ -3547,7 +3592,12 @@ class VectorManager:
         sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
 
         # Create the index
-        connection.execute(text(sql))
+        if hasattr(connection, 'exec_driver_sql'):
+            connection.exec_driver_sql(sql)
+        else:
+            from sqlalchemy import text
+
+            connection.execute(text(sql))
 
         return self
 
@@ -3587,8 +3637,6 @@ class VectorManager:
         if connection is None:
             raise ValueError("connection parameter is required for transaction operations")
 
-        from sqlalchemy import text
-
         # Enable HNSW indexing if needed
         from .sqlalchemy_ext import create_hnsw_config
 
@@ -3603,7 +3651,12 @@ class VectorManager:
         )
 
         # Create the index
-        connection.execute(text(sql))
+        if hasattr(connection, 'exec_driver_sql'):
+            connection.exec_driver_sql(sql)
+        else:
+            from sqlalchemy import text
+
+            connection.execute(text(sql))
 
         return self
 
@@ -3747,9 +3800,6 @@ class VectorManager:
         if connection is None:
             raise ValueError("connection parameter is required for transaction operations")
 
-        # Use client's insert method but execute within transaction
-        from sqlalchemy import text
-
         # Build INSERT statement
         columns = list(data.keys())
         values = list(data.values())
@@ -3760,13 +3810,20 @@ class VectorManager:
             if isinstance(value, list):
                 formatted_values.append("[" + ",".join(map(str, value)) + "]")
             else:
-                formatted_values.append(str(value))
+                # Escape single quotes
+                formatted_values.append(str(value).replace("'", "''"))
 
         columns_str = ", ".join(columns)
         values_str = ", ".join([f"'{v}'" for v in formatted_values])
 
         sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        connection.execute(text(sql))
+
+        if hasattr(connection, 'exec_driver_sql'):
+            connection.exec_driver_sql(sql)
+        else:
+            from sqlalchemy import text
+
+            connection.execute(text(sql))
 
         return self
 

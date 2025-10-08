@@ -24,6 +24,22 @@ from sqlalchemy.schema import DDLElement
 from sqlalchemy.sql.ddl import CreateIndex as SQLAlchemyCreateIndex
 
 
+def _exec_sql_safe(connection, sql: str):
+    """
+    Execute SQL safely, bypassing SQLAlchemy's bind parameter parsing.
+
+    This prevents JSON strings like {"a":1} from being incorrectly parsed as :1 bind params.
+    Uses exec_driver_sql() when available, falls back to text() for testing/compatibility.
+    """
+    if hasattr(connection, 'exec_driver_sql'):
+        # Escape % to %% for pymysql's format string handling
+        escaped_sql = sql.replace('%', '%%')
+        return connection.exec_driver_sql(escaped_sql)
+    else:
+        # Fallback for testing or older SQLAlchemy versions
+        return connection.execute(text(sql))
+
+
 class VectorIndexType:
     """Enum-like class for vector index types."""
 
@@ -229,9 +245,9 @@ class IVFVectorIndex(Index):
 
             with engine.begin() as conn:
                 # Enable IVF indexing
-                conn.execute(text("SET experimental_ivf_index = 1"))
-                conn.execute(text("SET probe_limit = 1"))
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, "SET experimental_ivf_index = 1")
+                _exec_sql_safe(conn, "SET probe_limit = 1")
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to create IVFFLAT vector index: {e}")
@@ -270,9 +286,9 @@ class IVFVectorIndex(Index):
             sql = index.create_sql(table_name)
 
             # Enable IVF indexing
-            connection.execute(text("SET experimental_ivf_index = 1"))
-            connection.execute(text("SET probe_limit = 1"))
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, "SET experimental_ivf_index = 1")
+            _exec_sql_safe(connection, "SET probe_limit = 1")
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create IVFFLAT vector index in transaction: {e}")
@@ -296,7 +312,7 @@ class IVFVectorIndex(Index):
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to drop IVFFLAT vector index: {e}")
@@ -319,7 +335,7 @@ class IVFVectorIndex(Index):
         """
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop IVFFLAT vector index in transaction: {e}")
@@ -343,9 +359,9 @@ class IVFVectorIndex(Index):
 
             with engine.begin() as conn:
                 # Enable IVF indexing
-                conn.execute(text("SET experimental_ivf_index = 1"))
-                conn.execute(text("SET probe_limit = 1"))
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, "SET experimental_ivf_index = 1")
+                _exec_sql_safe(conn, "SET probe_limit = 1")
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to create IVFFLAT vector index: {e}")
@@ -367,7 +383,7 @@ class IVFVectorIndex(Index):
         try:
             sql = self.drop_sql(table_name)
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to drop IVFFLAT vector index: {e}")
@@ -390,9 +406,9 @@ class IVFVectorIndex(Index):
             sql = self.create_sql(table_name)
 
             # Enable IVF indexing
-            connection.execute(text("SET experimental_ivf_index = 1"))
-            connection.execute(text("SET probe_limit = 1"))
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, "SET experimental_ivf_index = 1")
+            _exec_sql_safe(connection, "SET probe_limit = 1")
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create IVFFLAT vector index in transaction: {e}")
@@ -413,7 +429,7 @@ class IVFVectorIndex(Index):
         """
         try:
             sql = self.drop_sql(table_name)
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop IVFFLAT vector index in transaction: {e}")
@@ -631,8 +647,8 @@ class HnswVectorIndex(Index):
 
             with engine.begin() as conn:
                 # Enable HNSW indexing
-                conn.execute(text("SET experimental_hnsw_index = 1"))
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to create HNSW vector index: {e}")
@@ -675,8 +691,8 @@ class HnswVectorIndex(Index):
             sql = index.create_sql(table_name)
 
             # Enable HNSW indexing
-            connection.execute(text("SET experimental_hnsw_index = 1"))
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create HNSW vector index in transaction: {e}")
@@ -700,7 +716,7 @@ class HnswVectorIndex(Index):
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to drop HNSW vector index: {e}")
@@ -723,7 +739,7 @@ class HnswVectorIndex(Index):
         """
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop HNSW vector index in transaction: {e}")
@@ -747,8 +763,8 @@ class HnswVectorIndex(Index):
 
             with engine.begin() as conn:
                 # Enable HNSW indexing
-                conn.execute(text("SET experimental_hnsw_index = 1"))
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to create HNSW vector index: {e}")
@@ -770,7 +786,7 @@ class HnswVectorIndex(Index):
         try:
             sql = self.drop_sql(table_name)
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to drop HNSW vector index: {e}")
@@ -793,8 +809,8 @@ class HnswVectorIndex(Index):
             sql = self.create_sql(table_name)
 
             # Enable HNSW indexing
-            connection.execute(text("SET experimental_hnsw_index = 1"))
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create HNSW vector index in transaction: {e}")
@@ -815,7 +831,7 @@ class HnswVectorIndex(Index):
         """
         try:
             sql = self.drop_sql(table_name)
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop HNSW vector index in transaction: {e}")
@@ -996,12 +1012,12 @@ class VectorIndex(Index):
             with engine.begin() as conn:
                 # Enable appropriate indexing in the same connection
                 if index_type == VectorIndexType.IVFFLAT:
-                    conn.execute(text("SET experimental_ivf_index = 1"))
-                    conn.execute(text("SET probe_limit = 1"))
+                    _exec_sql_safe(conn, "SET experimental_ivf_index = 1")
+                    _exec_sql_safe(conn, "SET probe_limit = 1")
                 elif index_type == VectorIndexType.HNSW:
-                    conn.execute(text("SET experimental_hnsw_index = 1"))
+                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
 
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to create vector index: {e}")
@@ -1025,7 +1041,7 @@ class VectorIndex(Index):
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
             with engine.begin() as conn:
-                conn.execute(text(sql))
+                _exec_sql_safe(conn, sql)
             return True
         except Exception as e:
             print(f"Failed to drop vector index: {e}")
@@ -1116,7 +1132,7 @@ class VectorIndex(Index):
             # Note: Indexing should be enabled before calling this method
             # The SET statements are removed to avoid interfering with transaction rollback
 
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to create vector index in transaction: {e}")
@@ -1140,7 +1156,7 @@ class VectorIndex(Index):
         """
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
-            connection.execute(text(sql))
+            _exec_sql_safe(connection, sql)
             return True
         except Exception as e:
             print(f"Failed to drop vector index in transaction: {e}")

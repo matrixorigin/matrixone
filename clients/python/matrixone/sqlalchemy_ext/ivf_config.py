@@ -22,6 +22,16 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
+def _exec_sql_safe(connection, sql: str):
+    """Execute SQL safely, bypassing bind parameter parsing when possible."""
+    if hasattr(connection, 'exec_driver_sql'):
+        # Escape % to %% for pymysql's format string handling
+        escaped_sql = sql.replace('%', '%%')
+        return connection.exec_driver_sql(escaped_sql)
+    else:
+        return connection.execute(text(sql))
+
+
 class IVFConfig:
     """
     Configuration manager for IVF indexing in MatrixOne.
@@ -50,7 +60,7 @@ class IVFConfig:
         """
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("SET experimental_ivf_index = 1"))
+                _exec_sql_safe(conn, "SET experimental_ivf_index = 1")
             return True
         except Exception:
             return False
@@ -65,7 +75,7 @@ class IVFConfig:
         """
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("SET experimental_ivf_index = 0"))
+                _exec_sql_safe(conn, "SET experimental_ivf_index = 0")
             return True
         except Exception:
             return False
@@ -84,7 +94,7 @@ class IVFConfig:
         """
         try:
             with self.engine.begin() as conn:
-                conn.execute(text(f"SET probe_limit = {limit}"))
+                _exec_sql_safe(conn, f"SET probe_limit = {limit}")
             return True
         except Exception:
             return False
@@ -102,13 +112,13 @@ class IVFConfig:
         try:
             with self.engine.begin() as conn:
                 # Get IVF index setting
-                result = conn.execute(text("SHOW VARIABLES LIKE 'experimental_ivf_index'"))
+                result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_ivf_index'")
                 ivf_setting = result.fetchone()
                 if ivf_setting:
                     status["ivf_enabled"] = ivf_setting[1] == "1"
 
                 # Get probe limit setting
-                result = conn.execute(text("SHOW VARIABLES LIKE 'probe_limit'"))
+                result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'probe_limit'")
                 probe_setting = result.fetchone()
                 if probe_setting:
                     status["probe_limit"] = int(probe_setting[1])
@@ -155,7 +165,7 @@ class IVFConfig:
         """
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("SHOW VARIABLES LIKE 'experimental_ivf_index'"))
+                _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_ivf_index'")
             return True
         except Exception:
             return False

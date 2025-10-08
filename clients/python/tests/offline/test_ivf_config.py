@@ -35,6 +35,11 @@ class TestIVFConfigOffline:
 
     def _create_mock_engine_with_conn(self, mock_conn):
         """Helper to create a mock engine with connection."""
+        # Ensure mock_conn has exec_driver_sql if not already set
+        # This allows individual tests to customize the mock before calling this helper
+        if not hasattr(mock_conn, 'exec_driver_sql') or mock_conn.exec_driver_sql is None:
+            mock_conn.exec_driver_sql = Mock(return_value=Mock(returns_rows=False, rowcount=0))
+
         mock_engine = Mock()
         mock_context = Mock()
         mock_context.__enter__ = Mock(return_value=mock_conn)
@@ -66,10 +71,10 @@ class TestIVFConfigOffline:
         result = config.enable_ivf_indexing()
 
         assert result is True
-        # Check that execute was called with the correct SQL
-        mock_conn.execute.assert_called_once()
-        call_args = mock_conn.execute.call_args[0][0]
-        assert str(call_args) == "SET experimental_ivf_index = 1"
+        # Check that exec_driver_sql was called with the correct SQL
+        mock_conn.exec_driver_sql.assert_called_once()
+        call_args = mock_conn.exec_driver_sql.call_args[0][0]
+        assert call_args == "SET experimental_ivf_index = 1"
 
     def test_disable_ivf_indexing(self):
         """Test disabling IVF indexing."""
@@ -81,9 +86,9 @@ class TestIVFConfigOffline:
 
         assert result is True
         # Check that execute was called with the correct SQL
-        mock_conn.execute.assert_called_once()
-        call_args = mock_conn.execute.call_args[0][0]
-        assert str(call_args) == "SET experimental_ivf_index = 0"
+        mock_conn.exec_driver_sql.assert_called_once()
+        call_args = mock_conn.exec_driver_sql.call_args[0][0]
+        assert call_args == "SET experimental_ivf_index = 0"
 
     def test_set_probe_limit(self):
         """Test setting probe limit."""
@@ -95,9 +100,9 @@ class TestIVFConfigOffline:
 
         assert result is True
         # Check that execute was called with the correct SQL
-        mock_conn.execute.assert_called_once()
-        call_args = mock_conn.execute.call_args[0][0]
-        assert str(call_args) == "SET probe_limit = 5"
+        mock_conn.exec_driver_sql.assert_called_once()
+        call_args = mock_conn.exec_driver_sql.call_args[0][0]
+        assert call_args == "SET probe_limit = 5"
 
     def test_configure_ivf(self):
         """Test configuring IVF with multiple parameters."""
@@ -109,10 +114,10 @@ class TestIVFConfigOffline:
 
         assert result is True
         # Should call both enable and set probe limit
-        assert mock_conn.execute.call_count == 2
+        assert mock_conn.exec_driver_sql.call_count == 2
 
         # Check the SQL calls
-        calls = [str(call[0][0]) for call in mock_conn.execute.call_args_list]
+        calls = [call[0][0] for call in mock_conn.exec_driver_sql.call_args_list]
         assert "SET experimental_ivf_index = 1" in calls
         assert "SET probe_limit = 3" in calls
 
@@ -127,7 +132,7 @@ class TestIVFConfigOffline:
         mock_result2 = Mock()
         mock_result2.fetchone.return_value = ("probe_limit", "5")
 
-        mock_conn.execute.side_effect = [mock_result1, mock_result2]
+        mock_conn.exec_driver_sql.side_effect = [mock_result1, mock_result2]
 
         config = IVFConfig(mock_engine)
         status = config.get_ivf_status()
@@ -146,9 +151,9 @@ class TestIVFConfigOffline:
 
         assert result is True
         # Check that execute was called with the correct SQL
-        mock_conn.execute.assert_called_once()
-        call_args = mock_conn.execute.call_args[0][0]
-        assert str(call_args) == "SHOW VARIABLES LIKE 'experimental_ivf_index'"
+        mock_conn.exec_driver_sql.assert_called_once()
+        call_args = mock_conn.exec_driver_sql.call_args[0][0]
+        assert call_args == "SHOW VARIABLES LIKE 'experimental_ivf_index'"
 
     def test_is_ivf_supported_failure(self):
         """Test checking if IVF is supported when it fails."""
@@ -208,7 +213,7 @@ class TestIVFConfigOffline:
         mock_engine = self._create_mock_engine_with_conn(mock_conn)
 
         # First call succeeds, second call fails
-        mock_conn.execute.side_effect = [None, Exception("Failed")]
+        mock_conn.exec_driver_sql.side_effect = [None, Exception("Failed")]
 
         config = IVFConfig(mock_engine)
         result = config.configure_ivf(enabled=True, probe_limit=3)
@@ -237,7 +242,7 @@ class TestIVFConfigOffline:
         mock_result1.fetchone.return_value = ("experimental_ivf_index", "0")
         mock_result2 = Mock()
         mock_result2.fetchone.return_value = ("probe_limit", "10")
-        mock_conn.execute.side_effect = [mock_result1, mock_result2]
+        mock_conn.exec_driver_sql.side_effect = [mock_result1, mock_result2]
 
         status = get_ivf_status(mock_engine)
         assert status["ivf_enabled"] is False

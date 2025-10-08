@@ -26,6 +26,16 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
 
+def _exec_sql_safe(connection, sql: str):
+    """Execute SQL safely, bypassing bind parameter parsing when possible."""
+    if hasattr(connection, 'exec_driver_sql'):
+        # Escape % to %% for pymysql's format string handling
+        escaped_sql = sql.replace('%', '%%')
+        return connection.exec_driver_sql(escaped_sql)
+    else:
+        return connection.execute(text(sql))
+
+
 class HNSWConfig:
     """
     Configuration manager for HNSW indexing in MatrixOne.
@@ -58,10 +68,10 @@ class HNSWConfig:
         """
         try:
             if connection:
-                connection.execute(text("SET experimental_hnsw_index = 1"))
+                _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
             else:
                 with self.engine.begin() as conn:
-                    conn.execute(text("SET experimental_hnsw_index = 1"))
+                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
             return True
         except Exception as e:
             print(f"Failed to enable HNSW indexing: {e}")
@@ -81,10 +91,10 @@ class HNSWConfig:
         """
         try:
             if connection:
-                connection.execute(text("SET experimental_hnsw_index = 0"))
+                _exec_sql_safe(connection, "SET experimental_hnsw_index = 0")
             else:
                 with self.engine.begin() as conn:
-                    conn.execute(text("SET experimental_hnsw_index = 0"))
+                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 0")
             return True
         except Exception as e:
             print(f"Failed to disable HNSW indexing: {e}")
@@ -104,10 +114,10 @@ class HNSWConfig:
         """
         try:
             if connection:
-                result = connection.execute(text("SHOW VARIABLES LIKE 'experimental_hnsw_index'"))
+                result = _exec_sql_safe(connection, "SHOW VARIABLES LIKE 'experimental_hnsw_index'")
             else:
                 with self.engine.begin() as conn:
-                    result = conn.execute(text("SHOW VARIABLES LIKE 'experimental_hnsw_index'"))
+                    result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_hnsw_index'")
 
             row = result.fetchone()
             if row:

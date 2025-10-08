@@ -457,7 +457,13 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
         mock_result.fetchall.return_value = [(1, 'Alice')]
         mock_result.keys.return_value = ['id', 'name']
 
-        # Setup mock connection - make execute return a coroutine
+        # Setup mock connection - make exec_driver_sql return a coroutine
+        async def mock_exec_driver_sql(sql):
+            return mock_result
+
+        mock_connection.exec_driver_sql = Mock(side_effect=mock_exec_driver_sql)
+
+        # Also setup execute for fallback
         async def mock_execute(sql, params=None):
             return mock_result
 
@@ -474,7 +480,8 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
         result = await self.client.query("users", snapshot="test_snapshot").select("id", "name").execute()
 
         expected_sql = "SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}"
-        mock_connection.execute.assert_called_once()
+        # Check that exec_driver_sql or execute was called
+        assert mock_connection.exec_driver_sql.called or mock_connection.execute.called
         self.assertIsInstance(result, AsyncResultSet)
 
 
@@ -780,7 +787,13 @@ class TestAsyncTransaction(unittest.IsolatedAsyncioTestCase):
         mock_result.returns_rows = False
         mock_result.rowcount = 1
 
-        # Mock the connection.execute method - make it async
+        # Mock the connection.exec_driver_sql method - make it async
+        async def mock_exec_driver_sql(sql):
+            return mock_result
+
+        self.mock_connection.exec_driver_sql = Mock(side_effect=mock_exec_driver_sql)
+
+        # Also setup execute for fallback
         async def mock_execute(sql, params=None):
             return mock_result
 
@@ -790,12 +803,18 @@ class TestAsyncTransaction(unittest.IsolatedAsyncioTestCase):
             await tx.execute("INSERT INTO users (name) VALUES (%s)", ("Alice",))
 
         # Verify that the transaction was used
-        self.mock_connection.execute.assert_called_once()
+        assert self.mock_connection.exec_driver_sql.called or self.mock_connection.execute.called
 
     async def test_transaction_rollback(self):
         """Test async transaction rollback"""
 
-        # Mock the connection.execute method to raise an exception
+        # Mock the connection.exec_driver_sql method to raise an exception
+        async def mock_exec_driver_sql_error(sql):
+            raise Exception("Query failed")
+
+        self.mock_connection.exec_driver_sql = Mock(side_effect=mock_exec_driver_sql_error)
+
+        # Also setup execute for fallback
         async def mock_execute_error(sql, params=None):
             raise Exception("Query failed")
 
@@ -929,6 +948,11 @@ class TestAsyncSQLAlchemyTransaction(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.execute_called = False
                 self.execute_args = None
+
+            async def exec_driver_sql(self, sql):
+                self.execute_called = True
+                self.execute_args = (sql, None)
+                return MockResult()
 
             async def execute(self, sql, params=None):
                 self.execute_called = True

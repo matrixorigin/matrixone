@@ -116,7 +116,9 @@ class BaseMatrixOneClient:
                 elif isinstance(value, list):
                     formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
                 else:
-                    formatted_values.append(f"'{str(value)}'")
+                    # Escape single quotes in string values to prevent SQL injection
+                    escaped_value = str(value).replace("'", "''")
+                    formatted_values.append(f"'{escaped_value}'")
             values_str = "(" + ", ".join(formatted_values) + ")"
             values_list.append(values_str)
 

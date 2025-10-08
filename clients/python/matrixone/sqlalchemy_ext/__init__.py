@@ -24,6 +24,7 @@ from .fulltext_index import (
     FulltextAlgorithmType,
     FulltextIndex,
     FulltextModeType,
+    FulltextParserType,
     FulltextSearchBuilder,
     create_fulltext_index,
     fulltext_search_builder,

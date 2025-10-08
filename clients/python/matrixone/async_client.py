@@ -1960,7 +1960,17 @@ class AsyncClient(BaseMatrixOneClient):
             final_sql = self._substitute_parameters(sql, params)
 
             async with self._engine.begin() as conn:
-                result = await conn.execute(text(final_sql))
+                # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+                # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+                if hasattr(conn, 'exec_driver_sql'):
+                    # Escape % to %% for pymysql's format string handling
+                    escaped_sql = final_sql.replace('%', '%%')
+                    result = await conn.exec_driver_sql(escaped_sql)
+                else:
+                    # Fallback for testing or older SQLAlchemy versions
+                    from sqlalchemy import text
+
+                    result = await conn.execute(text(final_sql))
 
                 execution_time = time.time() - start_time
 
@@ -2762,7 +2772,17 @@ class AsyncTransactionWrapper:
         try:
             # Handle parameter substitution for MatrixOne compatibility
             final_sql = self.client._substitute_parameters(sql, params)
-            result = await self.connection.execute(text(final_sql))
+            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+            # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+            if hasattr(self.connection, 'exec_driver_sql'):
+                # Escape % to %% for pymysql's format string handling
+                escaped_sql = final_sql.replace('%', '%%')
+                result = await self.connection.exec_driver_sql(escaped_sql)
+            else:
+                # Fallback for testing or older SQLAlchemy versions
+                from sqlalchemy import text
+
+                result = await self.connection.execute(text(final_sql))
             execution_time = time.time() - start_time
 
             if result.returns_rows:

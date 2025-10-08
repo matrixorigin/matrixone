@@ -29,7 +29,7 @@ fulltext functionality with real database operations.
 
 import pytest
 import pytest_asyncio
-from matrixone import Client, AsyncClient, FulltextAlgorithmType, FulltextModeType
+from matrixone import Client, AsyncClient, FulltextAlgorithmType, FulltextModeType, FulltextParserType
 from matrixone.sqlalchemy_ext import FulltextIndex, FulltextSearchBuilder
 from matrixone.sqlalchemy_ext import boolean_match, natural_match
 
@@ -949,3 +949,321 @@ class TestFulltextComprehensive:
             test_client.fulltext_index.drop("test_multi_col", "ftidx_multi_col")
             test_client.execute("DROP TABLE test_multi_col")
             test_client.execute("DROP DATABASE fulltext_multi_col_test")
+
+    # ============================================================================
+    # JSON Parser Tests
+    # ============================================================================
+
+    def test_fulltext_json_parser_basic(self, test_client):
+        """Test JSON parser for fulltext index - basic functionality"""
+        from matrixone.orm import declarative_base
+        from sqlalchemy import BigInteger, Column, Text
+
+        # Enable fulltext indexing
+        test_client.fulltext_index.enable_fulltext()
+
+        # Create test database
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_json_test")
+        test_client.execute("USE fulltext_json_test")
+
+        # Define ORM model with JSON parser
+        Base = declarative_base()
+
+        class JsonDoc(Base):
+            __tablename__ = "json_docs"
+            id = Column(BigInteger, primary_key=True)
+            json_content = Column(Text)
+
+            __table_args__ = (FulltextIndex("ftidx_json", "json_content", parser=FulltextParserType.JSON),)
+
+        # Create table using ORM
+        try:
+            test_client.create_table(JsonDoc)
+
+            # Verify index was created with JSON parser
+            result = test_client.execute("SHOW CREATE TABLE json_docs")
+            create_stmt = result.fetchall()[0][1]
+            assert "WITH PARSER json" in create_stmt, "Index should have WITH PARSER json clause"
+            assert "FULLTEXT" in create_stmt, "Index should be FULLTEXT type"
+
+            # Insert test data using client interface
+            test_data = [
+                {"id": 1, "json_content": '{"title": "Python Tutorial", "tags": ["python", "programming"]}'},
+                {"id": 2, "json_content": '{"title": "Machine Learning", "tags": ["AI", "data science"]}'},
+                {"id": 3, "json_content": '{"title": "Database Design", "tags": ["SQL", "database"]}'},
+            ]
+            test_client.batch_insert(JsonDoc, test_data)
+
+            # Test search functionality
+            result = test_client.query(JsonDoc).filter(boolean_match(JsonDoc.json_content).must("python")).execute()
+
+            assert result is not None
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find at least one result with 'python'"
+
+            # Verify the result contains the expected JSON document
+            found = False
+            for row in rows:
+                if 'python' in str(row.json_content).lower():
+                    found = True
+                    break
+            assert found, "Should find JSON document containing 'python'"
+
+        finally:
+            # Clean up
+            test_client.drop_table(JsonDoc)
+            test_client.execute("DROP DATABASE fulltext_json_test")
+
+    def test_fulltext_json_parser_multiple_columns(self, test_client):
+        """Test JSON parser with multiple columns"""
+        from matrixone.orm import declarative_base
+        from sqlalchemy import BigInteger, Column, String, Text
+
+        # Enable fulltext indexing
+        test_client.fulltext_index.enable_fulltext()
+
+        # Create test database
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_json_multi_test")
+        test_client.execute("USE fulltext_json_multi_test")
+
+        # Define ORM model with JSON parser on multiple columns
+        Base = declarative_base()
+
+        class JsonMulti(Base):
+            __tablename__ = "json_multi"
+            id = Column(BigInteger, primary_key=True)
+            json1 = Column(Text)
+            json2 = Column(String(1000))
+
+            __table_args__ = (FulltextIndex("ftidx_json_multi", ["json1", "json2"], parser=FulltextParserType.JSON),)
+
+        # Create table using ORM
+        try:
+            test_client.create_table(JsonMulti)
+
+            # Verify index was created with JSON parser
+            result = test_client.execute("SHOW CREATE TABLE json_multi")
+            create_stmt = result.fetchall()[0][1]
+            assert "WITH PARSER json" in create_stmt, "Index should have WITH PARSER json clause"
+            assert "ftidx_json_multi" in create_stmt, "Index name should be present"
+
+            # Insert test data using client interface
+            test_data = [
+                {"id": 1, "json1": '{"name": "red apple"}', "json2": '{"color": "red", "taste": "sweet"}'},
+                {"id": 2, "json1": '{"name": "blue sky"}', "json2": '{"weather": "sunny", "season": "summer"}'},
+                {"id": 3, "json1": '{"name": "green tree"}', "json2": '{"type": "oak", "color": "green"}'},
+            ]
+            test_client.batch_insert(JsonMulti, test_data)
+
+            # Test search on multiple columns
+            result = (
+                test_client.query(JsonMulti).filter(boolean_match(JsonMulti.json1, JsonMulti.json2).must("red")).execute()
+            )
+
+            assert result is not None
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find results with 'red'"
+
+            # Verify result
+            found_red = False
+            for row in rows:
+                if row.id == 1:  # ID should be 1
+                    found_red = True
+                    break
+            assert found_red, "Should find the red apple document"
+
+        finally:
+            # Clean up
+            test_client.drop_table(JsonMulti)
+            test_client.execute("DROP DATABASE fulltext_json_multi_test")
+
+    def test_fulltext_json_parser_chinese_content(self, test_client):
+        """Test JSON parser with Chinese content"""
+        from matrixone.orm import declarative_base
+        from sqlalchemy import BigInteger, Column, Text
+
+        # Enable fulltext indexing
+        test_client.fulltext_index.enable_fulltext()
+
+        # Create test database
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_json_chinese_test")
+        test_client.execute("USE fulltext_json_chinese_test")
+
+        # Define ORM model with JSON parser
+        Base = declarative_base()
+
+        class JsonChinese(Base):
+            __tablename__ = "json_chinese"
+            id = Column(BigInteger, primary_key=True)
+            json_data = Column(Text)
+
+            __table_args__ = (FulltextIndex("ftidx_json_chinese", "json_data", parser=FulltextParserType.JSON),)
+
+        # Create table using ORM
+        try:
+            test_client.create_table(JsonChinese)
+
+            # Insert Chinese JSON data using client interface
+            test_data = [
+                {"id": 1, "json_data": '{"title": "中文學習教材", "description": "適合初學者"}'},
+                {"id": 2, "json_data": '{"title": "兒童中文", "description": "遠東兒童中文"}'},
+                {"id": 3, "json_data": '{"title": "English Book", "description": "For beginners"}'},
+            ]
+            test_client.batch_insert(JsonChinese, test_data)
+
+            # Test search for Chinese content
+            result = (
+                test_client.query(JsonChinese).filter(boolean_match(JsonChinese.json_data).must("中文學習教材")).execute()
+            )
+
+            assert result is not None
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find Chinese content"
+
+            # Verify result contains the expected Chinese document
+            found_chinese = False
+            for row in rows:
+                if row.id == 1:  # ID should be 1
+                    found_chinese = True
+                    assert "中文學習教材" in str(row.json_data), "Should contain the Chinese text"
+                    break
+            assert found_chinese, "Should find the Chinese learning material document"
+
+        finally:
+            # Clean up
+            test_client.drop_table(JsonChinese)
+            test_client.execute("DROP DATABASE fulltext_json_chinese_test")
+
+    def test_fulltext_json_parser_orm_integration(self, test_client):
+        """Test JSON parser with ORM integration"""
+        from matrixone.orm import declarative_base
+        from sqlalchemy import BigInteger, Column, Text
+
+        # Enable fulltext indexing
+        test_client.fulltext_index.enable_fulltext()
+
+        # Create test database
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_json_orm_test")
+        test_client.execute("USE fulltext_json_orm_test")
+
+        # Define ORM model with JSON parser index
+        Base = declarative_base()
+
+        class JsonDocument(Base):
+            __tablename__ = "json_documents"
+            id = Column(BigInteger, primary_key=True)
+            json_content = Column(Text)
+
+            __table_args__ = (FulltextIndex("idx_json_content", "json_content", parser=FulltextParserType.JSON),)
+
+        try:
+            # Create table using ORM
+            test_client.create_table(JsonDocument)
+
+            # Verify index was created correctly
+            result = test_client.execute("SHOW CREATE TABLE json_documents")
+            create_stmt = result.fetchall()[0][1]
+            assert "WITH PARSER json" in create_stmt, "ORM-created index should have WITH PARSER json"
+            assert "FULLTEXT" in create_stmt, "Index should be FULLTEXT type"
+            assert "idx_json_content" in create_stmt, "Index name should be present"
+
+            # Insert test data using client interface
+            test_data = [
+                {"id": 1, "json_content": '{"framework": "Django", "language": "Python"}'},
+                {"id": 2, "json_content": '{"framework": "Flask", "language": "Python"}'},
+                {"id": 3, "json_content": '{"framework": "Express", "language": "JavaScript"}'},
+            ]
+            test_client.batch_insert(JsonDocument, test_data)
+
+            # Test ORM query with JSON parser
+            result = (
+                test_client.query(JsonDocument).filter(boolean_match(JsonDocument.json_content).must("Django")).execute()
+            )
+
+            assert result is not None
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find Django document"
+
+            # Verify the result
+            found_django = False
+            for row in rows:
+                if row.id == 1:
+                    found_django = True
+                    assert "Django" in row.json_content
+                    break
+            assert found_django, "Should find the Django framework document"
+
+        finally:
+            # Clean up
+            test_client.drop_table(JsonDocument)
+            test_client.execute("DROP DATABASE fulltext_json_orm_test")
+
+    def test_fulltext_json_parser_colon_handling(self, test_client):
+        """
+        Test that JSON strings with colons are properly handled in batch_insert.
+
+        This is a regression test for the issue where SQLAlchemy's text() function
+        would interpret colons in JSON strings (like {"a":1}) as bind parameters (:1),
+        causing "A value is required for bind parameter" errors.
+
+        The fix uses exec_driver_sql() to bypass SQLAlchemy's parameter parsing.
+        """
+        from matrixone.orm import declarative_base
+        from sqlalchemy import BigInteger, Column, Text
+
+        # Enable fulltext indexing
+        test_client.fulltext_index.enable_fulltext()
+
+        # Create test database
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_json_colon_test")
+        test_client.execute("USE fulltext_json_colon_test")
+
+        # Define ORM model
+        Base = declarative_base()
+
+        class JsonColonTest(Base):
+            __tablename__ = "json_colon_test"
+            id = Column(BigInteger, primary_key=True)
+            json_data = Column(Text)
+
+            __table_args__ = (FulltextIndex("idx_json_data", "json_data", parser=FulltextParserType.JSON),)
+
+        try:
+            # Create table
+            test_client.create_table(JsonColonTest)
+
+            # Critical test: Insert JSON data with colons
+            # This would fail with "A value is required for bind parameter '1'" before the fix
+            test_data = [
+                {"id": 1, "json_data": '{"key1":"value1", "key2":123}'},
+                {"id": 2, "json_data": '{"a":1, "b":"red", "c":{"nested":"value"}}'},
+                {"id": 3, "json_data": '["item1", "item2", "item3"]'},
+                {"id": 4, "json_data": '{"中文":"測試", "number":456}'},
+            ]
+
+            # This should NOT raise "A value is required for bind parameter" error
+            test_client.batch_insert(JsonColonTest, test_data)
+
+            # Verify all rows were inserted
+            result = test_client.query(JsonColonTest).execute()
+            rows = result.fetchall()
+            assert len(rows) == 4, "Should insert all 4 rows with JSON containing colons"
+
+            # Test single insert with JSON colons
+            test_client.insert(JsonColonTest, {"id": 5, "json_data": '{"test":"single insert", "value":999}'})
+
+            result = test_client.query(JsonColonTest).execute()
+            rows = result.fetchall()
+            assert len(rows) == 5, "Should have 5 rows after single insert"
+
+            # Test fulltext search on JSON data
+            result = test_client.query(JsonColonTest).filter(boolean_match(JsonColonTest.json_data).must("red")).execute()
+
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find JSON with 'red'"
+            assert rows[0].id == 2, "Should find the correct JSON document"
+
+        finally:
+            # Clean up
+            test_client.drop_table(JsonColonTest)
+            test_client.execute("DROP DATABASE fulltext_json_colon_test")

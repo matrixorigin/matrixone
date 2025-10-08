@@ -26,6 +26,16 @@ if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
 
 
+async def _exec_sql_safe_async(connection, sql: str):
+    """Execute SQL safely for async connections, bypassing bind parameter parsing when possible."""
+    if hasattr(connection, 'exec_driver_sql'):
+        # Escape % to %% for pymysql's format string handling
+        escaped_sql = sql.replace('%', '%%')
+        return await connection.exec_driver_sql(escaped_sql)
+    else:
+        return await connection.execute(text(sql))
+
+
 class AsyncVectorManager:
     """
     Unified async vector manager for MatrixOne vector operations and chain operations.
@@ -117,9 +127,9 @@ class AsyncVectorManager:
 
             async with self.client._engine.begin() as conn:
                 # Enable IVF indexing in the same connection
-                await conn.execute(text("SET experimental_ivf_index = 1"))
-                await conn.execute(text("SET probe_limit = 1"))
-                await conn.execute(text(sql))
+                await _exec_sql_safe_async(conn, "SET experimental_ivf_index = 1")
+                await _exec_sql_safe_async(conn, "SET probe_limit = 1")
+                await _exec_sql_safe_async(conn, sql)
             return self
         except Exception as e:
             raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
@@ -163,8 +173,8 @@ class AsyncVectorManager:
 
             async with self.client._engine.begin() as conn:
                 # Enable HNSW indexing in the same connection
-                await conn.execute(text("SET experimental_hnsw_index = 1"))
-                await conn.execute(text(sql))
+                await _exec_sql_safe_async(conn, "SET experimental_hnsw_index = 1")
+                await _exec_sql_safe_async(conn, sql)
             return self
         except Exception as e:
             raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
@@ -184,7 +194,7 @@ class AsyncVectorManager:
         """
         try:
             async with self.client._engine.begin() as conn:
-                await conn.execute(text(f"DROP INDEX IF EXISTS {name} ON {table_name}"))
+                await _exec_sql_safe_async(conn, f"DROP INDEX IF EXISTS {name} ON {table_name}")
             return self
         except Exception as e:
             raise Exception(f"Failed to drop vector index {name} from table {table_name}: {e}")
