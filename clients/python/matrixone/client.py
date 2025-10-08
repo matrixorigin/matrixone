@@ -1576,8 +1576,43 @@ class Client(BaseMatrixOneClient):
             # It's a model class
             model_class = table_name_or_model
             table_name = model_class.__tablename__
-            # Use SQLAlchemy metadata to create table
-            model_class.__table__.create(self.get_sqlalchemy_engine())
+            table = model_class.__table__
+
+            from .sqlalchemy_ext import FulltextIndex, VectorIndex
+            from sqlalchemy.schema import CreateTable, CreateIndex
+            from sqlalchemy import text
+
+            with self.get_sqlalchemy_engine().begin() as conn:
+                # Create table without indexes first
+                # Build CREATE TABLE statement without indexes
+                create_table_sql = str(CreateTable(table).compile(dialect=conn.dialect))
+                conn.execute(text(create_table_sql))
+
+                # Create indexes separately with proper types
+                for index in table.indexes:
+                    if isinstance(index, FulltextIndex):
+                        # Create fulltext index using custom DDL
+                        columns_str = ", ".join(col.name for col in index.columns)
+                        fulltext_sql = f"CREATE FULLTEXT INDEX {index.name} ON {table_name} ({columns_str})"
+                        try:
+                            conn.execute(text(fulltext_sql))
+                        except Exception as e:
+                            self.logger.warning(f"Failed to create fulltext index {index.name}: {e}")
+                    elif isinstance(index, VectorIndex):
+                        # Create vector index using custom method
+                        try:
+                            vector_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
+                            conn.execute(text(vector_sql))
+                        except Exception as e:
+                            self.logger.warning(f"Failed to create vector index {index.name}: {e}")
+                    else:
+                        # Create regular index
+                        try:
+                            index_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
+                            conn.execute(text(index_sql))
+                        except Exception as e:
+                            self.logger.warning(f"Failed to create index {index.name}: {e}")
+
             return self
 
         # It's a table name string
@@ -3911,79 +3946,79 @@ class VectorManager:
 
     def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
         """
-            Get IVF index statistics for monitoring and optimization.
+        Get IVF index statistics for monitoring and optimization.
 
-            This method provides critical insights into IVF index health and performance.
-            It helps evaluate whether the current IVF index configuration is optimal
-            and whether the index needs to be rebuilt.
+        This method provides critical insights into IVF index health and performance.
+        It helps evaluate whether the current IVF index configuration is optimal
+        and whether the index needs to be rebuilt.
 
-            Key Use Cases:
+        Key Use Cases:
 
-            - **Index Health Monitoring**: Check if centroid count matches expected lists parameter
-            - **Load Balancing Analysis**: Evaluate if vectors are evenly distributed across centroids
-            - **Performance Optimization**: Identify when to rebuild the index for better performance
-            - **Capacity Planning**: Understand data distribution patterns
+        - **Index Health Monitoring**: Check if centroid count matches expected lists parameter
+        - **Load Balancing Analysis**: Evaluate if vectors are evenly distributed across centroids
+        - **Performance Optimization**: Identify when to rebuild the index for better performance
+        - **Capacity Planning**: Understand data distribution patterns
 
-            Critical Metrics to Monitor:
+        Critical Metrics to Monitor:
 
-            - **Centroid Count**: Should match the 'lists' parameter used during index creation
-            - **Load Distribution**: Each centroid should have roughly equal numbers of vectors
-            - **Centroid Versions**: Should be consistent (usually all 0 for stable indexes)
+        - **Centroid Count**: Should match the 'lists' parameter used during index creation
+        - **Load Distribution**: Each centroid should have roughly equal numbers of vectors
+        - **Centroid Versions**: Should be consistent (usually all 0 for stable indexes)
 
-            When to Rebuild Index:
+        When to Rebuild Index:
 
-            - Centroid count doesn't match expected lists parameter
-            - Significant imbalance in centroid load distribution (>2x difference between min/max)
-            - Performance degradation in similarity search queries
-            - After major data changes (bulk inserts, updates, deletes)
+        - Centroid count doesn't match expected lists parameter
+        - Significant imbalance in centroid load distribution (>2x difference between min/max)
+        - Performance degradation in similarity search queries
+        - After major data changes (bulk inserts, updates, deletes)
 
-            Args::
+        Args::
 
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                column_name: Name of the vector column (optional, will be inferred if not provided)
+            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+            column_name: Name of the vector column (optional, will be inferred if not provided)
 
-            Returns::
+        Returns::
 
-                Dict containing IVF index statistics including:
-                - index_tables: Dictionary mapping table types to table names
-                - distribution: Dictionary containing:
-                    - centroid_count: List of row counts per centroid
-                    - centroid_id: List of centroid identifiers
-                    - centroid_version: List of centroid versions
-                - database: Database name
-                - table_name: Table name
-                - column_name: Vector column name
+            Dict containing IVF index statistics including:
+            - index_tables: Dictionary mapping table types to table names
+            - distribution: Dictionary containing:
+                - centroid_count: List of row counts per centroid
+                - centroid_id: List of centroid identifiers
+                - centroid_version: List of centroid versions
+            - database: Database name
+            - table_name: Table name
+            - column_name: Vector column name
 
-            Raises::
+        Raises::
 
-                Exception: If IVF index is not found or if there are errors retrieving stats
+            Exception: If IVF index is not found or if there are errors retrieving stats
 
-            Examples::
+        Examples::
 
-                # Monitor index health
-                stats = client.vector_ops.get_ivf_stats("documents", "embedding")
-                
-                # Check centroid distribution
-                centroid_counts = stats['distribution']['centroid_count']
-                total_centroids = len(centroid_counts)
-                min_count = min(centroid_counts)
-                max_count = max(centroid_counts)
-                
-                print(f"Total centroids: {total_centroids}")
-                print(f"Min vectors per centroid: {min_count}")
-                print(f"Max vectors per centroid: {max_count}")
-                print(f"Load balance ratio: {max_count/min_count:.2f}")
-                
-                # Check if index needs rebuilding
-                expected_centroids = 100  # Original lists parameter
-                if total_centroids != expected_centroids:
-                    print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
-                
-                if max_count / min_count > 2.0:
-                    print("⚠️  Poor load balance! Consider rebuilding index.")
-                
-                # Get stats using model class
-                stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
+            # Monitor index health
+            stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+
+            # Check centroid distribution
+            centroid_counts = stats['distribution']['centroid_count']
+            total_centroids = len(centroid_counts)
+            min_count = min(centroid_counts)
+            max_count = max(centroid_counts)
+
+            print(f"Total centroids: {total_centroids}")
+            print(f"Min vectors per centroid: {min_count}")
+            print(f"Max vectors per centroid: {max_count}")
+            print(f"Load balance ratio: {max_count/min_count:.2f}")
+
+            # Check if index needs rebuilding
+            expected_centroids = 100  # Original lists parameter
+            if total_centroids != expected_centroids:
+                print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
+
+            if max_count / min_count > 2.0:
+                print("⚠️  Poor load balance! Consider rebuilding index.")
+
+            # Get stats using model class
+            stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
         """
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):

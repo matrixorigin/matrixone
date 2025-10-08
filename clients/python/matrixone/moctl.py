@@ -17,7 +17,7 @@ MatrixOne Control Operations (mo_ctl) Manager
 
 Provides access to MatrixOne control operations that require sys tenant privileges.
 
-IMPORTANT: All mo_ctl operations require 'sys' account privileges. 
+IMPORTANT: All mo_ctl operations require 'sys' account privileges.
 These operations cannot be executed with regular user accounts.
 
 To use mo_ctl operations:
@@ -73,7 +73,7 @@ class MoCtlManager:
         # IMPORTANT: Connect with sys account first
         client = Client()
         client.connect(host, port, 'sys#root', password, database)
-        
+
         # Initialize mo_ctl manager
         moctl = client.moctl
 

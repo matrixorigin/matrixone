@@ -19,6 +19,8 @@ Fulltext index support for SQLAlchemy integration with MatrixOne.
 from typing import Any, List, Union
 
 from sqlalchemy import Index, text
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.schema import CreateIndex
 
 
 class FulltextAlgorithmType:
@@ -637,3 +639,24 @@ def fulltext_search_builder(table_name: str, columns: Union[str, List[str]]) -> 
         FulltextSearchBuilder: Search builder instance
     """
     return FulltextSearchBuilder(table_name, columns)
+
+
+# Register SQLAlchemy compiler for FulltextIndex to generate FULLTEXT DDL
+@compiles(CreateIndex)
+def compile_create_index(element, compiler, **kw):
+    """
+    Custom compiler for CREATE INDEX that handles FulltextIndex specially.
+
+    This function intercepts SQLAlchemy's CREATE INDEX statement generation
+    and adds the FULLTEXT keyword for FulltextIndex instances.
+    """
+    index = element.element
+
+    # Check if this is a FulltextIndex
+    if isinstance(index, FulltextIndex):
+        # Generate FULLTEXT index DDL
+        columns_str = ", ".join(col.name for col in index.columns)
+        return f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
+
+    # Default behavior for regular indexes
+    return compiler.visit_create_index(element, **kw)

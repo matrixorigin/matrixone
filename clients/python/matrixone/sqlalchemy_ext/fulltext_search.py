@@ -330,11 +330,26 @@ class FulltextQueryBuilder:
             # Multiple required terms
             query.must("python", "programming")  # Generates: +python +programming
 
+            # Unpack list to search multiple terms
+            words = ["python", "programming"]
+            query.must(*words)  # Correct: unpacks the list
+
+        Raises::
+
+            TypeError: If a list or tuple is passed directly without unpacking
+
         Returns::
 
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
+            # Validate parameter types and provide friendly error messages
+            if isinstance(item, (list, tuple)):
+                raise TypeError(
+                    f"must() received a {type(item).__name__} object, but expected individual terms. "
+                    f"To search multiple terms, use the unpacking operator: must(*terms) instead of must(terms). "
+                    f"Example: must(*{list(item)[:3]}) or must({', '.join(repr(str(t)) for t in list(item)[:3])})"
+                )
             if isinstance(item, FulltextGroup):
                 item.group_type = "and"  # Force group to be required
                 self.main_group.add_group(item)
@@ -363,11 +378,26 @@ class FulltextQueryBuilder:
             # Multiple excluded terms
             query.must_not("spam", "junk")  # Generates: -spam -junk
 
+            # Unpack list to exclude multiple terms
+            words = ["spam", "junk"]
+            query.must_not(*words)  # Correct: unpacks the list
+
+        Raises::
+
+            TypeError: If a list or tuple is passed directly without unpacking
+
         Returns::
 
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
+            # Validate parameter types and provide friendly error messages
+            if isinstance(item, (list, tuple)):
+                raise TypeError(
+                    f"must_not() received a {type(item).__name__} object, but expected individual terms. "
+                    f"To exclude multiple terms, use the unpacking operator: must_not(*terms) instead of must_not(terms). "
+                    f"Example: must_not(*{list(item)[:3]}) or must_not({', '.join(repr(str(t)) for t in list(item)[:3])})"
+                )
             if isinstance(item, FulltextGroup):
                 item.group_type = "not"  # Force group to be excluded
                 self.main_group.add_group(item)
@@ -396,15 +426,32 @@ class FulltextQueryBuilder:
             # Multiple encouraged terms
             query.encourage("tutorial", "guide")  # Generates: tutorial guide
 
+            # Unpack list to encourage multiple terms
+            words = ["tutorial", "guide"]
+            query.encourage(*words)  # Correct: unpacks the list
+
         Weight Comparison:
             - encourage("term"): Normal positive boost (encourages term)
             - discourage("term"): Reduced/negative boost (discourages term)
+
+        Raises::
+
+            TypeError: If a list or tuple is passed directly without unpacking
 
         Returns::
 
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
+            # Validate parameter types and provide friendly error messages
+            if isinstance(item, (list, tuple)):
+                raise TypeError(
+                    f"encourage() received a {type(item).__name__} object, but expected individual terms. "
+                    f"To encourage multiple terms, use the unpacking operator: encourage(*terms) "
+                    f"instead of encourage(terms). "
+                    f"Example: encourage(*{list(item)[:3]}) or "
+                    f"encourage({', '.join(repr(str(t)) for t in list(item)[:3])})"
+                )
             if isinstance(item, FulltextGroup):
                 item.group_type = "or"  # Force group to be optional
                 self.main_group.add_group(item)
@@ -434,6 +481,10 @@ class FulltextQueryBuilder:
             # Multiple discouraged terms
             query.discourage("legacy", "deprecated")  # Generates: ~legacy ~deprecated
 
+            # Unpack list to discourage multiple terms
+            words = ["legacy", "deprecated"]
+            query.discourage(*words)  # Correct: unpacks the list
+
         Weight Comparison:
             - encourage("term"): Normal positive boost (encourages term)
             - discourage("term"): Reduced/negative boost (discourages term)
@@ -445,11 +496,24 @@ class FulltextQueryBuilder:
             # Find tutorials, but avoid outdated content
             query.must("tutorial").discourage(group().medium("old", "deprecated"))
 
+        Raises::
+
+            TypeError: If a list or tuple is passed directly without unpacking
+
         Returns::
 
             FulltextQueryBuilder: Self for method chaining
         """
         for item in items:
+            # Validate parameter types and provide friendly error messages
+            if isinstance(item, (list, tuple)):
+                raise TypeError(
+                    f"discourage() received a {type(item).__name__} object, but expected individual terms. "
+                    f"To discourage multiple terms, use the unpacking operator: discourage(*terms) "
+                    f"instead of discourage(terms). "
+                    f"Example: discourage(*{list(item)[:3]}) or "
+                    f"discourage({', '.join(repr(str(t)) for t in list(item)[:3])})"
+                )
             if isinstance(item, FulltextGroup):
                 # Apply tilde to the entire group
                 self.main_group.add_tilde_group(item)

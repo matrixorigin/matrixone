@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matrixone-python-sdk"
-version = "0.0.4"
+version = "0.0.8"
 description = "A comprehensive Python SDK for MatrixOne database operations with vector search, fulltext search, and advanced features"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -77,6 +77,9 @@ Changelog = "https://github.com/matrixorigin/matrixone/blob/main/clients/python/
 
 [project.scripts]
 matrixone-sdk = "matrixone.cli:main"
+
+[project.entry-points."sqlalchemy.dialects"]
+matrixone = "matrixone.sqlalchemy_ext.dialect:MatrixOneDialect"
 
 # 代码格式化配置
 [tool.black]
