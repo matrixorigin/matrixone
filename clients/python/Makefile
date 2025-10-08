@@ -24,6 +24,19 @@ BUILD_DIR := dist
 TEST_DIR := test-results
 COVERAGE_DIR := htmlcov
 
+# Source mode control (affects tests and examples)
+# USE_SOURCE=1 (default): Use local source code via PYTHONPATH=.
+#                        Best for development - changes are immediately reflected
+# USE_SOURCE=0: Use installed matrixone package
+#              Best for testing the actual installed package
+#
+# Usage examples:
+#   make test                     # Use local source (default)
+#   make test USE_SOURCE=0        # Use installed package
+#   make examples                 # Use local source (default)
+#   make examples USE_SOURCE=0    # Use installed package
+USE_SOURCE ?= 1
+
 # Color definitions
 RED := \033[0;31m
 GREEN := \033[0;32m
@@ -52,7 +65,7 @@ help: ## Show help information
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(docs|docs-check|docs-serv|docs-clean):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)📚 Examples:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(example|examples):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(example)' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(YELLOW)🏗️  Build & Publish:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E '^(build|build-release|publish-test|publish|release-check):' | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
@@ -154,48 +167,83 @@ install-sqlalchemy20: ## Install SQLAlchemy 2.0.x test dependencies
 	fi
 
 # Testing
+# Tests can use either local source code or installed package (controlled by USE_SOURCE)
+# USE_SOURCE=1 (default): Use local source code via PYTHONPATH=.
+# USE_SOURCE=0: Use installed matrixone package
+TEST_PYTHON_PATH := $(if $(filter 1,$(USE_SOURCE)),PYTHONPATH=.,)
+
 .PHONY: test-offline
-test-offline: ## Run offline tests (mock-based unit tests)
+test-offline: ## Run offline tests (USE_SOURCE=1 for local code, USE_SOURCE=0 for installed SDK)
 	@echo "$(BLUE)Running offline tests...$(NC)"
-	$(PYTHON) -m pytest tests/offline/ -v --tb=short
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code (PYTHONPATH=.)$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed matrixone package$(NC)"; \
+	fi
+	$(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/offline/ -v --tb=short
 	@echo "$(GREEN)Offline tests completed!$(NC)"
 
 .PHONY: test-online
-test-online: ## Run online tests (requires database connection)
+test-online: ## Run online tests (requires database, USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Running online tests...$(NC)"
 	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
-	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)Online tests completed!$(NC)" || echo "$(YELLOW)⚠️  Online tests skipped (database not available)$(NC)"
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code (PYTHONPATH=.)$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed matrixone package$(NC)"; \
+	fi
+	@$(PYTHON) scripts/check_connection.py && $(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)Online tests completed!$(NC)" || echo "$(YELLOW)⚠️  Online tests skipped (database not available)$(NC)"
 
 .PHONY: test
-test: test-offline test-online ## Run all tests (offline + online)
+test: test-offline test-online ## Run all tests (offline + online, USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(GREEN)All tests completed!$(NC)"
 
 .PHONY: test-fast
-test-fast: ## Run quick tests (offline only)
+test-fast: ## Run quick tests (offline only, USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Running quick tests...$(NC)"
-	$(PYTHON) -m pytest tests/offline/ -v --tb=short -x
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed package$(NC)"; \
+	fi
+	$(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/offline/ -v --tb=short -x
 	@echo "$(GREEN)Quick tests completed!$(NC)"
 
 .PHONY: coverage
-coverage: ## Run all tests with coverage report
+coverage: ## Run all tests with coverage report (USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
-	$(PYTHON) -m pytest --cov=matrixone --cov-report=html --cov-report=term
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed package$(NC)"; \
+	fi
+	$(TEST_PYTHON_PATH) $(PYTHON) -m pytest --cov=matrixone --cov-report=html --cov-report=term
 	@echo "$(GREEN)Coverage report generated in $(COVERAGE_DIR)/$(NC)"
 
 .PHONY: coverage-offline
-coverage-offline: ## Run offline tests with coverage
+coverage-offline: ## Run offline tests with coverage (USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Running offline tests with coverage...$(NC)"
-	$(PYTHON) -m pytest tests/offline/ --cov=matrixone --cov-report=html --cov-report=term
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed package$(NC)"; \
+	fi
+	$(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/offline/ --cov=matrixone --cov-report=html --cov-report=term
 	@echo "$(GREEN)Coverage report generated in $(COVERAGE_DIR)/$(NC)"
 
 .PHONY: coverage-online
-coverage-online: ## Run online tests with coverage
+coverage-online: ## Run online tests with coverage (USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Running online tests with coverage...$(NC)"
-	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term && echo "$(GREEN)Online coverage completed!$(NC)" || echo "$(YELLOW)⚠️  Online coverage skipped (database not available)$(NC)"
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed package$(NC)"; \
+	fi
+	@$(PYTHON) scripts/check_connection.py && $(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term && echo "$(GREEN)Online coverage completed!$(NC)" || echo "$(YELLOW)⚠️  Online coverage skipped (database not available)$(NC)"
 
 # Matrix testing for automation
 .PHONY: test-matrix
-test-matrix: ## Run matrix tests (SQLAlchemy 1.4 + 2.0)
+test-matrix: ## Run matrix tests (SQLAlchemy 1.4 + 2.0, USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Running matrix tests...$(NC)"
 	@echo "$(YELLOW)Testing SQLAlchemy 1.4.x...$(NC)"
 	@$(MAKE) test-sqlalchemy14
@@ -204,21 +252,31 @@ test-matrix: ## Run matrix tests (SQLAlchemy 1.4 + 2.0)
 	@echo "$(GREEN)Matrix tests completed!$(NC)"
 
 .PHONY: test-sqlalchemy14
-test-sqlalchemy14: install-sqlalchemy14 ## Test with SQLAlchemy 1.4.x
+test-sqlalchemy14: install-sqlalchemy14 ## Test with SQLAlchemy 1.4.x (USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Testing with SQLAlchemy 1.4.x...$(NC)"
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed package$(NC)"; \
+	fi
 	@echo "$(YELLOW)Running offline tests...$(NC)"
-	$(PYTHON) -m pytest tests/offline/ -v --tb=short
+	$(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/offline/ -v --tb=short
 	@echo "$(YELLOW)Running online tests...$(NC)"
-	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 1.4.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 1.4.x online tests skipped (database not available)$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 1.4.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 1.4.x online tests skipped (database not available)$(NC)"
 	@echo "$(GREEN)SQLAlchemy 1.4.x tests completed!$(NC)"
 
 .PHONY: test-sqlalchemy20
-test-sqlalchemy20: install-sqlalchemy20 ## Test with SQLAlchemy 2.0.x
+test-sqlalchemy20: install-sqlalchemy20 ## Test with SQLAlchemy 2.0.x (USE_SOURCE=1 for local, USE_SOURCE=0 for installed)
 	@echo "$(BLUE)Testing with SQLAlchemy 2.0.x...$(NC)"
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed package$(NC)"; \
+	fi
 	@echo "$(YELLOW)Running offline tests...$(NC)"
-	$(PYTHON) -m pytest tests/offline/ -v --tb=short
+	$(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/offline/ -v --tb=short
 	@echo "$(YELLOW)Running online tests...$(NC)"
-	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 2.0.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 2.0.x online tests skipped (database not available)$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(TEST_PYTHON_PATH) $(PYTHON) -m pytest tests/online/ -v --tb=short --maxfail=3 && echo "$(GREEN)SQLAlchemy 2.0.x online tests completed!$(NC)" || echo "$(YELLOW)⚠️  SQLAlchemy 2.0.x online tests skipped (database not available)$(NC)"
 	@echo "$(GREEN)SQLAlchemy 2.0.x tests completed!$(NC)"
 
 # Code Quality
@@ -290,37 +348,72 @@ pre-commit: format lint type-check test-offline test-online docs-check ## Run pr
 	@echo "$(GREEN)Pre-commit checks completed!$(NC)"
 
 # Examples
+# Control whether to use local source code or installed package
+# 
+# Usage:
+#   make examples                  # Use local source code (default)
+#   make examples-installed        # Use installed matrixone package
+#   make examples-source           # Explicitly use local source code
+#   make examples USE_SOURCE=0     # Use installed package (via parameter)
+#   make examples USE_SOURCE=1     # Use local source (via parameter)
+#
+# The USE_SOURCE variable controls which matrixone package to use:
+#   USE_SOURCE=1 (default): Add PYTHONPATH=. to use local source code
+#   USE_SOURCE=0: No PYTHONPATH, use installed matrixone package
+#
+USE_SOURCE ?= 1
+EXAMPLE_PYTHON_PATH := $(if $(filter 1,$(USE_SOURCE)),PYTHONPATH=.,)
+
 .PHONY: examples
-examples: ## Run all examples
+examples: ## Run all examples (USE_SOURCE=1 for local code, USE_SOURCE=0 for installed SDK)
 	@echo "$(BLUE)Running all examples...$(NC)"
+	@if [ "$(USE_SOURCE)" = "1" ]; then \
+		echo "$(YELLOW)Using local source code (PYTHONPATH=.)$(NC)"; \
+	else \
+		echo "$(YELLOW)Using installed matrixone package$(NC)"; \
+	fi
 	@for example in examples/example_*.py; do \
 		echo "$(YELLOW)Running $$example...$(NC)"; \
-		PYTHONPATH=. $(PYTHON) "$$example" || echo "$(RED)Example $$example failed$(NC)"; \
+		$(EXAMPLE_PYTHON_PATH) $(PYTHON) "$$example" || echo "$(RED)Example $$example failed$(NC)"; \
 	done
 	@echo "$(GREEN)All examples completed!$(NC)"
+
+.PHONY: examples-installed
+examples-installed: ## Run examples using installed matrixone package
+	@echo "$(BLUE)Running examples with installed matrixone package...$(NC)"
+	@$(MAKE) examples USE_SOURCE=0
+
+.PHONY: examples-source
+examples-source: ## Run examples using local source code (default)
+	@echo "$(BLUE)Running examples with local source code...$(NC)"
+	@$(MAKE) examples USE_SOURCE=1
 
 .PHONY: example-basic
 example-basic: ## Run basic connection example
 	@echo "$(BLUE)Running basic connection example...$(NC)"
-	PYTHONPATH=. $(PYTHON) examples/example_01_basic_connection.py
+	@if [ "$(USE_SOURCE)" = "1" ]; then echo "$(YELLOW)Using local source$(NC)"; fi
+	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_01_basic_connection.py
 	@echo "$(GREEN)Basic example completed!$(NC)"
 
 .PHONY: example-async
 example-async: ## Run async operations example
 	@echo "$(BLUE)Running async operations example...$(NC)"
-	PYTHONPATH=. $(PYTHON) examples/example_03_async_operations.py
+	@if [ "$(USE_SOURCE)" = "1" ]; then echo "$(YELLOW)Using local source$(NC)"; fi
+	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_03_async_operations.py
 	@echo "$(GREEN)Async example completed!$(NC)"
 
 .PHONY: example-vector
 example-vector: ## Run vector search example
 	@echo "$(BLUE)Running vector search example...$(NC)"
-	PYTHONPATH=. $(PYTHON) examples/example_12_vector_search.py
+	@if [ "$(USE_SOURCE)" = "1" ]; then echo "$(YELLOW)Using local source$(NC)"; fi
+	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_12_vector_search.py
 	@echo "$(GREEN)Vector example completed!$(NC)"
 
 .PHONY: example-fulltext
 example-fulltext: ## Run fulltext index example
 	@echo "$(BLUE)Running fulltext index example...$(NC)"
-	PYTHONPATH=. $(PYTHON) examples/example_fulltext_index.py
+	@if [ "$(USE_SOURCE)" = "1" ]; then echo "$(YELLOW)Using local source$(NC)"; fi
+	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_fulltext_index.py
 	@echo "$(GREEN)Fulltext example completed!$(NC)"
 
 # Build and publish
