@@ -53,6 +53,9 @@ Creating Tables with Text Content
 Creating Fulltext Indexes
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Basic Fulltext Indexes
+^^^^^^^^^^^^^^^^^^^^^^^
+
 .. code-block:: python
 
    # Create fulltext index using fulltext_index API
@@ -65,6 +68,205 @@ Creating Fulltext Indexes
 
    # Drop a fulltext index
    client.fulltext_index.drop("articles", "idx_title")
+
+Fulltext Indexes with Parsers
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+MatrixOne supports specialized parsers for different content types:
+
+**JSON Parser** - For searching within JSON documents:
+
+.. code-block:: python
+
+   from matrixone import Client, FulltextParserType
+   from matrixone.orm import declarative_base
+   from sqlalchemy import Column, BigInteger, Text
+
+   client = Client()
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+   
+   # Enable fulltext functionality
+   client.fulltext_index.enable_fulltext()
+   
+   # Method 1: Using ORM with JSON parser
+   Base = declarative_base()
+   
+   class Product(Base):
+       __tablename__ = "products"
+       id = Column(BigInteger, primary_key=True)
+       details = Column(Text)  # Stores JSON as text
+       
+       # Define fulltext index with JSON parser in table definition
+       __table_args__ = (
+           FulltextIndex("ftidx_details", "details", parser=FulltextParserType.JSON),
+       )
+   
+   # Create table with ORM (index is created automatically)
+   client.create_table(Product)
+   
+   # Insert JSON data
+   products = [
+       {"id": 1, "details": '{"name": "Laptop", "brand": "Dell", "price": 1200}'},
+       {"id": 2, "details": '{"name": "Phone", "brand": "Apple", "price": 800}'},
+       {"id": 3, "details": '{"name": "Tablet", "brand": "Samsung", "price": 600}'},
+   ]
+   client.batch_insert(Product, products)
+   
+   # Search within JSON content
+   result = client.query(Product).filter(
+       boolean_match(Product.details).must("Dell")
+   ).execute()
+   
+   for row in result.fetchall():
+       print(f"Found: {row.details}")
+   
+   # Method 2: Create JSON index on existing table
+   client.execute("CREATE TABLE json_docs (id INT PRIMARY KEY, data TEXT)")
+   client.execute(
+       "CREATE FULLTEXT INDEX ftidx_json ON json_docs (data) WITH PARSER json"
+   )
+   
+   # Insert and search JSON data
+   client.execute(
+       "INSERT INTO json_docs VALUES "
+       "(1, '{\"title\": \"Python Tutorial\", \"tags\": [\"python\", \"programming\"]}'), "
+       "(2, '{\"title\": \"Java Guide\", \"tags\": [\"java\", \"programming\"]}'))"
+   )
+   
+   result = client.execute(
+       "SELECT * FROM json_docs WHERE MATCH(data) AGAINST('python' IN BOOLEAN MODE)"
+   )
+   for row in result.fetchall():
+       print(f"ID: {row[0]}, Data: {row[1]}")
+
+**NGRAM Parser** - For Chinese and other Asian languages:
+
+.. code-block:: python
+
+   from matrixone import Client, FulltextParserType
+   from matrixone.orm import declarative_base
+   from matrixone.sqlalchemy_ext import FulltextIndex, natural_match, boolean_match
+   from sqlalchemy import Column, Integer, String, Text
+
+   client = Client()
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+   
+   # Enable fulltext functionality
+   client.fulltext_index.enable_fulltext()
+   
+   # Method 1: Using ORM with NGRAM parser for Chinese content
+   Base = declarative_base()
+   
+   class ChineseArticle(Base):
+       __tablename__ = "chinese_articles"
+       id = Column(Integer, primary_key=True, autoincrement=True)
+       title = Column(String(200))
+       body = Column(Text)
+       
+       # Define fulltext index with NGRAM parser for Chinese tokenization
+       __table_args__ = (
+           FulltextIndex("ftidx_chinese", ["title", "body"], parser=FulltextParserType.NGRAM),
+       )
+   
+   # Create table with ORM (index is created automatically)
+   client.create_table(ChineseArticle)
+   
+   # Insert Chinese content
+   articles = [
+       {"id": 1, "title": "神雕侠侣 第一回", "body": "越女采莲秋水畔，窄袖轻罗，暗露双金钏"},
+       {"id": 2, "title": "神雕侠侣 第二回", "body": "正自发痴，忽听左首屋中传出一人喝道"},
+       {"id": 3, "title": "神雕侠侣 第三回", "body": "郭靖在舟中潜运神功，数日间伤势便已痊愈了大半"},
+   ]
+   client.batch_insert(ChineseArticle, articles)
+   
+   # Search Chinese content with natural language mode
+   result = client.query(ChineseArticle).filter(
+       natural_match(ChineseArticle.title, ChineseArticle.body, query="神雕侠侣")
+   ).execute()
+   
+   print(f"Found {len(result.fetchall())} articles about 神雕侠侣")
+   
+   # Search with boolean mode
+   result = client.query(ChineseArticle).filter(
+       boolean_match(ChineseArticle.title, ChineseArticle.body).must("郭靖")
+   ).execute()
+   
+   for row in result.fetchall():
+       print(f"Title: {row.title}, Body: {row.body[:20]}...")
+   
+   # Method 2: Create NGRAM index on existing table
+   client.execute(
+       "CREATE TABLE chinese_docs ("
+       "id INT PRIMARY KEY, "
+       "title VARCHAR(200), "
+       "content TEXT"
+       ")"
+   )
+   
+   client.execute(
+       "CREATE FULLTEXT INDEX ftidx_ngram ON chinese_docs (title, content) "
+       "WITH PARSER ngram"
+   )
+   
+   # Insert and search Chinese content
+   client.execute(
+       "INSERT INTO chinese_docs VALUES "
+       "(1, 'MO全文索引示例', '这是一个关于MO全文索引的例子'), "
+       "(2, 'ngram解析器', 'ngram解析器允许MO对中文进行分词')"
+   )
+   
+   result = client.execute(
+       "SELECT * FROM chinese_docs "
+       "WHERE MATCH(title, content) AGAINST('全文索引' IN NATURAL LANGUAGE MODE)"
+   )
+   
+   for row in result.fetchall():
+       print(f"Title: {row[1]}, Content: {row[2]}")
+
+**Mixed Content (English + Chinese)**:
+
+.. code-block:: python
+
+   from matrixone import Client, FulltextParserType
+   from matrixone.orm import declarative_base
+   from matrixone.sqlalchemy_ext import FulltextIndex, natural_match
+   from sqlalchemy import Column, Integer, String, Text
+
+   client = Client()
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+   client.fulltext_index.enable_fulltext()
+   
+   Base = declarative_base()
+   
+   class MixedContent(Base):
+       __tablename__ = "mixed_articles"
+       id = Column(Integer, primary_key=True, autoincrement=True)
+       title = Column(String(255))
+       content = Column(Text)
+       
+       # NGRAM parser works well for mixed English/Chinese content
+       __table_args__ = (
+           FulltextIndex("ftidx_mixed", ["title", "content"], parser=FulltextParserType.NGRAM),
+       )
+   
+   client.create_table(MixedContent)
+   
+   # Insert mixed content
+   articles = [
+       {"id": 1, "title": "MO全文索引示例", "content": "这是关于MO fulltext index的例子"},
+       {"id": 2, "title": "Python教程", "content": "Learn Python programming with 中文教程"},
+   ]
+   client.batch_insert(MixedContent, articles)
+   
+   # Search for Chinese terms
+   result = client.query(MixedContent).filter(
+       natural_match(MixedContent.title, MixedContent.content, query="全文索引")
+   ).execute()
+   
+   # Search for English terms
+   result = client.query(MixedContent).filter(
+       natural_match(MixedContent.title, MixedContent.content, query="Python")
+   ).execute()
 
 Inserting Text Data
 ~~~~~~~~~~~~~~~~~~~

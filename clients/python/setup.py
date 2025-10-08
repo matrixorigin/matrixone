@@ -86,17 +86,22 @@ setup(
         "dev": [
             "pytest>=6.0",
             "pytest-asyncio>=0.18.0",
+            "pytest-cov>=3.0",
+            "Faker>=10.0.0",
             "black>=22.0",
             "flake8>=4.0",
             "mypy>=0.950",
+            "isort>=5.0",
             "sphinx>=4.0",
             "sphinx-rtd-theme>=1.0",
+            "build>=0.8.0",
+            "twine>=4.0.0",
         ],
-        "async": [
-            "aiomysql>=0.1.0",
-        ],
-        "sqlalchemy": [
-            "sqlalchemy>=1.4.0",
+        "test": [
+            "pytest>=6.0",
+            "pytest-asyncio>=0.18.0",
+            "pytest-cov>=3.0",
+            "Faker>=10.0.0",
         ],
     },
     keywords="matrixone, database, sql, python, sdk, sqlalchemy, async, fulltext, search, vector, similarity, ai, ml, embedding, hnsw, ivf",

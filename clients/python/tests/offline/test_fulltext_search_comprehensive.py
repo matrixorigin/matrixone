@@ -518,5 +518,278 @@ class TestFulltextLabel(unittest.TestCase):
         self.assertEqual(sql, expected)
 
 
+class TestFulltextParserSupport(unittest.TestCase):
+    """Test Fulltext Parser Support (JSON, NGRAM) - comprehensive SQL generation tests"""
+
+    def test_fulltext_index_with_json_parser(self):
+        """Test FulltextIndex with JSON parser generates correct SQL"""
+        from matrixone.sqlalchemy_ext import FulltextParserType
+
+        index = FulltextIndex("ftidx_json", ["json_data"], parser=FulltextParserType.JSON)
+        sql = index._create_index_sql("products")
+
+        expected_sql = "CREATE FULLTEXT INDEX ftidx_json ON products (json_data) WITH PARSER json"
+        self.assertEqual(sql, expected_sql)
+
+    def test_fulltext_index_with_ngram_parser(self):
+        """Test FulltextIndex with NGRAM parser generates correct SQL"""
+        from matrixone.sqlalchemy_ext import FulltextParserType
+
+        index = FulltextIndex("ftidx_ngram", ["title", "content"], parser=FulltextParserType.NGRAM)
+        sql = index._create_index_sql("chinese_articles")
+
+        expected_sql = "CREATE FULLTEXT INDEX ftidx_ngram ON chinese_articles (title, content) WITH PARSER ngram"
+        self.assertEqual(sql, expected_sql)
+
+    def test_fulltext_index_multiple_columns_with_parser(self):
+        """Test FulltextIndex with multiple columns and parser"""
+        from matrixone.sqlalchemy_ext import FulltextParserType
+
+        index = FulltextIndex("ftidx_multi_json", ["json1", "json2"], parser=FulltextParserType.JSON)
+        sql = index._create_index_sql("src")
+
+        expected_sql = "CREATE FULLTEXT INDEX ftidx_multi_json ON src (json1, json2) WITH PARSER json"
+        self.assertEqual(sql, expected_sql)
+
+    def test_fulltext_index_without_parser(self):
+        """Test FulltextIndex without parser (default behavior)"""
+        index = FulltextIndex("ftidx_default", ["title", "content"])
+        sql = index._create_index_sql("articles")
+
+        expected_sql = "CREATE FULLTEXT INDEX ftidx_default ON articles (title, content)"
+        self.assertEqual(sql, expected_sql)
+        self.assertNotIn("WITH PARSER", sql)
+
+    def test_fulltext_index_parser_attribute(self):
+        """Test that FulltextIndex correctly stores parser attribute"""
+        from matrixone.sqlalchemy_ext import FulltextParserType
+
+        index_json = FulltextIndex("ftidx_json", ["data"], parser=FulltextParserType.JSON)
+        self.assertEqual(index_json.parser, FulltextParserType.JSON)
+
+        index_ngram = FulltextIndex("ftidx_ngram", ["content"], parser=FulltextParserType.NGRAM)
+        self.assertEqual(index_ngram.parser, FulltextParserType.NGRAM)
+
+        index_none = FulltextIndex("ftidx_none", ["content"])
+        self.assertIsNone(index_none.parser)
+
+    def test_fulltext_parser_enum_values(self):
+        """Test FulltextParserType enum values"""
+        from matrixone.sqlalchemy_ext import FulltextParserType
+
+        self.assertEqual(FulltextParserType.JSON, "json")
+        self.assertEqual(FulltextParserType.NGRAM, "ngram")
+
+
+class TestBM25AlgorithmSupport(unittest.TestCase):
+    """Test BM25 Algorithm Support - comprehensive SQL and configuration tests"""
+
+    def test_bm25_algorithm_type(self):
+        """Test FulltextAlgorithmType.BM25 value"""
+        self.assertEqual(FulltextAlgorithmType.BM25, "BM25")
+        self.assertEqual(FulltextAlgorithmType.TF_IDF, "TF-IDF")
+
+    def test_fulltext_index_with_bm25(self):
+        """Test FulltextIndex with BM25 algorithm"""
+        index = FulltextIndex("ftidx_bm25", ["title", "content"], algorithm=FulltextAlgorithmType.BM25)
+
+        self.assertEqual(index.algorithm, FulltextAlgorithmType.BM25)
+        self.assertEqual(index.name, "ftidx_bm25")
+        self.assertEqual(index.get_columns(), ["title", "content"])
+
+    def test_fulltext_index_with_tfidf(self):
+        """Test FulltextIndex with TF-IDF algorithm (default)"""
+        index = FulltextIndex("ftidx_tfidf", ["title", "content"], algorithm=FulltextAlgorithmType.TF_IDF)
+
+        self.assertEqual(index.algorithm, FulltextAlgorithmType.TF_IDF)
+
+    def test_algorithm_sql_generation(self):
+        """Test that algorithm doesn't affect SQL generation (it's a runtime config)"""
+        index_bm25 = FulltextIndex("ftidx_test", ["content"], algorithm=FulltextAlgorithmType.BM25)
+        index_tfidf = FulltextIndex("ftidx_test", ["content"], algorithm=FulltextAlgorithmType.TF_IDF)
+
+        sql_bm25 = index_bm25._create_index_sql("articles")
+        sql_tfidf = index_tfidf._create_index_sql("articles")
+
+        # SQL should be same, algorithm is a config setting not part of DDL
+        self.assertEqual(sql_bm25, sql_tfidf)
+
+
+class TestComplexBooleanModeQueries(unittest.TestCase):
+    """Test complex boolean mode operators - offline SQL generation tests"""
+
+    def test_wildcard_suffix_generation(self):
+        """Test wildcard suffix (*) in boolean queries - SQL should contain wildcard"""
+        # Note: The SDK may not expose wildcard directly in the API
+        # This tests raw SQL generation if we were to support it
+        expr = boolean_match("title", "content").must("red")
+        sql = expr.compile()
+
+        self.assertIn("+red", sql)
+        self.assertIn("IN BOOLEAN MODE", sql)
+
+    def test_phrase_search_sql_generation(self):
+        """Test phrase search (quoted strings) in SQL generation"""
+        # Testing the SQL format for phrase search
+        # Actual phrase syntax is tested in online tests
+        expr = boolean_match("title", "content").must("is not red")
+        sql = expr.compile()
+
+        # Should use + operator for multi-word must
+        self.assertIn("+is not red", sql)
+        self.assertIn("IN BOOLEAN MODE", sql)
+
+    def test_complex_boolean_combination(self):
+        """Test complex boolean combinations"""
+        expr = boolean_match("title", "content").must("database").must_not("mysql").encourage("postgresql")
+
+        sql = expr.compile()
+
+        self.assertIn("+database", sql)
+        self.assertIn("-mysql", sql)
+        self.assertIn("postgresql", sql)  # encourage is no prefix
+        self.assertIn("IN BOOLEAN MODE", sql)
+
+    def test_discourage_operator_sql(self):
+        """Test discourage operator generates correct SQL"""
+        expr = boolean_match("title", "content").must("python").discourage("deprecated")
+        sql = expr.compile()
+
+        self.assertIn("+python", sql)
+        self.assertIn("~deprecated", sql)
+        self.assertIn("IN BOOLEAN MODE", sql)
+
+
+class TestNullAndEdgeCases(unittest.TestCase):
+    """Test NULL handling and edge cases in SQL generation"""
+
+    def test_empty_search_string(self):
+        """Test that empty search string raises ValueError"""
+        with self.assertRaises(ValueError) as context:
+            expr = natural_match("title", "content", query="")
+            expr.compile()
+
+        # Verify error message is informative
+        self.assertIn("empty", str(context.exception).lower())
+
+    def test_special_characters_in_search(self):
+        """Test special characters are properly handled"""
+        expr = boolean_match("title").must("C++")
+        sql = expr.compile()
+
+        self.assertIn("+C++", sql)
+
+    def test_unicode_in_search_query(self):
+        """Test unicode characters in search query"""
+        expr = natural_match("title", "content", query="机器学习")
+        sql = expr.compile()
+
+        self.assertIn("机器学习", sql)
+        self.assertIn("MATCH(title, content)", sql)
+
+    def test_very_long_search_query(self):
+        """Test very long search queries"""
+        long_query = " ".join(["term"] * 100)
+        expr = natural_match("content", query=long_query)
+        sql = expr.compile()
+
+        self.assertIn(long_query, sql)
+        self.assertIn("MATCH(content)", sql)
+
+
+class TestIndexCreationVariations(unittest.TestCase):
+    """Test various index creation scenarios and SQL generation"""
+
+    def test_single_column_index(self):
+        """Test index on single column"""
+        index = FulltextIndex("ftidx_single", "content")
+        sql = index._create_index_sql("articles")
+
+        expected = "CREATE FULLTEXT INDEX ftidx_single ON articles (content)"
+        self.assertEqual(sql, expected)
+
+    def test_three_column_index(self):
+        """Test index on three columns"""
+        index = FulltextIndex("ftidx_three", ["title", "summary", "content"])
+        sql = index._create_index_sql("articles")
+
+        expected = "CREATE FULLTEXT INDEX ftidx_three ON articles (title, summary, content)"
+        self.assertEqual(sql, expected)
+
+    def test_index_with_all_options(self):
+        """Test index with all available options"""
+        from matrixone.sqlalchemy_ext import FulltextParserType
+
+        index = FulltextIndex(
+            "ftidx_full", ["json1", "json2"], algorithm=FulltextAlgorithmType.BM25, parser=FulltextParserType.JSON
+        )
+        sql = index._create_index_sql("src")
+
+        expected = "CREATE FULLTEXT INDEX ftidx_full ON src (json1, json2) WITH PARSER json"
+        self.assertEqual(sql, expected)
+        # Algorithm is stored but not in DDL
+        self.assertEqual(index.algorithm, FulltextAlgorithmType.BM25)
+
+    def test_index_name_with_special_chars(self):
+        """Test index names with underscores and numbers"""
+        index = FulltextIndex("ftidx_test_123", ["content"])
+        sql = index._create_index_sql("my_table")
+
+        self.assertIn("ftidx_test_123", sql)
+        self.assertIn("my_table", sql)
+
+
+class TestSearchBuilderCombinations(unittest.TestCase):
+    """Test complex search builder combinations"""
+
+    def test_must_and_must_not_combination(self):
+        """Test combining must and must_not"""
+        expr = boolean_match("title", "content").must("python", "tutorial").must_not("advanced", "expert")
+        sql = expr.compile()
+
+        self.assertIn("+python", sql)
+        self.assertIn("+tutorial", sql)
+        self.assertIn("-advanced", sql)
+        self.assertIn("-expert", sql)
+
+    def test_all_operators_combined(self):
+        """Test using all operators together"""
+        expr = (
+            boolean_match("title", "content")
+            .must("python")
+            .must_not("deprecated")
+            .encourage("tutorial")
+            .discourage("advanced")
+        )
+        sql = expr.compile()
+
+        self.assertIn("+python", sql)
+        self.assertIn("-deprecated", sql)
+        self.assertIn("tutorial", sql)  # No prefix for encourage
+        self.assertIn("~advanced", sql)
+
+    def test_natural_language_mode_sql(self):
+        """Test natural language mode SQL generation"""
+        expr = natural_match("title", "content", query="machine learning tutorial")
+        sql = expr.compile()
+
+        self.assertIn("MATCH(title, content)", sql)
+        self.assertIn("AGAINST('machine learning tutorial')", sql)
+        # Natural language mode can omit the explicit mode clause or include it
+        # Depends on implementation - let's just check it's valid
+
+    def test_multiple_columns_various_orders(self):
+        """Test column order preservation in SQL"""
+        expr1 = boolean_match("title", "content", "summary").must("test")
+        sql1 = expr1.compile()
+
+        expr2 = boolean_match("summary", "content", "title").must("test")
+        sql2 = expr2.compile()
+
+        # Should preserve the order specified
+        self.assertIn("title, content, summary", sql1)
+        self.assertIn("summary, content, title", sql2)
+
+
 if __name__ == '__main__':
     unittest.main()

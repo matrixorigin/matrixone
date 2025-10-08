@@ -1010,27 +1010,86 @@ def boolean_match(*columns) -> FulltextFilter:
 
 
 def natural_match(*columns, query: str) -> FulltextFilter:
-    """Create a natural language mode fulltext filter for specified columns.
+    """
+    Create a natural language mode fulltext filter for specified columns.
 
-    Args::
+    Natural language mode provides user-friendly search with automatic processing:
+    - Stopword removal (e.g., 'the', 'a', 'an')
+    - Stemming and variations
+    - Relevance scoring based on TF-IDF or BM25 algorithm
+    - Best for end-user search interfaces
 
+    Args:
         *columns: Column names or SQLAlchemy Column objects to search against
+            - Must exactly match the columns in your fulltext index
+            - Can be strings or Column objects
         query: Natural language query string
+            - User-friendly search terms
+            - Automatically processed for best results
+            - Multi-word queries are supported
 
-    Important:
-        **Column Matching Restriction**: The columns specified in MATCH() must exactly
-        match the columns defined in the FULLTEXT index. For example, if your index
-        is `FULLTEXT(title, content, tags)`, you must use:
-        - ✅ `natural_match("title", "content", "tags", query="...")` - Correct (exact match)
-        - ❌ `natural_match("title", "content", query="...")` - Error (partial match)
-        - ❌ `natural_match("title", query="...")` - Error (single field from multi-field index)
+    Important - Column Matching:
+        The columns specified in MATCH() must exactly match the columns defined in
+        the FULLTEXT index. Mismatches will cause errors.
 
-    Examples
-        # Natural language search (assuming index: FULLTEXT(title, content, tags))
-        natural_match("title", "content", "tags", query="machine learning AI")
+        Examples:
+            If index is: FULLTEXT(title, content)
+            - ✅ natural_match("title", "content", query="...")  - Correct
+            - ❌ natural_match("title", query="...")             - Error (partial)
+            - ❌ natural_match("content", query="...")           - Error (partial)
 
-        # Using SQLAlchemy Column objects
-        natural_match(Article.title, Article.content, Article.tags, query="web development best practices")
+            If index is: FULLTEXT(content)
+            - ✅ natural_match("content", query="...")           - Correct
+            - ❌ natural_match("title", "content", query="...")  - Error (extra column)
+
+    Parser Compatibility:
+        Works with all parser types:
+        - Default parser: Standard text tokenization
+        - JSON parser: Searches JSON values within documents
+        - NGRAM parser: Chinese and Asian language tokenization
+
+    Returns:
+        FulltextFilter: A fulltext filter object for use in queries
+
+    Examples::
+    
+        # Basic natural language search
+        result = client.query("articles.id", "articles.title", "articles.content").filter(
+            natural_match("title", "content", query="machine learning")
+        ).execute()
+        
+        # Using with ORM models
+        result = client.query(Article).filter(
+            natural_match(Article.title, Article.content, query="artificial intelligence")
+        ).execute()
+        
+        # Single column search
+        result = client.query(Article).filter(
+            natural_match(Article.content, query="python programming")
+        ).execute()
+        
+        # With relevance scoring
+        result = client.query(
+            Article.id,
+            Article.title,
+            Article.content,
+            natural_match(Article.content, query="deep learning").label("score")
+        ).execute()
+        
+        # JSON parser - searching within JSON documents
+        result = client.query(Product).filter(
+            natural_match(Product.details, query="Dell laptop")
+        ).execute()
+        
+        # NGRAM parser - Chinese content search
+        result = client.query(ChineseArticle).filter(
+            natural_match(ChineseArticle.title, ChineseArticle.body, query="神雕侠侣")
+        ).execute()
+        
+        # Combined with SQL filters
+        result = client.query(Article).filter(
+            natural_match(Article.content, query="programming tutorial")
+        ).filter(Article.category == "Education").execute()
     """
     # Convert columns to strings
     column_names = []

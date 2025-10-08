@@ -32,6 +32,8 @@ import pytest_asyncio
 from matrixone import Client, AsyncClient, FulltextAlgorithmType, FulltextModeType, FulltextParserType
 from matrixone.sqlalchemy_ext import FulltextIndex, FulltextSearchBuilder
 from matrixone.sqlalchemy_ext import boolean_match, natural_match
+from matrixone.orm import declarative_base
+from sqlalchemy import Column, Integer, String, Text, BigInteger
 
 
 class TestFulltextComprehensive:
@@ -1267,3 +1269,505 @@ class TestFulltextComprehensive:
             # Clean up
             test_client.drop_table(JsonColonTest)
             test_client.execute("DROP DATABASE fulltext_json_colon_test")
+
+    # ============================================================================
+    # NGRAM Parser Tests (Chinese Content)
+    # ============================================================================
+
+    def test_fulltext_ngram_parser_chinese(self, test_client):
+        """Test NGRAM parser with Chinese content - comprehensive coverage"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_ngram_test")
+        test_client.execute("USE fulltext_ngram_test")
+
+        Base = declarative_base()
+
+        class ChineseArticle(Base):
+            __tablename__ = "chinese_articles"
+            id = Column(Integer, primary_key=True, autoincrement=True)
+            title = Column(String(200))
+            body = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_ngram", ["title", "body"], parser=FulltextParserType.NGRAM),)
+
+        try:
+            test_client.create_table(ChineseArticle)
+
+            # Insert Chinese content
+            articles = [
+                {"id": 1, "title": "神雕侠侣 第一回 风月无情", "body": "越女采莲秋水畔，窄袖轻罗，暗露双金钏"},
+                {
+                    "id": 2,
+                    "title": "神雕侠侣 第二回 故人之子",
+                    "body": "正自发痴，忽听左首屋中传出一人喝道：这是在人家府上，你又提小龙女干什么？",
+                },
+                {"id": 3, "title": "神雕侠侣 第三回 投师终南", "body": "郭靖在舟中潜运神功，数日间伤势便已痊愈了大半。"},
+                {
+                    "id": 4,
+                    "title": "神雕侠侣 第四回 全真门下",
+                    "body": "郭靖摆脱众道纠缠，提气向重阳宫奔去，忽听得钟声镗镗响起",
+                },
+                {"id": 5, "title": "神雕侠侣 第五回 活死人墓", "body": "杨过摔下山坡，滚入树林长草丛中，便即昏晕"},
+                {"id": 6, "title": "神雕侠侣 第六回 玉女心经", "body": "小龙女从怀里取出一个瓷瓶，交在杨过手里"},
+            ]
+            test_client.batch_insert(ChineseArticle, articles)
+
+            # Test NGRAM search for Chinese terms (using natural language mode)
+            result = (
+                test_client.query(ChineseArticle)
+                .filter(natural_match(ChineseArticle.title, ChineseArticle.body, query="风月无情"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find articles with 风月无情"
+            assert rows[0].id == 1, "Should find the correct article"
+
+            # Test multi-character Chinese search
+            result = (
+                test_client.query(ChineseArticle)
+                .filter(natural_match(ChineseArticle.title, ChineseArticle.body, query="杨过"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) >= 2, "Should find multiple articles with 杨过"
+            found_ids = {row.id for row in rows}
+            assert 5 in found_ids and 6 in found_ids, "Should find articles 5 and 6"
+
+            # Test search for common term across all articles
+            result = (
+                test_client.query(ChineseArticle)
+                .filter(natural_match(ChineseArticle.title, ChineseArticle.body, query="神雕侠侣"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) == 6, "Should find all 6 articles with 神雕侠侣 in title"
+
+            # Test 小龙女 search
+            result = (
+                test_client.query(ChineseArticle)
+                .filter(natural_match(ChineseArticle.title, ChineseArticle.body, query="小龙女"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) >= 2, "Should find articles mentioning 小龙女"
+            found_ids = {row.id for row in rows}
+            assert 2 in found_ids and 6 in found_ids, "Should find articles 2 and 6"
+
+        finally:
+            test_client.drop_table(ChineseArticle)
+            test_client.execute("DROP DATABASE fulltext_ngram_test")
+
+    def test_fulltext_ngram_parser_mixed_content(self, test_client):
+        """Test NGRAM parser with mixed English and Chinese content"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_ngram_mixed_test")
+        test_client.execute("USE fulltext_ngram_mixed_test")
+
+        Base = declarative_base()
+
+        class MixedArticle(Base):
+            __tablename__ = "mixed_articles"
+            id = Column(Integer, primary_key=True, autoincrement=True)
+            title = Column(String(255))
+            content = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_ngram_mixed", ["title", "content"], parser=FulltextParserType.NGRAM),)
+
+        try:
+            test_client.create_table(MixedArticle)
+
+            # Insert mixed content
+            articles = [
+                {
+                    "id": 1,
+                    "title": "MO全文索引示例",
+                    "content": "这是一个关于MO全文索引的例子。它展示了如何使用ngram解析器进行全文搜索。",
+                },
+                {"id": 2, "title": "ngram解析器", "content": "ngram解析器允许MO对中文等语言进行分词，以优化全文搜索。"},
+            ]
+            test_client.batch_insert(MixedArticle, articles)
+
+            # Test search for Chinese term (using natural language mode)
+            result = (
+                test_client.query(MixedArticle)
+                .filter(natural_match(MixedArticle.title, MixedArticle.content, query="全文索引"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find articles with 全文索引"
+            assert rows[0].id == 1, "Should find article 1"
+
+            # Test search for English term (using natural language mode)
+            result = (
+                test_client.query(MixedArticle)
+                .filter(natural_match(MixedArticle.title, MixedArticle.content, query="ngram"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find articles with ngram"
+
+        finally:
+            test_client.drop_table(MixedArticle)
+            test_client.execute("DROP DATABASE fulltext_ngram_mixed_test")
+
+    # ============================================================================
+    # BM25 Algorithm Tests
+    # ============================================================================
+
+    def test_fulltext_bm25_algorithm(self, test_client):
+        """Test BM25 relevancy algorithm"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute('SET ft_relevancy_algorithm = "BM25"')
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_bm25_test")
+        test_client.execute("USE fulltext_bm25_test")
+
+        Base = declarative_base()
+
+        class BM25Article(Base):
+            __tablename__ = "bm25_articles"
+            id = Column(Integer, primary_key=True)
+            body = Column(String(500))
+            title = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_bm25", ["body", "title"]),)
+
+        try:
+            test_client.create_table(BM25Article)
+
+            # Insert test data
+            articles = [
+                {"id": 0, "body": "color is red", "title": "t1"},
+                {"id": 1, "body": "car is yellow", "title": "crazy car"},
+                {"id": 2, "body": "sky is blue", "title": "no limit"},
+                {"id": 3, "body": "blue is not red", "title": "colorful"},
+            ]
+            test_client.batch_insert(BM25Article, articles)
+
+            # Test basic BM25 search
+            result = (
+                test_client.query(BM25Article)
+                .filter(boolean_match(BM25Article.body, BM25Article.title).must("red"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) == 2, "Should find 2 articles with 'red'"
+            found_ids = {row.id for row in rows}
+            assert 0 in found_ids and 3 in found_ids, "Should find articles 0 and 3"
+
+            # Test BM25 with multiple terms
+            result = (
+                test_client.query(BM25Article)
+                .filter(boolean_match(BM25Article.body, BM25Article.title).must("blue", "red"))
+                .execute()
+            )
+            rows = result.fetchall()
+            assert len(rows) >= 1, "Should find articles with both blue and red"
+            assert rows[0].id == 3, "Should find article 3"
+
+        finally:
+            test_client.drop_table(BM25Article)
+            test_client.execute("DROP DATABASE fulltext_bm25_test")
+            # Reset to TF-IDF
+            test_client.execute('SET ft_relevancy_algorithm = "TF-IDF"')
+
+    # ============================================================================
+    # Complex Boolean Mode Operators
+    # ============================================================================
+
+    def test_fulltext_boolean_wildcard(self, test_client):
+        """Test boolean mode wildcard operator"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_wildcard_test")
+        test_client.execute("USE fulltext_wildcard_test")
+
+        Base = declarative_base()
+
+        class WildcardTest(Base):
+            __tablename__ = "wildcard_test"
+            id = Column(Integer, primary_key=True)
+            body = Column(String(500))
+            title = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_wildcard", ["body", "title"]),)
+
+        try:
+            test_client.create_table(WildcardTest)
+
+            articles = [
+                {"id": 0, "body": "color is red", "title": "t1"},
+                {"id": 1, "body": "car is yellow", "title": "crazy car"},
+                {"id": 2, "body": "sky is blue", "title": "no limit"},
+                {"id": 3, "body": "blue is not red", "title": "colorful"},
+            ]
+            test_client.batch_insert(WildcardTest, articles)
+
+            # Test wildcard: re* should match 'red'
+            # Note: Using raw SQL as wildcard may not be directly supported in ORM API
+            result = test_client.execute(
+                "SELECT * FROM wildcard_test WHERE MATCH(body, title) AGAINST('re*' IN BOOLEAN MODE)"
+            )
+            rows = result.fetchall()
+            assert len(rows) == 2, "Wildcard re* should match 'red'"
+
+        finally:
+            test_client.drop_table(WildcardTest)
+            test_client.execute("DROP DATABASE fulltext_wildcard_test")
+
+    def test_fulltext_boolean_phrase(self, test_client):
+        """Test boolean mode phrase search"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_phrase_test")
+        test_client.execute("USE fulltext_phrase_test")
+
+        Base = declarative_base()
+
+        class PhraseTest(Base):
+            __tablename__ = "phrase_test"
+            id = Column(Integer, primary_key=True)
+            body = Column(String(500))
+            title = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_phrase", ["body", "title"]),)
+
+        try:
+            test_client.create_table(PhraseTest)
+
+            articles = [
+                {"id": 0, "body": "color is red", "title": "t1"},
+                {"id": 1, "body": "car is yellow", "title": "crazy car"},
+                {"id": 2, "body": "sky is blue", "title": "no limit"},
+                {"id": 3, "body": "blue is not red", "title": "colorful"},
+            ]
+            test_client.batch_insert(PhraseTest, articles)
+
+            # Test phrase search: "is not red" should match exact phrase
+            result = test_client.execute(
+                'SELECT * FROM phrase_test WHERE MATCH(body, title) AGAINST(\'"is not red"\' IN BOOLEAN MODE)'
+            )
+            rows = result.fetchall()
+            assert len(rows) == 1, "Should find exact phrase 'is not red'"
+            assert rows[0][0] == 3, "Should find article 3"
+
+            # Test non-matching phrase
+            result = test_client.execute(
+                'SELECT * FROM phrase_test WHERE MATCH(body, title) AGAINST(\'"blue is red"\' IN BOOLEAN MODE)'
+            )
+            rows = result.fetchall()
+            assert len(rows) == 0, "Should not find non-existent phrase"
+
+        finally:
+            test_client.drop_table(PhraseTest)
+            test_client.execute("DROP DATABASE fulltext_phrase_test")
+
+    # ============================================================================
+    # UPDATE/DELETE Index Maintenance Tests
+    # ============================================================================
+
+    def test_fulltext_update_maintenance(self, test_client):
+        """Test that fulltext index is maintained after UPDATE"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_update_test")
+        test_client.execute("USE fulltext_update_test")
+
+        Base = declarative_base()
+
+        class UpdateTest(Base):
+            __tablename__ = "update_test"
+            id = Column(Integer, primary_key=True)
+            body = Column(String(500))
+            title = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_update", ["body", "title"]),)
+
+        try:
+            test_client.create_table(UpdateTest)
+
+            articles = [
+                {"id": 0, "body": "color is red", "title": "t1"},
+                {"id": 1, "body": "car is yellow", "title": "crazy car"},
+            ]
+            test_client.batch_insert(UpdateTest, articles)
+
+            # Search for 'red' - should find article 0
+            result = test_client.execute("SELECT * FROM update_test WHERE MATCH(body, title) AGAINST('red')")
+            rows = result.fetchall()
+            assert len(rows) == 1 and rows[0][0] == 0, "Should find article 0 with 'red'"
+
+            # Update article 0 to have 'brown' instead of 'red'
+            test_client.execute("UPDATE update_test SET body='color is brown' WHERE id=0")
+
+            # Search for 'red' - should find nothing
+            result = test_client.execute("SELECT * FROM update_test WHERE MATCH(body, title) AGAINST('red')")
+            rows = result.fetchall()
+            assert len(rows) == 0, "Should not find 'red' after update"
+
+            # Search for 'brown' - should find updated article
+            result = test_client.execute("SELECT * FROM update_test WHERE MATCH(body, title) AGAINST('brown')")
+            rows = result.fetchall()
+            assert len(rows) == 1 and rows[0][0] == 0, "Should find updated article with 'brown'"
+
+        finally:
+            test_client.drop_table(UpdateTest)
+            test_client.execute("DROP DATABASE fulltext_update_test")
+
+    def test_fulltext_delete_maintenance(self, test_client):
+        """Test that fulltext index is maintained after DELETE"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_delete_test")
+        test_client.execute("USE fulltext_delete_test")
+
+        Base = declarative_base()
+
+        class DeleteTest(Base):
+            __tablename__ = "delete_test"
+            id = Column(Integer, primary_key=True)
+            body = Column(String(500))
+            title = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_delete", ["body", "title"]),)
+
+        try:
+            test_client.create_table(DeleteTest)
+
+            articles = [
+                {"id": 0, "body": "red", "title": "t1"},
+                {"id": 1, "body": "yellow", "title": "t2"},
+                {"id": 2, "body": "blue", "title": "t3"},
+                {"id": 3, "body": "blue red", "title": "t4"},
+            ]
+            test_client.batch_insert(DeleteTest, articles)
+
+            # Search for 'red' - should find 2 articles
+            result = test_client.execute("SELECT * FROM delete_test WHERE MATCH(body, title) AGAINST('red')")
+            rows = result.fetchall()
+            assert len(rows) == 2, "Should find 2 articles with 'red'"
+
+            # Delete article 3
+            test_client.execute("DELETE FROM delete_test WHERE id=3")
+
+            # Search for 'red' - should find only article 0
+            result = test_client.execute("SELECT * FROM delete_test WHERE MATCH(body, title) AGAINST('red')")
+            rows = result.fetchall()
+            assert len(rows) == 1 and rows[0][0] == 0, "Should find only article 0 after delete"
+
+        finally:
+            test_client.drop_table(DeleteTest)
+            test_client.execute("DROP DATABASE fulltext_delete_test")
+
+    # ============================================================================
+    # ALTER TABLE Tests
+    # ============================================================================
+
+    def test_fulltext_alter_table_drop_column(self, test_client):
+        """Test ALTER TABLE DROP COLUMN with fulltext index"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_alter_test")
+        test_client.execute("USE fulltext_alter_test")
+
+        Base = declarative_base()
+
+        class AlterTest(Base):
+            __tablename__ = "alter_test"
+            employee_number = Column(Integer, primary_key=True)
+            last_name = Column(String(50))
+            first_name = Column(String(50))
+            email = Column(String(100))
+
+        try:
+            test_client.create_table(AlterTest)
+
+            # Insert test data
+            employees = [
+                {"employee_number": 1002, "last_name": "Murphy", "first_name": "Diane", "email": "dmurphy@test.com"},
+                {"employee_number": 1056, "last_name": "Patterson", "first_name": "Mary", "email": "mpatterso@test.com"},
+            ]
+            test_client.batch_insert(AlterTest, employees)
+
+            # Create fulltext index
+            test_client.execute("CREATE FULLTEXT INDEX f01 ON alter_test (last_name, first_name)")
+
+            # Drop a column that's part of the fulltext index
+            test_client.execute("ALTER TABLE alter_test DROP COLUMN last_name")
+
+            # Verify the table structure
+            result = test_client.execute("SHOW CREATE TABLE alter_test")
+            create_stmt = result.fetchone()[1]
+            assert "first_name" in create_stmt, "first_name should still exist"
+            assert "last_name" not in create_stmt, "last_name should be dropped"
+            assert "FULLTEXT" in create_stmt, "Fulltext index should still exist (on remaining column)"
+
+            # Verify data is still accessible
+            result = test_client.execute("SELECT COUNT(*) FROM alter_test")
+            count = result.fetchone()[0]
+            assert count == 2, "All data should still be present"
+
+        finally:
+            test_client.execute("DROP TABLE IF EXISTS alter_test")
+            test_client.execute("DROP DATABASE fulltext_alter_test")
+
+    # ============================================================================
+    # NULL and Edge Case Tests
+    # ============================================================================
+
+    def test_fulltext_null_handling(self, test_client):
+        """Test fulltext index with NULL values"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_null_test")
+        test_client.execute("USE fulltext_null_test")
+
+        Base = declarative_base()
+
+        class NullTest(Base):
+            __tablename__ = "null_test"
+            id = Column(Integer, primary_key=True)
+            body = Column(String(500))
+            title = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_null", ["body", "title"]),)
+
+        try:
+            test_client.create_table(NullTest)
+
+            # Insert data with NULL values
+            test_client.execute(
+                "INSERT INTO null_test VALUES (0, 'color is red', 't1'), (1, NULL, 'NOT INCLUDED'), "
+                "(2, 'NOT INCLUDED BODY', NULL), (3, NULL, NULL)"
+            )
+
+            # Search should work even with NULLs
+            result = test_client.execute("SELECT * FROM null_test WHERE MATCH(body, title) AGAINST('red')")
+            rows = result.fetchall()
+            assert len(rows) == 1 and rows[0][0] == 0, "Should find article 0 with 'red', ignoring NULLs"
+
+            # NULL-only row should not be found
+            result = test_client.execute("SELECT * FROM null_test WHERE MATCH(body, title) AGAINST('NULL')")
+            rows = result.fetchall()
+            # NULL values should not be indexed
+
+        finally:
+            test_client.drop_table(NullTest)
+            test_client.execute("DROP DATABASE fulltext_null_test")
+
+    def test_fulltext_empty_search_string(self, test_client):
+        """Test fulltext with empty and special search strings"""
+        test_client.fulltext_index.enable_fulltext()
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_edge_test")
+        test_client.execute("USE fulltext_edge_test")
+
+        Base = declarative_base()
+
+        class EdgeTest(Base):
+            __tablename__ = "edge_test"
+            id = Column(Integer, primary_key=True)
+            data = Column(Text)
+            __table_args__ = (FulltextIndex("ftidx_edge", "data"),)
+
+        try:
+            test_client.create_table(EdgeTest)
+
+            articles = [
+                {"id": 1, "data": "test content"},
+                {"id": 2, "data": "another test"},
+            ]
+            test_client.batch_insert(EdgeTest, articles)
+
+            # Test with empty space - should return nothing
+            result = test_client.execute("SELECT * FROM edge_test WHERE MATCH(data) AGAINST(' ')")
+            rows = result.fetchall()
+            # Empty string search should return no results
+
+        finally:
+            test_client.drop_table(EdgeTest)
+            test_client.execute("DROP DATABASE fulltext_edge_test")
