@@ -713,8 +713,7 @@ func buildCreateTable(
 		tblName := formatStr(string(oldTable.ObjectName))
 		dbName := formatStr(string(oldTable.SchemaName))
 
-		var snapshot *Snapshot
-		snapshot = ctx.GetSnapshot()
+		snapshot := ctx.GetSnapshot()
 
 		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot); err != nil {
 			return nil, err
