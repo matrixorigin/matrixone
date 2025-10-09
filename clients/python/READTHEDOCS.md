@@ -87,8 +87,10 @@ ReadTheDocs 会在以下情况自动构建文档：
 
 1. 检出代码仓库
 2. 安装 Python 3.11
-3. 安装项目依赖（根据 `.readthedocs.yaml` 配置）
-4. 使用 Sphinx 构建文档
+3. 安装项目依赖（根据仓库根目录的 `.readthedocs.yaml` 配置）
+   - 安装 `clients/python/` 目录下的 Python 包及文档依赖
+   - 安装 `clients/python/docs/requirements.txt` 中的依赖
+4. 使用 Sphinx 从 `clients/python/docs/` 构建文档
 5. 发布到 ReadTheDocs 服务器
 
 ## 版本管理
@@ -121,9 +123,9 @@ ReadTheDocs 支持多版本文档：
 ### 构建失败
 
 1. 查看构建日志：Project -> Builds -> 选择失败的构建 -> View raw
-2. 检查 `docs/requirements.txt` 中的依赖是否正确
-3. 本地测试构建：`cd docs && make html`
-4. 检查 `.readthedocs.yaml` 配置是否正确
+2. 检查 `clients/python/docs/requirements.txt` 中的依赖是否正确
+3. 本地测试构建：`cd clients/python/docs && make html`
+4. 检查仓库根目录的 `.readthedocs.yaml` 配置是否正确，确保路径都指向 `clients/python/` 子目录
 
 ### 文档不更新
 

@@ -18,14 +18,14 @@ build:
       # If there are no changes (git diff exits with 0) we force the command to return with 183.
       # This is a special exit code on Read the Docs that will cancel the build immediately.
       - |
-        if [ "$READTHEDOCS_VERSION_TYPE" = "external" ] && git diff --quiet origin/main -- docs/ .readthedocs.yaml pyproject.toml;
+        if [ "$READTHEDOCS_VERSION_TYPE" = "external" ] && git diff --quiet origin/main -- clients/python/docs/ .readthedocs.yaml clients/python/pyproject.toml;
         then
           exit 183;
         fi
 
-# Build documentation in the "docs/" directory with Sphinx
+# Build documentation in the "clients/python/docs/" directory with Sphinx
 sphinx:
-  configuration: docs/conf.py
+  configuration: clients/python/docs/conf.py
   fail_on_warning: false
 
 # Optionally build your docs in additional formats such as PDF and ePub
@@ -39,9 +39,9 @@ formats:
 python:
   install:
     - method: pip
-      path: .
+      path: clients/python
       extra_requirements:
         - docs
     # Install any additional requirements for building docs
-    - requirements: docs/requirements.txt
+    - requirements: clients/python/docs/requirements.txt
 
