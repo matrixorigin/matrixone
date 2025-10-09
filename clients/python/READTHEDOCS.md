@@ -48,7 +48,7 @@ sphinx-autobuild . _build/html
 3. 点击 "Import a Project"
 4. 选择 `matrixone` 仓库
 5. 填写项目信息：
-   - Name: `matrixone-python-sdk`
+   - Name: `matrixone`（已配置）
    - Repository URL: `https://github.com/matrixorigin/matrixone`
    - Repository type: Git
    - Default branch: `main`
@@ -105,17 +105,17 @@ ReadTheDocs 支持多版本文档：
 
 构建成功后，文档将发布到：
 
-- 主站: https://matrixone-python-sdk.readthedocs.io/
-- 英文版: https://matrixone-python-sdk.readthedocs.io/en/latest/
-- 中文版: https://matrixone-python-sdk.readthedocs.io/zh_CN/latest/
-- 特定版本: https://matrixone-python-sdk.readthedocs.io/en/v1.0.0/
+- 主站: https://matrixone.readthedocs.io/
+- 英文版: https://matrixone.readthedocs.io/en/latest/
+- 中文版: https://matrixone.readthedocs.io/zh_CN/latest/
+- 特定版本: https://matrixone.readthedocs.io/en/v1.0.0/
 
 ## 徽章（Badge）
 
-在 README 中添加构建状态徽章：
+在 README 中添加构建状态徽章（已完成）：
 
 ```markdown
-[![Documentation Status](https://readthedocs.org/projects/matrixone-python-sdk/badge/?version=latest)](https://matrixone-python-sdk.readthedocs.io/en/latest/?badge=latest)
+[![Documentation Status](https://app.readthedocs.org/projects/matrixone/badge/?version=latest)](https://matrixone.readthedocs.io/en/latest/?badge=latest)
 ```
 
 ## 故障排查
