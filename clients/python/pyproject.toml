@@ -1,0 +1,264 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matrixone-python-sdk"
+version = "0.0.1"
+description = "A comprehensive Python SDK for MatrixOne database operations with vector search, fulltext search, and advanced features"
+readme = "README_USER.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "MatrixOne Team", email = "dev@matrixone.io"}
+]
+maintainers = [
+    {name = "MatrixOne Team", email = "dev@matrixone.io"}
+]
+keywords = ["matrixone", "database", "vector", "search", "sqlalchemy", "python"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "PyMySQL>=1.1.0",
+    "aiomysql>=0.2.0",
+    "SQLAlchemy>=1.4.0,<3.0.0",
+    "typing-extensions>=4.0.0",
+    "python-dateutil>=2.8.0",
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-asyncio>=0.18.0",
+    "pytest-cov>=3.0",
+    "Faker>=10.0.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+    "isort>=5.0",
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+    "sphinx-autobuild>=2021.3.14",
+    "build>=0.8.0",
+    "twine>=4.0.0",
+    "tox>=3.24.0",
+]
+docs = [
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+    "sphinx-autobuild>=2021.3.14",
+]
+test = [
+    "pytest>=6.0",
+    "pytest-asyncio>=0.18.0",
+    "pytest-cov>=3.0",
+    "Faker>=10.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/matrixorigin/matrixone"
+Documentation = "https://matrixone.readthedocs.io/"
+Repository = "https://github.com/matrixorigin/matrixone"
+Issues = "https://github.com/matrixorigin/matrixone/issues"
+Changelog = "https://github.com/matrixorigin/matrixone/blob/main/clients/python/CHANGELOG.md"
+
+[project.scripts]
+matrixone-sdk = "matrixone.cli:main"
+
+[project.entry-points."sqlalchemy.dialects"]
+matrixone = "matrixone.sqlalchemy_ext.dialect:MatrixOneDialect"
+
+# 代码格式化配置
+[tool.black]
+line-length = 120
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+skip-string-normalization = true
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+skip_glob = ["*/migrations/*", "*/venv/*", "*/build/*", "*/dist/*"]
+
+# Flake8 配置
+[tool.flake8]
+max-line-length = 120
+ignore = ["E203", "W503"]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".tox",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".coverage",
+    "htmlcov",
+    ".mypy_cache",
+    ".DS_Store"
+]
+per-file-ignores = [
+    "__init__.py:F401",
+    "tests/*:E501,F841,F403,F405"
+]
+
+# MyPy 配置
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+show_column_numbers = true
+show_error_context = true
+pretty = true
+color_output = true
+error_summary = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pymysql.*",
+    "aiomysql.*",
+    "sqlalchemy.*",
+    "dateutil.*",
+]
+ignore_missing_imports = true
+
+# Pytest 配置
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = [
+    "-ra",
+    "-q",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=matrixone",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--cov-fail-under=80"
+]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "online: marks tests that require database connection",
+    "offline: marks tests that use mocks",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning:pymysql",
+    "ignore::UserWarning:sqlalchemy",
+]
+
+# Coverage 配置
+[tool.coverage.run]
+source = ["matrixone"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/build/*",
+    "*/dist/*",
+    "*/migrations/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+# Tox 配置
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+envlist =
+    py38-sqlalchemy14,
+    py38-sqlalchemy20,
+    py39-sqlalchemy14,
+    py39-sqlalchemy20,
+    py310-sqlalchemy14,
+    py310-sqlalchemy20,
+    py311-sqlalchemy14,
+    py311-sqlalchemy20,
+    py312-sqlalchemy14,
+    py312-sqlalchemy20
+
+[testenv]
+deps =
+    sqlalchemy14: SQLAlchemy>=1.4.0,<2.0.0
+    sqlalchemy20: SQLAlchemy>=2.0.0,<3.0.0
+    pytest>=6.0
+    pytest-asyncio>=0.18.0
+    pytest-cov>=3.0
+    PyMySQL>=1.0.0
+    aiomysql>=0.1.0
+    typing-extensions>=4.0.0
+    python-dateutil>=2.8.0
+
+commands =
+    pytest tests/offline/ -v --tb=short
+    pytest tests/online/ -v --tb=short --maxfail=3
+"""
