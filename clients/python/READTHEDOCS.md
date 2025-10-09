@@ -86,7 +86,7 @@ ReadTheDocs 会在以下情况自动构建文档：
 ### 构建步骤
 
 1. 检出代码仓库
-2. 安装 Python 3.11
+2. 安装 Python 3.10（为了更好的依赖兼容性）
 3. 安装项目依赖（根据仓库根目录的 `.readthedocs.yaml` 配置）
    - 安装 `clients/python/` 目录下的 Python 包及文档依赖
    - 安装 `clients/python/docs/requirements.txt` 中的依赖
