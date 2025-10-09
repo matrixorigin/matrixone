@@ -803,17 +803,8 @@ func cloneUnaffectedIndexes(
 			// Delete the table
 			if !oriIdxTblNames.Unique &&
 				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
-				// delete all content
-				var sql string
-				if oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Metadata {
-					sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE __mo_index_key = 'version'", dbName, newIdxTblName.IndexTableName)
-				} else if oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Centroids {
-					sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE __mo_index_centroid_version = 0", dbName, newIdxTblName.IndexTableName)
-				} else if oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-					sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE __mo_index_centroid_fk_version = 0", dbName, newIdxTblName.IndexTableName)
-				} else {
-					return moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid IVF table type with table %s", newIdxTblName.IndexTableName))
-				}
+				// delete all content but avoid truncate table with WHERE TRUE
+				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
 				err := c.runSql(sql)
 				if err != nil {
 					return err
