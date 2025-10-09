@@ -96,6 +96,32 @@ func TestAddPartitions(t *testing.T) {
 	)
 }
 
+func TestDropPartitions(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.DropPartitions(ctx, 1, nil, txnOp))
+		},
+	)
+}
+
+func TestTruncatePartitions(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.TruncatePartitions(ctx, 1, nil, txnOp))
+		},
+	)
+}
+
 func TestIterResult(t *testing.T) {
 	res := PruneResult{
 		batches:    make([]*batch.Batch, 10),
