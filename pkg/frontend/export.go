@@ -339,7 +339,7 @@ func escapeJSONControlChars(s string) string {
 			builder.WriteString(`\\f`)
 		case `\\`:
 			i += 2
-			builder.WriteString(`\\`)
+			builder.WriteString(`\\\\`)
 		default:
 			builder.WriteString(s[i : i+1])
 			i++
