@@ -371,6 +371,10 @@ func (tc *txnOperator) IsSnapOp() bool {
 }
 
 func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
+	if snapshot.IsEmpty() {
+		snapshot = tc.SnapshotTS()
+	}
+
 	op := &txnOperator{}
 	op.mu.txn = txn.TxnMeta{
 		SnapshotTS: snapshot,
