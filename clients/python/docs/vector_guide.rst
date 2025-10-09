@@ -3,6 +3,13 @@ Vector Search Guide
 
 This guide covers comprehensive vector search and indexing capabilities in the MatrixOne Python SDK, including modern vector operations for AI applications.
 
+.. important::
+
+   **⭐ Production Critical**: If you're using IVF indexes in production, jump directly to 
+   :ref:`IVF Index Health Monitoring <ivf-index-health-monitoring>` to learn how to monitor 
+   and maintain index quality with ``get_ivf_stats()``. This is **essential** for optimal 
+   vector search performance.
+
 Overview
 --------
 
@@ -10,6 +17,7 @@ MatrixOne provides powerful vector operations designed for modern AI and machine
 
 * **Modern Vector API**: High-level vector operations with `vector_ops` and `vector_query` managers
 * **Multiple Index Types**: HNSW and IVF indexes for different performance characteristics
+* **⭐ Index Health Monitoring**: ``get_ivf_stats()`` for monitoring IVF index balance and performance
 * **Flexible Data Types**: Support for vecf32 and vecf64 vector types with configurable dimensions
 * **Distance Metrics**: L2, cosine, inner product, and negative inner product calculations
 * **Client Integration**: Seamless integration with MatrixOne client interface
@@ -592,40 +600,427 @@ Best Practices
    - Monitor IVF index health and distribution
    - Optimize based on usage patterns
 
+.. _ivf-index-health-monitoring:
+
 IVF Index Health Monitoring
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Monitor IVF index health to ensure optimal performance:
+⭐ **PRODUCTION CRITICAL** ⭐
+
+Monitor IVF index health to ensure optimal performance. The ``get_ivf_stats`` method is **critical** for evaluating 
+index quality and determining when to rebuild indexes.
+
+**Why IVF Stats Matter:**
+
+* Evaluate index balance - unbalanced indexes lead to poor query performance
+* Monitor cluster distribution - identify hot spots and load imbalance
+* Determine rebuild timing - know when index quality has degraded
+* Capacity planning - understand how data distributes across centroids
+
+Basic Usage
+^^^^^^^^^^^
 
 .. code-block:: python
 
-   # Get IVF index statistics
+   from matrixone import Client
+   
+   client = Client()
+   client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+   
+   # Get IVF index statistics for a table
+   # Method 1: Specify column name explicitly
    stats = client.vector_ops.get_ivf_stats("documents", "embedding")
    
-   # Analyze centroid distribution
-   centroid_counts = stats['distribution']['centroid_count']
-   total_centroids = len(centroid_counts)
-   min_count = min(centroid_counts)
-   max_count = max(centroid_counts)
+   # Method 2: Auto-infer column name (if only one vector column exists)
+   stats = client.vector_ops.get_ivf_stats("documents")
    
-   print(f"Total centroids: {total_centroids}")
-   print(f"Min vectors per centroid: {min_count}")
-   print(f"Max vectors per centroid: {max_count}")
-   print(f"Load balance ratio: {max_count/min_count:.2f}")
+   # Method 3: Use with ORM model
+   from matrixone.orm import declarative_base
+   from sqlalchemy import Column, Integer, String
+   from matrixone.sqlalchemy_ext import create_vector_column
    
-   # Check index health
-   expected_centroids = 100  # Original lists parameter
-   if total_centroids != expected_centroids:
-       print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
+   Base = declarative_base()
    
-   if max_count / min_count > 2.0:
-       print("⚠️  Poor load balance! Consider rebuilding index.")
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(Integer, primary_key=True)
+       title = Column(String(200))
+       embedding = create_vector_column(384, 'f32')
    
-   # When to rebuild IVF index:
-   # 1. Centroid count doesn't match expected lists parameter
-   # 2. Significant imbalance in centroid load distribution (>2x difference)
-   # 3. Performance degradation in similarity search queries
-   # 4. After major data changes (bulk inserts, updates, deletes)
+   stats = client.vector_ops.get_ivf_stats(Document, "embedding")
+
+Understanding the Return Value
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``get_ivf_stats`` method returns a comprehensive dictionary with the following structure:
+
+**Example Return Value:**
+
+.. code-block:: python
+
+   {
+       'database': 'test',
+       'table_name': 'documents',
+       'column_name': 'embedding',
+       'index_tables': {
+           'metadata': '__mo_index_ivf_0012e2e4-0153-7bd7-acf0-1f32def60681',
+           'centroids': '__mo_index_ivf_0012e2e4-0153-7bd7-acf0-1f32def60682',
+           'entries': '__mo_index_ivf_0012e2e4-0153-7bd7-acf0-1f32def60683'
+       },
+       'distribution': {
+           'centroid_id': [0, 1, 2, 3, 4],
+           'centroid_count': [8, 5, 7, 6, 4],
+           'centroid_version': [0, 0, 0, 0, 0]
+       }
+   }
+
+**Field Descriptions:**
+
+* **database**: Name of the database containing the table
+* **table_name**: Name of the table with the IVF index
+* **column_name**: Name of the vector column being indexed
+* **index_tables**: Internal IVF index table names (metadata, centroids, entries)
+* **distribution**: The most important section for monitoring:
+  
+  * **centroid_id**: List of centroid cluster IDs
+  * **centroid_count**: Number of vectors assigned to each centroid (critical for balance analysis)
+  * **centroid_version**: Version number of each centroid (usually all 0 for stable indexes)
+
+Analyzing Index Balance
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Key Metrics to Evaluate:**
+
+.. code-block:: python
+
+   # Get statistics
+   stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+   
+   # Extract distribution data
+   distribution = stats['distribution']
+   centroid_ids = distribution['centroid_id']
+   centroid_counts = distribution['centroid_count']
+   centroid_versions = distribution['centroid_version']
+   
+   # Calculate balance metrics
+   total_centroids = len(centroid_ids)
+   total_vectors = sum(centroid_counts)
+   min_count = min(centroid_counts) if centroid_counts else 0
+   max_count = max(centroid_counts) if centroid_counts else 0
+   avg_count = total_vectors / total_centroids if total_centroids > 0 else 0
+   
+   # Balance ratio: ideal is 1.0, higher values indicate imbalance
+   balance_ratio = max_count / min_count if min_count > 0 else float('inf')
+   
+   # Standard deviation: measure of distribution spread
+   import statistics
+   std_dev = statistics.stdev(centroid_counts) if len(centroid_counts) > 1 else 0
+   
+   print("=" * 60)
+   print("IVF INDEX HEALTH REPORT")
+   print("=" * 60)
+   print(f"Database: {stats['database']}")
+   print(f"Table: {stats['table_name']}")
+   print(f"Column: {stats['column_name']}")
+   print(f"\nIndex Tables:")
+   print(f"  - Metadata: {stats['index_tables']['metadata']}")
+   print(f"  - Centroids: {stats['index_tables']['centroids']}")
+   print(f"  - Entries: {stats['index_tables']['entries']}")
+   print(f"\nDistribution Metrics:")
+   print(f"  - Total Centroids: {total_centroids}")
+   print(f"  - Total Vectors: {total_vectors}")
+   print(f"  - Vectors per Centroid (avg): {avg_count:.2f}")
+   print(f"  - Min Vectors in Centroid: {min_count}")
+   print(f"  - Max Vectors in Centroid: {max_count}")
+   print(f"  - Balance Ratio (max/min): {balance_ratio:.2f}")
+   print(f"  - Standard Deviation: {std_dev:.2f}")
+   print(f"\nCentroid Details:")
+   for cid, count, version in zip(centroid_ids, centroid_counts, centroid_versions):
+       percentage = (count / total_vectors * 100) if total_vectors > 0 else 0
+       bar = "█" * int(count / max_count * 40) if max_count > 0 else ""
+       print(f"  Centroid {cid:3d}: {count:5d} vectors ({percentage:5.1f}%) {bar}")
+   print("=" * 60)
+
+**Example Output:**
+
+.. code-block:: text
+
+   ============================================================
+   IVF INDEX HEALTH REPORT
+   ============================================================
+   Database: test
+   Table: documents
+   Column: embedding
+   
+   Index Tables:
+     - Metadata: __mo_index_ivf_0012e2e4-0153-7bd7-acf0-1f32def60681
+     - Centroids: __mo_index_ivf_0012e2e4-0153-7bd7-acf0-1f32def60682
+     - Entries: __mo_index_ivf_0012e2e4-0153-7bd7-acf0-1f32def60683
+   
+   Distribution Metrics:
+     - Total Centroids: 5
+     - Total Vectors: 30
+     - Vectors per Centroid (avg): 6.00
+     - Min Vectors in Centroid: 4
+     - Max Vectors in Centroid: 8
+     - Balance Ratio (max/min): 2.00
+     - Standard Deviation: 1.58
+   
+   Centroid Details:
+     Centroid   0:     8 vectors ( 26.7%) ████████████████████████████████████████
+     Centroid   1:     5 vectors ( 16.7%) █████████████████████████
+     Centroid   2:     7 vectors ( 23.3%) ███████████████████████████████████
+     Centroid   3:     6 vectors ( 20.0%) ██████████████████████████████
+     Centroid   4:     4 vectors ( 13.3%) ████████████████████
+   ============================================================
+
+Health Check and Decision Making
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Automated Health Checks:**
+
+.. code-block:: python
+
+   def check_ivf_index_health(client, table_name, column_name, expected_lists):
+       """
+       Comprehensive IVF index health check with recommendations.
+       
+       Args:
+           client: MatrixOne client instance
+           table_name: Name of the table
+           column_name: Name of the vector column
+           expected_lists: Expected number of centroids (from index creation)
+       
+       Returns:
+           Dict with health status and recommendations
+       """
+       stats = client.vector_ops.get_ivf_stats(table_name, column_name)
+       
+       distribution = stats['distribution']
+       centroid_counts = distribution['centroid_count']
+       
+       if not centroid_counts:
+           return {
+               'status': 'ERROR',
+               'message': 'No centroids found - index may be corrupted',
+               'action': 'REBUILD_REQUIRED'
+           }
+       
+       total_centroids = len(centroid_counts)
+       total_vectors = sum(centroid_counts)
+       min_count = min(centroid_counts)
+       max_count = max(centroid_counts)
+       avg_count = total_vectors / total_centroids
+       balance_ratio = max_count / min_count if min_count > 0 else float('inf')
+       
+       issues = []
+       warnings = []
+       
+       # Check 1: Centroid count mismatch
+       if total_centroids != expected_lists:
+           issues.append(
+               f"Centroid count mismatch: expected {expected_lists}, found {total_centroids}"
+           )
+       
+       # Check 2: Severe imbalance (>3x ratio)
+       if balance_ratio > 3.0:
+           issues.append(
+               f"Severe load imbalance: max/min ratio is {balance_ratio:.2f} (threshold: 3.0)"
+           )
+       # Check 3: Moderate imbalance (2-3x ratio)
+       elif balance_ratio > 2.0:
+           warnings.append(
+               f"Moderate load imbalance: max/min ratio is {balance_ratio:.2f} (threshold: 2.0)"
+           )
+       
+       # Check 4: Empty centroids
+       empty_centroids = sum(1 for c in centroid_counts if c == 0)
+       if empty_centroids > 0:
+           warnings.append(f"{empty_centroids} empty centroids found")
+       
+       # Check 5: Sparse population (<5 vectors per centroid on average)
+       if avg_count < 5:
+           warnings.append(
+               f"Sparse population: {avg_count:.1f} vectors/centroid (consider reducing lists parameter)"
+           )
+       
+       # Determine overall status
+       if issues:
+           status = 'UNHEALTHY'
+           action = 'REBUILD_REQUIRED'
+       elif warnings:
+           status = 'WARNING'
+           action = 'MONITOR'
+       else:
+           status = 'HEALTHY'
+           action = 'NONE'
+       
+       return {
+           'status': status,
+           'action': action,
+           'metrics': {
+               'total_centroids': total_centroids,
+               'total_vectors': total_vectors,
+               'balance_ratio': balance_ratio,
+               'avg_vectors_per_centroid': avg_count,
+               'min_count': min_count,
+               'max_count': max_count
+           },
+           'issues': issues,
+           'warnings': warnings
+       }
+
+   # Usage example
+   health = check_ivf_index_health(
+       client, 
+       table_name="documents", 
+       column_name="embedding",
+       expected_lists=100
+   )
+   
+   print(f"Status: {health['status']}")
+   print(f"Action: {health['action']}")
+   
+   if health['issues']:
+       print("\n❌ Critical Issues:")
+       for issue in health['issues']:
+           print(f"   - {issue}")
+   
+   if health['warnings']:
+       print("\n⚠️  Warnings:")
+       for warning in health['warnings']:
+           print(f"   - {warning}")
+   
+   if health['status'] == 'HEALTHY':
+       print("\n✅ Index is healthy and well-balanced!")
+
+When to Rebuild the IVF Index
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Rebuild Triggers:**
+
+1. **Centroid Count Mismatch**: Actual centroids don't match expected ``lists`` parameter
+2. **Severe Imbalance**: Balance ratio > 3.0 (one centroid has 3x more vectors than another)
+3. **Performance Degradation**: Query times increasing despite similar data volume
+4. **Major Data Changes**: After bulk inserts (>20% of data), updates, or deletes
+5. **Empty Centroids**: Multiple centroids with zero vectors assigned
+6. **Very Sparse or Dense**: Average vectors per centroid < 5 or > 1000
+
+**Rebuild Process:**
+
+.. code-block:: python
+
+   # Check health first
+   stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+   balance_ratio = max(stats['distribution']['centroid_count']) / min(stats['distribution']['centroid_count'])
+   
+   if balance_ratio > 3.0:
+       print("⚠️  Index needs rebuilding due to poor balance")
+       
+       # Step 1: Drop existing IVF index
+       client.vector_ops.drop("documents", "idx_embedding_ivf")
+       
+       # Step 2: Recreate with optimal parameters
+       # Recommended: lists = sqrt(total_vectors) to 4*sqrt(total_vectors)
+       total_vectors = sum(stats['distribution']['centroid_count'])
+       import math
+       optimal_lists = int(math.sqrt(total_vectors) * 2)
+       
+       client.vector_ops.create_ivf(
+           "documents",
+           name="idx_embedding_ivf",
+           column="embedding",
+           lists=optimal_lists,
+           op_type="vector_l2_ops"
+       )
+       
+       # Step 3: Verify new index
+       new_stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+       new_balance = max(new_stats['distribution']['centroid_count']) / min(new_stats['distribution']['centroid_count'])
+       print(f"✅ Index rebuilt. New balance ratio: {new_balance:.2f}")
+
+Best Practices for IVF Index Monitoring
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+1. **Regular Monitoring**: Check index health weekly or after major data operations
+2. **Set Alerts**: Monitor balance ratio and trigger alerts when > 2.5
+3. **Track Trends**: Log stats over time to identify degradation patterns
+4. **Right-size Lists**: Use ``lists = sqrt(N)`` to ``4*sqrt(N)`` where N is total vectors
+5. **Rebuild Proactively**: Don't wait for severe degradation - rebuild at balance ratio > 2.5
+6. **Monitor After Changes**: Always check stats after bulk operations
+
+**Production Monitoring Example:**
+
+.. code-block:: python
+
+   import time
+   from datetime import datetime
+   
+   def monitor_ivf_health(client, table_name, column_name, check_interval=3600):
+       """
+       Continuous IVF index health monitoring.
+       
+       Args:
+           client: MatrixOne client
+           table_name: Table to monitor
+           column_name: Vector column to monitor
+           check_interval: Seconds between checks (default: 1 hour)
+       """
+       while True:
+           try:
+               stats = client.vector_ops.get_ivf_stats(table_name, column_name)
+               counts = stats['distribution']['centroid_count']
+               
+               if counts:
+                   balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+                   total_vectors = sum(counts)
+                   
+                   log_entry = {
+                       'timestamp': datetime.now().isoformat(),
+                       'total_centroids': len(counts),
+                       'total_vectors': total_vectors,
+                       'balance_ratio': balance_ratio,
+                       'status': 'OK' if balance_ratio <= 2.5 else 'WARNING' if balance_ratio <= 3.5 else 'CRITICAL'
+                   }
+                   
+                   print(f"[{log_entry['timestamp']}] {table_name}.{column_name}: "
+                         f"Balance={balance_ratio:.2f}, Vectors={total_vectors}, "
+                         f"Status={log_entry['status']}")
+                   
+                   # Alert on critical status
+                   if log_entry['status'] == 'CRITICAL':
+                       print(f"🚨 ALERT: Index on {table_name}.{column_name} needs immediate attention!")
+                       # Send notification (email, Slack, etc.)
+               
+               time.sleep(check_interval)
+               
+           except Exception as e:
+               print(f"Error monitoring index: {e}")
+               time.sleep(check_interval)
+   
+   # Run in background thread or separate process
+   # monitor_ivf_health(client, "documents", "embedding", check_interval=3600)
+
+Usage in Transactions
+^^^^^^^^^^^^^^^^^^^^^^
+
+You can also use ``get_ivf_stats`` within transaction contexts:
+
+.. code-block:: python
+
+   # Within a transaction
+   with client.transaction() as tx:
+       stats = tx.vector_ops.get_ivf_stats("documents", "embedding")
+       
+       # Make decisions based on stats
+       balance_ratio = max(stats['distribution']['centroid_count']) / min(stats['distribution']['centroid_count'])
+       
+       if balance_ratio > 3.0:
+           # Perform rebuild within transaction
+           tx.vector_ops.drop("documents", "idx_embedding_ivf")
+           tx.vector_ops.create_ivf("documents", "idx_embedding_ivf", "embedding", lists=50)
+   
+   # Transaction commits automatically if successful
 
 6. **Handle errors gracefully**:
    - Always use try-catch blocks

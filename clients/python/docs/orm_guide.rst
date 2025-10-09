@@ -255,7 +255,7 @@ Vector Operations with ORM
    # Create vector index
    client.vector_ops.enable_ivf()
    client.vector_ops.create_ivf(
-       table_name='documents',
+       'documents',  # Table name as positional argument
        name='idx_embedding',
        column='embedding',
        lists=50,
