@@ -52,6 +52,7 @@ Contents
 * [User Values](#user-values)
 * [Architecture](#architecture)
 * [Quick start](#quick-start)
+* [Python SDK](#python-sdk)
 * [Contributing](#contributing)
 * [License](#license)
 
@@ -265,6 +266,18 @@ __Tips__: The initial startup of MatrixOne approximately takes 20 to 30 seconds.
 One-click connection to MatrixOne service through `mo_ctl connect` command.
 
 __Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/latest/MatrixOne/Security/password-mgmt/).
+
+## 🐍 <a id="python-sdk">Python SDK</a>
+
+MatrixOne provides a **comprehensive Python SDK** for database operations, vector search, fulltext search, and advanced features like snapshots, PITR, and account management.
+
+**Key Features**: High-performance async/await support, vector similarity search with IVF/HNSW indexing, fulltext search, metadata analysis, and complete type safety.
+
+📚 **[Complete Documentation](https://matrixone.readthedocs.io/)** [![Documentation Status](https://app.readthedocs.org/projects/matrixone/badge/?version=latest)](https://matrixone.readthedocs.io/en/latest/)
+
+📖 **[Python SDK README](clients/python/README.md)** - Full features, installation, and usage guide
+
+📦 **Installation**: `pip install matrixone-python-sdk`
 
 ## 🙌 <a id="contributing">Contributing</a>
 
