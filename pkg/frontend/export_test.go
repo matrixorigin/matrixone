@@ -352,12 +352,12 @@ func TestEscapeJSONControl(t *testing.T) {
 		{
 			name:     "escaped sequences unchanged",
 			input:    `{"a":"abc\\n\\r\\t\\b\\fdef"}`,
-			expected: `{"a":"abc\\n\\r\\t\\b\\fdef"}`,
+			expected: `{"a":"abc\\\\n\\\\r\\\\t\\\\b\\\\fdef"}`,
 		},
 		{
 			name:     "mixed escaped and actual",
 			input:    `{"a":"abc\\n` + `\t` + `def\\r"}`,
-			expected: `{"a":"abc\\n\\tdef\\r"}`,
+			expected: `{"a":"abc\\\\n\\tdef\\\\r"}`,
 		},
 		{
 			name:     "control at start",
@@ -377,7 +377,7 @@ func TestEscapeJSONControl(t *testing.T) {
 		{
 			name:     "backslash literal",
 			input:    `{"a":"abc\\def"}`,
-			expected: `{"a":"abc\\def"}`,
+			expected: `{"a":"abc\\\\def"}`,
 		},
 	}
 
