@@ -215,110 +215,182 @@ client.account.grant_privilege(
 ### Vector Search Operations
 
 ```python
+from matrixone import Client
 from matrixone.sqlalchemy_ext import create_vector_column
-from sqlalchemy import Column, Integer, String, Text
 from matrixone.orm import declarative_base
+from sqlalchemy import Column, BigInteger, String, Text
 import numpy as np
 
-# Define vector table
+# Create client and connect
+client = Client()
+client.connect(
+    host='localhost',
+    port=6001,
+    user='root',
+    password='111',
+    database='test'
+)
+
+# Define vector table using MatrixOne ORM
 Base = declarative_base()
 
 class Document(Base):
     __tablename__ = 'documents'
-    id = Column(Integer, primary_key=True)
+    # IMPORTANT: HNSW index requires BigInteger (BIGINT) primary key
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     title = Column(String(200))
     content = Column(Text)
-    embedding = create_vector_column(384, 'f32')
+    embedding = create_vector_column(384, precision='f32')
 
-# Create table
+# Create table using client API (not Base.metadata.create_all)
 client.create_table(Document)
 
-# Create HNSW index for high-accuracy search
+# Create HNSW index using SDK (not SQL)
 client.vector_ops.enable_hnsw()
 client.vector_ops.create_hnsw(
-    'documents',
-    'idx_embedding',
-    'embedding',
+    'documents',  # table name or model - positional argument
+    name='idx_embedding',
+    column='embedding',
     m=16,
     ef_construction=200
 )
 
-# Insert vector data
+# Insert vector data using client API
 client.insert(Document, {
-    'id': 1,
     'title': 'Machine Learning Guide',
     'content': 'Comprehensive ML tutorial...',
     'embedding': np.random.rand(384).tolist()
 })
 
-# Search similar documents
+# Search similar documents using SDK
 query_vector = np.random.rand(384).tolist()
 results = client.vector_ops.similarity_search(
-    'documents',
-    'embedding',
-    query_vector,
+    'documents',  # table name or model - positional argument
+    vector_column='embedding',
+    query_vector=query_vector,
     limit=5,
     distance_type='cosine'
 )
 
 for row in results:
     print(f"Document: {row[1]}, Similarity: {row[-1]}")
+
+# Cleanup
+client.drop_table(Document)  # Use client API
+client.disconnect()
 ```
 
 ### Fulltext Search Operations
 
 ```python
-# Create fulltext index
+from matrixone import Client
+from matrixone.sqlalchemy_ext.fulltext_search import boolean_match, natural_match
+from matrixone.orm import declarative_base
+from sqlalchemy import Column, Integer, String, Text
+
+# Create client and connect
+client = Client()
+client.connect(
+    host='localhost',
+    port=6001,
+    user='root',
+    password='111',
+    database='test'
+)
+
+# Define model using MatrixOne ORM
+Base = declarative_base()
+
+class Article(Base):
+    __tablename__ = 'articles'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False)
+    category = Column(String(100))
+
+# Create table using client API (not Base.metadata.create_all)
+client.create_table(Article)
+
+# Insert some data using client API
+articles = [
+    {'title': 'Machine Learning Guide', 
+     'content': 'Comprehensive machine learning tutorial...', 
+     'category': 'AI'},
+    {'title': 'Python Programming', 
+     'content': 'Learn Python programming basics', 
+     'category': 'Programming'},
+]
+client.batch_insert(Article, articles)
+
+# Create fulltext index using SDK (not SQL)
 client.fulltext_index.create(
-    'documents',
-    'ftidx_content',
-    ['title', 'content'],
-    algorithm='BM25'
+    'articles',  # table name - positional argument
+    name='ftidx_content',
+    columns=['title', 'content']
 )
 
 # Natural language search using ORM
-from matrixone.sqlalchemy_ext.fulltext_search import natural_match
-
-results = client.query(Document).filter(
+results = client.query(Article).filter(
     natural_match('title', 'content', query='machine learning tutorial')
 ).all()
 
 # Boolean search with operators using ORM
-from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
-
-results = client.query(Document).filter(
+results = client.query(Article).filter(
     boolean_match('title', 'content')
     .must('machine')
     .must('learning')
     .discourage('basics')
 ).all()
 
-for row in results:
-    print(f"Title: {row[1]}, Score: {row[-1]}")
+for article in results:
+    print(f"Title: {article.title}, Category: {article.category}")
+
+# Cleanup
+client.drop_table(Article)  # Use client API
+client.disconnect()
 ```
 
 ### Metadata Analysis
 
 ```python
-# Analyze table metadata
-metadata = client.metadata.scan(
-    dbname='test',
-    tablename='documents'
+from matrixone import Client
+
+# Create client and connect
+client = Client()
+client.connect(
+    host='localhost',
+    port=6001,
+    user='root',
+    password='111',
+    database='test'
 )
 
-for row in metadata:
+# Analyze table metadata - returns structured MetadataRow objects
+metadata_rows = client.metadata.scan(
+    dbname='test',
+    tablename='documents',
+    columns='*'  # Get all columns
+)
+
+for row in metadata_rows:
     print(f"Column: {row.col_name}")
-    print(f"  Type: {row.data_type}")
-    print(f"  Null count: {row.null_cnt}")
     print(f"  Rows count: {row.rows_cnt}")
+    print(f"  Null count: {row.null_cnt}")
+    print(f"  Size: {row.origin_size}")
 
-# Get table statistics
-stats = client.metadata.get_table_brief_stats(
+# Get table brief statistics
+brief_stats = client.metadata.get_table_brief_stats(
     dbname='test',
     tablename='documents'
 )
-print(f"Total rows: {stats['total_rows']}")
-print(f"Table size: {stats['total_size']} bytes")
+
+table_stats = brief_stats['documents']
+print(f"Total rows: {table_stats['row_cnt']}")
+print(f"Total nulls: {table_stats['null_cnt']}")
+print(f"Original size: {table_stats['original_size']}")
+print(f"Compressed size: {table_stats['compress_size']}")
+
+client.disconnect()
 ```
 
 ### Pub/Sub Operations
@@ -350,15 +422,19 @@ client = Client(
 ### Logging Configuration
 
 ```python
-from matrixone import MatrixOneLogger
+from matrixone import Client
+from matrixone.logger import create_default_logger
+import logging
 
-logger = MatrixOneLogger(
+# Create custom logger
+logger = create_default_logger(
     level=logging.INFO,
     sql_log_mode='auto',  # 'off', 'simple', 'auto', 'full'
     slow_query_threshold=1.0,
     max_sql_display_length=500
 )
 
+# Use custom logger with client
 client = Client(logger=logger)
 ```
 

@@ -166,13 +166,13 @@ Vector Operations with Table Models
    # Enable IVF indexing
    client.vector_ops.enable_ivf()
 
-   # Create IVF index
-   client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=100)
+   # Create IVF index (first argument is positional)
+   client.vector_ops.create_ivf(Document, name="idx_embedding", column="embedding", lists=100)
 
-   # Vector similarity search using simple interface
+   # Vector similarity search using simple interface (first argument is positional)
    query_vector = [0.1] * 384
    results = client.vector_ops.similarity_search(
-       table_name_or_model="documents",
+       Document,
        vector_column="embedding",
        query_vector=query_vector,
        limit=5,
@@ -190,10 +190,10 @@ Vector Operations with Table Models
        print(f"Document: {row[1]}, Distance: {row[3]}")
 
    # Drop vector index
-   client.vector_ops.drop("documents", "idx_embedding")
+   client.vector_ops.drop(Document, "idx_embedding")
 
    # Clean up
-   client.drop_table("documents")
+   client.drop_table(Document)
    client.disconnect()
 
 HNSW Vector Indexing
@@ -203,7 +203,7 @@ HNSW Vector Indexing
 
    from matrixone import Client
    from matrixone.config import get_connection_params
-   from sqlalchemy import Column, Integer, String
+   from sqlalchemy import Column, BigInteger, String
    from matrixone.orm import declarative_base
    from matrixone.sqlalchemy_ext import Vectorf32
 
@@ -217,16 +217,16 @@ HNSW Vector Indexing
    
    class Product(Base):
        __tablename__ = 'products'
-       id = Column(Integer, primary_key=True)
+       # IMPORTANT: HNSW index requires BigInteger primary key
+       id = Column(BigInteger, primary_key=True, autoincrement=True)
        name = Column(String(200))
        features = Column(Vectorf32(128))  # 128-dimensional feature vector
 
    # Create table using model
    client.create_table(Product)
 
-   # Insert vector data
-   client.insert("products", {
-       "id": 1,
+   # Insert vector data using client API
+   client.insert(Product, {
        "name": "Smartphone",
        "features": [0.2] * 128  # Example 128-dimensional vector
    })
@@ -234,13 +234,13 @@ HNSW Vector Indexing
    # Enable HNSW indexing
    client.vector_ops.enable_hnsw()
 
-   # Create HNSW index
-   client.vector_ops.create_hnsw("products", "idx_features", "features", m=16, ef_construction=200)
+   # Create HNSW index (first argument is positional)
+   client.vector_ops.create_hnsw(Product, name="idx_features", column="features", m=16, ef_construction=200)
 
-   # Vector similarity search
+   # Vector similarity search (first argument is positional)
    query_vector = [0.2] * 128
    results = client.vector_ops.similarity_search(
-       table_name_or_model="products",
+       Product,
        vector_column="features",
        query_vector=query_vector,
        limit=5,
@@ -249,10 +249,10 @@ HNSW Vector Indexing
    print("HNSW similarity search results:", results)
 
    # Drop vector index
-   client.vector_ops.drop("products", "idx_features")
+   client.vector_ops.drop(Product, "idx_features")
 
    # Clean up
-   client.drop_table("products")
+   client.drop_table(Product)
    client.disconnect()
 
 ORM with Modern Patterns
@@ -284,19 +284,15 @@ ORM with Modern Patterns
    # Create table using ORM model
    client.create_table(Account)
 
-   # Insert data using ORM
-   from sqlalchemy.orm import sessionmaker
-   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
-   session = Session()
+   # Insert data using client API
+   accounts_data = [
+       {"name": "Alice", "balance": 1000.00, "created_at": "2024-01-01 10:00:00"},
+       {"name": "Bob", "balance": 500.00, "created_at": "2024-01-01 10:00:00"}
+   ]
+   client.batch_insert(Account, accounts_data)
 
-   account1 = Account(name="Alice", balance=1000.00, created_at="2024-01-01 10:00:00")
-   account2 = Account(name="Bob", balance=500.00, created_at="2024-01-01 10:00:00")
-   
-   session.add_all([account1, account2])
-   session.commit()
-
-   # Query using ORM
-   accounts = session.query(Account).filter(Account.balance > 600).all()
+   # Query using client API
+   accounts = client.query(Account).filter(Account.balance > 600).all()
    for account in accounts:
        print(f"{account.name}: ${account.balance}")
 

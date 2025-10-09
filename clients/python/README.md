@@ -175,7 +175,7 @@ client.clone.clone_database(
 
 ```python
 from matrixone.sqlalchemy_ext import create_vector_column
-from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy import Column, BigInteger, String, Text
 from matrixone.orm import declarative_base
 import numpy as np
 
@@ -184,27 +184,27 @@ Base = declarative_base()
 
 class Document(Base):
     __tablename__ = 'documents'
-    id = Column(Integer, primary_key=True)
+    # IMPORTANT: HNSW index requires BigInteger primary key
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     title = Column(String(200))
     content = Column(Text)
-    embedding = create_vector_column(384, 'f32')  # 384-dim vector
+    embedding = create_vector_column(384, precision='f32')  # 384-dim vector
 
-# Create table and vector index
+# Create table using client API
 client.create_table(Document)
 
 # Enable and create HNSW index
 client.vector_ops.enable_hnsw()
 client.vector_ops.create_hnsw(
-    table_name='documents',
+    'documents',  # table name - positional argument
     name='idx_embedding',
     column='embedding',
     m=16,
     ef_construction=200
 )
 
-# Insert document with vector
+# Insert document with vector using client API
 client.insert(Document, {
-    'id': 1,
     'title': 'AI Research Paper',
     'content': 'Advanced machine learning techniques...',
     'embedding': np.random.rand(384).tolist()
@@ -213,7 +213,7 @@ client.insert(Document, {
 # Vector similarity search
 query_vector = np.random.rand(384).tolist()
 results = client.vector_ops.similarity_search(
-    table_name='documents',
+    'documents',  # table name - positional argument
     vector_column='embedding',
     query_vector=query_vector,
     limit=5,
@@ -224,12 +224,11 @@ results = client.vector_ops.similarity_search(
 ### Fulltext Search
 
 ```python
-# Create fulltext index
+# Create fulltext index using client API
 client.fulltext_index.create(
-    'documents',
-    'ftidx_content',
-    ['title', 'content'],
-    algorithm='BM25'
+    'documents',  # table name - positional argument
+    name='ftidx_content',
+    columns=['title', 'content']
 )
 
 # Natural language search using ORM
@@ -254,24 +253,27 @@ results = client.query(Document).filter(
 
 ```python
 # Get table metadata with statistics
-metadata = client.metadata.scan(
+metadata_rows = client.metadata.scan(
     dbname='test',
-    tablename='documents'
+    tablename='documents',
+    columns='*'  # Get structured MetadataRow objects
 )
 
-for row in metadata:
+for row in metadata_rows:
     print(f"Column: {row.col_name}")
-    print(f"  Type: {row.data_type}")
     print(f"  Nulls: {row.null_cnt}")
     print(f"  Rows: {row.rows_cnt}")
+    print(f"  Size: {row.origin_size}")
 
 # Get table statistics
-stats = client.metadata.get_table_brief_stats(
+brief_stats = client.metadata.get_table_brief_stats(
     dbname='test',
     tablename='documents'
 )
-print(f"Total rows: {stats['total_rows']}")
-print(f"Table size: {stats['total_size']}")
+table_stats = brief_stats['documents']
+print(f"Total rows: {table_stats['row_cnt']}")
+print(f"Original size: {table_stats['original_size']} bytes")
+print(f"Compressed size: {table_stats['compress_size']} bytes")
 ```
 
 ### Version Management

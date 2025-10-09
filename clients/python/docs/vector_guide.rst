@@ -373,7 +373,6 @@ ORM with Vector Types
 
    from sqlalchemy import Column, Integer, String, Text
    from matrixone.orm import declarative_base
-   from sqlalchemy.orm import sessionmaker
    from matrixone.sqlalchemy_ext import create_vector_column
 
    # Define ORM models with vector columns
@@ -391,28 +390,21 @@ ORM with Vector Types
    # Create table using ORM model
    client.create_table(Document)
 
-   # Create session
-   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
-   session = Session()
+   # Insert data using client API
+   client.insert(Document, {
+       "title": "ORM Document",
+       "content": "This is a document created using ORM",
+       "category": "tutorial",
+       "embedding": np.random.rand(384).astype(np.float32).tolist()
+   })
 
-   # Insert data using ORM
-   doc = Document(
-       title="ORM Document",
-       content="This is a document created using ORM",
-       category="tutorial",
-       embedding=np.random.rand(384).astype(np.float32).tolist()
-   )
-   session.add(doc)
-   session.commit()
-
-   # Query using ORM with filtering
-   documents = session.query(Document).filter(Document.category == "tutorial").all()
+   # Query using client API with filtering
+   documents = client.query(Document).filter(Document.category == "tutorial").all()
    for doc in documents:
        print(f"Document: {doc.title}, Category: {doc.category}")
 
    # Clean up
    client.drop_table(Document)
-   session.close()
 
 Vector Index Types and Performance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -421,9 +413,9 @@ MatrixOne supports different vector index types for different use cases:
 
 .. code-block:: python
 
-   # IVF Index - Good for large datasets
+   # IVF Index - Good for large datasets (first argument is positional)
    client.vector_ops.create_ivf(
-       "large_dataset",
+       "large_dataset",  # table name - positional argument
        name="idx_ivf_large",
        column="embedding",
        lists=1000,  # More lists for larger datasets
@@ -432,7 +424,7 @@ MatrixOne supports different vector index types for different use cases:
 
    # IVF Index with cosine distance
    client.vector_ops.create_ivf(
-       "recommendations",
+       "recommendations",  # table name - positional argument
        name="idx_ivf_cosine",
        column="features",
        lists=100,
@@ -441,7 +433,7 @@ MatrixOne supports different vector index types for different use cases:
 
    # IVF Index with inner product
    client.vector_ops.create_ivf(
-       "similarity",
+       "similarity",  # table name - positional argument
        name="idx_ivf_inner",
        column="vectors",
        lists=50,

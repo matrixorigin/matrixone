@@ -117,46 +117,41 @@ Advanced Query Building with ORM Models
    client.create_table(Department)
    client.create_table(User)
 
-   # Create session
-   Session = sessionmaker(bind=client.get_sqlalchemy_engine())
-   session = Session()
+   # Insert data using client API
+   departments = [
+       {"name": "Engineering", "budget": 1000000.00},
+       {"name": "Marketing", "budget": 500000.00}
+   ]
+   client.batch_insert(Department, departments)
 
-   # Insert data using ORM
-   dept1 = Department(name="Engineering", budget=1000000.00)
-   dept2 = Department(name="Marketing", budget=500000.00)
-   session.add_all([dept1, dept2])
-   session.commit()
+   users = [
+       {"username": "alice", "email": "alice@example.com", "age": 25, "department_id": 1, "salary": 50000.00},
+       {"username": "bob", "email": "bob@example.com", "age": 30, "department_id": 1, "salary": 60000.00},
+       {"username": "charlie", "email": "charlie@example.com", "age": 35, "department_id": 2, "salary": 70000.00}
+   ]
+   client.batch_insert(User, users)
 
-   user1 = User(username="alice", email="alice@example.com", age=25, department_id=1, salary=50000.00)
-   user2 = User(username="bob", email="bob@example.com", age=30, department_id=1, salary=60000.00)
-   user3 = User(username="charlie", email="charlie@example.com", age=35, department_id=2, salary=70000.00)
-   session.add_all([user1, user2, user3])
-   session.commit()
-
-   # Query using ORM
-   users = session.query(User).filter(User.age > 25).all()
+   # Query using client API
+   users = client.query(User).filter(User.age > 25).all()
    print("Users over 25:")
    for user in users:
        print(f"  {user.username} - {user.email} - Age: {user.age}")
 
-   # Query with joins using ORM
-   results = session.query(User, Department).join(Department).filter(Department.name == "Engineering").all()
+   # Query with joins using client API
+   results = client.query(User, Department).join(Department).filter(Department.name == "Engineering").all()
    print("Engineering users:")
    for user, dept in results:
        print(f"  {user.username} - {dept.name} - ${user.salary}")
 
-   # Update using ORM
-   session.query(User).filter(User.username == "alice").update({"salary": 55000.00})
-   session.commit()
+   # Update using client API
+   client.query(User).filter(User.username == "alice").update({"salary": 55000.00})
 
-   # Delete using ORM
-   session.query(User).filter(User.username == "charlie").delete()
-   session.commit()
+   # Delete using client API
+   client.query(User).filter(User.username == "charlie").delete()
 
    # Clean up
    client.drop_table(User)
    client.drop_table(Department)
-   session.close()
    client.disconnect()
 
 Enhanced Query Building with logical_in
@@ -285,13 +280,15 @@ Vector Operations with ORM
        )
    ]
    
-   session.add_all(docs)
-   session.commit()
+   client.batch_insert(Document, [
+       {"title": doc.title, "content": doc.content, "embedding": doc.embedding}
+       for doc in docs
+   ])
 
-   # Vector similarity search using vector_query API
+   # Vector similarity search using vector_query API (first argument is positional)
    query_vector = np.random.rand(384).astype(np.float32).tolist()
    results = client.vector_ops.similarity_search(
-       table_name='documents',
+       'documents',  # table name - positional argument
        vector_column='embedding',
        query_vector=query_vector,
        limit=5,
@@ -340,19 +337,15 @@ Async ORM Operations
        # Create table using async create_table API
        await client.create_table(AsyncUser)
 
-       # Create async session
-       Session = sessionmaker(bind=client.get_sqlalchemy_engine())
-       session = Session()
+       # Insert data using client API
+       users = [
+           {"username": "async_alice", "email": "alice@async.com", "balance": 1000.00},
+           {"username": "async_bob", "email": "bob@async.com", "balance": 500.00}
+       ]
+       client.batch_insert(AsyncUser, users)
 
-       # Insert data using ORM
-       user1 = AsyncUser(username="async_alice", email="alice@async.com", balance=1000.00)
-       user2 = AsyncUser(username="async_bob", email="bob@async.com", balance=500.00)
-       
-       session.add_all([user1, user2])
-       session.commit()
-
-       # Query using ORM
-       users = session.query(AsyncUser).filter(AsyncUser.balance > 600).all()
+       # Query using client API
+       users = client.query(AsyncUser).filter(AsyncUser.balance > 600).all()
        print("Users with balance > 600:")
        for user in users:
            print(f"  {user.username} - ${user.balance}")
@@ -411,41 +404,33 @@ Transaction Management with ORM
        client.create_table(Account)
        client.create_table(Transaction)
 
-       # Create session
-       Session = sessionmaker(bind=client.get_sqlalchemy_engine())
-       session = Session()
-
-       # Insert initial data
-       account1 = Account(name="Alice", balance=1000.00)
-       account2 = Account(name="Bob", balance=500.00)
-       session.add_all([account1, account2])
-       session.commit()
+       # Insert initial data using client API
+       accounts = [
+           {"name": "Alice", "balance": 1000.00},
+           {"name": "Bob", "balance": 500.00}
+       ]
+       client.batch_insert(Account, accounts)
 
        # Transfer money using transaction
        try:
-           # Start transaction
-           session.begin()
-           
-           # Update balances
-           session.query(Account).filter(Account.name == "Alice").update({"balance": 900.00})
-           session.query(Account).filter(Account.name == "Bob").update({"balance": 600.00})
-           
-           # Record transaction
-           transaction = Transaction(
-               from_account_id=1,
-               to_account_id=2,
-               amount=100.00,
-               timestamp="2024-01-01 10:00:00"
-           )
-           session.add(transaction)
-           
-           # Commit transaction
-           session.commit()
-           print("✓ Transaction completed successfully")
+           # Use client transaction API
+           with client.transaction() as tx:
+               # Update balances
+               tx.query(Account).filter(Account.name == "Alice").update({"balance": 900.00})
+               tx.query(Account).filter(Account.name == "Bob").update({"balance": 600.00})
+               
+               # Record transaction
+               tx.insert(Transaction, {
+                   "from_account_id": 1,
+                   "to_account_id": 2,
+                   "amount": 100.00,
+                   "timestamp": "2024-01-01 10:00:00"
+               })
+               
+               print("✓ Transaction completed successfully")
            
        except Exception as e:
-           # Rollback on error
-           session.rollback()
+           # Transaction is automatically rolled back on error
            print(f"❌ Transaction failed: {e}")
 
        # Verify the transfer
