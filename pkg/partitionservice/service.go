@@ -88,10 +88,6 @@ func (s *Service) Redefine(
 	stmt *tree.PartitionOption,
 	txnOp client.TxnOperator,
 ) error {
-	if s.cfg.Disable {
-		return nil
-	}
-
 	metadata, ok, err := s.store.GetMetadata(
 		ctx,
 		tableID,

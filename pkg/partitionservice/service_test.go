@@ -57,6 +57,45 @@ func TestDelete(t *testing.T) {
 	)
 }
 
+func TestRedefine(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.Redefine(ctx, 1, nil, txnOp))
+		},
+	)
+}
+
+func TestRenamePartition(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.Rename(ctx, 1, "old", "new", txnOp))
+		},
+	)
+}
+
+func TestAddPartitions(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.AddPartitions(ctx, 1, nil, txnOp))
+		},
+	)
+}
+
 func TestIterResult(t *testing.T) {
 	res := PruneResult{
 		batches:    make([]*batch.Batch, 10),
