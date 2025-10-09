@@ -60,16 +60,16 @@ func (jobEntry *JobEntry) update(
 	state int8,
 	dropAt types.Timestamp,
 ) {
+	jobEntry.jobSpec = &jobSpec.TriggerSpec
+	jobEntry.dropAt = dropAt
 	if jobEntry.state == ISCPJobState_Error {
 		return
 	}
-	jobEntry.jobSpec = &jobSpec.TriggerSpec
-	jobEntry.dropAt = dropAt
 	needApply := false
 	if jobEntry.currentLSN < jobStatus.LSN {
 		needApply = true
 	}
-	if jobEntry.state < state {
+	if jobEntry.currentLSN == jobStatus.LSN && jobEntry.state < state {
 		needApply = true
 	}
 	if needApply {
