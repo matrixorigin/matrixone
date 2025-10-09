@@ -804,7 +804,16 @@ func cloneUnaffectedIndexes(
 			if !oriIdxTblNames.Unique &&
 				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
 				// delete all content
-				sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", dbName, newIdxTblName.IndexTableName)
+				var sql string
+				if oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Metadata {
+					sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE __mo_index_key = 'version'", dbName, newIdxTblName.IndexTableName)
+				} else if oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Centroids {
+					sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE __mo_index_centroid_version = 0", dbName, newIdxTblName.IndexTableName)
+				} else if oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+					sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE __mo_index_centroid_fk_version = 0", dbName, newIdxTblName.IndexTableName)
+				} else {
+					return moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid IVF table type with table %s", newIdxTblName.IndexTableName))
+				}
 				err := c.runSql(sql)
 				if err != nil {
 					return err
@@ -822,6 +831,9 @@ func cloneUnaffectedIndexes(
 
 			logutil.Infof("cloneUnaffectedIndex: clone %v -> %v\n", oriIdxTblName, newIdxTblName)
 			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
+			if err != nil {
+				return err
+			}
 
 			clonePlan := plan.CloneTable{
 				CreateTable:     nil,
