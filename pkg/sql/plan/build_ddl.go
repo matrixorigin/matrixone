@@ -715,9 +715,6 @@ func buildCreateTable(
 
 		var snapshot *Snapshot
 		snapshot = ctx.GetSnapshot()
-		if snapshot == nil {
-			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
-		}
 
 		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot); err != nil {
 			return nil, err
