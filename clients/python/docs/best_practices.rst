@@ -1,1338 +1,1059 @@
 Best Practices Guide
 ====================
 
-This guide provides best practices for using the MatrixOne Python SDK effectively in production environments, with emphasis on modern API usage and avoiding raw SQL when possible.
+This guide provides best practices for using the MatrixOne Python SDK effectively in production environments,
+with emphasis on using the SDK's high-level APIs and avoiding raw SQL.
 
-API-First Approach
-------------------
+SDK-First Development Philosophy
+---------------------------------
 
-**Prefer Client API Over Raw SQL:**
+The MatrixOne Python SDK provides rich, high-level APIs designed to replace raw SQL and complex SQLAlchemy code.
+Always prefer SDK APIs for better maintainability, type safety, and feature integration.
 
-The MatrixOne Python SDK provides high-level APIs that are more maintainable, type-safe, and feature-rich than raw SQL. Always prefer these APIs when available.
+Table Operations Best Practices
+--------------------------------
 
-.. code-block:: python
-
-   # ✅ Good: Use client API
-   from matrixone import Client
-   from matrixone.orm import logical_in
-   from matrixone.config import get_connection_params
-
-   client = Client()
-   host, port, user, password, database = get_connection_params()
-   client.connect(host=host, port=port, user=user, password=password, database=database)
-
-   # Create tables using API
-   client.create_table("users", {
-       "id": "int",
-       "username": "varchar(50)",
-       "email": "varchar(100)",
-       "age": "int"
-   }, primary_key="id")
-
-   # Insert data using API
-   client.batch_insert("users", [
-       {"id": 1, "username": "alice", "email": "alice@example.com", "age": 25},
-       {"id": 2, "username": "bob", "email": "bob@example.com", "age": 30}
-   ])
-
-   # Query using modern query builder
-   results = client.query("users").filter(logical_in("age", [25, 30])).all()
-
-   # ❌ Avoid: Raw SQL when API alternatives exist
-   # client.execute("CREATE TABLE users (id INT, username VARCHAR(50), ...)")
-   # client.execute("INSERT INTO users VALUES (1, 'alice', 'alice@example.com', 25)")
-   # client.execute("SELECT * FROM users WHERE age IN (25, 30)")
-
-**Use Modern Query Building Features:**
-
-.. code-block:: python
-
-   from matrixone.orm import logical_in
-   from matrixone.sqlalchemy_ext import boolean_match
-   from sqlalchemy import func
-
-   # ✅ Good: Use logical_in for flexible IN conditions
-   results = client.query("users").filter(logical_in("department_id", [1, 2, 3])).all()
-
-   # ✅ Good: Use fulltext search integration
-   fulltext_filter = boolean_match("bio").must("python developer")
-   results = client.query("users").filter(logical_in("id", fulltext_filter)).all()
-
-   # ✅ Good: Use expressions in group_by and having
-   results = (client.query("users")
-              .select("department_id", func.count("id").label("user_count"))
-              .group_by("department_id")
-              .having(func.count("id") > 1)
-              .all())
-
-   # ✅ Good: Use explain for query optimization
-   explain_result = client.query("users").filter("age > 25").explain(verbose=True)
-
-   # ❌ Avoid: Complex raw SQL when query builder can handle it
-   # client.execute("SELECT department_id, COUNT(id) as user_count FROM users 
-   #                 WHERE age > 25 GROUP BY department_id HAVING COUNT(id) > 1")
-
-**Leverage Vector and Fulltext Operations:**
-
-.. code-block:: python
-
-   # ✅ Good: Use vector operations API
-   client.vector_ops.create_hnsw(
-       table_name="documents",
-       name="idx_embedding",
-       column="embedding",
-       m=16,
-       ef_construction=200
-   )
-
-   results = client.vector_ops.similarity_search(
-       table_name="documents",
-       vector_column="embedding",
-       query_vector=query_vector,
-       limit=5,
-       distance_type="cosine"
-   )
-
-   # ✅ Good: Use fulltext search API
-   client.fulltext_index.create("products", "idx_description", "description", algorithm="BM25")
-   
-   results = client.fulltext_index.simple_query(
-       table_name="products",
-       columns=["description"],
-       query="laptop OR phone",
-       limit=10
-   )
-
-   # ❌ Avoid: Raw SQL for vector and fulltext operations
-   # client.execute("CREATE INDEX idx_embedding ON documents USING hnsw (embedding vector_l2_ops)")
-   # client.execute("SELECT * FROM documents ORDER BY embedding <-> %s LIMIT 5")
-
-Connection Management
----------------------
-
-Environment Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**Use Environment Variables for Configuration:**
-
-.. code-block:: python
-
-   import os
-   from matrixone import Client
-   from matrixone.config import get_connection_params
-
-   # Recommended: Use environment variables
-   # Set these in your environment or .env file:
-   # MATRIXONE_HOST=your-host
-   # MATRIXONE_PORT=6001
-   # MATRIXONE_USER=your-user
-   # MATRIXONE_PASSWORD=your-password
-   # MATRIXONE_DATABASE=your-database
-
-   def create_client():
-       host, port, user, password, database = get_connection_params()
-       
-       client = Client(
-           connection_timeout=30,        # 30 second timeout
-           query_timeout=300,           # 5 minute query timeout
-           auto_commit=True,            # Enable auto-commit
-           charset='utf8mb4',           # Support international characters
-           sql_log_mode='simple',       # Simple mode for production
-           slow_query_threshold=1.0     # Alert on slow queries
-       )
-       
-       client.connect(host=host, port=port, user=user, password=password, database=database)
-       return client
-
-**Connection Pooling Best Practices:**
-
-.. code-block:: python
-
-   from matrixone import Client
-   from contextlib import contextmanager
-
-   class DatabaseManager:
-       def __init__(self):
-           self._client = None
-           
-       def get_client(self):
-           if self._client is None:
-               self._client = create_client()
-           return self._client
-           
-       @contextmanager
-       def get_connection(self):
-           client = self.get_client()
-           try:
-               yield client
-           except Exception as e:
-               # Log error and potentially reconnect
-               print(f"Database error: {e}")
-               raise
-           finally:
-               # Don't disconnect here - keep connection alive
-               pass
-               
-       def close(self):
-           if self._client:
-               self._client.disconnect()
-               self._client = None
-
-   # Usage
-   db_manager = DatabaseManager()
-
-   with db_manager.get_connection() as client:
-       result = client.execute("SELECT 1")
-       print(result.fetchall())
-
-   # Clean up when application shuts down
-   db_manager.close()
-
-Error Handling and Resilience
------------------------------
-
-Comprehensive Error Handling
+Creating Tables with SDK API
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from matrixone import Client
-   from matrixone.exceptions import ConnectionError, QueryError, VersionError
-   import logging
-   import time
-   from functools import wraps
+   from matrixone.config import get_connection_params
+   
+   # Connect using environment configuration
+   client = Client()
+   host, port, user, password, database = get_connection_params()
+   client.connect(host=host, port=port, user=user, password=password, database=database)
+   
+   # ✅ GOOD: Use create_table API with dictionary
+   client.create_table("users", {
+       "id": "int",
+       "username": "varchar(100)",
+       "email": "varchar(255)",
+       "created_at": "timestamp",
+       "age": "int"
+   }, primary_key="id")
+   
+   # ✅ GOOD: Use create_table with ORM model
+   from sqlalchemy import Column, Integer, String, DateTime
+   from matrixone.orm import declarative_base
+   
+   Base = declarative_base()
+   
+   class Product(Base):
+       __tablename__ = 'products'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(200))
+       price = Column(Integer)
+       category = Column(String(50))
+       created_at = Column(DateTime)
+   
+   client.create_table(Product)
+   
+   # ❌ AVOID: Raw SQL for table creation
+   # client.execute("CREATE TABLE users (id INT, username VARCHAR(100)...)")
 
-   # Configure logging
-   logging.basicConfig(level=logging.INFO)
-   logger = logging.getLogger(__name__)
+Data Insertion Best Practices
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   def retry_on_failure(max_retries=3, delay=1):
-       """Decorator for retrying operations on failure"""
-       def decorator(func):
-           @wraps(func)
-           def wrapper(*args, **kwargs):
-               for attempt in range(max_retries):
-                   try:
-                       return func(*args, **kwargs)
-                   except (ConnectionError, QueryError) as e:
-                       if attempt == max_retries - 1:
-                           logger.error(f"Operation failed after {max_retries} attempts: {e}")
-                           raise
-                       
-                       logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
-                       time.sleep(delay)
-                       
-               return None
-           return wrapper
-       return decorator
+.. code-block:: python
 
-   class RobustDatabaseClient:
-       def __init__(self):
-           self.client = None
-           self.max_retries = 3
-           self.retry_delay = 1
-           
-       def connect(self):
-           """Connect with retry logic"""
-           for attempt in range(self.max_retries):
-               try:
-                   self.client = Client()
-                   self.client.connect(
-                       host='localhost',
-                       port=6001,
-                       user='root',
-                       password='111',
-                       database='test'
-                   )
-                   logger.info("Successfully connected to database")
-                   return
-                   
-               except ConnectionError as e:
-                   if attempt == self.max_retries - 1:
-                       logger.error(f"Failed to connect after {self.max_retries} attempts: {e}")
-                       raise
-                   
-                   logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
-                   time.sleep(self.retry_delay)
-                   
-       @retry_on_failure(max_retries=3, delay=1)
-       def execute_query(self, query, params=None):
-           """Execute query with retry logic"""
-           try:
-               result = self.client.execute(query, params)
-               return result.fetchall()
-               
-           except QueryError as e:
-               logger.error(f"Query failed: {e}")
-               raise
-               
-           except Exception as e:
-               logger.error(f"Unexpected error: {e}")
-               raise
-               
-       def check_connection(self):
-           """Check if connection is still alive"""
-           try:
-               self.client.execute("SELECT 1")
-               return True
-           except Exception:
-               return False
-               
-       def reconnect_if_needed(self):
-           """Reconnect if connection is lost"""
-           if not self.check_connection():
-               logger.info("Connection lost, attempting to reconnect...")
-               self.connect()
+   # ✅ GOOD: Single insert using SDK API
+   client.insert("users", {
+       "id": 1,
+       "username": "alice",
+       "email": "alice@example.com",
+       "age": 25
+   })
+   
+   # ✅ GOOD: Batch insert for multiple rows - MUCH FASTER
+   users_data = [
+       {"id": 2, "username": "bob", "email": "bob@example.com", "age": 30},
+       {"id": 3, "username": "charlie", "email": "charlie@example.com", "age": 28},
+       {"id": 4, "username": "diana", "email": "diana@example.com", "age": 32}
+   ]
+   client.batch_insert("users", users_data)
+   
+   # ✅ GOOD: Insert with model class
+   client.insert(Product, {
+       "id": 101,
+       "name": "Laptop",
+       "price": 999,
+       "category": "Electronics"
+   })
+   
+   # ❌ AVOID: Manual SQL INSERT statements
+   # client.execute("INSERT INTO users VALUES (1, 'alice', 'alice@example.com', 25)")
+   
+   # ❌ AVOID: Loop with individual inserts (use batch_insert instead)
+   # for user in users_data:
+   #     client.execute(f"INSERT INTO users ...")  # Slow!
 
-   # Usage
-   db_client = RobustDatabaseClient()
-   db_client.connect()
+Query Building Best Practices
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   try:
-       results = db_client.execute_query("SELECT * FROM users WHERE active = %s", (True,))
-       print(f"Found {len(results)} active users")
-   except Exception as e:
-       logger.error(f"Database operation failed: {e}")
+.. code-block:: python
 
-ORM Best Practices
-------------------
+   from matrixone.orm import logical_in
+   from sqlalchemy import func
+   
+   # ✅ GOOD: Use query builder for simple queries
+   results = client.query("users").filter("age > 25").all()
+   
+   # ✅ GOOD: Use where with parameters (prevents SQL injection)
+   results = client.query("users").where("email = ?", "alice@example.com").all()
+   
+   # ✅ GOOD: Use logical_in for flexible IN queries
+   results = client.query("users").filter(logical_in("age", [25, 28, 30])).all()
+   
+   # ✅ GOOD: Chain multiple filters
+   results = (client.query("users")
+              .filter("age > 20")
+              .filter(logical_in("username", ["alice", "bob"]))
+              .order_by("created_at DESC")
+              .limit(10)
+              .all())
+   
+   # ✅ GOOD: Use aggregation functions
+   result = (client.query("users")
+             .select("age", func.count("id").label("count"))
+             .group_by("age")
+             .having(func.count("id") > 1)
+             .all())
+   
+   # ✅ GOOD: Use explain for query analysis
+   explain_result = client.query("users").filter("age > 25").explain(verbose=True)
+   print(explain_result)
+   
+   # ❌ AVOID: Complex raw SQL that query builder can handle
+   # client.execute("SELECT age, COUNT(id) as count FROM users 
+   #                 WHERE age > 20 GROUP BY age HAVING COUNT(id) > 1")
 
-Model Design Guidelines
+Update and Delete Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Update using query builder
+   client.query("users").update({"age": 26}).filter("id = 1").execute()
+   
+   # ✅ GOOD: Update multiple columns
+   client.query("users").update({
+       "username": "alice_updated",
+       "age": 27
+   }).filter("id = 1").execute()
+   
+   # ✅ GOOD: Delete using query builder
+   client.query("users").filter("id = 999").delete()
+   
+   # ✅ GOOD: Bulk delete with conditions
+   client.query("users").filter("age < 18").delete()
+   
+   # ❌ AVOID: Raw UPDATE/DELETE SQL
+   # client.execute("UPDATE users SET age = 26 WHERE id = 1")
+   # client.execute("DELETE FROM users WHERE id = 999")
+
+Vector Operations Best Practices
+---------------------------------
+
+Creating Vector Tables
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import create_vector_column
+   from matrixone.orm import declarative_base
+   from sqlalchemy import Column, Integer, String, Text
+   
+   Base = declarative_base()
+   
+   # ✅ GOOD: Define vector table with ORM
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(Integer, primary_key=True)
+       title = Column(String(200))
+       content = Column(Text)
+       category = Column(String(50))
+       # Vector column for embeddings
+       embedding = create_vector_column(384, 'f32')  # 384-dim f32 vectors
+   
+   client.create_table(Document)
+   
+   # ✅ GOOD: Create vector table using dictionary API
+   client.create_table("articles", {
+       "id": "int",
+       "title": "varchar(200)",
+       "content": "text",
+       "embedding": "vecf32(768)"  # 768-dimensional vectors
+   }, primary_key="id")
+
+IVF Index Management
+~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import numpy as np
+   
+   # ✅ GOOD: Enable IVF indexing
+   client.vector_ops.enable_ivf()
+   
+   # ✅ GOOD: Create IVF index with optimal parameters
+   client.vector_ops.create_ivf(
+       "documents",  # Table name as positional argument
+       name="idx_embedding_ivf",
+       column="embedding",
+       lists=100,  # Use sqrt(N) to 4*sqrt(N) where N is total vectors
+       op_type="vector_l2_ops"
+   )
+   
+   # ✅ GOOD: Insert vectors using SDK API
+   vectors_data = []
+   for i in range(100):
+       vectors_data.append({
+           "id": i,
+           "title": f"Document {i}",
+           "content": f"Content for document {i}",
+           "embedding": np.random.rand(384).tolist()
+       })
+   client.batch_insert("documents", vectors_data)
+   
+   # ✅ CRITICAL: Monitor IVF index health regularly
+   stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+   
+   counts = stats['distribution']['centroid_count']
+   balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+   
+   print(f"Total centroids: {len(counts)}")
+   print(f"Total vectors: {sum(counts)}")
+   print(f"Balance ratio: {balance_ratio:.2f}")
+   
+   # Rebuild if imbalanced
+   if balance_ratio > 2.5:
+       print("⚠️  Index needs rebuilding")
+       client.vector_ops.drop("documents", "idx_embedding_ivf")
+       client.vector_ops.create_ivf("documents", "idx_embedding_ivf", "embedding", lists=100)
+   
+   # ❌ AVOID: Raw SQL for vector indexing
+   # client.execute("CREATE INDEX idx_embedding ON documents USING ivf (embedding vector_l2_ops) LISTS = 100")
+
+Vector Similarity Search
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, func, Index
-   from matrixone.orm import declarative_base
-   from matrixone import Client
+   # ✅ GOOD: Use vector_ops.similarity_search API
+   query_vector = np.random.rand(384).tolist()
+   
+   results = client.vector_ops.similarity_search(
+       "documents",  # Table name as positional argument
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=10,
+       distance_type="l2"
+   )
+   
+   print(f"Found {len(results.rows)} similar documents")
+   for row in results.rows:
+       print(f"ID: {row[0]}, Title: {row[1]}, Distance: {row[-1]:.4f}")
+   
+   # ✅ GOOD: Similarity search with filters
+   results = client.vector_ops.similarity_search(
+       "documents",  # Table name as positional argument
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=10,
+       distance_type="cosine",
+       filter_conditions="category = 'technology'"
+   )
+   
+   # ✅ GOOD: Range search for distance threshold
+   results = client.vector_ops.range_search(
+       "documents",  # Table name as positional argument
+       vector_column="embedding",
+       query_vector=query_vector,
+       max_distance=0.5,
+       distance_type="l2"
+   )
+   
+   # ❌ AVOID: Raw SQL for vector search
+   # client.execute("SELECT * FROM documents ORDER BY l2_distance(embedding, ?) LIMIT 10")
 
-   Base = declarative_base()
-
-   class User(Base):
-       __tablename__ = 'users'
-       
-       # Primary key with auto-increment
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       
-       # Required fields with proper constraints
-       username = Column(String(50), unique=True, nullable=False, index=True)
-       email = Column(String(100), unique=True, nullable=False, index=True)
-       
-       # Optional fields with defaults
-       full_name = Column(String(200))
-       bio = Column(Text)
-       is_active = Column(Integer, default=1, nullable=False)
-       
-       # Timestamps with automatic updates
-       created_at = Column(TIMESTAMP, server_default=func.current_timestamp(), nullable=False)
-       updated_at = Column(TIMESTAMP, server_default=func.current_timestamp(), 
-                          onupdate=func.current_timestamp(), nullable=False)
-       
-       # Composite indexes for common queries
-       __table_args__ = (
-           Index('idx_user_active_created', 'is_active', 'created_at'),
-           Index('idx_user_email_active', 'email', 'is_active'),
-       )
-       
-       def to_dict(self):
-           """Convert to dictionary for JSON serialization"""
-           return {
-               'id': self.id,
-               'username': self.username,
-               'email': self.email,
-               'full_name': self.full_name,
-               'bio': self.bio,
-               'is_active': bool(self.is_active),
-               'created_at': self.created_at.isoformat() if self.created_at else None,
-               'updated_at': self.updated_at.isoformat() if self.updated_at else None
-           }
-           
-       @classmethod
-       def from_dict(cls, data):
-           """Create instance from dictionary"""
-           # Filter out None values and non-existent attributes
-           filtered_data = {k: v for k, v in data.items() 
-                          if hasattr(cls, k) and v is not None}
-           return cls(**filtered_data)
-           
-       def __repr__(self):
-           return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
-
-Session Management
-~~~~~~~~~~~~~~~~~~
+HNSW Index for High Accuracy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from sqlalchemy.orm import sessionmaker
-   from contextlib import contextmanager
-   from matrixone import Client
+   # ✅ GOOD: Enable and create HNSW index
+   client.vector_ops.enable_hnsw()
+   
+   client.vector_ops.create_hnsw(
+       "documents",  # Table name as positional argument
+       name="idx_embedding_hnsw",
+       column="embedding",
+       m=16,                  # Connections per node (higher = better recall, slower build)
+       ef_construction=200,   # Build-time search depth (higher = better quality)
+       op_type="vector_l2_ops"
+   )
+   
+   # Search works the same way - SDK automatically uses the best index
+   results = client.vector_ops.similarity_search(
+       "documents",  # Table name as positional argument
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=10
+   )
 
-   class ORMManager:
-       def __init__(self, client):
-           self.client = client
-           self.engine = client.get_sqlalchemy_engine()
-           self.Session = sessionmaker(bind=self.engine)
-           
-       @contextmanager
-       def get_session(self):
-           """Get database session with automatic cleanup"""
-           session = self.Session()
-           try:
-               yield session
-               session.commit()
-           except Exception as e:
-               session.rollback()
-               raise
-           finally:
-               session.close()
-               
-       def create_user(self, user_data):
-           """Create user with proper error handling"""
-           with self.get_session() as session:
-               try:
-                   user = User.from_dict(user_data)
-                   session.add(user)
-                   session.flush()  # Get the ID without committing
-                   
-                   # Additional validation or business logic
-                   if not user.username or len(user.username) < 3:
-                       raise ValueError("Username must be at least 3 characters")
-                       
-                   return user.to_dict()
-                   
-               except Exception as e:
-                   logger.error(f"Failed to create user: {e}")
-                   raise
-                   
-       def get_active_users(self, limit=100, offset=0):
-           """Get active users with pagination"""
-           with self.get_session() as session:
-               users = session.query(User).filter(
-                   User.is_active == 1
-               ).offset(offset).limit(limit).all()
-               
-               return [user.to_dict() for user in users]
+Fulltext Search Best Practices
+-------------------------------
 
-   # Usage
-   client = Client()
-   client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+Fulltext Index Creation
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Enable fulltext indexing first
+   client.fulltext_index.enable_fulltext()
    
-   orm_manager = ORMManager(client)
+   # ✅ GOOD: Create fulltext index using SDK API
+   client.fulltext_index.create(
+       "documents",  # Table name as positional argument
+       name="ftidx_content",
+       columns=["title", "content"]
+   )
    
-   # Create user
-   user_data = {
-       'username': 'johndoe',
-       'email': 'john@example.com',
-       'full_name': 'John Doe',
-       'bio': 'Software developer'
-   }
+   # ✅ GOOD: Create index with specific algorithm
+   from matrixone import FulltextAlgorithmType
    
-   try:
-       created_user = orm_manager.create_user(user_data)
-       print(f"Created user: {created_user}")
-   except Exception as e:
-       print(f"Failed to create user: {e}")
+   client.fulltext_index.create(
+       "documents",  # Table name as positional argument
+       name="ftidx_advanced",
+       columns=["content"],
+       algorithm=FulltextAlgorithmType.BM25
+   )
+   
+   # ❌ AVOID: Raw SQL for fulltext index creation
+   # client.execute("CREATE FULLTEXT INDEX ftidx_content ON documents(title, content) 
+   #                 WITH PARSER ngram ALGORITHM = BM25")
+
+Fulltext Search Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+   from matrixone.orm import logical_in
+   
+   # ✅ GOOD: Boolean search with encourage (like search)
+   results = client.query(
+       "documents.title",
+       "documents.content",
+       boolean_match("title", "content").encourage("machine learning")
+   ).execute()
+   
+   print(f"Found {len(results.rows)} results")
+   for row in results.rows:
+       print(f"Title: {row[0]}, Content: {row[1]}")
+   
+   # ✅ GOOD: Boolean search with must/should operators
+   ft_filter = (boolean_match("title", "content")
+                .must("python")
+                .should("tensorflow", "pytorch")
+                .must_not("deprecated"))
+   
+   results = client.query(
+       "documents.title",
+       "documents.content",
+       ft_filter
+   ).execute()
+   
+   # ✅ GOOD: Combine fulltext with regular filters
+   results = (client.query(
+                  "documents.title",
+                  "documents.content",
+                  boolean_match("title", "content").encourage("deep learning")
+              )
+              .filter("created_at > '2024-01-01'")
+              .limit(10)
+              .execute())
+
+Metadata Analysis Best Practices
+---------------------------------
+
+Table Metadata Scanning
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Use metadata.scan for comprehensive table analysis
+   metadata = client.metadata.scan(
+       dbname="test",
+       tablename="users"
+   )
+   
+   print("Column Analysis:")
+   for row in metadata:
+       print(f"\n{row.column_name} ({row.data_type}):")
+       print(f"  - Nullable: {row.is_nullable}")
+       print(f"  - Null count: {row.null_count}")
+       print(f"  - Distinct values: {row.distinct_count}")
+       print(f"  - Min: {row.min_value}, Max: {row.max_value}")
+       print(f"  - Avg length: {row.avg_length}")
+   
+   # ✅ GOOD: Get table-level statistics
+   stats = client.metadata.get_table_brief_stats(
+       dbname="test",
+       tablename="users"
+   )
+   
+   print(f"\nTable Statistics:")
+   print(f"  - Total rows: {stats.row_count}")
+   print(f"  - Size: {stats.size_bytes / 1024 / 1024:.2f} MB")
+   print(f"  - Columns: {stats.column_count}")
+   
+   # ✅ GOOD: Scan all tables in a database
+   all_metadata = client.metadata.scan(dbname="test")
+   
+   for row in all_metadata:
+       print(f"{row.table_name}.{row.column_name}: {row.data_type}")
 
 Transaction Management
 ----------------------
 
-Best Practices for Transactions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Basic Transaction Usage
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Use transaction context manager
+   with client.transaction() as tx:
+       # Insert user
+       tx.insert("users", {
+           "id": 100,
+           "username": "transaction_user",
+           "email": "tx@example.com",
+           "age": 30
+       })
+       
+       # Insert related order
+       tx.insert("orders", {
+           "id": 1,
+           "user_id": 100,
+           "amount": 99.99,
+           "status": "pending"
+       })
+       
+       # Transaction commits automatically if no exception
+   
+   # On exception, transaction rolls back automatically
+   try:
+       with client.transaction() as tx:
+           tx.insert("users", {"id": 101, "username": "test"})
+           raise Exception("Something went wrong")
+           tx.insert("orders", {"id": 2, "user_id": 101})  # Never executed
+   except Exception as e:
+       print(f"Transaction rolled back: {e}")
+
+Advanced Transaction Patterns
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Transaction with query operations
+   with client.transaction() as tx:
+       # Check balance
+       result = tx.query("accounts").filter("id = 1").one()
+       balance = result[2]  # Assuming balance is 3rd column
+       
+       if balance >= 100:
+           # Deduct from account
+           tx.query("accounts").update({
+               "balance": balance - 100
+           }).filter("id = 1").execute()
+           
+           # Record transaction
+           tx.insert("transactions", {
+               "account_id": 1,
+               "amount": -100,
+               "type": "withdrawal"
+           })
+   
+   # ✅ GOOD: Batch operations in transaction
+   with client.transaction() as tx:
+       # Batch insert multiple records
+       users = [
+           {"id": i, "username": f"user{i}", "email": f"user{i}@example.com"}
+           for i in range(200, 300)
+       ]
+       tx.batch_insert("users", users)
+       
+       # Update related statistics
+       tx.execute("UPDATE user_stats SET total_users = total_users + 100")
+
+Snapshot and PITR Operations
+-----------------------------
+
+Snapshot Management
+~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone.snapshot import SnapshotLevel
+   
+   # ✅ GOOD: Create cluster-level snapshot
+   snapshot = client.snapshots.create(
+       name="cluster_backup_20240101",
+       level=SnapshotLevel.CLUSTER
+   )
+   print(f"Created snapshot: {snapshot.name}")
+   
+   # ✅ GOOD: Create account-level snapshot
+   snapshot = client.snapshots.create(
+       name="account_backup",
+       level=SnapshotLevel.ACCOUNT
+   )
+   
+   # ✅ GOOD: Create database-level snapshot
+   snapshot = client.snapshots.create(
+       name="db_backup_test",
+       level=SnapshotLevel.DATABASE,
+       database_name="test"
+   )
+   
+   # ✅ GOOD: List all snapshots
+   snapshots = client.snapshots.list()
+   for snap in snapshots:
+       print(f"{snap.name}: {snap.level}")
+   
+   # ✅ GOOD: Drop snapshot when no longer needed
+   client.snapshots.drop("old_backup_20231201")
+
+Table Cloning
+~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Clone database
+   client.clone.clone_database(
+       target_database="test_copy",
+       source_database="test",
+       snapshot_name="db_backup_test"
+   )
+   
+   # ✅ GOOD: Clone table
+   client.clone.clone_table(
+       target_table="users_backup",
+       source_table="users",
+       snapshot_name="users_backup",
+       if_not_exists=True
+   )
+   
+   # ✅ GOOD: Clone table within transaction
+   with client.transaction() as tx:
+       tx.clone.clone_table(
+           target_table="users_temp",
+           source_table="users",
+           snapshot_name="users_backup"
+       )
+
+Point-in-Time Recovery (PITR)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Create PITR for cluster
+   pitr_name = "pitr_backup"
+   pitr = client.pitr.create_cluster_pitr(
+       name=pitr_name,
+       range_value=1,
+       range_unit="d"  # days
+   )
+   
+   # ✅ GOOD: List PITR snapshots
+   pitr_list = client.pitr.list()
+   for pitr_item in pitr_list:
+       print(f"PITR: {pitr_item}")
+   
+   # ✅ GOOD: Drop PITR when done
+   try:
+       client.pitr.drop_cluster_pitr(pitr_name)
+   except Exception as e:
+       print(f"PITR cleanup: {e}")
+
+Account and User Management
+----------------------------
+
+Account Operations
+~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone.account import AccountManager
+   
+   # ✅ GOOD: Initialize AccountManager
+   account_manager = AccountManager(client)
+   
+   # ✅ GOOD: Create account
+   account = account_manager.create_account(
+       name="test_account",
+       admin_name="admin_user",
+       admin_password="secure_password_123",
+       comment="Test account for development"
+   )
+   print(f"Created account: {account.name}")
+   
+   # ✅ GOOD: List accounts
+   accounts = account_manager.list_accounts()
+   for acc in accounts:
+       print(f"Account: {acc.name}, Status: {acc.status}")
+   
+   # ✅ GOOD: Drop account
+   account_manager.drop_account("test_account")
+
+User and Role Management
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone.account import AccountManager
+   
+   account_manager = AccountManager(client)
+   
+   # ✅ GOOD: Create user
+   user = account_manager.create_user(
+       username="developer",
+       password="dev_password_123",
+       comment="Developer account"
+   )
+   print(f"Created user: {user.name}")
+   
+   # ✅ GOOD: Create role
+   role = account_manager.create_role(
+       role_name="data_analyst",
+       comment="Read-only data access"
+   )
+   
+   # ✅ GOOD: Grant privileges to role
+   account_manager.grant_privilege(
+       role_or_user="data_analyst",
+       privilege="SELECT",
+       database="test",
+       table="users"
+   )
+   
+   # ✅ GOOD: Grant role to user
+   account_manager.grant_role(
+       role_name="data_analyst",
+       username="developer"
+   )
+   
+   # ✅ GOOD: List users
+   users = account_manager.list_users()
+   for user in users:
+       print(f"User: {user.name}")
+
+Pub/Sub Operations
+------------------
+
+Publication and Subscription Management
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: List publications
+   publications = client.pubsub.list_publications()
+   for pub in publications:
+       print(f"Publication: {pub}")
+   
+   # ✅ GOOD: List subscriptions
+   subscriptions = client.pubsub.list_subscriptions()
+   for sub in subscriptions:
+       print(f"Subscription: {sub}")
+   
+   # ✅ GOOD: Drop subscription (if exists)
+   try:
+       client.pubsub.drop_subscription("test_subscription")
+   except Exception as e:
+       print(f"Drop subscription: {e}")
+   
+   # ✅ GOOD: Drop publication (if exists)
+   try:
+       client.pubsub.drop_publication("test_publication")
+   except Exception as e:
+       print(f"Drop publication: {e}")
+
+Async Operations Best Practices
+--------------------------------
+
+Basic Async Usage
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import asyncio
+   from matrixone import AsyncClient
+   from matrixone.config import get_connection_params
+   
+   async def async_operations():
+       # ✅ GOOD: Use AsyncClient for async operations
+       client = AsyncClient()
+       host, port, user, password, database = get_connection_params()
+       await client.connect(host=host, port=port, user=user, password=password, database=database)
+       
+       try:
+           # Create table
+           await client.create_table("async_users", {
+               "id": "int",
+               "username": "varchar(100)",
+               "email": "varchar(255)"
+           }, primary_key="id")
+           
+           # Batch insert
+           users = [
+               {"id": i, "username": f"user{i}", "email": f"user{i}@example.com"}
+               for i in range(100)
+           ]
+           await client.batch_insert("async_users", users)
+           
+           # Query
+           results = await client.query("async_users").filter("id < 10").all()
+           print(f"Found {len(results.rows)} users")
+           
+       finally:
+           await client.disconnect()
+   
+   asyncio.run(async_operations())
+
+Async Vector Operations
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import numpy as np
+   
+   async def async_vector_operations():
+       client = AsyncClient()
+       await client.connect(...)
+       
+       try:
+           # Create vector table
+           await client.create_table("async_documents", {
+               "id": "int",
+               "title": "varchar(200)",
+               "embedding": "vecf32(384)"
+           }, primary_key="id")
+           
+           # Enable and create IVF index
+           await client.vector_ops.enable_ivf()
+           await client.vector_ops.create_ivf(
+               "async_documents",
+               "idx_embedding",
+               "embedding",
+               lists=50
+           )
+           
+           # Batch insert vectors
+           docs = []
+           for i in range(100):
+               docs.append({
+                   "id": i,
+                   "title": f"Document {i}",
+                   "embedding": np.random.rand(384).tolist()
+               })
+           await client.batch_insert("async_documents", docs)
+           
+           # Similarity search
+           query_vector = np.random.rand(384).tolist()
+           results = await client.vector_ops.similarity_search(
+               "async_documents",
+               "embedding",
+               query_vector,
+               limit=10
+           )
+           
+           # Monitor index health
+           stats = await client.vector_ops.get_ivf_stats("async_documents", "embedding")
+           counts = stats['distribution']['centroid_count']
+           print(f"Index health: {len(counts)} centroids, {sum(counts)} vectors")
+           
+       finally:
+           await client.disconnect()
+
+Async Transactions
+~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   async def async_transaction():
+       client = AsyncClient()
+       await client.connect(...)
+       
+       try:
+           # ✅ GOOD: Async transaction
+           async with client.transaction() as tx:
+               await tx.insert("users", {
+                   "id": 500,
+                   "username": "async_user",
+                   "email": "async@example.com"
+               })
+               
+               await tx.insert("orders", {
+                   "id": 1000,
+                   "user_id": 500,
+                   "amount": 199.99
+               })
+               # Auto-commit on success
+               
+       finally:
+           await client.disconnect()
+
+Performance Optimization
+------------------------
+
+Batch Operations
+~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Always use batch_insert for multiple rows
+   # This is 10-100x faster than individual inserts
+   large_dataset = []
+   for i in range(10000):
+       large_dataset.append({
+           "id": i,
+           "data": f"row_{i}",
+           "value": i * 2
+       })
+   
+   client.batch_insert("large_table", large_dataset)
+   
+   # ❌ AVOID: Loop with individual inserts
+   # for row in large_dataset:
+   #     client.insert("large_table", row)  # Very slow!
+
+Connection Pooling
+~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from matrixone import Client
-   from sqlalchemy.orm import sessionmaker
-   from contextlib import contextmanager
-
-   class TransactionManager:
-       def __init__(self, client):
-           self.client = client
-           self.engine = client.get_sqlalchemy_engine()
-           self.Session = sessionmaker(bind=self.engine)
-           
-       @contextmanager
-       def transaction(self):
-           """Client-level transaction with automatic rollback on error"""
-           with self.client.transaction() as tx:
-               try:
-                   yield tx
-               except Exception as e:
-                   logger.error(f"Transaction failed: {e}")
-                   raise
-                   
-       @contextmanager
-       def orm_transaction(self):
-           """ORM-level transaction with automatic rollback"""
-           session = self.Session()
-           try:
-               yield session
-               session.commit()
-           except Exception as e:
-               session.rollback()
-               logger.error(f"ORM transaction failed: {e}")
-               raise
-           finally:
-               session.close()
-               
-       def transfer_money(self, from_account_id, to_account_id, amount):
-           """Example of complex transaction with validation"""
-           with self.orm_transaction() as session:
-               # Get accounts
-               from_account = session.query(Account).filter(
-                   Account.id == from_account_id
-               ).with_for_update().first()  # Lock for update
-               
-               to_account = session.query(Account).filter(
-                   Account.id == to_account_id
-               ).with_for_update().first()
-               
-               if not from_account or not to_account:
-                   raise ValueError("One or both accounts not found")
-                   
-               if from_account.balance < amount:
-                   raise ValueError("Insufficient funds")
-                   
-               # Perform transfer
-               from_account.balance -= amount
-               to_account.balance += amount
-               
-               # Log transaction
-               transaction_log = TransactionLog(
-                   from_account_id=from_account_id,
-                   to_account_id=to_account_id,
-                   amount=amount,
-                   status='completed'
-               )
-               session.add(transaction_log)
-               
-               logger.info(f"Transferred ${amount} from account {from_account_id} to {to_account_id}")
-
-Performance Optimization
-------------------------
+   
+   # ✅ GOOD: Configure connection pooling for production
+   client = Client(
+       pool_size=20,           # Number of connections in pool
+       max_overflow=40,        # Additional connections when pool is full
+       pool_timeout=30,        # Wait time for connection
+       pool_recycle=3600,      # Recycle connections after 1 hour
+       connection_timeout=30,  # Connection establishment timeout
+       query_timeout=300       # Query execution timeout
+   )
 
 Query Optimization
 ~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from sqlalchemy.orm import sessionmaker
-   from sqlalchemy import text, func
-   from matrixone import Client
-
-   class PerformanceOptimizedClient:
-       def __init__(self, client):
-           self.client = client
-           self.engine = client.get_sqlalchemy_engine()
-           self.Session = sessionmaker(bind=self.engine)
-           
-       def bulk_insert_users(self, users_data):
-           """Bulk insert for better performance"""
-           with self.client.transaction() as tx:
-               # Use raw SQL for bulk operations
-               placeholders = ', '.join(['%s'] * len(users_data[0]))
-               columns = ['username', 'email', 'full_name', 'is_active']
-               
-               sql = f"""
-                   INSERT INTO users ({', '.join(columns)}) 
-                   VALUES ({placeholders})
-               """
-               
-               # Prepare data
-               values = [
-                   (user['username'], user['email'], user['full_name'], user.get('is_active', 1))
-                   for user in users_data
-               ]
-               
-               # Execute bulk insert
-               for value_set in values:
-                   tx.execute(sql, value_set)
-                   
-       def get_user_statistics(self):
-           """Optimized query with aggregation"""
-           with self.get_session() as session:
-               # Use raw SQL for complex aggregations
-               result = session.execute(text("""
-                   SELECT 
-                       COUNT(*) as total_users,
-                       COUNT(CASE WHEN is_active = 1 THEN 1 END) as active_users,
-                       COUNT(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as new_users,
-                       AVG(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_ratio
-                   FROM users
-               """))
-               
-               stats = result.fetchone()
-               return {
-                   'total_users': stats[0],
-                   'active_users': stats[1],
-                   'new_users': stats[2],
-                   'active_ratio': float(stats[3]) if stats[3] else 0
-               }
-               
-       def search_users_optimized(self, search_term, limit=50):
-           """Optimized search with proper indexing"""
-           with self.get_session() as session:
-               # Use fulltext search if available
-               try:
-                   from matrixone.sqlalchemy_ext.fulltext_search import natural_match
-                   
-                   results = self.client.query(User).filter(
-                       natural_match('username', 'email', 'full_name', query=search_term)
-                   ).limit(limit).all()
-                   return results
-               except Exception:
-                   # Fallback to LIKE search
-                   users = session.query(User).filter(
-                       (User.username.like(f'%{search_term}%')) |
-                       (User.email.like(f'%{search_term}%')) |
-                       (User.full_name.like(f'%{search_term}%'))
-                   ).limit(limit).all()
-                   
-                   return [user.to_dict() for user in users]
-
-Connection Pooling and Caching
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from functools import lru_cache
-   import threading
-   from matrixone import Client
-
-   class CachedDatabaseClient:
-       def __init__(self):
-           self._client = None
-           self._lock = threading.Lock()
-           
-       def get_client(self):
-           """Thread-safe client creation"""
-           if self._client is None:
-               with self._lock:
-                   if self._client is None:
-                       self._client = Client()
-                       self._client.connect(
-                           host='localhost',
-                           port=6001,
-                           user='root',
-                           password='111',
-                           database='test'
-                       )
-           return self._client
-           
-       @lru_cache(maxsize=128)
-       def get_user_by_id(self, user_id):
-           """Cached user lookup"""
-           client = self.get_client()
-           result = client.execute(
-               "SELECT * FROM users WHERE id = %s",
-               (user_id,)
-           )
-           row = result.fetchone()
-           return dict(zip([col[0] for col in result.description], row)) if row else None
-           
-       def invalidate_user_cache(self, user_id):
-           """Invalidate cache when user is updated"""
-           self.get_user_by_id.cache_clear()
-
-Vector Search Best Practices
-----------------------------
-
-Query Vector Parameter Formats
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The `query_vector` parameter in vector search functions supports multiple formats:
-
-**List Format (Recommended):**
-.. code-block:: python
-
-   import numpy as np
+   # ✅ GOOD: Use EXPLAIN to analyze queries
+   explain_result = client.query("users").filter("age > 25").explain(verbose=True)
+   print(explain_result)
    
-   # Generate query vector as list
-   query_vector_list = np.random.rand(384).tolist()  # [0.1, 0.2, 0.3, ...]
+   # ✅ GOOD: Add indexes for frequently queried columns
+   client.execute("CREATE INDEX idx_users_age ON users(age)")
+   client.execute("CREATE INDEX idx_users_email ON users(email)")
    
-   # Use in vector search
-   results = client.vector_ops.similarity_search(
-   table_name='documents',
-   vector_column='embedding',
-   query_vector=query_vector_list,  # List format
-   limit=5,
-   distance_type='l2'
-   )
-
-**String Format:**
-
-.. code-block:: python
-
-   # Convert list to string format
-   query_vector_str = str(query_vector_list)  # '[0.1, 0.2, 0.3, ...]'
+   # ✅ GOOD: Use limit for large result sets
+   results = client.query("users").order_by("created_at DESC").limit(100).all()
    
-   # Use in vector search
-   results = client.vector_ops.similarity_search(
-       table_name='documents',
-       vector_column='embedding',
-       query_vector=query_vector_str,  # String format
-       limit=5,
-       distance_type='l2'
-   )
-
-**In ORM Queries:**
-.. code-block:: python
-
-   from sqlalchemy import text
-   
-   # Both formats work in raw SQL queries
-   # Using list format
-   session.execute(text("""
-   SELECT id, title, l2_distance(embedding, :query_vector) as distance
-   FROM documents
-   WHERE l2_distance(embedding, :query_vector) < 1.0
-   ORDER BY distance ASC
-   """), {'query_vector': query_vector_list})
-   
-   # Using string format  
-   session.execute(text("""
-   SELECT id, title, l2_distance(embedding, :query_vector) as distance
-   FROM documents
-   WHERE l2_distance(embedding, :query_vector) < 1.0
-   ORDER BY distance ASC
-   """), {'query_vector': query_vector_str})
-
-
-
-**With VectorColumn Methods:**
-
-.. code-block:: python
-
-   from matrixone.sqlalchemy_ext import VectorColumn
-   
-   # Both formats work with VectorColumn methods
-   session.query(Document).filter(
-       Document.embedding.within_distance(query_vector_list, 1.0)  # List format
-   ).all()
-   
-   session.query(Document).filter(
-       Document.embedding.within_distance(query_vector_str, 1.0)   # String format
-   ).all()
-
-Index Configuration
-~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from matrixone import Client
-   from matrixone.sqlalchemy_ext import create_vector_column
-   from sqlalchemy import Column, Integer, String, Text
-   from matrixone.orm import declarative_base
-
-   Base = declarative_base()
-
-   class Document(Base):
-       __tablename__ = 'documents'
-       
-       id = Column(Integer, primary_key=True, autoincrement=True)
-       title = Column(String(200), nullable=False, index=True)
-       content = Column(Text)
-       # Use appropriate vector dimensions (384 for sentence-transformers, 1536 for OpenAI)
-       embedding = create_vector_column(384, "f32")
-       created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-
-   class VectorSearchManager:
-       def __init__(self, client):
-           self.client = client
-           
-       def setup_vector_indexes(self):
-           """Setup optimized vector indexes"""
-           # Enable vector indexing
-           self.client.vector_ops.enable_ivf()
-           
-           # Create IVF index for large datasets
-           self.client.vector_ops.create_ivf(
-               table_name='documents',
-               name='idx_documents_embedding_ivf',
-               column='embedding',
-               lists=100,  # sqrt(number_of_documents) is a good starting point
-               op_type='vector_l2_ops'
-           )
-           
-           # Enable HNSW for high-accuracy searches
-           self.client.vector_ops.enable_hnsw()
-           
-           # Create HNSW index for high-accuracy searches
-           self.client.vector_ops.create_hnsw(
-               table_name='documents',
-               name='idx_documents_embedding_hnsw',
-               column='embedding',
-               m=16,                    # Good balance for most use cases
-               ef_construction=200,    # Higher for better quality
-               ef_search=50,           # Adjust based on accuracy needs
-               op_type='vector_l2_ops'
-           )
-           
-       def search_documents(self, query_vector, search_type='ivf', limit=10):
-           """Search documents with different index types"""
-           if search_type == 'ivf':
-               # Fast search with IVF
-               results = self.client.vector_ops.similarity_search(
-                   table_name='documents',
-                   vector_column='embedding',
-                   query_vector=query_vector,
-                   limit=limit,
-                   distance_type='l2'
-               )
-           elif search_type == 'hnsw':
-               # High-accuracy search with HNSW
-               results = self.client.vector_ops.similarity_search(
-                   table_name='documents',
-                   vector_column='embedding',
-                   query_vector=query_vector,
-                   limit=limit,
-                   distance_type='l2'
-               )
-           else:
-               raise ValueError("search_type must be 'ivf' or 'hnsw'")
-               
-           return results
-
-Fulltext Search Best Practices
-------------------------------
-
-Index Design and Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from matrixone import Client, FulltextAlgorithmType, FulltextModeType
-
-   class FulltextSearchManager:
-       def __init__(self, client):
-           self.client = client
-           
-       def setup_fulltext_indexes(self):
-           """Setup optimized fulltext indexes"""
-           # Enable fulltext indexing
-           self.client.fulltext_index.enable_fulltext()
-           
-           # Create BM25 index for better relevance scoring
-           self.client.fulltext_index.create(
-               table_name='documents',
-               name='ftidx_documents_content',
-               columns=['title', 'content', 'tags'],
-               algorithm=FulltextAlgorithmType.BM25
-           )
-           
-           # Create separate index for metadata
-           self.client.fulltext_index.create(
-               table_name='documents',
-               name='ftidx_documents_metadata',
-               columns=['title', 'tags'],
-               algorithm=FulltextAlgorithmType.TF_IDF
-           )
-           
-       def search_documents(self, search_term, mode='natural', limit=20):
-           """Search documents with different modes"""
-           if mode == 'natural':
-               # Natural language search
-               from matrixone.sqlalchemy_ext.fulltext_search import natural_match
-               
-               results = self.client.query(Document).filter(
-                   natural_match('title', 'content', 'tags', query=search_term)
-               ).limit(limit).all()
-           elif mode == 'boolean':
-               # Boolean search with operators
-               from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
-               
-               results = self.client.query(Document).filter(
-                   boolean_match('title', 'content', 'tags')
-                   .must(search_term)
-               ).limit(limit).all()
-           else:
-               raise ValueError("mode must be 'natural' or 'boolean'")
-               
-           return results
-
-Security Best Practices
------------------------
-
-Input Validation and Sanitization
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   import re
-   from typing import Optional, List
-   from matrixone import Client
-
-   class SecureDatabaseClient:
-       def __init__(self, client):
-           self.client = client
-           
-       def validate_username(self, username: str) -> bool:
-           """Validate username format"""
-           if not username or len(username) < 3 or len(username) > 50:
-               return False
-           # Only allow alphanumeric and underscore
-           return bool(re.match(r'^[a-zA-Z0-9_]+$', username))
-           
-       def validate_email(self, email: str) -> bool:
-           """Validate email format"""
-           pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-           return bool(re.match(pattern, email))
-           
-       def sanitize_search_term(self, search_term: str) -> str:
-           """Sanitize search term for fulltext search"""
-           # Remove potentially dangerous characters
-           sanitized = re.sub(r'[^\w\s-]', '', search_term)
-           # Limit length
-           return sanitized[:100]
-           
-       def create_user_safe(self, username: str, email: str, full_name: str) -> Optional[dict]:
-           """Create user with validation"""
-           # Validate inputs
-           if not self.validate_username(username):
-               raise ValueError("Invalid username format")
-               
-           if not self.validate_email(email):
-               raise ValueError("Invalid email format")
-               
-           if not full_name or len(full_name) > 200:
-               raise ValueError("Invalid full name")
-               
-           # Use parameterized queries
-           try:
-               result = self.client.execute(
-                   "INSERT INTO users (username, email, full_name) VALUES (%s, %s, %s)",
-                   (username, email, full_name)
-               )
-               return {'id': result.lastrowid, 'username': username, 'email': email}
-           except Exception as e:
-               logger.error(f"Failed to create user: {e}")
-               raise
-
-Access Control and Permissions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from functools import wraps
-   from matrixone import Client
-
-   class AccessControlManager:
-       def __init__(self, client):
-           self.client = client
-           
-       def check_user_permissions(self, user_id: int, required_permission: str) -> bool:
-           """Check if user has required permission"""
-           result = self.client.execute(
-               """
-               SELECT COUNT(*) FROM user_permissions up
-               JOIN permissions p ON up.permission_id = p.id
-               WHERE up.user_id = %s AND p.name = %s
-               """,
-               (user_id, required_permission)
-           )
-           return result.fetchone()[0] > 0
-           
-       def require_permission(self, permission: str):
-           """Decorator to require specific permission"""
-           def decorator(func):
-               @wraps(func)
-               def wrapper(self, user_id: int, *args, **kwargs):
-                   if not self.check_user_permissions(user_id, permission):
-                       raise PermissionError(f"User {user_id} lacks permission: {permission}")
-                   return func(self, user_id, *args, **kwargs)
-               return wrapper
-           return decorator
-
-   # Usage
-   access_manager = AccessControlManager(client)
-
-   class UserService:
-       def __init__(self, access_manager):
-           self.access_manager = access_manager
-           
-       @access_manager.require_permission('user.read')
-       def get_user(self, user_id: int, target_user_id: int):
-           """Get user information (requires read permission)"""
-           result = self.client.execute(
-               "SELECT id, username, email FROM users WHERE id = %s",
-               (target_user_id,)
-           )
-           return result.fetchone()
-           
-       @access_manager.require_permission('user.write')
-       def update_user(self, user_id: int, target_user_id: int, data: dict):
-           """Update user information (requires write permission)"""
-           # Implementation here
-           pass
+   # ✅ GOOD: Filter before ordering/grouping
+   results = (client.query("users")
+              .filter("created_at > '2024-01-01'")  # Filter first
+              .order_by("username")                  # Then order
+              .limit(50)                             # Then limit
+              .all())
 
 Monitoring and Logging
-----------------------
-
-Performance Monitoring
-~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   import time
-   import logging
-   from functools import wraps
-   from matrixone import Client
-
-   # Configure logging
-   logging.basicConfig(
-       level=logging.INFO,
-       format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-       handlers=[
-           logging.FileHandler('database.log'),
-           logging.StreamHandler()
-       ]
-   )
-   logger = logging.getLogger(__name__)
-
-   def monitor_performance(func):
-       """Decorator to monitor function performance"""
-       @wraps(func)
-       def wrapper(*args, **kwargs):
-           start_time = time.time()
-           try:
-               result = func(*args, **kwargs)
-               execution_time = time.time() - start_time
-               
-               logger.info(f"{func.__name__} executed successfully in {execution_time:.3f}s")
-               
-               # Log slow queries
-               if execution_time > 1.0:
-                   logger.warning(f"Slow query detected: {func.__name__} took {execution_time:.3f}s")
-                   
-               return result
-               
-           except Exception as e:
-               execution_time = time.time() - start_time
-               logger.error(f"{func.__name__} failed after {execution_time:.3f}s: {e}")
-               raise
-               
-       return wrapper
-
-   class MonitoredDatabaseClient:
-       def __init__(self, client):
-           self.client = client
-           
-       @monitor_performance
-       def execute_query(self, query: str, params=None):
-           """Execute query with performance monitoring"""
-           result = self.client.execute(query, params)
-           return result.fetchall()
-           
-       @monitor_performance
-       def bulk_insert(self, table: str, data: List[dict]):
-           """Bulk insert with performance monitoring"""
-           with self.client.transaction() as tx:
-               for record in data:
-                   tx.execute(
-                       f"INSERT INTO {table} VALUES (%s, %s, %s)",
-                       (record['col1'], record['col2'], record['col3'])
-                   )
-
-Health Checks and Monitoring
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   import time
-   import threading
-   from matrixone import Client
-
-   class DatabaseHealthMonitor:
-       def __init__(self, client):
-           self.client = client
-           self.is_healthy = True
-           self.last_check = None
-           self.check_interval = 30  # seconds
-           self._monitoring = False
-           self._monitor_thread = None
-           
-       def check_health(self) -> bool:
-           """Check database health"""
-           try:
-               start_time = time.time()
-               result = self.client.execute("SELECT 1")
-               response_time = time.time() - start_time
-               
-               # Check response time
-               if response_time > 5.0:
-                   logger.warning(f"Slow database response: {response_time:.3f}s")
-                   
-               # Check connection
-               if not result.fetchone():
-                   return False
-                   
-               self.is_healthy = True
-               self.last_check = time.time()
-               return True
-               
-           except Exception as e:
-               logger.error(f"Database health check failed: {e}")
-               self.is_healthy = False
-               return False
-               
-       def start_monitoring(self):
-           """Start continuous health monitoring"""
-           if self._monitoring:
-               return
-               
-           self._monitoring = True
-           self._monitor_thread = threading.Thread(target=self._monitor_loop)
-           self._monitor_thread.daemon = True
-           self._monitor_thread.start()
-           
-       def stop_monitoring(self):
-           """Stop health monitoring"""
-           self._monitoring = False
-           if self._monitor_thread:
-               self._monitor_thread.join()
-               
-       def _monitor_loop(self):
-           """Monitor loop running in background"""
-           while self._monitoring:
-               self.check_health()
-               time.sleep(self.check_interval)
-
-Deployment Best Practices
--------------------------
-
-Configuration Management
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   import os
-   import json
-   from typing import Dict, Any
-   from matrixone import Client
-
-   class ConfigurationManager:
-       def __init__(self, config_file: str = None):
-           self.config = self._load_config(config_file)
-           
-       def _load_config(self, config_file: str) -> Dict[str, Any]:
-           """Load configuration from file or environment"""
-           config = {
-               'database': {
-                   'host': os.getenv('MATRIXONE_HOST', 'localhost'),
-                   'port': int(os.getenv('MATRIXONE_PORT', '6001')),
-                   'user': os.getenv('MATRIXONE_USER', 'root'),
-                   'password': os.getenv('MATRIXONE_PASSWORD', '111'),
-                   'database': os.getenv('MATRIXONE_DATABASE', 'test')
-               },
-               'client': {
-                   'connection_timeout': int(os.getenv('CONNECTION_TIMEOUT', '30')),
-                   'query_timeout': int(os.getenv('QUERY_TIMEOUT', '300')),
-                   'auto_commit': os.getenv('AUTO_COMMIT', 'true').lower() == 'true',
-                   'sql_log_mode': os.getenv('SQL_LOG_MODE', 'auto'),
-                   'slow_query_threshold': float(os.getenv('SLOW_QUERY_THRESHOLD', '1.0'))
-               }
-           }
-           
-           # Override with config file if provided
-           if config_file and os.path.exists(config_file):
-               with open(config_file, 'r') as f:
-                   file_config = json.load(f)
-                   config.update(file_config)
-                   
-           return config
-           
-       def get_database_config(self) -> Dict[str, Any]:
-           """Get database configuration"""
-           return self.config['database']
-           
-       def get_client_config(self) -> Dict[str, Any]:
-           """Get client configuration"""
-           return self.config['client']
-
-   # Usage
-   config_manager = ConfigurationManager('config.json')
+   from matrixone.logging import MatrixOneLogger, LogLevel
    
-   client = Client(**config_manager.get_client_config())
-   client.connect(**config_manager.get_database_config())
+   # ✅ GOOD: Configure logging for production
+   logger = MatrixOneLogger(
+       level=LogLevel.INFO,        # INFO level for production
+       log_file="matrixone.log",   # Log to file
+       max_bytes=10485760,         # 10MB max file size
+       backup_count=5              # Keep 5 backup files
+   )
+   
+   client = Client(
+       logger=logger,
+       sql_log_mode='simple',        # Simple SQL logging
+       slow_query_threshold=1.0      # Log queries > 1 second
+   )
 
-Graceful Shutdown
-~~~~~~~~~~~~~~~~~
+Error Handling Best Practices
+------------------------------
+
+Comprehensive Exception Handling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   import signal
-   import sys
+   from matrixone.exceptions import (
+       ConnectionError,
+       QueryError,
+       TransactionError,
+       SnapshotError
+   )
+   
+   # ✅ GOOD: Handle specific exceptions
+   try:
+       client.connect(...)
+   except ConnectionError as e:
+       print(f"Failed to connect: {e}")
+       # Implement retry logic or fallback
+   
+   # ✅ GOOD: Handle transaction errors
+   try:
+       with client.transaction() as tx:
+           tx.insert("users", {...})
+           tx.insert("orders", {...})
+   except TransactionError as e:
+       print(f"Transaction failed: {e}")
+       # Transaction auto-rolled back
+   
+   # ✅ GOOD: Handle query errors with retry
+   max_retries = 3
+   for attempt in range(max_retries):
+       try:
+           results = client.query("users").all()
+           break
+       except QueryError as e:
+           if attempt == max_retries - 1:
+               raise
+           print(f"Query failed, retrying ({attempt + 1}/{max_retries})...")
+           time.sleep(1)
+
+Resource Cleanup
+~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
    from contextlib import contextmanager
-   from matrixone import Client
-
-   class ApplicationManager:
-       def __init__(self):
-           self.client = None
-           self.shutdown_requested = False
-           self._setup_signal_handlers()
-           
-       def _setup_signal_handlers(self):
-           """Setup signal handlers for graceful shutdown"""
-           signal.signal(signal.SIGINT, self._signal_handler)
-           signal.signal(signal.SIGTERM, self._signal_handler)
-           
-       def _signal_handler(self, signum, frame):
-           """Handle shutdown signals"""
-           logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-           self.shutdown_requested = True
-           
-       @contextmanager
-       def get_client(self):
-           """Get client with automatic cleanup"""
-           if self.client is None:
-               self.client = Client()
-               self.client.connect(
-                   host='localhost',
-                   port=6001,
-                   user='root',
-                   password='111',
-                   database='test'
-               )
-               
-           try:
-               yield self.client
-           finally:
-               if self.shutdown_requested:
-                   self.cleanup()
-                   
-       def cleanup(self):
-           """Cleanup resources"""
-           if self.client:
-               logger.info("Closing database connection...")
-               self.client.disconnect()
-               self.client = None
-               
-       def run(self):
-           """Main application loop"""
-           try:
-               while not self.shutdown_requested:
-                   with self.get_client() as client:
-                       # Your application logic here
-                       result = client.execute("SELECT 1")
-                       print(f"Database check: {result.fetchone()}")
-                       
-                   time.sleep(1)
-                   
-           except KeyboardInterrupt:
-               logger.info("Application interrupted by user")
-           finally:
-               self.cleanup()
-
+   
+   # ✅ GOOD: Use context managers for automatic cleanup
+   @contextmanager
+   def get_client():
+       client = Client()
+       client.connect(...)
+       try:
+           yield client
+       finally:
+           client.disconnect()
+   
    # Usage
-   app_manager = ApplicationManager()
-   app_manager.run()
+   with get_client() as client:
+       results = client.query("users").all()
+       # Client automatically disconnected
 
 Testing Best Practices
-----------------------
+-----------------------
 
-Test Database Setup
-~~~~~~~~~~~~~~~~~~~
+Unit Testing with SDK
+~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    import pytest
-   import tempfile
-   import os
    from matrixone import Client
-   from sqlalchemy import create_engine
-   from sqlalchemy.orm import sessionmaker
-
-   @pytest.fixture(scope="session")
+   from matrixone.config import get_connection_params
+   
+   @pytest.fixture
    def test_client():
-       """Create test client for the entire test session"""
+       """Fixture for test client"""
        client = Client()
-       client.connect(
-           host='localhost',
-           port=6001,
-           user='root',
-           password='111',
-           database='test'
-       )
+       host, port, user, password, database = get_connection_params()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
        yield client
        client.disconnect()
-
-   @pytest.fixture(scope="function")
-   def clean_database(test_client):
-       """Clean database before each test"""
-       # Clean up test data
-       test_client.execute("DELETE FROM users WHERE username LIKE 'test_%'")
-       test_client.execute("DELETE FROM documents WHERE title LIKE 'Test %'")
-       yield
-       # Clean up after test
-       test_client.execute("DELETE FROM users WHERE username LIKE 'test_%'")
-       test_client.execute("DELETE FROM documents WHERE title LIKE 'Test %'")
-
+   
    @pytest.fixture
-   def test_user_data():
-       """Provide test user data"""
-       return {
-           'username': 'test_user',
-           'email': 'test@example.com',
-           'full_name': 'Test User',
-           'bio': 'Test user for unit tests'
-       }
+   def test_table(test_client):
+       """Fixture for test table"""
+       table_name = "test_users"
+       test_client.create_table(table_name, {
+           "id": "int",
+           "username": "varchar(100)",
+           "email": "varchar(255)"
+       }, primary_key="id")
+       yield table_name
+       test_client.drop_table(table_name)
+   
+   def test_insert_and_query(test_client, test_table):
+       """Test insert and query operations"""
+       # Insert data
+       test_client.insert(test_table, {
+           "id": 1,
+           "username": "testuser",
+           "email": "test@example.com"
+       })
+       
+       # Query data
+       results = test_client.query(test_table).filter("id = 1").all()
+       assert len(results.rows) == 1
+       assert results.rows[0][1] == "testuser"
 
-   def test_create_user(test_client, clean_database, test_user_data):
-       """Test user creation"""
-       # Test user creation
-       result = test_client.execute(
-           "INSERT INTO users (username, email, full_name, bio) VALUES (%s, %s, %s, %s)",
-           (test_user_data['username'], test_user_data['email'], 
-            test_user_data['full_name'], test_user_data['bio'])
-       )
-       
-       user_id = result.lastrowid
-       assert user_id > 0
-       
-       # Verify user was created
-       result = test_client.execute(
-           "SELECT * FROM users WHERE id = %s",
-           (user_id,)
-       )
-       user = result.fetchone()
-       assert user is not None
-       assert user[1] == test_user_data['username']
+Summary of SDK Features
+-----------------------
 
-   def test_vector_search(test_client, clean_database):
-       """Test vector search functionality"""
-       from sqlalchemy.orm import sessionmaker
-       
-       # Insert test document using ORM
-       Session = sessionmaker(bind=test_client.get_sqlalchemy_engine())
-       session = Session()
-       
-       test_doc = Document(
-           title='Test Document',
-           content='This is a test document',
-           embedding=[0.1, 0.2, 0.3] + [0.0] * 381
-       )
-       session.add(test_doc)
-       session.commit()
-       session.close()
-       
-       # Test vector search using client interface
-       results = test_client.vector_ops.similarity_search(
-           table_name='documents',
-           vector_column='embedding',
-           query_vector=[0.1, 0.2, 0.3] + [0.0] * 381,
-           limit=5,
-           distance_type='l2'
-       )
-       
-       assert len(results) > 0
-       assert results[0][1] == 'Test Document'
+Essential SDK APIs to Use:
 
-Next Steps
-----------
+**Table Operations:**
+- ``client.create_table()`` - Create tables
+- ``client.drop_table()`` - Drop tables
+- ``client.insert()`` - Insert single row
+- ``client.batch_insert()`` - Batch insert (fastest)
+- ``client.query()`` - Query builder
 
-* Review :doc:`orm_guide` for detailed ORM patterns
-* Check :doc:`vector_guide` for vector search optimization
-* See :doc:`fulltext_guide` for fulltext search best practices
-* Explore :doc:`examples` for comprehensive usage examples
-* Run ``make test`` to verify your implementation
-* Use ``make docs`` to generate updated documentation
+**Vector Operations:**
+- ``client.vector_ops.create_ivf()`` - Create IVF index
+- ``client.vector_ops.create_hnsw()`` - Create HNSW index
+- ``client.vector_ops.similarity_search()`` - Vector search
+- ``client.vector_ops.get_ivf_stats()`` - Monitor index health (CRITICAL)
+- ``client.vector_ops.drop()`` - Drop index
+
+**Fulltext Operations:**
+- ``client.fulltext_index.enable_fulltext()`` - Enable fulltext
+- ``client.fulltext_index.create()`` - Create fulltext index
+- ``client.fulltext_index.drop()`` - Drop fulltext index
+- Use ``boolean_match()`` in queries with ``encourage()``, ``must()``, ``should()``
+
+**Metadata Operations:**
+- ``client.metadata.scan()`` - Scan table metadata
+- ``client.metadata.get_table_brief_stats()`` - Get table statistics
+
+**Snapshot Operations:**
+- ``client.snapshots.create()`` - Create snapshot
+- ``client.snapshots.list()`` - List snapshots
+- ``client.snapshots.drop()`` - Drop snapshot
+- ``client.clone.clone_database()`` - Clone database
+- ``client.clone.clone_table()`` - Clone table
+
+**Transaction Operations:**
+- ``with client.transaction() as tx:`` - Transaction context
+
+**Account Operations:**
+- ``AccountManager(client)`` - Initialize account manager
+- ``account_manager.create_account()`` - Create account
+- ``account_manager.create_user()`` - Create user
+- ``account_manager.create_role()`` - Create role
+- ``account_manager.grant_privilege()`` - Grant privileges
+
+**Pub/Sub Operations:**
+- ``client.pubsub.list_publications()`` - List publications
+- ``client.pubsub.list_subscriptions()`` - List subscriptions
+- ``client.pubsub.drop_publication()`` - Drop publication
+- ``client.pubsub.drop_subscription()`` - Drop subscription
+
+Remember: Always prefer SDK APIs over raw SQL for better maintainability, type safety, and feature integration!

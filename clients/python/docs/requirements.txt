@@ -1,0 +1,16 @@
+# Documentation build requirements for ReadTheDocs
+# These are the dependencies needed to build the Sphinx documentation
+
+# Core Sphinx packages
+sphinx>=4.0,<8.0
+sphinx-rtd-theme>=1.0,<3.0
+sphinx-autobuild>=2021.3.14
+
+# Required for autodoc to work with the source code
+PyMySQL>=1.1.0
+aiomysql>=0.2.0
+SQLAlchemy>=1.4.0,<3.0.0
+typing-extensions>=4.0.0
+python-dateutil>=2.8.0
+numpy>=1.20.0,<2.0.0
+

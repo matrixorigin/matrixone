@@ -459,7 +459,7 @@ Vector Search Examples
 
        # Create vector index using vector_ops API
        client.vector_ops.create_ivf(
-           table_name="documents",
+           "documents",  # Table name as positional argument
            name="idx_embedding",
            column="embedding",
            lists=50,
@@ -500,7 +500,7 @@ Vector Search Examples
        # L2 distance search - Euclidean distance for geometric similarity
        # Lower distances indicate more similar vectors
        results = client.vector_ops.similarity_search(
-           table_name="documents",
+           "documents",  # Table name as positional argument
            vector_column="embedding",
            query_vector=query_vector,
            limit=3,
@@ -514,7 +514,7 @@ Vector Search Examples
        # Cosine distance search - angular similarity for semantic similarity
        # Lower cosine distance = higher semantic similarity
        cosine_results = client.vector_ops.similarity_search(
-           table_name="documents",
+           "documents",  # Table name as positional argument
            vector_column="embedding",
            query_vector=query_vector,
            limit=3,
@@ -528,7 +528,7 @@ Vector Search Examples
        # Search with metadata filtering - combining vector search with SQL filters
        # Filters results by category before performing vector similarity
        filtered_results = client.vector_ops.similarity_search(
-           table_name="documents",
+           "documents",  # Table name as positional argument
            vector_column="embedding",
            query_vector=query_vector,
            limit=2,
@@ -577,7 +577,7 @@ Async Vector Operations
 
        # Create vector index using async vector_ops API
        await client.vector_ops.create_ivf(
-           table_name="async_products",
+           "async_products",  # Table name as positional argument
            name="idx_features",
            column="features",
            lists=100,
@@ -617,7 +617,7 @@ Async Vector Operations
        
        # Async similarity search with cosine distance for semantic similarity
        results = await client.vector_ops.similarity_search(
-           table_name="async_products",
+           "async_products",  # Table name as positional argument
            vector_column="features",
            query_vector=query_vector,
            limit=3,
@@ -631,7 +631,7 @@ Async Vector Operations
        # Search with pagination - handling large result sets efficiently
        # Page 1: Get first 2 results
        results_page1 = await client.vector_ops.similarity_search(
-           table_name="async_products",
+           "async_products",  # Table name as positional argument
            vector_column="features",
            query_vector=query_vector,
            limit=2,
@@ -641,7 +641,7 @@ Async Vector Operations
 
        # Page 2: Get next 2 results (skip first 2)
        results_page2 = await client.vector_ops.similarity_search(
-           table_name="async_products",
+           "async_products",  # Table name as positional argument
            vector_column="features",
            query_vector=query_vector,
            limit=2,

@@ -2,10 +2,15 @@
 
 [![PyPI version](https://badge.fury.io/py/matrixone-python-sdk.svg)](https://badge.fury.io/py/matrixone-python-sdk)
 [![Python Support](https://img.shields.io/pypi/pyversions/matrixone-python-sdk.svg)](https://pypi.org/project/matrixone-python-sdk/)
+[![Documentation Status](https://app.readthedocs.org/projects/matrixone/badge/?version=latest)](https://matrixone.readthedocs.io/en/latest/?badge=latest)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build Status](https://github.com/matrixorigin/matrixone/workflows/CI/badge.svg)](https://github.com/matrixorigin/matrixone/actions)
 
 A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector search, fulltext search, snapshot management, PITR, restore operations, table cloning, and mo-ctl integration.
+
+> **📚 [Complete Documentation](https://matrixone.readthedocs.io/)** | 
+> **🚀 [Quick Start Guide](https://matrixone.readthedocs.io/en/latest/quickstart.html)** | 
+> **🧠 [Vector Search & IVF Monitoring](https://matrixone.readthedocs.io/en/latest/vector_guide.html)** | 
+> **📖 [API Reference](https://matrixone.readthedocs.io/en/latest/api/index.html)**
 
 > **Note**: This SDK implementation is generated and optimized through AI-assisted development, leveraging advanced code generation techniques to ensure comprehensive API coverage, type safety, and modern Python best practices.
 
@@ -16,6 +21,7 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
 - 🧠 **Vector Search**: Advanced vector similarity search with HNSW and IVF indexing algorithms
   - Support for f32 and f64 precision vectors
   - Multiple distance metrics (L2, Cosine, Inner Product)
+  - ⭐ **IVF Index Health Monitoring** with `get_ivf_stats()` - Critical for production!
   - Configurable index parameters for performance tuning
 - 🔍 **Fulltext Search**: Powerful fulltext indexing and search with BM25 and TF-IDF algorithms
   - Natural language and boolean search modes
@@ -219,34 +225,46 @@ results = client.vector_ops.similarity_search(
     limit=5,
     distance_type='cosine'
 )
+
+# ⭐ CRITICAL: Monitor IVF index health for production
+stats = client.vector_ops.get_ivf_stats('documents', 'embedding')
+counts = stats['distribution']['centroid_count']
+balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+
+print(f"Index Health: {len(counts)} centroids, balance ratio: {balance_ratio:.2f}")
+if balance_ratio > 2.5:
+    print("⚠️  Index needs rebuilding for optimal performance!")
 ```
 
 ### Fulltext Search
 
 ```python
-# Create fulltext index using client API
+# Enable and create fulltext index using client API
+client.fulltext_index.enable_fulltext()
 client.fulltext_index.create(
     'documents',  # table name - positional argument
     name='ftidx_content',
     columns=['title', 'content']
 )
 
-# Natural language search using ORM
-from matrixone.sqlalchemy_ext.fulltext_search import natural_match
-
-results = client.query(Document).filter(
-    natural_match('title', 'content', query='machine learning techniques')
-).all()
-
-# Boolean search with operators using ORM
+# Boolean search with encourage (like natural language search)
 from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
 
-results = client.query(Document).filter(
+results = client.query(
+    Document.title,
+    Document.content,
+    boolean_match('title', 'content').encourage('machine learning techniques')
+).execute()
+
+# Boolean search with must/should/must_not operators
+results = client.query(
+    Document.title,
+    Document.content,
     boolean_match('title', 'content')
-    .must('machine')
-    .must('learning')
-    .discourage('basic')
-).all()
+        .must('machine')
+        .must('learning')
+        .must_not('basic')
+).execute()
 ```
 
 ### Metadata Analysis
@@ -567,22 +585,37 @@ For detailed testing instructions, environment setup, and troubleshooting, see [
 
 ## 📚 Documentation
 
-The SDK includes comprehensive documentation for all features:
+### 📖 Online Documentation
 
+**[Full Documentation on ReadTheDocs](https://matrixone.readthedocs.io/)** ⭐
+
+Complete documentation with examples, API reference, and production best practices.
+
+### Local Documentation Guides
+
+**Getting Started:**
 - **[Quick Start](docs/quickstart.rst)**: Get started quickly with common use cases
 - **[Installation Guide](docs/installation.rst)**: Installation and setup instructions
 - **[Configuration Guide](docs/configuration_guide.rst)**: Connection and client configuration
-- **[Connection Hooks](docs/connection_hooks_guide.rst)**: Pre/post connection hooks
-- **[ORM Guide](docs/orm_guide.rst)**: SQLAlchemy ORM integration and patterns
-- **[Vector Guide](docs/vector_guide.rst)**: Vector search and indexing operations
+
+**Core Features:**
+- **[Vector Guide](docs/vector_guide.rst)**: Vector search, indexing, and ⭐ **IVF health monitoring**
 - **[Fulltext Guide](docs/fulltext_guide.rst)**: Fulltext search and indexing
+- **[ORM Guide](docs/orm_guide.rst)**: SQLAlchemy ORM integration and patterns
 - **[Metadata Guide](docs/metadata_guide.rst)**: Table metadata analysis and statistics
-- **[Account Guide](docs/account_guide.rst)**: User and role management
-- **[Pub/Sub Guide](docs/pubsub_guide.rst)**: Publication and subscription operations
+
+**Advanced Features:**
 - **[Snapshot & Restore](docs/snapshot_restore_guide.rst)**: Snapshot and PITR operations
 - **[Clone Guide](docs/clone_guide.rst)**: Database and table cloning
+- **[Account Guide](docs/account_guide.rst)**: User and role management
+- **[Pub/Sub Guide](docs/pubsub_guide.rst)**: Publication and subscription operations
 - **[MoCTL Guide](docs/moctl_guide.rst)**: MoCTL integration
-- **[Best Practices](docs/best_practices.rst)**: Best practices and patterns
+
+**Production Guide:**
+- **[Best Practices](docs/best_practices.rst)**: Production-ready patterns using SDK APIs
+- **[Connection Hooks](docs/connection_hooks_guide.rst)**: Pre/post connection hooks
+
+**Reference:**
 - **[API Reference](docs/api/index.rst)**: Complete API reference
 - **[Examples](docs/examples.rst)**: Comprehensive usage examples
 - **[Testing Guide](TESTING.md)**: Testing instructions and environment setup

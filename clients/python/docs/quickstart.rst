@@ -189,6 +189,14 @@ Vector Operations with Table Models
    for row in result.fetchall():
        print(f"Document: {row[1]}, Distance: {row[3]}")
 
+   # ⭐ IMPORTANT: Monitor IVF index health for production systems
+   stats = client.vector_ops.get_ivf_stats(Document, "embedding")
+   counts = stats['distribution']['centroid_count']
+   balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+   print(f"Index health - Centroids: {len(counts)}, Balance ratio: {balance_ratio:.2f}")
+   if balance_ratio > 2.5:
+       print("⚠️  Warning: Index needs rebuilding for optimal performance")
+   
    # Drop vector index
    client.vector_ops.drop(Document, "idx_embedding")
 
@@ -371,6 +379,25 @@ Vector Search with Modern API
    for result in results.rows:
        print(f"Document: {result[1]} (Distance: {result[-1]:.4f})")
 
+   # ⭐ CRITICAL: Check IVF index health - Essential for production monitoring
+   stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+   
+   # Analyze index balance
+   distribution = stats['distribution']
+   counts = distribution['centroid_count']
+   total_centroids = len(counts)
+   total_vectors = sum(counts)
+   balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+   
+   print(f"\nIVF Index Health:")
+   print(f"  - Total centroids: {total_centroids}")
+   print(f"  - Total vectors: {total_vectors}")
+   print(f"  - Balance ratio: {balance_ratio:.2f} {'✓' if balance_ratio <= 2.5 else '⚠️'}")
+   
+   if balance_ratio > 2.5:
+       print(f"  - ⚠️  Index imbalanced - consider rebuilding")
+       print(f"  - See vector_guide for detailed monitoring procedures")
+
    # Clean up using drop_table API
    client.drop_table("documents")
    client.disconnect()
@@ -442,6 +469,14 @@ Async Vector Operations
        print("Async Vector Search Results:")
        for result in results.rows:
            print(f"Product: {result[1]} (Similarity: {1 - result[-1]:.4f})")
+
+       # ⭐ Monitor IVF index health asynchronously
+       stats = await client.vector_ops.get_ivf_stats("products", "features")
+       counts = stats['distribution']['centroid_count']
+       balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+       
+       print(f"\nAsync IVF Index Health:")
+       print(f"  - Centroids: {len(counts)}, Balance: {balance_ratio:.2f}")
 
        # Clean up using async drop_table API
        await client.drop_table("products")

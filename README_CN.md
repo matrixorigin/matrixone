@@ -51,6 +51,7 @@
 * [用户价值](#user-values)
 * [架构](#architecture)
 * [快速上手](#quick-start)
+* [Python SDK](#python-sdk)
 * [参与贡献](#contributing)
 * [License](#license)
 
@@ -264,6 +265,17 @@ __Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在
 
 __Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/latest/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码。详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/latest/MatrixOne/Reference/mo-tools/mo_ctl_standalone/)。
 
+## 🐍 <a id="python-sdk">Python SDK</a>
+
+MatrixOne 提供**全面的 Python SDK**，支持数据库操作、向量搜索、全文搜索以及快照、PITR、账户管理等高级功能。
+
+**核心特性**：高性能 async/await 支持、向量相似度搜索（IVF/HNSW 索引）、全文搜索、元数据分析和完整的类型安全。
+
+📚 **[完整文档](https://matrixone.readthedocs.io/)** [![Documentation Status](https://app.readthedocs.org/projects/matrixone/badge/?version=latest)](https://matrixone.readthedocs.io/en/latest/)
+
+📖 **[Python SDK README](clients/python/README.md)** - 功能详情、安装和使用指南
+
+📦 **安装**: `pip install matrixone-python-sdk`
 
 ### 👏贡献者
 
