@@ -366,6 +366,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 							JobName: jobName,
 							JobID:   iter.jobIDs[i],
 						}]
+						job.currentLSN++
 						job.state = ISCPJobState_Pending
 					}
 					err := exec.worker.Submit(iter)
@@ -375,6 +376,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 								JobName: jobName,
 								JobID:   iter.jobIDs[i],
 							}]
+							job.currentLSN--
 							job.state = ISCPJobState_Completed
 						}
 						logutil.Error(
