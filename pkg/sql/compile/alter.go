@@ -274,13 +274,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 					}
 
 					if valid {
-						// register ISCP job after clone for fulltext/hnsw/ivfflat index with startFromNow = true
-						// because the index is already cloned and no need to build index again
-						//
-						// Append Closed event to TxnOperator and wait for CLOSED event
-						// Register the job inside the closed event callback to make sure the new TxnOperator ts > closed Txn commitTs
+						// index table may not be fully sync'd with source table via ISCP during alter table
+						// clone index table (with ISCP) may not be a complete clone
+						// so register ISCP job with startFromNow = false
 						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-						err = AppendIscpRegisterEvent(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, true, "")
+						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false)
 						if err != nil {
 							return err
 						}
@@ -641,9 +639,10 @@ func cloneUnaffectedIndexes(
 	}
 
 	type IndexTableInfo struct {
-		Unique    bool
-		IndexAlgo string
-		Indexes   []IndexTypeInfo
+		Unique          bool
+		IndexAlgo       string
+		IndexAlgoParams string
+		Indexes         []IndexTypeInfo
 	}
 
 	var (
@@ -722,9 +721,10 @@ func cloneUnaffectedIndexes(
 		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
 			m = &IndexTableInfo{
-				Unique:    idxTbl.Unique,
-				IndexAlgo: idxTbl.IndexAlgo,
-				Indexes:   make([]IndexTypeInfo, 0, 3),
+				Unique:          idxTbl.Unique,
+				IndexAlgo:       idxTbl.IndexAlgo,
+				IndexAlgoParams: idxTbl.IndexAlgoParams,
+				Indexes:         make([]IndexTypeInfo, 0, 3),
 			}
 
 		}
@@ -769,6 +769,19 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
+		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		if err != nil {
+			return err
+		}
+
+		if !oriIdxTblNames.Unique &&
+			((catalog.IsFullTextIndexAlgo(oriIdxTblNames.IndexAlgo) && async) ||
+				catalog.IsHnswIndexAlgo(oriIdxTblNames.IndexAlgo)) {
+			// skip fultext async index and hsnw index clone because index table may not be fully sync'd
+			logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
+			continue
+		}
+
 		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
 
 			var newIdxTblName IndexTypeInfo
@@ -782,6 +795,27 @@ func cloneUnaffectedIndexes(
 			}
 
 			if !found {
+				continue
+			}
+
+			// IVF index table is NOT empty and clone will have duplicate rows
+			// Delete the table
+			if !oriIdxTblNames.Unique &&
+				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
+				// delete all content
+				sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", dbName, newIdxTblName.IndexTableName)
+				err := c.runSql(sql)
+				if err != nil {
+					return err
+				}
+			}
+
+			if !oriIdxTblNames.Unique &&
+				async &&
+				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) &&
+				oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+				// skip async IVF entries index table
+				logutil.Infof("cloneUnaffectedIndex: skip async IVF entries index table %v\n", oriIdxTblName)
 				continue
 			}
 
