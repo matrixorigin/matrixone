@@ -743,9 +743,10 @@ func cloneUnaffectedIndexes(
 		m, ok := newIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
 			m = &IndexTableInfo{
-				Unique:    idxTbl.Unique,
-				IndexAlgo: idxTbl.IndexAlgo,
-				Indexes:   make([]IndexTypeInfo, 0, 3),
+				Unique:          idxTbl.Unique,
+				IndexAlgo:       idxTbl.IndexAlgo,
+				IndexAlgoParams: idxTbl.IndexAlgoParams,
+				Indexes:         make([]IndexTypeInfo, 0, 3),
 			}
 		}
 
