@@ -78,6 +78,7 @@ func dataBranchCreateTable(
 		reqCtx = execCtx.reqCtx
 		bh     = ses.GetBackgroundExec(reqCtx)
 
+		deferred    func(error) error
 		newSql      string
 		tempExecCtx *ExecCtx
 		cloneTable  *tree.CloneTable
@@ -85,17 +86,15 @@ func dataBranchCreateTable(
 
 	// do not open another transaction,
 	// if the clone already executed within a transaction.
-	if !isCloneAlreadyInTxn(ses) {
-		if err = bh.Exec(reqCtx, "begin"); err != nil {
-			return err
-		}
-		defer func() {
-			if r := recover(); r != nil {
-				err = moerr.ConvertPanicError(execCtx.reqCtx, r)
-			}
-			err = finishTxn(reqCtx, bh, err)
-		}()
+	if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+		return err
 	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
 
 	newSql = rewriteBranchNewTableToClone(execCtx.input.sql, stmt)
 
