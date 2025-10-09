@@ -422,7 +422,7 @@ func ConstructCreateTableSQL(
 				txn = txn.CloneSnapshotOp(*snapshot.TS)
 			}
 
-			meta, err := ps.GetPartitionMetadata(ctx.GetContext(), tableDef.GetTblId(), txn)
+			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), txn)
 			if err != nil {
 				return "", nil, err
 			}
