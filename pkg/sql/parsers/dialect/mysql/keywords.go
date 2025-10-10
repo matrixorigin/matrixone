@@ -659,5 +659,10 @@ func init() {
 		"clone":                      CLONE,
 		"mo":                         MO,
 		"branch":                     BRANCH,
+		"fail":                       CONFLICT_FAIL,
+		"skip":                       CONFLICT_SKIP,
+		"accept":                     CONFLICT_ACCEPT,
+		"diff":                       DIFF,
+		"conflict":                   CONFLICT,
 	}
 }

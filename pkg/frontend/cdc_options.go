@@ -357,7 +357,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 }
 
 // handleFrequency validates the format of frequency
-// It also ensures that there exists a pitr that support this frequency
+// It also ensures that there Exists a pitr that support this frequency
 // For example, if frequency is 24h, pitr should be >= 24 + 2 = 26h
 func (opts *CDCCreateTaskOptions) handleFrequency(
 	ctx context.Context,

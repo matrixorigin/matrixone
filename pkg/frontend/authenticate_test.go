@@ -170,7 +170,7 @@ func TestFormSql(t *testing.T) {
 }
 
 func Test_checkTenantExistsOrNot(t *testing.T) {
-	convey.Convey("check tenant exists or not", t, func() {
+	convey.Convey("check tenant Exists or not", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -222,7 +222,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 }
 
 func Test_checkDatabaseExistsOrNot(t *testing.T) {
-	convey.Convey("check databse exists or not", t, func() {
+	convey.Convey("check databse Exists or not", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -4617,7 +4617,7 @@ func Test_doRevokeRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("revoke role from role succ (if exists = true, miss role before FROM)", t, func() {
+	convey.Convey("revoke role from role succ (if Exists = true, miss role before FROM)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -4681,7 +4681,7 @@ func Test_doRevokeRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("revoke role from role fail (if exists = false,miss role before FROM)", t, func() {
+	convey.Convey("revoke role from role fail (if Exists = false,miss role before FROM)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -4749,7 +4749,7 @@ func Test_doRevokeRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeError)
 	})
 
-	convey.Convey("revoke role from user fail (if exists = false,miss role after FROM)", t, func() {
+	convey.Convey("revoke role from user fail (if Exists = false,miss role after FROM)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -5611,7 +5611,7 @@ func Test_doDropRole(t *testing.T) {
 		err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
-	convey.Convey("drop role succ (if exists)", t, func() {
+	convey.Convey("drop role succ (if Exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -5764,7 +5764,7 @@ func Test_doDropUser(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("drop user succ (if exists)", t, func() {
+	convey.Convey("drop user succ (if Exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -6206,7 +6206,7 @@ func TestGetSessionSysVar(t *testing.T) {
 		value, err = ses.GetSessionSysVar("host")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, "0.0.0.0")
-		_, err = ses.GetSessionSysVar("not exists sys var")
+		_, err = ses.GetSessionSysVar("not Exists sys var")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -6258,7 +6258,7 @@ func TestSetSessionSysVar(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 1)
 
-		err = ses0.SetSessionSysVar(context.TODO(), "not exists sys var", "xxxx")
+		err = ses0.SetSessionSysVar(context.TODO(), "not Exists sys var", "xxxx")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -6287,7 +6287,7 @@ func TestGetGlobalSysVar(t *testing.T) {
 		// err when get from a ScopeSession var
 		_, err = ses.GetGlobalSysVar("debug_sync")
 		convey.So(err, convey.ShouldNotBeNil)
-		_, err = ses.GetGlobalSysVar("not exists sys var")
+		_, err = ses.GetGlobalSysVar("not Exists sys var")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -6365,7 +6365,7 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
 
-		err = ses0.SetGlobalSysVar(context.TODO(), "not exists sys var", "xxxx")
+		err = ses0.SetGlobalSysVar(context.TODO(), "not Exists sys var", "xxxx")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -6802,7 +6802,7 @@ func Test_doAlterAccount(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-	convey.Convey("alter account (auth_option) succ (no account, if exists)", t, func() {
+	convey.Convey("alter account (auth_option) succ (no account, if Exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -6854,7 +6854,7 @@ func Test_doAlterAccount(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("alter account (auth_option) failed (has account,if exists, no user)", t, func() {
+	convey.Convey("alter account (auth_option) failed (has account,if Exists, no user)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -7231,7 +7231,7 @@ func Test_doDropAccount(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeNil)
 	})
-	convey.Convey("drop account (if exists)", t, func() {
+	convey.Convey("drop account (if Exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -7383,7 +7383,7 @@ func generateGrantPrivilege(grant, to string, exists bool, roleNames []string, w
 				bb.WriteString(grant)
 				if exists {
 					bb.WriteString(" ")
-					bb.WriteString("if exists")
+					bb.WriteString("if Exists")
 				}
 
 				bb.WriteString(" ")
@@ -7458,7 +7458,7 @@ func genRevokeCases1(A [][]string, path []string, cur int, exists bool, out *[]s
 		bb := bytes.Buffer{}
 		bb.WriteString("revoke ")
 		if exists {
-			bb.WriteString("if exists ")
+			bb.WriteString("if Exists ")
 		}
 		bb.WriteString(path[0])
 		bb.WriteString(",")
@@ -8438,7 +8438,7 @@ func Test_DropDatabaseOfAccount(t *testing.T) {
 			"ABC":        0,
 		}
 		var sqlsForDropDatabases []string
-		prefix := "drop database if exists "
+		prefix := "drop database if Exists "
 		for db = range databases {
 			if db == "mo_catalog" {
 				continue
@@ -10937,7 +10937,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 	})
 
 	// system tenant  create account level snapshot for other tenant
-	// but the snapshot name already exists
+	// but the snapshot name already Exists
 	convey.Convey("doCreateSnapshot fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -11004,7 +11004,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 	})
 
 	// system tenant  create account level snapshot for other tenant
-	// but the account not exists
+	// but the account not Exists
 	convey.Convey("doCreateSnapshot fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

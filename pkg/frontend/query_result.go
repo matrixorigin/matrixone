@@ -694,7 +694,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	return err
 }
 
-// openResultMeta checks the query result of the queryId exists or not
+// openResultMeta checks the query result of the queryId Exists or not
 func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.ResultColDef, error) {
 	account := ses.GetTenantInfo()
 	if account == nil {
@@ -775,7 +775,7 @@ func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize
 }
 
 // getFileSize finds the fileName in the file handlers ,returns the file size
-// and returns -1 if not exists
+// and returns -1 if not Exists
 func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
 	for _, file := range files {
 		if file.Name == fileName {

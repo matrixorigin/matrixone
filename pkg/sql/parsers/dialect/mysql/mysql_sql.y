@@ -231,6 +231,7 @@ import (
 
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
+    conflictOpt *tree.ConflictOpt
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -352,6 +353,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE MO BRANCH LOG REVERT REBASE DIFF
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -562,6 +564,7 @@ import (
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
+%type <conflictOpt> conflict_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -7976,6 +7979,45 @@ branch_stmt:
 	t := tree.NewDataBranchDeleteDatabase()
 	t.DatabaseName = tree.Identifier($5)
 	$$ = t
+    }
+|   SNAPSHOT DIFF table_name AGAINST table_name
+    {
+    	t := tree.NewSnapshotDiff()
+    	t.TargetTable = *$3
+    	t.BaseTable = *$5
+    	$$ = t
+    }
+|   SNAPSHOT MERGE table_name INTO table_name conflict_opt
+    {
+    	t := tree.NewSnapshotMerge()
+    	t.SrcTable = *$3
+    	t.DstTable = *$5
+    	t.ConflictOpt = $6
+    	$$ = t
+    }
+
+
+conflict_opt:
+     {
+     	$$ = nil
+     }
+     | WHEN CONFLICT CONFLICT_FAIL
+     {
+     	$$ = &tree.ConflictOpt {
+             Opt: tree.CONFLICT_FAIL,
+     	}
+     }
+    | WHEN CONFLICT CONFLICT_SKIP
+    {
+     	$$ = &tree.ConflictOpt {
+             Opt: tree.CONFLICT_SKIP,
+     	}
+    }
+    | WHEN CONFLICT CONFLICT_ACCEPT
+    {
+    	$$ = &tree.ConflictOpt {
+            Opt: tree.CONFLICT_ACCEPT,
+    	}
     }
 
 to_account_opt:

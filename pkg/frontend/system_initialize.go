@@ -153,7 +153,7 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	return nil
 }
 
-// checkSysExistsOrNot checks the SYS tenant exists or not.
+// checkSysExistsOrNot checks the SYS tenant Exists or not.
 func checkSysExistsOrNotWithTxn(ctx context.Context, txn executor.TxnExecutor) (bool, error) {
 	if res, err := txn.Exec("show databases;", executor.StatementOption{}); err != nil {
 		return false, err
@@ -179,7 +179,7 @@ func checkSysExistsOrNotWithTxn(ctx context.Context, txn executor.TxnExecutor) (
 			for i := 0; i < rows; i++ {
 				count += i
 				tableName := cols[0].UnsafeGetStringAt(i)
-				// if there is at least one catalog table, it denotes the sys tenant exists.
+				// if there is at least one catalog table, it denotes the sys tenant Exists.
 				if _, ok := sysWantedTables[tableName]; ok {
 					sysTenantExists = true
 				}

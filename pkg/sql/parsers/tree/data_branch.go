@@ -50,6 +50,27 @@ func init() {
 		func(c *DataBranchDeleteDatabase) { c.reset() },
 		reuse.DefaultOptions[DataBranchDeleteDatabase](), //.
 	) //WithEnableChecker()
+
+	reuse.CreatePool[SnapshotDiff](
+		func() *SnapshotDiff {
+			return &SnapshotDiff{}
+		},
+		func(c *SnapshotDiff) {
+			c.reset()
+		},
+		reuse.DefaultOptions[SnapshotDiff](),
+	)
+
+	reuse.CreatePool[SnapshotMerge](
+		func() *SnapshotMerge {
+			return &SnapshotMerge{}
+		},
+		func(c *SnapshotMerge) {
+			c.reset()
+		},
+		reuse.DefaultOptions[SnapshotMerge](),
+	)
+
 }
 
 type DataBranchType int
@@ -261,4 +282,105 @@ func (d *DataBranchDeleteDatabase) reset() {
 
 func (d *DataBranchDeleteDatabase) DataBranchType() DataBranchType {
 	return DataBranch_DeleteDatabase
+}
+
+/////////////////////////////////////////////////////////////////
+
+const (
+	CONFLICT_FAIL = iota
+	CONFLICT_SKIP
+	CONFLICT_ACCEPT
+)
+
+type SnapshotDiff struct {
+	statementImpl
+
+	TargetTable TableName
+	BaseTable   TableName
+}
+
+func (s *SnapshotDiff) TypeName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *SnapshotDiff) reset() {
+	*s = SnapshotDiff{}
+}
+
+func NewSnapshotDiff() *SnapshotDiff {
+	return reuse.Alloc[SnapshotDiff](nil)
+}
+
+func (s *SnapshotDiff) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (s *SnapshotDiff) Format(ctx *FmtCtx) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *SnapshotDiff) String() string {
+	return s.GetStatementType()
+}
+
+func (s *SnapshotDiff) GetStatementType() string {
+	return "snapshot diff"
+}
+
+func (s *SnapshotDiff) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *SnapshotDiff) Free() {
+	reuse.Free[SnapshotDiff](s, nil)
+}
+
+type ConflictOpt struct {
+	Opt int
+}
+type SnapshotMerge struct {
+	statementImpl
+	SrcTable    TableName
+	DstTable    TableName
+	ConflictOpt *ConflictOpt
+}
+
+func (s *SnapshotMerge) TypeName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *SnapshotMerge) reset() {
+	*s = SnapshotMerge{}
+}
+
+func NewSnapshotMerge() *SnapshotMerge {
+	return reuse.Alloc[SnapshotMerge](nil)
+}
+
+func (s *SnapshotMerge) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (s *SnapshotMerge) Format(ctx *FmtCtx) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *SnapshotMerge) String() string {
+	return s.GetStatementType()
+}
+
+func (s *SnapshotMerge) GetStatementType() string {
+	return "snapshot diff"
+}
+
+func (s *SnapshotMerge) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *SnapshotMerge) Free() {
+	reuse.Free[SnapshotMerge](s, nil)
 }

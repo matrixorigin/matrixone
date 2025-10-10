@@ -179,9 +179,9 @@ func SubStringFromBegin(str string, length int) string {
 }
 
 /*
-path exists in the system
+path Exists in the system
 return:
-true/false - exists or not.
+true/false - Exists or not.
 true/false - file or directory
 error
 */
