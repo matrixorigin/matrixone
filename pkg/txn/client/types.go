@@ -194,7 +194,7 @@ type TxnOperator interface {
 
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
-	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
+	AppendEventCallback(event EventType, callbacks ...TxnEventCallback)
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
@@ -325,4 +325,21 @@ func (e TxnEvent) Committed() bool {
 
 func (e TxnEvent) Aborted() bool {
 	return e.Txn.Status == txn.TxnStatus_Aborted
+}
+
+type TxnEventCallback struct {
+	Func  func(context.Context, TxnOperator, TxnEvent, any) error
+	Value any
+}
+
+func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any) error) TxnEventCallback {
+	return TxnEventCallback{
+		Func: f,
+	}
+}
+func NewTxnEventCallbackWithValue(f func(context.Context, TxnOperator, TxnEvent, any) error, v any) TxnEventCallback {
+	return TxnEventCallback{
+		Func:  f,
+		Value: v,
+	}
 }

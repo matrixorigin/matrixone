@@ -96,7 +96,7 @@ func (s *service) Create(
 
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
-		s.txnClosed)
+		client.NewTxnEventCallback(s.txnClosed))
 	if err := s.store.Create(ctx, tableID, cols, txnOp); err != nil {
 		s.logger.Error("create auto increment cache failed",
 			zap.Uint64("table-id", tableID),
@@ -180,7 +180,7 @@ func (s *service) Delete(
 
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
-		s.txnClosed)
+		client.NewTxnEventCallback(s.txnClosed))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -345,12 +345,13 @@ func (s *service) getCommittedTableCache(
 	return c, nil
 }
 
-func (s *service) txnClosed(event client.TxnEvent) {
+func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.handleCreatesLocked(event.Txn)
 	s.handleDeletesLocked(event.Txn)
+	return nil
 }
 
 func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
