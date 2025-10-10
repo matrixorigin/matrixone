@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -418,11 +419,16 @@ func ConstructCreateTableSQL(
 			partitionBy := " partition by "
 
 			txn := ctx.GetProcess().GetTxnOperator()
+			newCtx := ctx.GetContext()
 			if snapshot != nil && snapshot.TS != nil {
 				txn = txn.CloneSnapshotOp(*snapshot.TS)
+
+				if snapshot.Tenant != nil {
+					newCtx = defines.AttachAccountId(newCtx, snapshot.Tenant.TenantID)
+				}
 			}
 
-			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), txn)
+			meta, err := ps.GetPartitionMetadata(newCtx, tableDef.GetTblId(), txn)
 			if err != nil {
 				return "", nil, err
 			}

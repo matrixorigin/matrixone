@@ -495,7 +495,7 @@ func NewAlterTable(table *TableName) *AlterTable {
 }
 
 func (node *AlterTable) Free() {
-	reuse.Free[AlterTable](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterTable) Format(ctx *FmtCtx) {
@@ -1471,7 +1471,7 @@ func NewAlterPartitionRedefinePartitionClause(typ AlterPartitionOptionType, part
 }
 
 func (node *AlterPartitionRedefinePartitionClause) Free() {
-	reuse.Free[AlterPartitionRedefinePartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionRedefinePartitionClause) Format(ctx *FmtCtx) {
@@ -1504,7 +1504,7 @@ func NewAlterPartitionAddPartitionClause(typ AlterPartitionOptionType, partition
 }
 
 func (node *AlterPartitionAddPartitionClause) Free() {
-	reuse.Free[AlterPartitionAddPartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionAddPartitionClause) Format(ctx *FmtCtx) {
@@ -1550,7 +1550,7 @@ func NewAlterPartitionDropPartitionClause(typ AlterPartitionOptionType, partitio
 }
 
 func (node *AlterPartitionDropPartitionClause) Free() {
-	reuse.Free[AlterPartitionDropPartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionDropPartitionClause) Format(ctx *FmtCtx) {
@@ -1581,7 +1581,7 @@ func NewAlterPartitionTruncatePartitionClause(typ AlterPartitionOptionType, part
 }
 
 func (node *AlterPartitionTruncatePartitionClause) Free() {
-	reuse.Free[AlterPartitionTruncatePartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionTruncatePartitionClause) Format(ctx *FmtCtx) {

@@ -51,9 +51,99 @@ func TestDelete(t *testing.T) {
 			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
 			require.NoError(t, txnOp.Commit(ctx))
-			require.Empty(t, s.mu.tables)
 
 			require.NoError(t, s.Delete(ctx, tableID, nil))
+		},
+	)
+}
+
+func TestRedefine(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.Redefine(ctx, 1, nil, txnOp))
+		},
+	)
+}
+
+func TestRenamePartition(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.Rename(ctx, 1, "old", "new", txnOp))
+		},
+	)
+}
+
+func TestAddPartitions(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.AddPartitions(ctx, 1, nil, txnOp))
+
+			tableID := uint64(1)
+			num := uint64(2)
+			columns := []string{"a"}
+			def := newTestTablePartitionDefine(1, columns, []types.T{types.T_int8}, num, partition.PartitionMethod_Hash)
+			memStore := store.(*memStorage)
+			memStore.addUncommittedTable(def)
+
+			stmt := newTestHashOption(t, columns[0], num)
+			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
+			require.NoError(t, txnOp.Commit(ctx))
+
+			require.Error(t, s.AddPartitions(ctx, tableID, nil, txnOp))
+		},
+	)
+}
+
+func TestDropPartitions(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.DropPartitions(ctx, 1, nil, txnOp))
+
+			tableID := uint64(1)
+			num := uint64(2)
+			columns := []string{"a"}
+			def := newTestTablePartitionDefine(1, columns, []types.T{types.T_int8}, num, partition.PartitionMethod_Hash)
+			memStore := store.(*memStorage)
+			memStore.addUncommittedTable(def)
+
+			stmt := newTestHashOption(t, columns[0], num)
+			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
+			require.NoError(t, txnOp.Commit(ctx))
+
+			require.Error(t, s.DropPartitions(ctx, tableID, nil, txnOp))
+		},
+	)
+}
+
+func TestTruncatePartitions(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			require.Error(t, s.TruncatePartitions(ctx, 1, nil, txnOp))
 		},
 	)
 }
