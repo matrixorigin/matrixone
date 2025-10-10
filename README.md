@@ -88,49 +88,98 @@ MatrixOne empowers enterprises to build modern, AI-powered applications with unp
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 
-### 2️⃣ Connect & Query
+### 2️⃣ Create Database
+
+```bash
+mysql -h127.0.0.1 -P6001 -p111 -uroot -e "create database demo"
+```
+
+### 3️⃣ Connect & Query
 
 **Install Python SDK:**
 ```bash
 pip install matrixone-python-sdk
 ```
 
-**Run your first vector search:**
+**Vector search:**
 ```python
-from matrixone import connect
+from matrixone import Client
+from matrixone.orm import declarative_base
+from sqlalchemy import Column, Integer, String, Text
+from matrixone.sqlalchemy_ext import create_vector_column
 
-# Connect to MatrixOne (use defaults: host='localhost', port=6001, user='root', password='111')
-conn = connect(database='demo')
+# Create client and connect
+client = Client()
+client.connect(database='demo')
 
-# Create table with vector column
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS documents (
-        id INT PRIMARY KEY,
-        title VARCHAR(100),
-        embedding VECF32(16)  -- 16-dimensional vector
-    )
-""")
+# Define model using MatrixOne ORM
+Base = declarative_base()
 
-# Create IVF index for fast similarity search
-conn.execute("CREATE INDEX idx_vec ON documents(embedding) USING IVF")
+class Article(Base):
+    __tablename__ = 'articles'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = create_vector_column(8, "f32")
 
-# Insert sample vectors (e.g., document embeddings)
-conn.execute("""
-    INSERT INTO documents VALUES
-    (1, 'AI Database', '[0.1, 0.2, 0.3, 0.15, 0.25, 0.35, 0.12, 0.22, 0.18, 0.28, 0.13, 0.23, 0.17, 0.27, 0.14, 0.24]'),
-    (2, 'Vector Search', '[0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32, 0.28, 0.38, 0.23, 0.33, 0.27, 0.37, 0.24, 0.34]'),
-    (3, 'Time Series', '[0.5, 0.1, 0.2, 0.45, 0.15, 0.25, 0.42, 0.12, 0.48, 0.18, 0.43, 0.13, 0.47, 0.17, 0.44, 0.14]')
-""")
+# Create table using client API
+client.create_table(Article)
 
-# Find similar documents using cosine similarity
-query_vector = "[0.15, 0.25, 0.35, 0.2, 0.3, 0.4, 0.17, 0.27, 0.23, 0.33, 0.18, 0.28, 0.22, 0.32, 0.19, 0.29]"
-results = conn.query(f"""
-    SELECT id, title, cosine_similarity(embedding, {query_vector}) AS similarity
-    FROM documents
-    ORDER BY similarity DESC
-    LIMIT 3
-""")
-print(results)
+# Insert some data using client API
+articles = [
+    {'title': 'Machine Learning Guide',
+     'content': 'Comprehensive machine learning tutorial...',
+     'embedding': [0.1, 0.2, 0.3, 0.15, 0.25, 0.35, 0.12, 0.22]},
+    {'title': 'Python Programming',
+     'content': 'Learn Python programming basics',
+     'embedding': [0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32]},
+]
+client.batch_insert(Article, articles)
+
+client.vector_ops.create_ivf(
+    Article,
+    name='idx_embedding',
+    column='embedding',
+    lists=100,
+    op_type='vector_l2_ops'
+)
+
+query_vector = [0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32]
+results = client.query(
+    Article.title,
+    Article.content,
+    Article.embedding.l2_distance(query_vector).label("distance"),
+).filter(Article.embedding.l2_distance(query_vector) < 0.1).execute()
+for row in results.rows:
+    print(f"Title: {row[0]}, Content: {row[1][:50]}...")
+
+# Cleanup
+client.drop_table(Article)  # Use client API
+client.disconnect()
+```
+
+**Fulltext Search:**
+```python
+...
+# Create fulltext index using SDK 
+client.fulltext_index.create(
+    Article,name='ftidx_content',columns=['title', 'content']
+)
+
+# Boolean search with must/should operators
+results = client.query(
+    Article.title,
+    Article.content,
+    boolean_match('title', 'content')
+        .must('machine')
+        .must('learning')
+        .must_not('basics')
+).execute()
+
+# Results is a ResultSet object
+for row in results.rows:
+    print(f"Title: {row[0]}, Content: {row[1][:50]}...")
+...
 ```
 
 **That's it!** 🎉 You're now running a production-ready database with Git-like snapshots, vector search, and full ACID compliance.

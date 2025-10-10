@@ -1587,7 +1587,18 @@ class AsyncClient(BaseMatrixOneClient):
         except Exception as e:
             self.logger.log_connection(host, port, final_user, database or "default", success=False)
             self.logger.log_error(e, context="Async connection")
-            raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
+
+            # Provide user-friendly error messages for common issues
+            error_msg = str(e)
+            if 'Unknown database' in error_msg or '1049' in error_msg:
+                db_name = database or "default"
+                raise ConnectionError(
+                    f"Database '{db_name}' does not exist. Please create it first:\n"
+                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p{password} "
+                    f"-e \"CREATE DATABASE {db_name}\""
+                ) from e
+            else:
+                raise ConnectionError(f"Failed to connect to MatrixOne: {e}") from e
 
     def _setup_connection_hook(
         self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
