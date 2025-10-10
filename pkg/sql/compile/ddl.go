@@ -2107,7 +2107,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	newCt, err := makeNewDropConstraint(oldCt, qry.GetIndexName())
+	newCt, dropIndexTableNames, err := makeNewDropConstraint(oldCt, qry.GetIndexName())
 	if err != nil {
 		return err
 	}
@@ -2117,19 +2117,18 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	//2. drop index table
-	if qry.IndexTableName != "" {
-		if _, err = d.Relation(c.proc.Ctx, qry.IndexTableName, nil); err != nil {
+	for _, indexTableName := range dropIndexTableNames {
+		if _, err = d.Relation(c.proc.Ctx, indexTableName, nil); err != nil {
 			return err
 		}
 
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, qry.IndexTableName, c.proc.GetTxnOperator()); err != nil {
+		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, indexTableName, c.proc.GetTxnOperator()); err != nil {
 			return err
 		}
 
-		if err = d.Delete(c.proc.Ctx, qry.IndexTableName); err != nil {
+		if err = d.Delete(c.proc.Ctx, indexTableName); err != nil {
 			return err
 		}
-
 	}
 
 	//3. delete index object from mo_catalog.mo_indexes
@@ -2141,7 +2140,8 @@ func (s *Scope) DropIndex(c *Compile) error {
 	return nil
 }
 
-func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, error) {
+func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, []string, error) {
+	dropIndexTableNames := []string{}
 	// must fount dropName because of being checked in plan
 	for i := 0; i < len(oldCt.Cts); i++ {
 		ct := oldCt.Cts[i]
@@ -2154,13 +2154,16 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			oldCt.Cts[i] = def
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
+				if index.IndexName == dropName && len(index.IndexTableName) > 0 {
+					dropIndexTableNames = append(dropIndexTableNames, index.IndexTableName)
+				}
 				return index.IndexName == dropName
 			}
 			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
 			oldCt.Cts[i] = def
 		}
 	}
-	return oldCt, nil
+	return oldCt, dropIndexTableNames, nil
 }
 
 func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (*engine.ConstraintDef, error) {
