@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -31,11 +32,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
 	injectedError = "injected table clone error"
 )
+
+const (
+	dataBranchLevel_Table    = "table"
+	dataBranchLevel_Database = "database"
+	dataBranchLevel_Account  = "account"
+)
+
+const (
+	insertIntoBranchMetadataSql = `insert into %s.%s values(%d, %d, %d, %d, '%s', false)`
+	scanBranchMetadataSql       = `select * from %s.%s`
+)
+
+type cloneReceipt struct {
+	dstDb  string
+	dstTbl string
+	srcDb  string
+	srcTbl string
+	// this valid only when the snapshot is nil
+	snapshotTS int64
+	snapshot   *plan.Snapshot
+
+	opAccount  uint32
+	toAccount  uint32
+	srcAccount uint32
+}
 
 func getBackExecutor(
 	ctx context.Context,
@@ -75,6 +102,25 @@ func getBackExecutor(
 	return bh, deferred, nil
 }
 
+func resolveSnapshot(
+	ses *Session, atTsExpr *tree.AtTimeStamp,
+) (*plan.Snapshot, error) {
+
+	var (
+		err      error
+		snapshot *plan.Snapshot
+	)
+
+	if atTsExpr != nil {
+		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
+		if snapshot, err = builder.ResolveTsHint(atTsExpr); err != nil {
+			return nil, err
+		}
+	}
+
+	return snapshot, nil
+}
+
 func getOpAndToAccountId(
 	reqCtx context.Context,
 	ses *Session,
@@ -83,11 +129,8 @@ func getOpAndToAccountId(
 	atTsExpr *tree.AtTimeStamp,
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
-	if atTsExpr != nil {
-		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
-		if snapshot, err = builder.ResolveTsHint(atTsExpr); err != nil {
-			return 0, 0, nil, err
-		}
+	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
+		return 0, 0, nil, err
 	}
 
 	if opAccountId, err = defines.GetAccountId(reqCtx); err != nil {
@@ -111,7 +154,6 @@ func handleCloneTable(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.CloneTable,
-	receipt *cloneReceipt,
 	bh BackgroundExec,
 ) (err error) {
 
@@ -128,21 +170,9 @@ func handleCloneTable(
 		toAccountId   uint32
 		opAccountId   uint32
 		fromAccountId uint32
-	)
 
-	defer func() {
-		if receipt != nil {
-			receipt.srcDb = stmt.SrcTable.SchemaName.String()
-			receipt.srcTbl = stmt.SrcTable.ObjectName.String()
-			receipt.dstDb = stmt.CreateTable.Table.SchemaName.String()
-			receipt.dstTbl = stmt.CreateTable.Table.ObjectName.String()
-			receipt.snapshot = snapshot
-			receipt.snapshotTS = snapshotTS
-			receipt.toAccount = toAccountId
-			receipt.opAccount = opAccountId
-			receipt.srcAccount = fromAccountId
-		}
-	}()
+		receipt cloneReceipt
+	)
 
 	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
 		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
@@ -247,6 +277,20 @@ func handleCloneTable(
 		return
 	}
 
+	receipt.srcDb = stmt.SrcTable.SchemaName.String()
+	receipt.srcTbl = stmt.SrcTable.ObjectName.String()
+	receipt.dstDb = stmt.CreateTable.Table.SchemaName.String()
+	receipt.dstTbl = stmt.CreateTable.Table.ObjectName.String()
+	receipt.snapshot = snapshot
+	receipt.snapshotTS = snapshotTS
+	receipt.toAccount = toAccountId
+	receipt.opAccount = opAccountId
+	receipt.srcAccount = fromAccountId
+
+	if err = updateBranchMetaTable(reqCtx, ses, bh, receipt); err != nil {
+		return
+	}
+
 	if faultInjected, _ = objectio.LogCNCloneFailedInjected(
 		stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
 	); faultInjected {
@@ -289,6 +333,11 @@ func handleCloneDatabase(
 
 		snapshotTS int64
 	)
+
+	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
+	defer func() {
+		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
+	}()
 
 	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
 		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase)
@@ -404,7 +453,7 @@ func handleCloneDatabase(
 		}()
 
 		if err = handleCloneTable(
-			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), nil, bh,
+			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), bh,
 		); err != nil {
 			return err
 		}
@@ -507,4 +556,81 @@ func tryToIncreaseTxnPhysicalTS(
 	updatedPhysical -= int64(time.Nanosecond)
 
 	return updatedPhysical, nil
+}
+
+func updateBranchMetaTable(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	receipt cloneReceipt,
+) (err error) {
+
+	var (
+		srcTblDef  *plan.TableDef
+		dstTblDef  *plan.TableDef
+		dstDB      engine.Database
+		dstRel     engine.Relation
+		cloneTxnOp TxnOperator
+		level      string
+	)
+
+	switch ctx.Value(tree.CloneLevelCtxKey{}).(tree.CloneLevelType) {
+	case tree.NormalCloneLevelTable:
+		level = dataBranchLevel_Table
+	case tree.NormalCloneLevelDatabase:
+		level = dataBranchLevel_Database
+	case tree.NormalCloneLevelAccount:
+		level = dataBranchLevel_Account
+	default:
+		// we do not record the branch metadata for restore
+		return nil
+	}
+
+	if _, srcTblDef, err = ses.GetTxnCompileCtx().Resolve(
+		receipt.srcDb, receipt.srcTbl, receipt.snapshot,
+	); err != nil {
+		return err
+	}
+
+	dstCtx := defines.AttachAccountId(ctx, receipt.toAccount)
+
+	// the back session did the clone operation,
+	// we need it's txnOp to read the uncommit table info.
+	cloneTxnOp = bh.(*backExec).backSes.GetTxnHandler().GetTxn()
+	if dstDB, err = ses.proc.GetSessionInfo().StorageEngine.Database(
+		dstCtx, receipt.dstDb, cloneTxnOp,
+	); err != nil {
+		return err
+	}
+
+	if dstRel, err = dstDB.Relation(dstCtx, receipt.dstTbl, nil); err != nil {
+		return err
+	}
+	dstTblDef = dstRel.GetTableDef(dstCtx)
+
+	if receipt.snapshot != nil {
+		receipt.snapshotTS = receipt.snapshot.TS.PhysicalTime
+	}
+
+	// write branch info into branch_metadata table
+	updateMetadataSql := fmt.Sprintf(
+		insertIntoBranchMetadataSql,
+		catalog.MO_CATALOG,
+		catalog.MO_BRANCH_METADATA,
+		dstTblDef.TblId,
+		receipt.snapshotTS,
+		srcTblDef.TblId,
+		receipt.opAccount,
+		level,
+	)
+
+	tempCtx := ctx
+	if receipt.opAccount != sysAccountID {
+		tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
+	}
+	if err = bh.Exec(tempCtx, updateMetadataSql); err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -305,7 +305,7 @@ func restoreToAccountFromTS(
 			continue
 		}
 
-		getLogger(sid).Info(fmt.Sprintf("[%d:%d]drop current exists db: %v", restoreAccount, snapshotTs, dbName))
+		getLogger(sid).Info(fmt.Sprintf("[%d:%d]drop current Exists db: %v", restoreAccount, snapshotTs, dbName))
 		if err = dropDb(toCtx, bh, dbName); err != nil {
 			return
 		}
@@ -533,7 +533,7 @@ func recreateTableFromTS(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop table: %v,", restoreAccount, snapshotTs, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("drop table if Exists `%s`", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -702,7 +702,7 @@ func restoreViewsFromTS(
 				return err
 			}
 
-			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(toCtx, "drop view if Exists "+tblInfo.tblName); err != nil {
 				return err
 			}
 
