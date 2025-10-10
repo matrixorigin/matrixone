@@ -204,6 +204,8 @@ client.disconnect()
 **Fulltext Search:**
 ```python
 ...
+from matrixone.sqlalchemy_ext import boolean_match
+
 # Create fulltext index using SDK 
 client.fulltext_index.create(
     Article,name='ftidx_content',columns=['title', 'content']

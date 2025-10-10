@@ -198,6 +198,8 @@ print(results)
 **全文检索示例：**
 ```python
 ...
+from matrixone.sqlalchemy_ext import boolean_match
+
 # 使用 SDK 创建全文索引
 client.fulltext_index.create(
     Article, name='ftidx_content', columns=['title', 'content']
