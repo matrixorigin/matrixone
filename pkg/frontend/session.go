@@ -532,7 +532,7 @@ func NewSession(
 	proto MysqlRrWr,
 	mp *mpool.MPool,
 ) *Session {
-	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
+	//if the sharedTxnHandler Exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
@@ -1098,7 +1098,7 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
-// AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
+// AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database Exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
 		defaultRoleID        int64
@@ -1148,7 +1148,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
 	defer bh.Close()
 
-	//step1 : check tenant exists or not in SYS tenant context
+	//step1 : check tenant Exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
 	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 
@@ -1164,7 +1164,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	ses.Debugf(ctx, "check tenant %s exists", tenant)
+	ses.Debugf(ctx, "check tenant %s Exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
@@ -1212,13 +1212,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
 	v2.CheckTenantDurationHistogram.Observe(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Seconds())
 
-	//step2 : check user exists or not in general tenant.
+	//step2 : check user Exists or not in general tenant.
 	//step3 : get the password of the user
 
 	ses.timestampMap[TSCheckUserStart] = time.Now()
 	tenantCtx := defines.AttachAccountId(ctx, uint32(tenantID))
 
-	ses.Debugf(tenantCtx, "check user of %s exists", tenant)
+	ses.Debugf(tenantCtx, "check user of %s Exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser, err = getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
 	if err != nil {
@@ -1267,7 +1267,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
 		ses.Debugf(tenantCtx, "check default role of user %s.", tenant)
-		//step4 : check role exists or not
+		//step4 : check role Exists or not
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
 		if err != nil {
@@ -1464,7 +1464,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
 	}
 
-	// If the login information contains the database name, verify if the database exists
+	// If the login information contains the database name, verify if the database Exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
 		_, err = executeSQLInBackgroundSession(tenantCtx, bh, "use `"+dbName+"`")

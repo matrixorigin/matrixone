@@ -1446,7 +1446,7 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
-			err = moerr.NewInternalErrorf(ctx, "table '%s' not exists", tblName)
+			err = moerr.NewInternalErrorf(ctx, "table '%s' not Exists", tblName)
 			return
 		}
 		tablesNames = append(tablesNames, tblName)

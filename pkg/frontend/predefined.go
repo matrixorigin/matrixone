@@ -331,11 +331,11 @@ var (
 
 	MoCatalogBranchMetadataDDL = fmt.Sprintf(`create table mo_catalog.%s(
     	table_id bigint unsigned comment 'id of the table this branch points to',
-   	 	clone_ts bigint signed comment 'branch creation timestamp in nanoseconds',
-    	p_table_id bigint unsigned comment 'id of the parent table this branch is based on',
-    	creator bigint unsigned comment 'account id of the creator',
-    	level varchar,
-    	table_deleted bool,
+   	 	clone_ts bigint signed not null comment 'branch creation timestamp in nanoseconds',
+    	p_table_id bigint unsigned not null comment 'id of the parent table this branch is based on',
+    	creator bigint unsigned not null comment 'account id of the creator',
+    	level varchar not null,
+    	table_deleted bool not null default false,
     	index(p_table_id),
     	index(creator),
     	primary key(table_id)

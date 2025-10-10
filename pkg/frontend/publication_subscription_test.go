@@ -223,7 +223,7 @@ func Test_doAlterPublication(t *testing.T) {
 		// get all accounts
 		bh.EXPECT().Exec(gomock.Any(), getAccountIdNamesSql).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
-		// check col exists
+		// check col Exists
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCheckColResults(ctrl))
 		// get pub info
@@ -328,7 +328,7 @@ func Test_doAlterPublication2(t *testing.T) {
 		// get all accounts
 		bh.EXPECT().Exec(gomock.Any(), getAccountIdNamesSql).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
-		// check col exists
+		// check col Exists
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCheckColResults(ctrl))
 		// get pub info
@@ -411,7 +411,7 @@ func Test_doDropPublication(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		// check col exists
+		// check col Exists
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCheckColResults(ctrl))
 		// get pub info
