@@ -48,7 +48,6 @@ Contents
 ========
 
 * [What is MatrixOne](#what-is-matrixone)
-* [KeyFeatures](#key-features)
 * [User Values](#user-values)
 * [Architecture](#architecture)
 * [Quick start](#quick-start)
@@ -58,77 +57,27 @@ Contents
 
 ## What is MatrixOne?
 
-MatrixOne is a hyper-converged cloud & edge native distributed database with a structure that separates storage, computation, and transactions to form a consolidated HSTAP data engine. This engine enables a single database system to accommodate diverse business loads such as OLTP, OLAP, and stream computing. It also supports deployment and utilization across public, private, and edge clouds, ensuring compatibility with diverse infrastructures.
+**MatrixOne is the next-generation AI-native hyper-converged database** that redefines how you manage, version, and analyze data in the AI era.
+
+Built on a revolutionary **storage-compute-transaction separation architecture**, MatrixOne delivers a unified **HSTAP (Hyper-converged Serving & Transactional Analytical Processing)** engine that consolidates OLTP, OLAP, time-series, and streaming workloads into a single database—eliminating data silos and complex ETL pipelines.
+
+**What makes MatrixOne unique:**
+
+🎬 **Git for Data** - Industry-first database version control with instant snapshots, time-travel queries, and data branching—manage your data like code.
+
+🤖 **AI-Native Architecture** - Built-in vector search (IVF/HNSW indexing) and full-text search for semantic retrieval, RAG applications, and intelligent data discovery. No external vector databases needed.
+
+🚀 **One Database for Everything** - Replace your entire data stack (MySQL + ClickHouse + Elasticsearch + Vector DB) with a single, high-performance database that maintains full ACID compliance.
+
+☁️ **Cloud-Native & Edge-Ready** - Deploy seamlessly across public clouds, private datacenters, and edge locations with true multi-cloud portability and elastic scalability.
+
+💰 **Radically Cost-Efficient** - Intelligent storage tiering and erasure coding reduce costs by 70% while delivering enterprise-grade performance and availability.
+
+MatrixOne empowers enterprises to build modern, AI-powered applications with unprecedented simplicity, speed, and scale.
 
 <p align="center">
   <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/architeture241113_en.png?raw=true">
 </p>
-
-## 🎯 <a id="key-features">Key Features</a>
-
-### 💥 **Hyper-converged Engine**
-
-<details>
-  <summary><b><font size=4>Monolithic Engine</b></font></summary>
-          HTAP data engine that supports a mix of workloads such as TP, AP, time series, and machine learning within a single database.
-</details>
-
-<details>
-  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary>
-             Built-in stream computing engine that enables real-time data inflow, transformation, and querying.
-</details>
-
-### ☁️ **Cloud & Edge Native**
-
-<details>
-  <summary><b><font size=4>Storage-Computation Separation Structure</b></font></summary>
-            Separates the storage, computation, and transaction layers, leveraging a containerized design for ultimate scalability.
-</details>
-
-<details>
-  <summary><b><font size=4>Multi-Infrastructure Compatibility</b></font></summary>
-           MatrixOne provides industry-leading latency control with optimized consistency protocol.
-</details>
-
-### 🚀 **Extreme Performance**
-
-<details>
-  <summary><b><font size=4>High-Performance Execution Engine</b></font></summary>
-     The flexible combination of Compute Node and Transaction node accommodates point queries and batch processing, delivering peak performance for OLTP and OLAP.
-</details>
-
-<details>
-  <summary><b><font size=4>Enterprise-Grade High Availability</b></font></summary>
-     Establishes a consistently shared log under a leading Multi-Raft replication state machine model. It ensures high cluster availability while preventing data duplication, thus achieving RTO=0.
-</details>
-
-### 🖊️ **Ease of Use**
-
-<details>
-  <summary><b><font size=4>Built-in Multi-Tenancy Capability</b></font></summary>
-  Offers inherent multi-tenancy, where tenants are isolated from each other, independently scalable yet uniformly manageable. This feature simplifies the complexity of multi-tenancy design in upper-level applications.
-  </details>
-
-<details>
-  <summary><b><font size=4>High Compatibility with MySQL</b></font></summary>
-     MatrixOne exhibits high compatibility with MySQL 8.0, including transmission protocol, SQL syntax, and ecosystem tools, lowering usage and migration barriers.
-</details>
-
-### 💰 **Cost-Effective**
-
-<details>
-  <summary><b><font size=4>Efficient Storage Design</b></font></summary>
-  Employs cost-effective object storage as primary storage. High availability can be achieved through erasure coding technology with only about 150% data redundancy. It also provides high-speed caching capabilities, balancing cost and performance via a multi-tiered storage strategy that separates hot and cold data.
-  </details>
-
-<details>
-  <summary><b><font size=4>Flexible Resource Allocation</b></font></summary>
-    Users can adjust the resource allocation ratio for OLTP and OLAP according to business conditions, maximizing resource utilization.
-</details>
-
-### 🔒 **Enterprise-Level Security and Compliance**
-
-   MatrixOne employs Role-Based Access Control (RBAC), TLS connections, and data encryption to establish a multi-tiered security defense system, safeguarding enterprise-level data security and compliance.
 
 ## 💎 **<a id="user-values">User Values</a>**
 
