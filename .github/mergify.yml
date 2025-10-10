@@ -3,44 +3,54 @@ queue_rules:
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: |
+    commit_message_template: >
       {{ title }} (#{{ number }})
 
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
+      this PR does / why we need it:") }}
+
 
       Approved by: @{{ approved_reviews_by | join(', @') }}
-
   - name: release-3.0
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: |
+    commit_message_template: >
       {{ title }} (#{{ number }})
 
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
+      this PR does / why we need it:") }}
+
 
       Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: release-2.2
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: |
+    commit_message_template: >
       {{ title }} (#{{ number }})
 
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
+      this PR does / why we need it:") }}
+
 
       Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: release-2.1
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
-    commit_message_template: |
+    commit_message_template: >
       {{ title }} (#{{ number }})
 
-      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What
+      this PR does / why we need it:") }}
+
 
       Approved by: @{{ approved_reviews_by | join(', @') }}
-
 pull_request_rules:
   - name: Automatic queue on approval for main
     conditions:
@@ -50,7 +60,6 @@ pull_request_rules:
     actions:
       queue:
         name: main
-
   - name: Automatic queue on approval for release-3.0
     conditions:
       - "#changes-requested-reviews-by<=0"
@@ -60,7 +69,6 @@ pull_request_rules:
     actions:
       queue:
         name: release-3.0
-
   - name: Automatic queue on approval for release-2.2
     conditions:
       - "#changes-requested-reviews-by<=0"
@@ -70,7 +78,6 @@ pull_request_rules:
     actions:
       queue:
         name: release-2.2
-
   - name: Automatic queue on approval for release-2.1
     conditions:
       - "#changes-requested-reviews-by<=0"
@@ -80,7 +87,6 @@ pull_request_rules:
     actions:
       queue:
         name: release-2.1
-
   - name: Auto Request Reviewer For Non Main Branch
     conditions:
       - base!=main
@@ -88,13 +94,11 @@ pull_request_rules:
       request_reviews:
         users:
           - XuPeng-SH
-
   - name: Auto update branch
     conditions:
       - created-at>=00:10 ago
     actions:
       update:
-
   - name: label for Bug
     conditions:
       - body~=(?im)- \[x\] BUG
@@ -153,3 +157,5 @@ priority_rules:
     conditions:
       - queue-name=release-2.0
     priority: 2250
+merge_queue:
+  max_parallel_checks: 1
