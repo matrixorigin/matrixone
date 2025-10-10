@@ -187,7 +187,7 @@ class SnapshotManager:
             return snapshot_info
 
         except Exception as e:
-            raise SnapshotError(f"Failed to create snapshot: {e}")
+            raise SnapshotError(f"Failed to create snapshot: {e}") from None
 
     def list(self) -> List[Snapshot]:
         """
@@ -236,7 +236,7 @@ class SnapshotManager:
             return snapshots
 
         except Exception as e:
-            raise SnapshotError(f"Failed to list snapshots: {e}")
+            raise SnapshotError(f"Failed to list snapshots: {e}") from None
 
     def get(self, name: str, executor=None) -> Snapshot:
         """
@@ -312,7 +312,7 @@ class SnapshotManager:
             execute_func = executor.execute if executor else self.client.execute
             execute_func(f"DROP SNAPSHOT {name}")
         except Exception as e:
-            raise SnapshotError(f"Failed to delete snapshot: {e}")
+            raise SnapshotError(f"Failed to delete snapshot: {e}") from None
 
     def exists(self, name: str) -> bool:
         """
@@ -442,7 +442,7 @@ class CloneManager:
             execute_func = executor.execute if executor else self.client.execute
             execute_func(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}")
+            raise CloneError(f"Failed to clone database: {e}") from None
 
     def clone_table(
         self,
@@ -487,7 +487,7 @@ class CloneManager:
             execute_func = executor.execute if executor else self.client.execute
             execute_func(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}")
+            raise CloneError(f"Failed to clone table: {e}") from None
 
     def clone_database_with_snapshot(
         self,

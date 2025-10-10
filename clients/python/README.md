@@ -44,9 +44,22 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
 
 ## 🚀 Installation
 
+### From PyPI (Stable Release)
+
 ```bash
 pip install matrixone-python-sdk
 ```
+
+### From test.pypi (Latest Pre-release)
+
+```bash
+pip install \
+    --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    matrixone-python-sdk
+```
+
+**Note**: The `--extra-index-url` is required to install dependencies (PyMySQL, SQLAlchemy, etc.) from the official PyPI.
 
 ### Development Installation
 
