@@ -75,7 +75,8 @@ class MetadataOperationsDemo:
 
         # Create client and connect
         self.client = Client(logger=self.logger)
-        self.client.connect(*self.connection_params)
+        host, port, user, password, database = self.connection_params
+        self.client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Get SQLAlchemy engine and create session
         self.engine = self.client.get_sqlalchemy_engine()
@@ -357,7 +358,8 @@ class MetadataOperationsDemo:
         self.logger.info("\n=== Asynchronous Metadata Operations ===")
 
         client = AsyncClient()
-        await client.connect(*self.connection_params)
+        host, port, user, password, database = self.connection_params
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
             # Async metadata scan with raw results

@@ -39,7 +39,7 @@ def demo_dynamic_config_update():
     # Start with 'simple' logging mode
     logger = create_default_logger(sql_log_mode='simple')
     client = Client(logger=logger)
-    client.connect(host, port, user, password, database)
+    client.connect(host=host, port=port, user=user, password=password, database=database)
 
     # Create test table
     client.execute("DROP TABLE IF EXISTS dynamic_log_test")
@@ -100,7 +100,7 @@ def demo_per_operation_override():
     # Start with 'off' logging mode
     logger = create_default_logger(sql_log_mode='off')
     client = Client(logger=logger)
-    client.connect(host, port, user, password, database)
+    client.connect(host=host, port=port, user=user, password=password, database=database)
 
     # Create test table
     client.execute("DROP TABLE IF EXISTS override_log_test")
@@ -162,7 +162,7 @@ def demo_debugging_scenario():
     # Production setup: minimal logging
     logger = create_default_logger(sql_log_mode='simple', slow_query_threshold=1.0)
     client = Client(logger=logger)
-    client.connect(host, port, user, password, database)
+    client.connect(host=host, port=port, user=user, password=password, database=database)
 
     # Create test table
     client.execute("DROP TABLE IF EXISTS debug_scenario")

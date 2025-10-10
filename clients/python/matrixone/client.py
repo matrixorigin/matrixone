@@ -244,10 +244,11 @@ class Client(BaseMatrixOneClient):
 
     def connect(
         self,
-        host: str,
-        port: int,
-        user: str,
-        password: str,
+        *,
+        host: str = "localhost",
+        port: int = 6001,
+        user: str = "root",
+        password: str = "111",
         database: str,
         ssl_mode: str = "preferred",
         ssl_ca: Optional[str] = None,
@@ -345,8 +346,12 @@ class Client(BaseMatrixOneClient):
             except Exception as e:
                 self.logger.warning(f"Failed to detect backend version: {e}")
 
-            # Setup connection hook if provided
-            if on_connect:
+            # Setup connection hook (default to ENABLE_ALL if not provided)
+            # Allow empty list [] to explicitly disable hooks
+            if on_connect is None:
+                on_connect = [ConnectionAction.ENABLE_ALL]
+
+            if on_connect:  # Only setup if not empty list
                 self._setup_connection_hook(on_connect)
                 # Execute the hook once immediately for the initial connection
                 self._execute_connection_hook_immediately(on_connect)
@@ -354,7 +359,17 @@ class Client(BaseMatrixOneClient):
         except Exception as e:
             self.logger.log_connection(host, port, final_user, database, success=False)
             self.logger.log_error(e, context="Connection")
-            raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
+
+            # Provide user-friendly error messages for common issues
+            error_msg = str(e)
+            if 'Unknown database' in error_msg or '1049' in error_msg:
+                raise ConnectionError(
+                    f"Database '{database}' does not exist. Please create it first:\n"
+                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p{password} "
+                    f"-e \"CREATE DATABASE {database}\""
+                ) from e
+            else:
+                raise ConnectionError(f"Failed to connect to MatrixOne: {e}") from e
 
     def _setup_connection_hook(
         self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
@@ -1686,7 +1701,25 @@ class Client(BaseMatrixOneClient):
             from .sqlalchemy_ext import FulltextIndex, VectorIndex
             from sqlalchemy.schema import CreateTable, CreateIndex
 
-            with self.get_sqlalchemy_engine().begin() as conn:
+            try:
+                engine_context = self.get_sqlalchemy_engine().begin()
+            except Exception as e:
+                # Handle database connection errors with user-friendly messages
+                error_msg = str(e)
+                if 'Unknown database' in error_msg or '1049' in error_msg:
+                    db_name = self._connection_params.get('database', 'unknown')
+                    raise ConnectionError(
+                        f"Database '{db_name}' does not exist. Please create it first:\n"
+                        f"  mysql -h{self._connection_params.get('host', 'localhost')} "
+                        f"-P{self._connection_params.get('port', 6001)} "
+                        f"-u{self._connection_params.get('user', 'root')} "
+                        f"-p{self._connection_params.get('password', '***')} "
+                        f"-e \"CREATE DATABASE {db_name}\""
+                    ) from e
+                else:
+                    raise ConnectionError(f"Failed to connect to database: {error_msg}") from e
+
+            with engine_context as conn:
                 # Create table without indexes first
                 # Build CREATE TABLE statement without indexes
                 create_table_sql = str(CreateTable(table).compile(dialect=conn.dialect))

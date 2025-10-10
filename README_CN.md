@@ -17,6 +17,10 @@
    <img src="https://img.shields.io/badge/Release-latest-green.svg" alt="release"/>
   </a>
   <br>
+  <img src="https://img.shields.io/badge/MySQL-Compatible-4479A1.svg?logo=mysql&logoColor=white" alt="mysql-compatible"/>
+  <img src="https://img.shields.io/badge/AI-Native-FF6B6B.svg?logo=openai&logoColor=white" alt="ai-native"/>
+  <img src="https://img.shields.io/badge/Cloud-Native-326CE5.svg?logo=kubernetes&logoColor=white" alt="cloud-native"/>
+  <br>
   <a href="https://docs.matrixorigin.cn/latest/">
     <b>Docs</b>
   </a>
@@ -47,114 +51,203 @@
 ========
 
 * [MatrixOne 是什么？](#what-is-matrixone)
-* [核心特性](#key-features)
-* [用户价值](#user-values)
+* [60秒快速上手](#️-60秒快速上手)
+* [安装与部署](#️-安装与部署)
 * [架构](#architecture)
-* [快速上手](#quick-start)
 * [Python SDK](#python-sdk)
 * [参与贡献](#contributing)
 * [License](#license)
 
 ## <a id="what-is-matrixone">MatrixOne 是什么？</a>
 
-MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。
+**MatrixOne 是业界首个将 Git 风格版本控制引入数据库的产品**，同时具备 MySQL 兼容、AI 原生和云原生架构。
+
+作为一款 **HTAP（混合事务/分析处理）数据库**，MatrixOne 采用超融合的 **HSTAP 引擎**，在单一系统中无缝处理事务型（OLTP）、分析型（OLAP）、全文检索和向量检索等多种工作负载——无需数据迁移、无需 ETL、无需妥协。
+
+### 🎬 **Git for Data - 革命性创新**
+
+正如 Git 革新了代码管理，MatrixOne 革新了数据管理。**像管理代码一样管理数据库：**
+
+- **📸 即时快照** - 毫秒级零拷贝快照，无存储膨胀
+- **⏰ 时间旅行** - 查询任意历史时刻的数据状态
+- **🔀 分支与合并** - 在隔离分支中测试迁移和转换
+- **↩️ 即时回滚** - 无需完整备份即可恢复到任意状态
+- **🔍 完整审计追踪** - 不可变历史记录追踪每次数据变更
+
+**为什么重要：** 数据错误代价高昂。Git for Data 为您的最关键资产（数据）提供了开发者在 Git 中享有的安全性和灵活性。
+
+---
+
+### 🎯 **为 AI 时代而生**
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**🗄️ MySQL 兼容**
+
+MySQL 8.0 的直接替代品。使用现有工具、ORM 和应用程序无需修改代码。无缝迁移路径。
+
+</td>
+<td width="33%" valign="top">
+
+**🤖 AI 原生**
+
+内置向量检索（IVF/HNSW）和全文检索。直接构建 RAG 应用和语义搜索——无需外部向量数据库。
+
+</td>
+<td width="33%" valign="top">
+
+**☁️ 云原生**
+
+存算分离。随处部署。弹性扩展。Kubernetes 原生。零停机运维。
+
+</td>
+</tr>
+</table>
+
+---
+
+### 🚀 **一个数据库替代所有**
+
+MatrixOne 的 **HSTAP 引擎**整合您的整个数据基础设施：
+
+**传统方案：**
+```
+MySQL (OLTP) → ETL → ClickHouse (OLAP) → ETL → Elasticsearch (检索)
+                                             → Vector DB (AI)
+```
+4 个数据库 · 多条 ETL 管道 · 数据不一致 · 运维复杂
+
+**MatrixOne 方案：**
+```
+MatrixOne (OLTP + OLAP + 全文检索 + 向量检索)
+```
+1 个数据库 · 无需 ETL · 实时一致 · ACID 合规
+
+**核心优势：**
+- 🎯 **简单** - 一套系统部署、监控和维护
+- ⚡ **实时** - 无数据延迟，即时分析
+- 🔒 **一致** - 单一数据源，无同步问题
+- 💰 **高效** - 共享基础设施，无数据重复
+
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture.png?raw=true">
+  <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/architeture241113_en.png?raw=true">
 </p>
 
-## 🎯 <a id="key-features">核心特性</a>
+## ⚡️ 60秒快速上手
 
-### 💥 **超融合引擎**
+### 1️⃣ 启动 MatrixOne
 
-<details>
-  <summary><b><font size=4>超融合引擎</b></font></summary>
-    HTAP 数据引擎，单数据库即可支持 TP、AP、时序、机器学习等混合工作负载。
-</details>
+```bash
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
 
-<details>
-  <summary><b><font size=4>内置流引擎</b></font></summary>
-     内置流计算引擎，支持实时数据流入、实时数据转换及实时数据查询。
-</details>
+### 2️⃣ 创建数据库
 
-### ☁️ **异构云原生**
+```bash
+mysql -h127.0.0.1 -P6001 -p111 -uroot -e "create database demo"
+```
 
-<details>
-  <summary><b><font size=4>存算分离架构</b></font></summary>
-     将存储、计算、事务三层解耦，通过完全容器化的设计来实现极致扩展。
-</details>
+### 3️⃣ 连接与查询
 
-<details>
-  <summary><b><font size=4>多基础设施兼容</b></font></summary>
-     支持跨机房协同/多地协同/云边协同，实现无感知扩缩容，提供高效统一的数据管理。
-</details>
+**安装 Python SDK：**
+```bash
+pip install matrixone-python-sdk
+```
 
-### 🚀 **极致性能**
+**向量检索示例：**
+```python
+from matrixone import Client
 
-<details>
-  <summary><b><font size=4>高性能执行引擎</b></font></summary>
-  通过 Compute Node 和 Transaction node 的灵活配合兼顾点查询与批处理，对于 OLTP 和 OLAP 都具备极致性能。
-  </details>
+# 连接到 MatrixOne（使用默认配置）
+client = Client()
+client.connect(database='demo')
 
-<details>
-  <summary><b><font size=4>企业级高可用</b></font></summary>
-     在领先的 Multi-Raft 复制状态机模型下建立强一致共享日志，可在避免数据重复的同时保证集群的高可用。
-</details>
+# 创建带向量列的表
+client.execute("""
+    CREATE TABLE IF NOT EXISTS documents (
+        id INT PRIMARY KEY,
+        title VARCHAR(100),
+        embedding VECF32(16)  -- 16维向量
+    )
+""")
 
-### 🖊️ **简单易用**
+# 创建 IVF 索引以加速相似度搜索
+client.execute("CREATE INDEX idx_vec ON documents(embedding) USING IVF")
 
-<details>
-  <summary><b><font size=4>自带多租户能力</b></font></summary>
-  自带多租户功能，租户既相互隔离，独立扩缩容又可进行统一管理，简化上层应用的多租户设计复杂度。
-  </details>
+# 插入示例向量数据
+client.execute("""
+    INSERT INTO documents VALUES
+    (1, 'AI 数据库', '[0.1, 0.2, 0.3, 0.15, 0.25, 0.35, 0.12, 0.22, 0.18, 0.28, 0.13, 0.23, 0.17, 0.27, 0.14, 0.24]'),
+    (2, '向量检索', '[0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32, 0.28, 0.38, 0.23, 0.33, 0.27, 0.37, 0.24, 0.34]'),
+    (3, '时序数据', '[0.5, 0.1, 0.2, 0.45, 0.15, 0.25, 0.42, 0.12, 0.48, 0.18, 0.43, 0.13, 0.47, 0.17, 0.44, 0.14]')
+""")
 
-<details>
-  <summary><b><font size=4>MySQL 高度兼容</b></font></summary>
-     MatrixOne 与 MySQL8.0 高度兼容，包括传输协议，SQL 语法和生态工具，降低使用和迁移门槛。
-</details>
+# 使用余弦相似度查找相似文档
+query_vector = "[0.15, 0.25, 0.35, 0.2, 0.3, 0.4, 0.17, 0.27, 0.23, 0.33, 0.18, 0.28, 0.22, 0.32, 0.19, 0.29]"
+results = client.query(f"""
+    SELECT id, title, cosine_similarity(embedding, {query_vector}) AS similarity
+    FROM documents
+    ORDER BY similarity DESC
+    LIMIT 3
+""")
+print(results)
+```
 
-### 💰 **高性价比**
+**全文检索示例：**
+```python
+...
+from matrixone.sqlalchemy_ext import boolean_match
 
-<details>
-  <summary><b><font size=4>高效存储设计</b></font></summary>
-  以成本低廉的对象存储作为主存储，通过纠删码技术仅需要 150% 左右的数据冗余即可实现高可用，同时提供高速缓存能力，通过冷热分离多级存储方案兼顾成本和性能。
+# 使用 SDK 创建全文索引
+client.fulltext_index.create(
+    Article, name='ftidx_content', columns=['title', 'content']
+)
 
-  </details>
+# 布尔搜索，支持 must/should 操作符
+results = client.query(
+    Article.title,
+    Article.content,
+    boolean_match('title', 'content')
+        .must('机器')
+        .must('学习')
+        .must_not('入门')
+).execute()
 
-<details>
-  <summary><b><font size=4>资源灵活调配</b></font></summary>
-    用户可以根据业务情况自由调整为 OLTP 及 OLAP 分配的资源比例，实现资源最大化利用。
-</details>
+# 结果是 ResultSet 对象
+for row in results.rows:
+    print(f"标题: {row[0]}, 内容: {row[1][:50]}...")
+...
+```
 
-### 🔒 **企业级安全合规**
+**完成！** 🎉 您现在已运行一个生产级数据库，具备类 Git 快照、向量检索和完整 ACID 合规性。
 
- 采用用户角色访问控制（RBAC）、TLS 连接、数据加密等手段，建立多级安全防护体系，保障企业级数据安全和合规。
+> 💡 **需要更多控制？** 查看下方的 [安装与部署](#️-安装与部署) 章节了解生产级安装选项。
 
-## 💎 **<a id="user-values">用户价值</a>**
+📖 **[Python SDK 文档 →](clients/python/README.md)**
 
-<details>
-  <summary><b><font size=4>简化数据开发和运维</b></font></summary>
-      随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖 5+ 个基础组件，存储 3+ 个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在 MatrixOne 的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少 80%，大大简化了数据库管理和维护的成本。
-</details>
-<details>
-  <summary><b><font size=4>消减数据碎片和不一致</b></font></summary>
-    在既有复杂的系统架构内，存在多条数据管道多份数据存储冗余。数据依赖复杂，导致数据更新维护复杂，上下游数据不一致问题频发，人工校对难度增大。MatrixOne 的高内聚架构和独有的增量物化视图能力，使得下游可以支持上游数据的实时更新，摆脱冗余的 ETL 流程，实现端到端实时数据处理。
-</details>
-<details>
-  <summary><b><font size=4>无需绑定基础设施</b></font></summary>
-    因为基础设施的碎片化，企业的私有化数据集群和公有云数据集群之间数据架构和建设方案割裂，数据迁移成本高。而数据上云一旦选型确定数据库厂商，后续的集群扩容、其他组件采购等都将被既有厂商绑定。MatrixOne 提供统一的云边基础架构和高效统一的数据管理，企业数据架构不再被基础设施绑定，实现单数据集群跨云无感知扩缩容，提升性价比。
-</details>
-<details>
-  <summary><b><font size=4>极速的分析性能</b></font></summary>  
-    目前，由于缓慢的复杂查询性能以及冗余的中间表，数据仓库在业务敏捷性上的表现不尽人意，大量宽表的创建也严重影响迭代速度。MatrixOne 通过特有的因子化计算和向量化执行引擎，支持极速的复杂查询，单表、星型和雪花查询都具备极速分析性能。
-</details>
-<details>
-  <summary><b><font size=4>像 TP 一样可靠的 AP 体验</b></font></summary>
-    传统数据仓库数据更新代价非常高，很难做到数据更新即可见。在营销风控，无人驾驶，智能工厂等实时计算要求高的场景或者上游数据变化快的场景中，当前的大数据分析系统无法支持增量更新，往往需要做全量的更新，耗时耗力。MatrixOne 通过提供跨存储引擎的高性能全局分布式事务能力，支持条级别的实时增量更新，在保证极速分析性能的同时支持更新、删除和实时点查询。
-</details>
-<details>
-  <summary><b><font size=4>不停服自动扩缩容</b></font></summary>
-    传统数仓无法兼顾性能和灵活度，性价比无法做到最优。MatrixOne 基于存算分离的技术架构，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
-</details>
+## 🛠️ <a id="installation--deployment">安装与部署</a>
+
+MatrixOne 支持多种安装方式，选择最适合您需求的方式：
+
+### 🎯 使用 mo_ctl 工具（推荐）
+
+官方 [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 工具提供一键部署和生命周期管理。自动处理安装、升级、备份和健康监控。
+
+📖 **[完整 mo_ctl 安装指南 →](INSTALLATION.md#using-moctl-tool)**
+
+### ⚙️ 从源码构建
+
+从源码构建 MatrixOne，适用于开发、定制或参与贡献。需要 Go 1.22、GCC/Clang、Git 和 Make。
+
+📖 **[完整源码构建指南 →](BUILD.md)**
+
+### 🐳 其他方式
+
+Docker、Kubernetes、二进制包等更多部署选项。
+
+📖 **[所有安装选项 →](INSTALLATION.md)**
 
 ## 🔎 <a id="architecture">架构一览</a>
 
@@ -164,106 +257,6 @@ MatrixOne 的架构图如下图所示：
 </p>
 
 关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/latest/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
-
-## ⚡️ <a id="quick-start">快速上手</a>
-
-### ⚙️ 安装 MatrixOne
-
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装，二进制包安装或者 docker 安装。对于更详情的安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/latest/MatrixOne/Get-Started/install-standalone-matrixone/)。
-
-以下为您介绍通过源码部署和docker部署两种方式:
-
-**步骤 1.前置依赖**
-
-- 源码部署
-
-1. 搭建 Go 语言环境(至少需要 1.22 版本)
-
-点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
-
-2. 安装 GCC/Clang
-
-点击 <a href="https://gcc.gnu.org/install/" target="_blank">GCC Download and install</a> 进入到 **GCC** 的官方文档，按照官方指导安装步骤完成 **GCC** 的安装。
-
-3. 安装 Git
-
-通过[官方文档](https://git-scm.com/download)安装 Git.
-
-4. 安装 MySQL Client
-
-点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量。
-
-- docker部署
-
-1. 安装docker
-
-点击 <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker，Docker 版本推荐选择在 20.10.18 及以上，且尽量保持 Docker client 和 Docker server 的版本一致。
-
-2. 安装 MySQL 客户端
-
-点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量。
-
-__Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
-
-**步骤 2.安装 mo_ctl 工具**
-
-[mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 是一个部署安装和管理 MatrixOne 的命令行工具，使用它可以非常方便的对 MatrixOne 进行各类操作。
-
-通过以下命令一键安装 mo_ctl 工具:
-
-```  
-wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
-```
-
-如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/latest/MatrixOne/Reference/mo-tools/mo_ctl_standalone/)。
-
-**步骤 3.设置 mo_ctl 的配置参数**
-
-- 源码部署
-
-```
-mo_ctl set_conf MO_PATH="yourpath" # 设置自定义的MatrixOne下载路径
-mo_ctl set_conf MO_DEPLOY_MODE=git #设置MatrixOne部署方式，此为源码部署方式
-```
-
-- docker部署
-
-```
-mo_ctl set_conf MO_CONTAINER_DATA_HOST_PATH="/yourpath/mo/" # 宿主机mo的数据目录
-mo_ctl set_conf MO_DEPLOY_MODE=docker #设置MatrixOne部署方式，此为docker部署方式
-```
-
-**步骤 4.一键安装 MatrixOne**
-
-根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
-
-- *选项 1*:获取 MatrixOne(开发版本)
-
-    **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
-
-    ```  
-    mo_ctl deploy main
-    ```
-
-- *选项 2*:获取 MatrixOne (稳定版本)
-
-    如果您想获得 MatrixOne 发布的最新稳定版本，请指定版本号。
-
-    ```
-    mo_ctl deploy <latest version>
-    ```
-
-**步骤 5.启动 MatrixOne 服务**
-
-通过 `mo_ctl start` 命令一键启动 MatrixOne 服务。
-
-__Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在稍作等待后，你便可以连接至 MatrixOne。
-
-**步骤 6.连接 MatrixOne 服务**
-
-通过 `mo_ctl connect` 命令一键连接 MatrixOne 服务。
-
-__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/latest/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码。详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/latest/MatrixOne/Reference/mo-tools/mo_ctl_standalone/)。
 
 ## 🐍 <a id="python-sdk">Python SDK</a>
 

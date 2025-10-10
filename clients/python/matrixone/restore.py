@@ -204,7 +204,9 @@ class RestoreManager:
             result = self._client.execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(
+                f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}"
+            ) from None
 
     def restore_table(
         self,
@@ -323,7 +325,9 @@ class RestoreManager:
                     )
             elif restore_type == "table":
                 if not all([account_name, database_name, table_name]):
-                    raise RestoreError("Account name, database name, and table name are required for table restore") from None
+                    raise RestoreError(
+                        "Account name, database name, and table name are required for table restore"
+                    ) from None
                 if to_account:
                     sql = (
                         f"RESTORE ACCOUNT {self._client._escape_identifier(account_name)} "

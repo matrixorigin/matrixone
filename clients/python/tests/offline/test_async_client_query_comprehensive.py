@@ -263,7 +263,7 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
         # Mock create_async_engine to return our mock engine
         mock_create_async_engine.return_value = mock_engine
 
-        await self.client.connect(host="localhost", port=6001, user="root", password="111", database="test")
+        await self.client.connect(host="localhost", port=6001, user="root", password="111", database="test", on_connect=[])
 
         # Verify create_async_engine was called
         mock_create_async_engine.assert_called_once()
@@ -280,7 +280,9 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
         mock_create_async_engine.side_effect = Exception("Connection failed")
 
         with self.assertRaises(Exception):
-            await self.client.connect(host="localhost", port=6001, user="root", password="111", database="test")
+            await self.client.connect(
+                host="localhost", port=6001, user="root", password="111", database="test", on_connect=[]
+            )
 
     async def test_disconnect(self):
         """Test async disconnection"""

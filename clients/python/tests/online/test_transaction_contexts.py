@@ -34,7 +34,7 @@ class TestSyncTransactionContexts:
         """Setup sync client for testing"""
         client = Client()
         host, port, user, password, database = online_config.get_connection_params()
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Enable fulltext indexing
         client.execute("SET experimental_fulltext_index=1")
@@ -154,7 +154,7 @@ class TestAsyncTransactionContexts:
         """Setup async client for testing"""
         client = AsyncClient()
         host, port, user, password, database = online_config.get_connection_params()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Enable fulltext indexing
         await client.execute("SET experimental_fulltext_index=1")
@@ -295,7 +295,7 @@ class TestTransactionContextCompatibility:
         """Setup sync client for testing"""
         client = Client()
         host, port, user, password, database = online_config.get_connection_params()
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Enable fulltext indexing
         client.execute("SET experimental_fulltext_index=1")
@@ -364,7 +364,7 @@ class TestTransactionContextCompatibility:
         """Test that async transaction wrapper has all necessary managers"""
         client = AsyncClient()
         host, port, user, password, database = online_config.get_connection_params()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
             # Enable fulltext indexing
@@ -432,7 +432,7 @@ class TestTransactionContextFeatures:
         """Setup sync client for testing"""
         client = Client()
         host, port, user, password, database = online_config.get_connection_params()
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Enable fulltext indexing
         client.execute("SET experimental_fulltext_index=1")
@@ -537,7 +537,7 @@ class TestTransactionContextFeatures:
         """Test fulltext features in async transaction context"""
         client = AsyncClient()
         host, port, user, password, database = online_config.get_connection_params()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
             # Enable fulltext indexing
@@ -648,7 +648,7 @@ class TestGetConnectionInterface:
         """Setup sync client for testing"""
         client = Client()
         host, port, user, password, database = online_config.get_connection_params()
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Create test database and table
         test_db = "get_conn_test"
@@ -758,7 +758,7 @@ class TestGetConnectionInterface:
         """Test basic usage of get_connection in async transaction"""
         client = AsyncClient()
         host, port, user, password, database = online_config.get_connection_params()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
             # Create test database and table
@@ -869,7 +869,7 @@ class TestAsyncTransactionManagerConsistency:
         """Setup sync client for testing"""
         client = Client()
         host, port, user, password, database = online_config.get_connection_params()
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Create test database and table
         test_db = "sync_async_consistency_test"
@@ -920,7 +920,7 @@ class TestAsyncTransactionManagerConsistency:
         """Setup async client for testing"""
         client = AsyncClient()
         host, port, user, password, database = online_config.get_connection_params()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Create test database and table
         test_db = "async_consistency_test"

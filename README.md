@@ -18,6 +18,10 @@
    <img src="https://img.shields.io/badge/Release-latest-green.svg" alt="release"/>
   </a>
   <br>
+  <img src="https://img.shields.io/badge/MySQL-Compatible-4479A1.svg?logo=mysql&logoColor=white" alt="mysql-compatible"/>
+  <img src="https://img.shields.io/badge/AI-Native-FF6B6B.svg?logo=openai&logoColor=white" alt="ai-native"/>
+  <img src="https://img.shields.io/badge/Cloud-Native-326CE5.svg?logo=kubernetes&logoColor=white" alt="cloud-native"/>
+  <br>
   <a href="https://docs.matrixorigin.cn/en/latest/">
     <b>Docs</b>
   </a>
@@ -42,122 +46,214 @@
 
 </p>
 
-<h5 align="center">If you are interested in MatrixOne project, please kindly give MatrixOne a triple `Star`, `Fork` and `Watch`, Thanks!</h5>
-
 Contents
 ========
 
 * [What is MatrixOne](#what-is-matrixone)
-* [KeyFeatures](#key-features)
-* [User Values](#user-values)
+* [Get Started in 60 Seconds](#️-get-started-in-60-seconds)
+* [Installation & Deployment](#️-installation--deployment)
 * [Architecture](#architecture)
-* [Quick start](#quick-start)
 * [Python SDK](#python-sdk)
 * [Contributing](#contributing)
 * [License](#license)
 
 ## What is MatrixOne?
 
-MatrixOne is a hyper-converged cloud & edge native distributed database with a structure that separates storage, computation, and transactions to form a consolidated HSTAP data engine. This engine enables a single database system to accommodate diverse business loads such as OLTP, OLAP, and stream computing. It also supports deployment and utilization across public, private, and edge clouds, ensuring compatibility with diverse infrastructures.
+**MatrixOne is the industry's first database to bring Git-style version control to data**, combined with MySQL compatibility, AI-native capabilities, and cloud-native architecture.
+
+At its core, MatrixOne is a **HTAP (Hybrid Transactional/Analytical Processing) database** with a hyper-converged **HSTAP engine** that seamlessly handles transactional (OLTP), analytical (OLAP), full-text search, and vector search workloads in a single unified system—no data movement, no ETL, no compromises.
+
+### 🎬 **Git for Data - The Game Changer**
+
+Just as Git revolutionized code management, MatrixOne revolutionizes data management. **Manage your database like code:**
+
+- **📸 Instant Snapshots** - Zero-copy snapshots in milliseconds, no storage explosion
+- **⏰ Time Travel** - Query data as it existed at any point in history
+- **🔀 Branch & Merge** - Test migrations and transformations in isolated branches
+- **↩️ Instant Rollback** - Restore to any previous state without full backups
+- **🔍 Complete Audit Trail** - Track every data change with immutable history
+
+**Why it matters:** Data mistakes are expensive. Git for Data gives you the safety net and flexibility developers have enjoyed with Git—now for your most critical asset: your data.
+
+---
+
+### 🎯 **Built for the AI Era**
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**🗄️ MySQL-Compatible**
+
+Drop-in replacement for MySQL. Use existing tools, ORMs, and applications without code changes. Seamless migration path.
+
+</td>
+<td width="33%" valign="top">
+
+**🤖 AI-Native**
+
+Built-in vector search (IVF/HNSW) and full-text search. Build RAG apps and semantic search directly—no external vector databases needed.
+
+</td>
+<td width="33%" valign="top">
+
+**☁️ Cloud-Native**
+
+Storage-compute separation. Deploy anywhere. Elastic scaling. Kubernetes-native. Zero-downtime operations.
+
+</td>
+</tr>
+</table>
+
+---
+
+### 🚀 **One Database for Everything**
+
+**The typical modern data stack:**
+
+🗄️ MySQL for transactions → 📊 ClickHouse for analytics → 🔍 Elasticsearch for search → 🤖 Pinecone for AI
+
+**The problem:** 4 databases · Multiple ETL jobs · Hours of data lag · Sync nightmares
+
+**MatrixOne replaces all of them:**
+
+🎯 **One database** with native OLTP, OLAP, full-text search, and vector search. Real-time. ACID compliant. No ETL.
 
 <p align="center">
   <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/architeture241113_en.png?raw=true">
 </p>
 
-## 🎯 <a id="key-features">Key Features</a>
+## ⚡️ Get Started in 60 Seconds
 
-### 💥 **Hyper-converged Engine**
+### 1️⃣ Launch MatrixOne
 
-<details>
-  <summary><b><font size=4>Monolithic Engine</b></font></summary>
-          HTAP data engine that supports a mix of workloads such as TP, AP, time series, and machine learning within a single database.
-</details>
+```bash
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
 
-<details>
-  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary>
-             Built-in stream computing engine that enables real-time data inflow, transformation, and querying.
-</details>
+### 2️⃣ Create Database
 
-### ☁️ **Cloud & Edge Native**
+```bash
+mysql -h127.0.0.1 -P6001 -p111 -uroot -e "create database demo"
+```
 
-<details>
-  <summary><b><font size=4>Storage-Computation Separation Structure</b></font></summary>
-            Separates the storage, computation, and transaction layers, leveraging a containerized design for ultimate scalability.
-</details>
+### 3️⃣ Connect & Query
 
-<details>
-  <summary><b><font size=4>Multi-Infrastructure Compatibility</b></font></summary>
-           MatrixOne provides industry-leading latency control with optimized consistency protocol.
-</details>
+**Install Python SDK:**
+```bash
+pip install matrixone-python-sdk
+```
 
-### 🚀 **Extreme Performance**
+**Vector search:**
+```python
+from matrixone import Client
+from matrixone.orm import declarative_base
+from sqlalchemy import Column, Integer, String, Text
+from matrixone.sqlalchemy_ext import create_vector_column
 
-<details>
-  <summary><b><font size=4>High-Performance Execution Engine</b></font></summary>
-     The flexible combination of Compute Node and Transaction node accommodates point queries and batch processing, delivering peak performance for OLTP and OLAP.
-</details>
+# Create client and connect
+client = Client()
+client.connect(database='demo')
 
-<details>
-  <summary><b><font size=4>Enterprise-Grade High Availability</b></font></summary>
-     Establishes a consistently shared log under a leading Multi-Raft replication state machine model. It ensures high cluster availability while preventing data duplication, thus achieving RTO=0.
-</details>
+# Define model using MatrixOne ORM
+Base = declarative_base()
 
-### 🖊️ **Ease of Use**
+class Article(Base):
+    __tablename__ = 'articles'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = create_vector_column(8, "f32")
 
-<details>
-  <summary><b><font size=4>Built-in Multi-Tenancy Capability</b></font></summary>
-  Offers inherent multi-tenancy, where tenants are isolated from each other, independently scalable yet uniformly manageable. This feature simplifies the complexity of multi-tenancy design in upper-level applications.
-  </details>
+# Create table using client API
+client.create_table(Article)
 
-<details>
-  <summary><b><font size=4>High Compatibility with MySQL</b></font></summary>
-     MatrixOne exhibits high compatibility with MySQL 8.0, including transmission protocol, SQL syntax, and ecosystem tools, lowering usage and migration barriers.
-</details>
+# Insert some data using client API
+articles = [
+    {'title': 'Machine Learning Guide',
+     'content': 'Comprehensive machine learning tutorial...',
+     'embedding': [0.1, 0.2, 0.3, 0.15, 0.25, 0.35, 0.12, 0.22]},
+    {'title': 'Python Programming',
+     'content': 'Learn Python programming basics',
+     'embedding': [0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32]},
+]
+client.batch_insert(Article, articles)
 
-### 💰 **Cost-Effective**
+client.vector_ops.create_ivf(
+    Article,
+    name='idx_embedding',
+    column='embedding',
+    lists=100,
+    op_type='vector_l2_ops'
+)
 
-<details>
-  <summary><b><font size=4>Efficient Storage Design</b></font></summary>
-  Employs cost-effective object storage as primary storage. High availability can be achieved through erasure coding technology with only about 150% data redundancy. It also provides high-speed caching capabilities, balancing cost and performance via a multi-tiered storage strategy that separates hot and cold data.
-  </details>
+query_vector = [0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32]
+results = client.query(
+    Article.title,
+    Article.content,
+    Article.embedding.l2_distance(query_vector).label("distance"),
+).filter(Article.embedding.l2_distance(query_vector) < 0.1).execute()
+for row in results.rows:
+    print(f"Title: {row[0]}, Content: {row[1][:50]}...")
 
-<details>
-  <summary><b><font size=4>Flexible Resource Allocation</b></font></summary>
-    Users can adjust the resource allocation ratio for OLTP and OLAP according to business conditions, maximizing resource utilization.
-</details>
+# Cleanup
+client.drop_table(Article)  # Use client API
+client.disconnect()
+```
 
-### 🔒 **Enterprise-Level Security and Compliance**
+**Fulltext Search:**
+```python
+...
+from matrixone.sqlalchemy_ext import boolean_match
 
-   MatrixOne employs Role-Based Access Control (RBAC), TLS connections, and data encryption to establish a multi-tiered security defense system, safeguarding enterprise-level data security and compliance.
+# Create fulltext index using SDK 
+client.fulltext_index.create(
+    Article,name='ftidx_content',columns=['title', 'content']
+)
 
-## 💎 **<a id="user-values">User Values</a>**
+# Boolean search with must/should operators
+results = client.query(
+    Article.title,
+    Article.content,
+    boolean_match('title', 'content')
+        .must('machine')
+        .must('learning')
+        .must_not('basics')
+).execute()
 
-<details>
-  <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary>
-     With business evolution, the number of data engines and middleware enterprises employ increases. Each data engine relies on 5+ essential components and stores 3+ data replicas. Each engine must be independently installed, monitored, patched, and upgraded. This results in high and uncontrollable data engine selection, development, and operations costs. Under MatrixOne's unified architecture, users can employ a single database to serve multiple data applications, reducing the number of introduced data components and technology stacks by 80% and significantly simplifying database management and maintenance costs.
-</details>
-<details>
-  <summary><b><font size=4>Reduce Data Fragmentation and Inconsistency</b></font></summary>
-     Data flow and copy between databases make data sync and consistency increasingly tricky. The unified and incrementally materialized view of MatrixOne allows the downstream to support real-time upstream updates and achieve end-to-end data processing without redundant ETL processes.
-</details>
-<details>
-  <summary><b><font size=4>Decoupling Data Architecture From Infrastructure</b></font></summary>
-     Currently, the architecture design across different infrastructures is complicated, causing new data silos between cloud and edge, cloud and on-premise. MatrixOne is designed with a unified architecture to support simplified data management and operations across different infrastructures.
-</details>
-<details>
-  <summary><b><font size=4>Extremely Fast Complex Query Performance</b></font></summary>
-     Poor business agility results from slow, complex queries and redundant intermediate tables in current data warehousing solutions. MatrixOne supports blazing-fast experience even for star and snowflake schema queries, improving business agility with real-time analytics.
-</details>
-<details>
-  <summary><b><font size=4>Solid OLTP-like OLAP Experience</b></font></summary>
-     Current data warehousing solutions have the following problems: high latency and absence of immediate visibility for data updates. MatrixOne brings OLTP (Online Transactional Processing) level consistency and high availability to CRUD operations in OLAP (Online Analytical Processing).
-</details>
-<details>
-  <summary><b><font size=4>Seamless and Non-disruptive Scalability</b></font></summary>
-     It is challenging to balance performance and scalability to achieve an optimum price-performance ratio in current data warehousing solutions. MatrixOne's disaggregated storage and compute architecture makes it fully automated and efficient to scale in/out and up/down without disrupting applications.
-</details>
+# Results is a ResultSet object
+for row in results.rows:
+    print(f"Title: {row[0]}, Content: {row[1][:50]}...")
+...
+```
 
-<br>
+**That's it!** 🎉 You're now running a production-ready database with Git-like snapshots, vector search, and full ACID compliance.
+
+> 💡 **Want more control?** Check out the [Installation & Deployment](#️-installation--deployment) section below for production-grade installation options.
+
+📖 **[Python SDK Documentation →](clients/python/README.md)**
+
+## 🛠️ <a id="installation--deployment">Installation & Deployment</a>
+
+MatrixOne supports multiple installation methods. Choose the one that best fits your needs:
+
+### 🎯 Using mo_ctl Tool (Recommended)
+
+One-command deployment and lifecycle management with the official [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) tool. Handles installation, upgrades, backups, and health monitoring automatically.
+
+📖 **[Complete mo_ctl Installation Guide →](INSTALLATION.md#using-moctl-tool)**
+
+### ⚙️ Building from Source
+
+Build MatrixOne from source for development, customization, or contributing. Requires Go 1.22, GCC/Clang, Git, and Make.
+
+📖 **[Complete Build from Source Guide →](BUILD.md)**
+
+### 🐳 Other Methods
+
+Docker, Kubernetes, binary packages, and more deployment options.
+
+📖 **[All Installation Options →](INSTALLATION.md)**
 
 ## 🔎 <a id="architecture">Architecture</a>
 
@@ -167,105 +263,6 @@ MatrixOne's architecture is as below:
 </p>
 
 For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/latest/MatrixOne/Overview/architecture/matrixone-architecture-design/).
-
-## ⚡️ <a id="quick-start">Quick start</a>
-
-### ⚙️ Install MatrixOne
-
-MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/latest/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
-
-**Step 1.Install Dependency**
-
-- **Building from source**
-
-1. Install Go (version 1.22 is required)
-
-    Click <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> to enter its official documentation, and follow the installation steps to complete the **Go** installation.
-
-2. Install GCC/Clang
-
-     Click <a href="https://gcc.gnu.org/install/" target="_blank">GCC Download and install</a> to enter its official documentation, and follow the installation steps to complete the **GCC** installation.
-
-3. Install Git
-
-    Install Git via the [Official Documentation](https://git-scm.com/download).
-
-4. Install and configure MySQL Client
-
-    Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
-
-- **Using docker**
-
-1. Download and install Docker
-
-Click <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>, enter into the Docker's official document page, depending on your operating system, download and install the corresponding Docker.  It is recommended to choose Docker version 20.10.18 or later and strive to maintain consistency between the Docker client and Docker server versions.
-
-2. Install and configure MySQL Client
-
-Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
-
-__Note__: MySQL client version 8.0.30 or later is recommended.
-
-**Step 2. Install the mo_ctl tool**
-
-[mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) is a command-line tool for deploying, installing, and managing MatrixOne. It is very convenient to perform various operations on MatrixOne.
-
-The mo_ctl tool can be installed through the following command:
-
-```
-wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
-```
-
-See [mo_ctl Tool](https://docs.matrixorigin.cn/en/latest/MatrixOne/Reference/mo-tools/mo_ctl_standalone/) for complete usage details.
-
-**Step 3. Set mo_ctl parameters**
-
-- **Building from source**
-
-```
-mo_ctl set_conf MO_PATH="yourpath" # Set custom MatrixOne download path
-mo_ctl set_conf MO_DEPLOY_MODE=git # Set MatrixOne deployment method
-```
-
-- **Using docker**
-
-```
-mo_ctl set_conf MO_CONTAINER_DATA_HOST_PATH="/yourpath/mo/" # Set the data directory for host
-mo_ctl set_conf MO_DEPLOY_MODE=docker # Set MatrixOne deployment method
-```
-
-**Step 4. One-click install Matrixone**
-
-Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
-
-- *Option 1*: Get the MatrixOne(Develop Version)
-
-The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
-
-```
-mo_ctl deploy main
-```
-
-- *Option 2*: Get the MatrixOne(Stable Version)
-
-If you want to get the latest stable version code released by MatrixOne, Please specify a specific version number.
-
-```
-mo_ctl deploy <latest version>
-```
-
-**Step 5. Launch MatrixOne server**
-
-Launch the MatrixOne service through the `mo_ctl start` command.
-
-__Tips__: The initial startup of MatrixOne approximately takes 20 to 30 seconds. After a brief wait, you can connect to MatrixOne using the MySQL client.
-
-**Step 6. Connect to MatrixOne**
-
-One-click connection to MatrixOne service through `mo_ctl connect` command.
-
-__Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/latest/MatrixOne/Security/password-mgmt/).
 
 ## 🐍 <a id="python-sdk">Python SDK</a>
 
