@@ -244,10 +244,11 @@ class Client(BaseMatrixOneClient):
 
     def connect(
         self,
-        host: str,
-        port: int,
-        user: str,
-        password: str,
+        *,
+        host: str = "localhost",
+        port: int = 6001,
+        user: str = "root",
+        password: str = "111",
         database: str,
         ssl_mode: str = "preferred",
         ssl_ca: Optional[str] = None,
@@ -345,8 +346,12 @@ class Client(BaseMatrixOneClient):
             except Exception as e:
                 self.logger.warning(f"Failed to detect backend version: {e}")
 
-            # Setup connection hook if provided
-            if on_connect:
+            # Setup connection hook (default to ENABLE_ALL if not provided)
+            # Allow empty list [] to explicitly disable hooks
+            if on_connect is None:
+                on_connect = [ConnectionAction.ENABLE_ALL]
+
+            if on_connect:  # Only setup if not empty list
                 self._setup_connection_hook(on_connect)
                 # Execute the hook once immediately for the initial connection
                 self._execute_connection_hook_immediately(on_connect)

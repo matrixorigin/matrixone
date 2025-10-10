@@ -6,6 +6,25 @@ This guide will help you get started with the MatrixOne Python SDK quickly. For 
 Basic Usage
 -----------
 
+.. note::
+   **Connection API Requirements**
+   
+   The ``connect()`` method requires **keyword arguments** (not positional):
+   
+   - ``database`` - **Required**, no default value
+   - ``host`` - Default: ``'localhost'``
+   - ``port`` - Default: ``6001``
+   - ``user`` - Default: ``'root'``
+   - ``password`` - Default: ``'111'``
+   
+   **Minimal connection** (uses all defaults):
+   
+   .. code-block:: python
+   
+      client.connect(database='test')
+   
+   By default, all features (IVF, HNSW, fulltext) are automatically enabled via ``on_connect=[ConnectionAction.ENABLE_ALL]``.
+
 .. code-block:: python
 
    from matrixone import Client

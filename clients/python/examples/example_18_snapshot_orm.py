@@ -56,7 +56,7 @@ class SnapshotORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger)
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test sync snapshot ORM
             self.logger.info("Test: Sync Snapshot ORM")
@@ -144,7 +144,7 @@ class SnapshotORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = AsyncClient(logger=self.logger)
-            await client.connect(host, port, user, password, database)
+            await client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test async snapshot ORM
             self.logger.info("Test: Async Snapshot ORM")
@@ -225,7 +225,7 @@ class SnapshotORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger)
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test complex snapshot queries
             self.logger.info("Test: Complex Snapshot Queries")
@@ -320,7 +320,7 @@ class SnapshotORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger)
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test snapshot query builder methods
             self.logger.info("Test: Snapshot Query Builder Methods")

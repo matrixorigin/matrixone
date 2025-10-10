@@ -118,7 +118,7 @@ class VersionManagementDemo:
             print("Test: Backend Version Detection")
             try:
                 client = Client()
-                client.connect(host, port, user, password, database)
+                client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Get version information
                 version_info = client.version()

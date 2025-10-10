@@ -40,7 +40,7 @@ class TestAsyncClientOnline:
         """Create and connect AsyncClient for testing"""
         host, port, user, password, database = online_config.get_connection_params()
         client = AsyncClient()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
         try:
             yield client
         finally:

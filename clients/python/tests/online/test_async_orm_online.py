@@ -100,13 +100,15 @@ class TestAsyncORMOnline:
 
         # First create the database using default connection
         temp_client = AsyncClient()
-        await temp_client.connect(host, port, user, password, "test")  # Connect to default database
+        await temp_client.connect(
+            host=host, port=port, user=user, password=password, database="test"
+        )  # Connect to default database
         await temp_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_database}")
         await temp_client.disconnect()
 
         # Now connect to the test database
         client = AsyncClient()
-        await client.connect(host, port, user, password, test_database)
+        await client.connect(host=host, port=port, user=user, password=password, database=test_database)
 
         try:
             # Create test tables
@@ -158,7 +160,7 @@ class TestAsyncORMOnline:
                 await client.disconnect()
                 # Clean up database
                 cleanup_client = AsyncClient()
-                await cleanup_client.connect(host, port, user, password, "test")
+                await cleanup_client.connect(host=host, port=port, user=user, password=password, database="test")
                 await cleanup_client.execute(f"DROP DATABASE IF EXISTS {test_database}")
                 await cleanup_client.disconnect()
             except Exception as e:

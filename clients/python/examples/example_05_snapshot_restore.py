@@ -59,7 +59,7 @@ class SnapshotRestoreDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test 1: Create test data
             self.logger.info("Test 1: Create Test Data")
@@ -186,7 +186,7 @@ class SnapshotRestoreDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test snapshot enumeration
             self.logger.info("Test: Snapshot Enumeration")
@@ -223,7 +223,7 @@ class SnapshotRestoreDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test error handling
             self.logger.info("Test: Snapshot Error Handling")
@@ -266,7 +266,7 @@ class SnapshotRestoreDemo:
             host, port, user, password, database = get_connection_params()
 
             client = AsyncClient(logger=self.logger, sql_log_mode="full")
-            await client.connect(host, port, user, password, database)
+            await client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test async snapshot operations
             self.logger.info("Test: Async Snapshot Operations")

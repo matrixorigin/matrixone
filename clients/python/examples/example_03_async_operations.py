@@ -67,7 +67,7 @@ class AsyncOperationsDemo:
             self.logger.info("Test 1: Basic Async Connection")
             try:
                 client = AsyncClient(logger=self.logger, sql_log_mode="full")
-                await client.connect(host, port, user, password, database)
+                await client.connect(host=host, port=port, user=user, password=password, database=database)
                 self.logger.info("✅ Async connection successful")
 
                 # Test basic async query
@@ -107,7 +107,7 @@ class AsyncOperationsDemo:
             self.logger.info("Test: Async Query Execution")
             try:
                 client = AsyncClient(logger=self.logger, sql_log_mode="full")
-                await client.connect(host, port, user, password, database)
+                await client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Test various query types
                 queries = [
@@ -149,7 +149,7 @@ class AsyncOperationsDemo:
             self.logger.info("Test: Async Transaction Management")
             try:
                 client = AsyncClient(logger=self.logger, sql_log_mode="full")
-                await client.connect(host, port, user, password, database)
+                await client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Test transaction operations
                 await client.execute("START TRANSACTION")
@@ -193,7 +193,7 @@ class AsyncOperationsDemo:
                 clients = []
                 for i in range(3):
                     client = AsyncClient(logger=self.logger, sql_log_mode="full")
-                    await client.connect(host, port, user, password, database)
+                    await client.connect(host=host, port=port, user=user, password=password, database=database)
                     clients.append(client)
                     self.logger.info(f"   ✅ Created async connection {i+1}")
 
@@ -239,7 +239,7 @@ class AsyncOperationsDemo:
             self.logger.info("Test: Async Error Handling")
             try:
                 client = AsyncClient(logger=self.logger, sql_log_mode="full")
-                await client.connect(host, port, user, password, database)
+                await client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Test invalid query (should raise error)
                 try:

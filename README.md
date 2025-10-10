@@ -48,6 +48,7 @@ Contents
 ========
 
 * [What is MatrixOne](#what-is-matrixone)
+* [Get Started in 60 Seconds](#️-get-started-in-60-seconds)
 * [User Values](#user-values)
 * [Architecture](#architecture)
 * [Quick start](#quick-start)
@@ -78,6 +79,64 @@ MatrixOne empowers enterprises to build modern, AI-powered applications with unp
 <p align="center">
   <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/architeture241113_en.png?raw=true">
 </p>
+
+## ⚡️ Get Started in 60 Seconds
+
+### 1️⃣ Launch MatrixOne
+
+```bash
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+
+### 2️⃣ Connect & Query
+
+**Install Python SDK:**
+```bash
+pip install matrixone-python-sdk
+```
+
+**Run your first vector search:**
+```python
+from matrixone import connect
+
+# Connect to MatrixOne (use defaults: host='localhost', port=6001, user='root', password='111')
+conn = connect(database='demo')
+
+# Create table with vector column
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS documents (
+        id INT PRIMARY KEY,
+        title VARCHAR(100),
+        embedding VECF32(16)  -- 16-dimensional vector
+    )
+""")
+
+# Create IVF index for fast similarity search
+conn.execute("CREATE INDEX idx_vec ON documents(embedding) USING IVF")
+
+# Insert sample vectors (e.g., document embeddings)
+conn.execute("""
+    INSERT INTO documents VALUES
+    (1, 'AI Database', '[0.1, 0.2, 0.3, 0.15, 0.25, 0.35, 0.12, 0.22, 0.18, 0.28, 0.13, 0.23, 0.17, 0.27, 0.14, 0.24]'),
+    (2, 'Vector Search', '[0.2, 0.3, 0.4, 0.25, 0.35, 0.45, 0.22, 0.32, 0.28, 0.38, 0.23, 0.33, 0.27, 0.37, 0.24, 0.34]'),
+    (3, 'Time Series', '[0.5, 0.1, 0.2, 0.45, 0.15, 0.25, 0.42, 0.12, 0.48, 0.18, 0.43, 0.13, 0.47, 0.17, 0.44, 0.14]')
+""")
+
+# Find similar documents using cosine similarity
+query_vector = "[0.15, 0.25, 0.35, 0.2, 0.3, 0.4, 0.17, 0.27, 0.23, 0.33, 0.18, 0.28, 0.22, 0.32, 0.19, 0.29]"
+results = conn.query(f"""
+    SELECT id, title, cosine_similarity(embedding, {query_vector}) AS similarity
+    FROM documents
+    ORDER BY similarity DESC
+    LIMIT 3
+""")
+print(results)
+```
+
+**That's it!** 🎉 You're now running a production-ready database with Git-like snapshots, vector search, and full ACID compliance.
+
+📚 **[Full Installation Guide →](https://docs.matrixorigin.cn/en/latest/MatrixOne/Get-Started/install-standalone-matrixone/)**  
+📖 **[Python SDK Documentation →](clients/python/README.md)**
 
 ## 💎 **<a id="user-values">User Values</a>**
 
