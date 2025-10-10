@@ -672,6 +672,5 @@ func ProcessInitSQL(
 		return
 	}
 	defer result.Close()
-	retry()
 	return
 }

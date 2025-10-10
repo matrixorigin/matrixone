@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"fmt"
 
 	"sync"
 	"time"
@@ -269,6 +270,18 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	if err != nil {
 		return err
 	}
+	err = retry(
+		ctx,
+		func() error {
+			return exec.initState()
+		},
+		exec.option.RetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
+	)
+	if err != nil {
+		return err
+	}
 	exec.wg.Add(1)
 	return nil
 }
@@ -288,6 +301,38 @@ func (exec *ISCPTaskExecutor) Stop() {
 	exec.wg.Wait()
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
+}
+
+func (exec *ISCPTaskExecutor) initState() (err error) {
+	sql := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_iscp_log
+        SET job_state = %d
+        WHERE job_state IN (%d, %d);
+        `,
+		ISCPJobState_Completed,
+		ISCPJobState_Pending,
+		ISCPJobState_Running,
+	)
+	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"iscp init state",
+		0)
+	txnOp, err := exec.cnTxnClient.New(exec.ctx, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(exec.ctx)
+	}
+	err = exec.txnEngine.New(exec.ctx, txnOp)
+	if err != nil {
+		return
+	}
+	result, err := ExecWithResult(exec.ctx, sql, exec.cnUUID, txnOp)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) run(ctx context.Context) {
