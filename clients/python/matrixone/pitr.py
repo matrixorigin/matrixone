@@ -161,13 +161,13 @@ class PitrManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create cluster PITR '{name}'")
+                raise PitrError(f"Failed to create cluster PITR '{name}'") from None
 
             # Return PITR object (we'll get the actual details via SHOW PITR)
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
+            raise PitrError(f"Failed to create cluster PITR '{name}': {e}") from None
 
     def create_account_pitr(
         self,
@@ -218,12 +218,12 @@ class PitrManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create account PITR '{name}'")
+                raise PitrError(f"Failed to create account PITR '{name}'") from None
 
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to create account PITR '{name}': {e}")
+            raise PitrError(f"Failed to create account PITR '{name}': {e}") from None
 
     def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
         """
@@ -259,12 +259,12 @@ class PitrManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create database PITR '{name}'")
+                raise PitrError(f"Failed to create database PITR '{name}'") from None
 
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to create database PITR '{name}': {e}")
+            raise PitrError(f"Failed to create database PITR '{name}': {e}") from None
 
     def create_table_pitr(
         self,
@@ -309,12 +309,12 @@ class PitrManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create table PITR '{name}'")
+                raise PitrError(f"Failed to create table PITR '{name}'") from None
 
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to create table PITR '{name}': {e}")
+            raise PitrError(f"Failed to create table PITR '{name}': {e}") from None
 
     def get(self, name: str) -> Pitr:
         """
@@ -337,13 +337,13 @@ class PitrManager:
             result = self._client.execute(sql)
 
             if not result or not result.rows:
-                raise PitrError(f"PITR '{name}' not found")
+                raise PitrError(f"PITR '{name}' not found") from None
 
             row = result.rows[0]
             return self._row_to_pitr(row)
 
         except Exception as e:
-            raise PitrError(f"Failed to get PITR '{name}': {e}")
+            raise PitrError(f"Failed to get PITR '{name}': {e}") from None
 
     def list(
         self,
@@ -392,7 +392,7 @@ class PitrManager:
             return [self._row_to_pitr(row) for row in result.rows]
 
         except Exception as e:
-            raise PitrError(f"Failed to list PITRs: {e}")
+            raise PitrError(f"Failed to list PITRs: {e}") from None
 
     def alter(self, name: str, range_value: int, range_unit: str) -> Pitr:
         """
@@ -419,12 +419,12 @@ class PitrManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to alter PITR '{name}'")
+                raise PitrError(f"Failed to alter PITR '{name}'") from None
 
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to alter PITR '{name}': {e}")
+            raise PitrError(f"Failed to alter PITR '{name}': {e}") from None
 
     def delete(self, name: str) -> bool:
         """
@@ -448,16 +448,16 @@ class PitrManager:
             return result is not None
 
         except Exception as e:
-            raise PitrError(f"Failed to delete PITR '{name}': {e}")
+            raise PitrError(f"Failed to delete PITR '{name}': {e}") from None
 
     def _validate_range(self, range_value: int, range_unit: str) -> None:
         """Validate PITR range parameters"""
         if not (1 <= range_value <= 100):
-            raise PitrError("Range value must be between 1 and 100")
+            raise PitrError("Range value must be between 1 and 100") from None
 
         valid_units = ["h", "d", "mo", "y"]
         if range_unit not in valid_units:
-            raise PitrError(f"Range unit must be one of: {', '.join(valid_units)}")
+            raise PitrError(f"Range unit must be one of: {', '.join(valid_units)}") from None
 
     def _row_to_pitr(self, row: tuple) -> Pitr:
         """Convert database row to Pitr object"""
@@ -557,16 +557,16 @@ class TransactionPitrManager(PitrManager):
                     f"RANGE {range_value} '{range_unit}'"
                 )
             else:
-                raise PitrError(f"Invalid PITR level: {level}")
+                raise PitrError(f"Invalid PITR level: {level}") from None
 
             result = self._transaction_wrapper.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create {level} PITR '{name}'")
+                raise PitrError(f"Failed to create {level} PITR '{name}'") from None
 
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to create {level} PITR '{name}': {e}")
+            raise PitrError(f"Failed to create {level} PITR '{name}': {e}") from None
 
     def get(self, name: str) -> Pitr:
         """Get PITR within transaction"""
@@ -575,13 +575,13 @@ class TransactionPitrManager(PitrManager):
             result = self._transaction_wrapper.execute(sql)
 
             if not result or not result.rows:
-                raise PitrError(f"PITR '{name}' not found")
+                raise PitrError(f"PITR '{name}' not found") from None
 
             row = result.rows[0]
             return self._row_to_pitr(row)
 
         except Exception as e:
-            raise PitrError(f"Failed to get PITR '{name}': {e}")
+            raise PitrError(f"Failed to get PITR '{name}': {e}") from None
 
     def list(
         self,
@@ -617,7 +617,7 @@ class TransactionPitrManager(PitrManager):
             return [self._row_to_pitr(row) for row in result.rows]
 
         except Exception as e:
-            raise PitrError(f"Failed to list PITRs: {e}")
+            raise PitrError(f"Failed to list PITRs: {e}") from None
 
     def alter(self, name: str, range_value: int, range_unit: str) -> Pitr:
         """Alter PITR within transaction"""
@@ -628,12 +628,12 @@ class TransactionPitrManager(PitrManager):
 
             result = self._transaction_wrapper.execute(sql)
             if result is None:
-                raise PitrError(f"Failed to alter PITR '{name}'")
+                raise PitrError(f"Failed to alter PITR '{name}'") from None
 
             return self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to alter PITR '{name}': {e}")
+            raise PitrError(f"Failed to alter PITR '{name}': {e}") from None
 
     def delete(self, name: str) -> bool:
         """Delete PITR within transaction"""
@@ -643,4 +643,4 @@ class TransactionPitrManager(PitrManager):
             return result is not None
 
         except Exception as e:
-            raise PitrError(f"Failed to delete PITR '{name}': {e}")
+            raise PitrError(f"Failed to delete PITR '{name}': {e}") from None

@@ -212,31 +212,30 @@ from matrixone.account import AccountManager
 account_manager = AccountManager(client)
 
 # Create user
-user = account_manager.create_user(
-    username='newuser',
-    password='password123',
-    comment='New user account'
-)
+user = account_manager.create_user('newuser', 'password123')
+print(f"Created user: {user.name}")
 
-# Create role
-role = account_manager.create_role(
-    role_name='analyst',
-    comment='Data analyst role'
-)
+# Create role  
+role = account_manager.create_role('analyst')
+print(f"Created role: {role.name}")
 
-# Grant privileges to role
+# Grant privileges on specific table (optional)
+# Note: table must exist first
 account_manager.grant_privilege(
-    role_or_user='analyst',
-    privilege='SELECT',
-    database='test',
-    table='users'
+    'SELECT',           # privilege
+    'TABLE',            # object_type
+    'users',       # object_name (database.table format)
+    to_role='analyst'
 )
 
 # Grant role to user
-account_manager.grant_role(
-    role_name='analyst',
-    username='newuser'
-)
+account_manager.grant_role('analyst', 'newuser')
+print(f"Granted role to user")
+
+# List users
+users = account_manager.list_users()
+for user in users:
+    print(f"User: {user.name}")
 ```
 
 ### Vector Search Operations

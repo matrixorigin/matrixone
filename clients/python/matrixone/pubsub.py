@@ -216,13 +216,13 @@ class PubSubManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to create database publication '{name}'")
+                raise PubSubError(f"Failed to create database publication '{name}'") from None
 
             # Return publication object (we'll get the actual details via SHOW PUBLICATIONS)
             return self.get_publication(name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to create database publication '{name}': {e}")
+            raise PubSubError(f"Failed to create database publication '{name}': {e}") from None
 
     def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """
@@ -257,12 +257,12 @@ class PubSubManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to create table publication '{name}'")
+                raise PubSubError(f"Failed to create table publication '{name}'") from None
 
             return self.get_publication(name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to create table publication '{name}': {e}")
+            raise PubSubError(f"Failed to create table publication '{name}': {e}") from None
 
     def get_publication(self, name: str) -> Publication:
         """
@@ -286,17 +286,17 @@ class PubSubManager:
             result = self._client.execute(sql)
 
             if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
+                raise PubSubError(f"Publication '{name}' not found") from None
 
             # Find publication with matching name
             for row in result.rows:
                 if row[0] == name:  # publication name is in first column
                     return self._row_to_publication(row)
 
-            raise PubSubError(f"Publication '{name}' not found")
+            raise PubSubError(f"Publication '{name}' not found") from None
 
         except Exception as e:
-            raise PubSubError(f"Failed to get publication '{name}': {e}")
+            raise PubSubError(f"Failed to get publication '{name}': {e}") from None
 
     def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
         """
@@ -331,7 +331,7 @@ class PubSubManager:
             return publications
 
         except Exception as e:
-            raise PubSubError(f"Failed to list publications: {e}")
+            raise PubSubError(f"Failed to list publications: {e}") from None
 
     def alter_publication(
         self,
@@ -372,12 +372,12 @@ class PubSubManager:
             sql = " ".join(parts)
             result = self._client.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to alter publication '{name}'")
+                raise PubSubError(f"Failed to alter publication '{name}'") from None
 
             return self.get_publication(name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to alter publication '{name}': {e}")
+            raise PubSubError(f"Failed to alter publication '{name}': {e}") from None
 
     def drop_publication(self, name: str) -> bool:
         """
@@ -401,7 +401,7 @@ class PubSubManager:
             return result is not None
 
         except Exception as e:
-            raise PubSubError(f"Failed to drop publication '{name}': {e}")
+            raise PubSubError(f"Failed to drop publication '{name}': {e}") from None
 
     def show_create_publication(self, name: str) -> str:
         """
@@ -424,14 +424,14 @@ class PubSubManager:
             result = self._client.execute(sql)
 
             if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
+                raise PubSubError(f"Publication '{name}' not found") from None
 
             # The result should contain the CREATE statement
             # Assuming the CREATE statement is in the first column
             return result.rows[0][0]
 
         except Exception as e:
-            raise PubSubError(f"Failed to show create publication '{name}': {e}")
+            raise PubSubError(f"Failed to show create publication '{name}': {e}") from None
 
     # Subscription Operations
 
@@ -466,12 +466,12 @@ class PubSubManager:
 
             result = self._client.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to create subscription '{subscription_name}'")
+                raise PubSubError(f"Failed to create subscription '{subscription_name}'") from None
 
             return self.get_subscription(subscription_name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}")
+            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}") from None
 
     def get_subscription(self, name: str) -> Subscription:
         """
@@ -495,17 +495,17 @@ class PubSubManager:
             result = self._client.execute(sql)
 
             if not result or not result.rows:
-                raise PubSubError(f"Subscription '{name}' not found")
+                raise PubSubError(f"Subscription '{name}' not found") from None
 
             # Find subscription with matching name
             for row in result.rows:
                 if len(row) > 6 and row[6] == name:  # sub_name is in 7th column (index 6)
                     return self._row_to_subscription(row)
 
-            raise PubSubError(f"Subscription '{name}' not found")
+            raise PubSubError(f"Subscription '{name}' not found") from None
 
         except Exception as e:
-            raise PubSubError(f"Failed to get subscription '{name}': {e}")
+            raise PubSubError(f"Failed to get subscription '{name}': {e}") from None
 
     def list_subscriptions(
         self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
@@ -541,7 +541,7 @@ class PubSubManager:
             return subscriptions
 
         except Exception as e:
-            raise PubSubError(f"Failed to list subscriptions: {e}")
+            raise PubSubError(f"Failed to list subscriptions: {e}") from None
 
     def _row_to_publication(self, row: tuple) -> Publication:
         """Convert database row to Publication object"""
@@ -612,16 +612,16 @@ class TransactionPubSubManager(PubSubManager):
                     f"ACCOUNT {self._client._escape_identifier(account)}"
                 )
             else:
-                raise PubSubError(f"Invalid publication level: {level}")
+                raise PubSubError(f"Invalid publication level: {level}") from None
 
             result = self._transaction_wrapper.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to create {level} publication '{name}'")
+                raise PubSubError(f"Failed to create {level} publication '{name}'") from None
 
             return self.get_publication(name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to create {level} publication '{name}': {e}")
+            raise PubSubError(f"Failed to create {level} publication '{name}': {e}") from None
 
     def get_publication(self, name: str) -> Publication:
         """Get publication within transaction"""
@@ -630,13 +630,13 @@ class TransactionPubSubManager(PubSubManager):
             result = self._transaction_wrapper.execute(sql)
 
             if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
+                raise PubSubError(f"Publication '{name}' not found") from None
 
             row = result.rows[0]
             return self._row_to_publication(row)
 
         except Exception as e:
-            raise PubSubError(f"Failed to get publication '{name}': {e}")
+            raise PubSubError(f"Failed to get publication '{name}': {e}") from None
 
     def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
         """List publications within transaction"""
@@ -663,7 +663,7 @@ class TransactionPubSubManager(PubSubManager):
             return publications
 
         except Exception as e:
-            raise PubSubError(f"Failed to list publications: {e}")
+            raise PubSubError(f"Failed to list publications: {e}") from None
 
     def alter_publication(
         self,
@@ -687,12 +687,12 @@ class TransactionPubSubManager(PubSubManager):
             sql = " ".join(parts)
             result = self._transaction_wrapper.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to alter publication '{name}'")
+                raise PubSubError(f"Failed to alter publication '{name}'") from None
 
             return self.get_publication(name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to alter publication '{name}': {e}")
+            raise PubSubError(f"Failed to alter publication '{name}': {e}") from None
 
     def drop_publication(self, name: str) -> bool:
         """Drop publication within transaction"""
@@ -702,7 +702,7 @@ class TransactionPubSubManager(PubSubManager):
             return result is not None
 
         except Exception as e:
-            raise PubSubError(f"Failed to drop publication '{name}': {e}")
+            raise PubSubError(f"Failed to drop publication '{name}': {e}") from None
 
     def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
         """Create subscription within transaction"""
@@ -715,12 +715,12 @@ class TransactionPubSubManager(PubSubManager):
 
             result = self._transaction_wrapper.execute(sql)
             if result is None:
-                raise PubSubError(f"Failed to create subscription '{subscription_name}'")
+                raise PubSubError(f"Failed to create subscription '{subscription_name}'") from None
 
             return self.get_subscription(subscription_name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}")
+            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}") from None
 
     def get_subscription(self, name: str) -> Subscription:
         """Get subscription within transaction"""
@@ -730,17 +730,17 @@ class TransactionPubSubManager(PubSubManager):
             result = self._transaction_wrapper.execute(sql)
 
             if not result or not result.rows:
-                raise PubSubError(f"Subscription '{name}' not found")
+                raise PubSubError(f"Subscription '{name}' not found") from None
 
             # Find subscription with matching name
             for row in result.rows:
                 if row[6] == name:  # sub_name is in 7th column (index 6)
                     return self._row_to_subscription(row)
 
-            raise PubSubError(f"Subscription '{name}' not found")
+            raise PubSubError(f"Subscription '{name}' not found") from None
 
         except Exception as e:
-            raise PubSubError(f"Failed to get subscription '{name}': {e}")
+            raise PubSubError(f"Failed to get subscription '{name}': {e}") from None
 
     def list_subscriptions(
         self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
@@ -768,4 +768,4 @@ class TransactionPubSubManager(PubSubManager):
             return [self._row_to_subscription(row) for row in result.rows]
 
         except Exception as e:
-            raise PubSubError(f"Failed to list subscriptions: {e}")
+            raise PubSubError(f"Failed to list subscriptions: {e}") from None
