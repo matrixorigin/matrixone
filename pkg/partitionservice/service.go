@@ -193,8 +193,6 @@ func (s *Service) AddPartitions(
 
 	case partition.PartitionMethod_List:
 		// TODO: check overlapping list values
-	default:
-		panic("BUG: unsupported partition method")
 	}
 
 	values := make([]partition.Partition, 0, len(partitions))
@@ -255,8 +253,6 @@ func (s *Service) DropPartitions(
 		return moerr.NewNotSupportedNoCtx("drop partition is not supported for hash/key partitioned table")
 	case partition.PartitionMethod_Range:
 	case partition.PartitionMethod_List:
-	default:
-		panic("BUG: unsupported partition method")
 	}
 
 	return s.store.DropPartitions(
