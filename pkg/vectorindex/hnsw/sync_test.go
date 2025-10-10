@@ -15,7 +15,6 @@
 package hnsw
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -27,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
 )
@@ -70,12 +69,12 @@ func (e *MockTxnExecutor) Txn() client.TxnOperator {
 }
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql_empty(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql_empty(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
-func mock_runTxn(proc *process.Process, fn func(exec executor.TxnExecutor) error) error {
+func mock_runTxn(sqlproc *sqlexec.SqlProcess, fn func(exec executor.TxnExecutor) error) error {
 	exec := &MockTxnExecutor{}
 	err := fn(exec)
 	return err
@@ -84,17 +83,19 @@ func mock_runTxn(proc *process.Process, fn func(exec executor.TxnExecutor) error
 func TestSyncRunSqls(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
 	runTxn = mock_runTxn
 
 	sync := &HnswSync[float32]{}
-	defer sync.destroy()
+	defer sync.Destroy()
 
 	sqls := []string{"fake"}
-	err := sync.runSqls(proc, sqls)
+	err := sync.runSqls(sqlproc, sqls)
 	require.NotNil(t, err)
 
 	sqls = []string{"sql"}
-	err = sync.runSqls(proc, sqls)
+	err = sync.runSqls(sqlproc, sqls)
 	require.Nil(t, err)
 }
 
@@ -102,6 +103,7 @@ func TestSyncEmptyCatalogError(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_empty
 	runSql_streaming = mock_runSql_streaming
@@ -122,7 +124,7 @@ func TestSyncEmptyCatalogError(t *testing.T) {
 		}
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	_, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
 	require.NotNil(t, err)
 }
 
@@ -130,6 +132,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_empty
 	runSql_streaming = mock_runSql_streaming
@@ -150,13 +153,16 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 		}
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
 func TestSyncVariableError(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -186,9 +192,11 @@ func TestSyncVariableError(t *testing.T) {
 		}
 	})
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
-	fmt.Println(err)
+	_, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
 	require.NotNil(t, err)
+
+	//err = sync.RunOnce(sqlproc, &cdc)
+	// require.Nil(t, err)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
 		switch key {
@@ -202,8 +210,7 @@ func TestSyncVariableError(t *testing.T) {
 		}
 	})
 
-	err = CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
-	//fmt.Println(err)
+	_, err = NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
 	require.NotNil(t, err)
 }
 
@@ -211,6 +218,7 @@ func TestSyncUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -231,7 +239,9 @@ func TestSyncUpsert(t *testing.T) {
 		}
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -240,6 +250,7 @@ func TestSyncDelete(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -256,7 +267,9 @@ func TestSyncDelete(t *testing.T) {
 		key += 1
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -265,6 +278,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -290,7 +304,9 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -299,6 +315,7 @@ func TestSyncUpdate(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -316,7 +333,9 @@ func TestSyncUpdate(t *testing.T) {
 		key += 1
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -325,6 +344,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -350,7 +370,9 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -359,6 +381,7 @@ func TestSyncAddOneModel(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -379,7 +402,9 @@ func TestSyncAddOneModel(t *testing.T) {
 		}
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -388,6 +413,7 @@ func TestSyncDelete2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -404,7 +430,9 @@ func TestSyncDelete2Files(t *testing.T) {
 		key += 1
 	}
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -413,6 +441,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -432,7 +461,9 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -441,6 +472,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -461,7 +493,9 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+	require.Nil(t, err)
+	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
 }
 
@@ -470,6 +504,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -494,10 +529,14 @@ func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		err := CdcSync[T](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+		require.Nil(t, err)
+		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	case float64:
-		err := CdcSync[T](proc, "db", "src", int32(types.T_array_float64), 3, &cdc)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float64), 3)
+		require.Nil(t, err)
+		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	}
 }
@@ -513,6 +552,7 @@ func TestSyncUpdateInsertShuffle2FilesF64(t *testing.T) {
 func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
 		switch key {
@@ -548,14 +588,83 @@ func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testin
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		err := CdcSync[T](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+		require.Nil(t, err)
+		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	case float64:
-		err := CdcSync[T](proc, "db", "src", int32(types.T_array_float64), 3, &cdc)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float64), 3)
 		require.Nil(t, err)
+		err = sync.RunOnce(sqlproc, &cdc)
+		require.Nil(t, err)
+
 	}
 }
 
 func TestSyncUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
 	runSyncUpdateInsertShuffle2FilesWithSmallCap[float32](t)
+}
+
+func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return int64(10), nil
+		case "hnsw_threads_build":
+			return int64(8), nil
+		default:
+			return int64(0), nil
+		}
+	})
+
+	runSql = mock_runSql_2files
+	runSql_streaming = mock_runSql_streaming_2files
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[T]{Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, 100)}
+
+	key := int64(0)
+	v := []T{0.1, 0.2, 0.3}
+
+	// 0 - 199 key exists, 200 - 399 new insert
+	for i := 0; i < 400; i++ {
+		e := vectorindex.VectorIndexCdcEntry[T]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	rand.Seed(uint64(time.Now().UnixNano()))
+	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+
+	var err error
+	var sync *HnswSync[T]
+
+	var ff T
+	switch any(ff).(type) {
+	case float32:
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float32), 3)
+		require.Nil(t, err)
+
+	case float64:
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", int32(types.T_array_float64), 3)
+		require.Nil(t, err)
+	}
+
+	defer sync.Destroy()
+	for i := 0; i < 10; i++ {
+		err = sync.Update(sqlproc, &cdc)
+		require.Nil(t, err)
+	}
+
+	err = sync.Save(sqlproc)
+	require.NoError(t, err)
+}
+
+func TestSyncContinuousUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
+	runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[float32](t)
 }

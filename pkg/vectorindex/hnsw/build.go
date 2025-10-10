@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 type HnswBuild[T types.RealNumbers] struct {
@@ -48,7 +48,7 @@ type AddItem[T types.RealNumbers] struct {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild[T types.RealNumbers](proc *process.Process, uid string, nworker int32,
+func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, nworker int32,
 	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild[T], err error) {
 
 	// estimate the number of worker threads
@@ -86,7 +86,7 @@ func NewHnswBuild[T types.RealNumbers](proc *process.Process, uid string, nworke
 				var err0 error
 				closed := false
 				for !closed {
-					closed, err0 = info.addFromChannel(proc)
+					closed, err0 = info.addFromChannel(sqlproc)
 					if err0 != nil {
 						info.err_chan <- err0
 						return
@@ -99,17 +99,18 @@ func NewHnswBuild[T types.RealNumbers](proc *process.Process, uid string, nworke
 	return info, nil
 }
 
-func (h *HnswBuild[T]) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
+func (h *HnswBuild[T]) addFromChannel(sqlproc *sqlexec.SqlProcess) (stream_closed bool, err error) {
 	var res AddItem[T]
 	var ok bool
 
+	procCtx := sqlproc.GetContext()
 	select {
 	case res, ok = <-h.add_chan:
 		if !ok {
 			return true, nil
 		}
-	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-procCtx.Done():
+		return false, moerr.NewInternalError(procCtx, "context cancelled")
 	}
 
 	// add

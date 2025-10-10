@@ -24,14 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
 // give blob
 func mock_runSql_streaming(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
@@ -44,7 +44,7 @@ func mock_runSql_streaming(
 
 func mock_runSql_streaming_parser_error(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
@@ -55,11 +55,13 @@ func mock_runSql_streaming_parser_error(
 
 func mock_runSql_streaming_cancel(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
 ) (executor.Result, error) {
+
+	proc := sqlproc.Proc
 	select {
 	case <-proc.Ctx.Done():
 		close(ch)
@@ -81,6 +83,7 @@ func TestIvfSearchRace(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 
@@ -89,7 +92,7 @@ func TestIvfSearchRace(t *testing.T) {
 
 	idx := &IvfflatSearchIndex[float32]{}
 
-	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
 	require.NotNil(t, err)
 
 }
@@ -103,6 +106,7 @@ func TestIvfSearchParserError(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 
@@ -111,7 +115,7 @@ func TestIvfSearchParserError(t *testing.T) {
 
 	idx := &IvfflatSearchIndex[float32]{}
 
-	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
 	require.NotNil(t, err)
 }
 
@@ -125,6 +129,7 @@ func TestIvfSearchCancel(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	proc.Ctx, proc.Cancel = context.WithCancelCause(proc.Ctx)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 
@@ -135,7 +140,7 @@ func TestIvfSearchCancel(t *testing.T) {
 
 	proc.Cancel(moerr.NewInternalErrorNoCtx("user cancel"))
 
-	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
 	t.Logf("error: %v", err)
 	require.Error(t, err)
 }

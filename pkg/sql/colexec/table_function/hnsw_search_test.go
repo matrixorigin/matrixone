@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -100,7 +101,7 @@ type MockSearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float64{2.0}, nil
 }
@@ -108,7 +109,7 @@ func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.Run
 func (m *MockSearch) Destroy() {
 }
 
-func (m *MockSearch) Load(*process.Process) error {
+func (m *MockSearch) Load(*sqlexec.SqlProcess) error {
 	//time.Sleep(6 * time.Second)
 	return nil
 }

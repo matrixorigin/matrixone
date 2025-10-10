@@ -26,7 +26,7 @@ func TestCdc(t *testing.T) {
 	key2 := int64(1)
 	v2 := []float32{1, 2, 3}
 
-	cdc := NewVectorIndexCdc[float32]()
+	cdc := NewVectorIndexCdc[float32](8192)
 
 	// Insert
 	cdc.Insert(key, v)
