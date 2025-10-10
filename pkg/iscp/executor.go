@@ -58,7 +58,8 @@ const (
 	DefaultFlushWatermarkTTL      = time.Hour
 
 	DefaultRetryTimes    = 5
-	DefaultRetryDuration = time.Second
+	DefaultRetryInterval = time.Second
+	DefaultRetryDuration = time.Minute * 10
 )
 
 type ISCPExecutorOption struct {
@@ -257,10 +258,13 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	exec.ctx = ctx
 	exec.cancel = cancel
 	err := retry(
+		ctx,
 		func() error {
 			return exec.replay(exec.ctx)
 		},
 		exec.option.RetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 	if err != nil {
 		return err
@@ -865,13 +869,30 @@ func (exec *ISCPTaskExecutor) String() string {
 	return str
 }
 
-func retry(fn func() error, retryTimes int) (err error) {
+func retry(
+	ctx context.Context,
+	fn func() error,
+	retryTimes int,
+	firstInterval time.Duration,
+	totalDuration time.Duration,
+) (err error) {
+	interval := firstInterval
+	startTime := time.Now()
 	for i := 0; i < retryTimes; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if time.Since(startTime) > totalDuration {
+			break
+		}
 		err = fn()
 		if err == nil {
 			return
 		}
-		time.Sleep(DefaultRetryDuration)
+		time.Sleep(interval)
+		interval *= 2
 	}
 	logutil.Errorf("ISCP-Task retry failed, err: %v", err)
 	return

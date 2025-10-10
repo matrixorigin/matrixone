@@ -105,11 +105,14 @@ func RegisterJob(
 	startFromNow bool,
 ) (ok bool, err error) {
 	return ok, retry(
+		ctx,
 		func() error {
 			ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
 			return err
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -120,11 +123,14 @@ func UnregisterJobsByDBName(
 	dbName string,
 ) (err error) {
 	return retry(
+		ctx,
 		func() error {
 			err = unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
 			return err
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -303,11 +309,14 @@ func UnregisterJob(
 	jobID *JobID,
 ) (ok bool, err error) {
 	return ok, retry(
+		ctx,
 		func() error {
 			ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
 			return err
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -319,10 +328,13 @@ func RenameSrcTable(
 	oldTableName, newTableName string,
 ) (err error) {
 	return retry(
+		ctx,
 		func() error {
 			return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -416,10 +428,13 @@ func UpdateJobSpec(
 	jobSpec *JobSpec,
 ) (err error) {
 	return retry(
+		ctx,
 		func() error {
 			return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 

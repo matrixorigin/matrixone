@@ -125,24 +125,30 @@ func ExecuteIteration(
 		if err != nil {
 			return
 		}
-		err = FlushJobStatusOnIterationState(
+		statuses[0].Stage = JobStage_Running
+		err = retry(
 			ctx,
-			cnUUID,
-			cnEngine,
-			cnTxnClient,
-			iterCtx.accountID,
-			iterCtx.tableID,
-			iterCtx.jobNames,
-			iterCtx.jobIDs,
-			iterCtx.lsn,
-			statuses,
-			types.TS{},
-			ISCPJobState_Completed,
+			func() error {
+				return FlushJobStatusOnIterationState(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					types.TS{},
+					ISCPJobState_Completed,
+				)
+			},
+			SubmitRetryTimes,
+			DefaultRetryInterval,
+			SubmitRetryDuration,
 		)
-		if err != nil {
-			return
-		}
-		return
+		return nil
 	}
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
 	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
@@ -376,29 +382,33 @@ func ExecuteIteration(
 			if status.ErrorCode == 0 {
 				watermark = status.To
 			}
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				err = FlushJobStatusOnIterationState(
-					ctx,
-					cnUUID,
-					cnEngine,
-					cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					[]string{iterCtx.jobNames[i]},
-					[]uint64{iterCtx.jobIDs[i]},
-					[]uint64{iterCtx.lsn[i]},
-					[]*JobStatus{status},
-					watermark,
-					state,
+			err = retry(
+				ctx,
+				func() error {
+					return FlushJobStatusOnIterationState(
+						ctx,
+						cnUUID,
+						cnEngine,
+						cnTxnClient,
+						iterCtx.accountID,
+						iterCtx.tableID,
+						[]string{iterCtx.jobNames[i]},
+						[]uint64{iterCtx.jobIDs[i]},
+						[]uint64{iterCtx.lsn[i]},
+						[]*JobStatus{status},
+						watermark,
+						state,
+					)
+				},
+				SubmitRetryTimes,
+				DefaultRetryInterval,
+				SubmitRetryDuration,
+			)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task iteration flush job status failed",
+					zap.Error(err),
 				)
-				if err == nil {
-					break
-				}
 			}
 		}
 	}
@@ -662,5 +672,6 @@ func ProcessInitSQL(
 		return
 	}
 	defer result.Close()
+	retry()
 	return
 }
