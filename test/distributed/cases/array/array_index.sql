@@ -694,5 +694,30 @@ alter table vector_index_08 add column d vecf32(3) not null after c;
 select * from vector_index_08;
 
 -- post
-SET experimental_ivf_index = 0;
 drop database vecdb2;
+
+
+create database vecdb3;
+use vecdb3;
+
+CREATE TABLE `rag_table` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `title` varchar(200) DEFAULT NULL,
+  `embedding` vecf32(8) DEFAULT NULL,
+  `content` text DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `embedding_idx` USING ivfflat (`embedding`) lists = 20  op_type 'vector_l2_ops'
+);
+
+select count(*) from mo_catalog.mo_indexes as i join mo_catalog.mo_tables as t on i.table_id = t.rel_id and t.relname = "rag_table" and i.algo="ivfflat"; -- 3 ivf index tables
+
+select count(*) from mo_catalog.mo_tables where reldatabase = "vecdb3"; -- rag_table + 3 ivf index tables
+
+drop index embedding_idx on rag_table;
+
+select count(*) from mo_catalog.mo_indexes as i join mo_catalog.mo_tables as t on i.table_id = t.rel_id and t.relname = "rag_table" and i.algo="ivfflat"; -- 0 ivf index tables
+
+select count(*) from mo_catalog.mo_tables where reldatabase = "vecdb3"; -- rag_table + 0 ivf index tables
+
+SET experimental_ivf_index = 0;
+drop database vecdb3;

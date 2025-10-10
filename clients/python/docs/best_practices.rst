@@ -593,12 +593,11 @@ Account Operations
    # ✅ GOOD: Initialize AccountManager
    account_manager = AccountManager(client)
    
-   # ✅ GOOD: Create account
+   # ✅ GOOD: Create account (name, admin_name, admin_password)
    account = account_manager.create_account(
-       name="test_account",
-       admin_name="admin_user",
-       admin_password="secure_password_123",
-       comment="Test account for development"
+       "test_account",
+       "admin_user",
+       "secure_password_123"
    )
    print(f"Created account: {account.name}")
    
@@ -619,38 +618,40 @@ User and Role Management
    
    account_manager = AccountManager(client)
    
-   # ✅ GOOD: Create user
-   user = account_manager.create_user(
-       username="developer",
-       password="dev_password_123",
-       comment="Developer account"
-   )
+   # ✅ GOOD: Create user (user_name, password)
+   user = account_manager.create_user("developer", "dev_password_123")
    print(f"Created user: {user.name}")
    
-   # ✅ GOOD: Create role
-   role = account_manager.create_role(
-       role_name="data_analyst",
-       comment="Read-only data access"
-   )
+   # ✅ GOOD: Create role (role_name)
+   role = account_manager.create_role("data_analyst")
+   print(f"Created role: {role.name}")
    
-   # ✅ GOOD: Grant privileges to role
+   # ✅ GOOD: Grant privileges on specific table (optional)
+   # Note: table must exist, use database.table format
    account_manager.grant_privilege(
-       role_or_user="data_analyst",
-       privilege="SELECT",
-       database="test",
-       table="users"
+       "SELECT",           # privilege
+       "TABLE",            # object_type
+       "users",       # object_name (database.table)
+       to_role="data_analyst"
    )
    
-   # ✅ GOOD: Grant role to user
-   account_manager.grant_role(
-       role_name="data_analyst",
-       username="developer"
-   )
+   # ✅ GOOD: Grant role to user (role_name, to_user)
+   account_manager.grant_role("data_analyst", "developer")
+   print(f"Granted role to user")
    
    # ✅ GOOD: List users
    users = account_manager.list_users()
    for user in users:
        print(f"User: {user.name}")
+   
+   # ✅ GOOD: Clean up
+   account_manager.drop_user("developer")
+   account_manager.drop_role("data_analyst")
+   
+   # ✅ GOOD: List roles
+   roles = account_manager.list_roles()
+   for role in roles:
+       print(f"Role: {role.name}")
 
 Pub/Sub Operations
 ------------------
@@ -1048,7 +1049,8 @@ Essential SDK APIs to Use:
 - ``account_manager.create_account()`` - Create account
 - ``account_manager.create_user()`` - Create user
 - ``account_manager.create_role()`` - Create role
-- ``account_manager.grant_privilege()`` - Grant privileges
+- ``account_manager.grant_role()`` - Grant role to user
+- ``account_manager.drop_user()`` / ``drop_role()`` - Clean up
 
 **Pub/Sub Operations:**
 - ``client.pubsub.list_publications()`` - List publications
