@@ -85,7 +85,7 @@ Just as Git revolutionized code management, MatrixOne revolutionizes data manage
 
 **🗄️ MySQL-Compatible**
 
-Drop-in replacement for MySQL 8.0. Use existing tools, ORMs, and applications without code changes. Seamless migration path.
+Drop-in replacement for MySQL. Use existing tools, ORMs, and applications without code changes. Seamless migration path.
 
 </td>
 <td width="33%" valign="top">
