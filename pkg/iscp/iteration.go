@@ -78,7 +78,7 @@ func ExecuteIteration(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, err := GetJobSpecs(
+	jobSpecs, prevStatus, err := GetJobSpecs(
 		ctx,
 		cnUUID,
 		cnTxnClient,
@@ -93,6 +93,55 @@ func ExecuteIteration(
 		iterCtx.jobIDs,
 	)
 	if err != nil {
+		return
+	}
+
+	var needInit bool
+	for i := range prevStatus {
+		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
+			if len(iterCtx.jobNames) != 1 {
+				errMsg := "init sql is not supported for multiple jobs"
+				FlushPermanentErrorMessage(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					iterCtx.fromTS,
+					errMsg,
+				)
+			}
+			needInit = true
+			break
+		}
+	}
+	if needInit {
+		err = ProcessInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL)
+		if err != nil {
+			return
+		}
+		err = FlushJobStatusOnIterationState(
+			ctx,
+			cnUUID,
+			cnEngine,
+			cnTxnClient,
+			iterCtx.accountID,
+			iterCtx.tableID,
+			iterCtx.jobNames,
+			iterCtx.jobIDs,
+			iterCtx.lsn,
+			statuses,
+			types.TS{},
+			ISCPJobState_Completed,
+		)
+		if err != nil {
+			return
+		}
 		return
 	}
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
@@ -463,9 +512,9 @@ var GetJobSpecs = func(
 	watermark types.TS,
 	jobStatuses []*JobStatus,
 	jobIDs []uint64,
-) (jobSpec []*JobSpec, err error) {
+) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_spec FROM mo_catalog.mo_iscp_log WHERE")
+	buf.WriteString("SELECT job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -480,6 +529,7 @@ var GetJobSpecs = func(
 	}
 	defer execResult.Close()
 	jobSpec = make([]*JobSpec, len(jobName))
+	prevStatus = make([]*JobStatus, len(jobName))
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows != len(jobName) {
 			errMsg := fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName))
@@ -499,7 +549,11 @@ var GetJobSpecs = func(
 			)
 		}
 		for i := 0; i < rows; i++ {
-			jobSpec[i], err = UnmarshalJobSpec(cols[0].GetBytesAt(i))
+			jobSpec[i], err = UnmarshalJobSpec([]byte(cols[0].GetStringAt(i)))
+			if err != nil {
+				return false
+			}
+			prevStatus[i], err = UnmarshalJobStatus([]byte(cols[1].GetStringAt(i)))
 			if err != nil {
 				return false
 			}
@@ -580,4 +634,33 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 		fromTS:    fromTS,
 		toTS:      toTS,
 	}
+}
+
+func ProcessInitSQL(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	sql string,
+) (err error) {
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"iscp process init sql",
+		0)
+	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(ctx)
+	}
+	err = cnEngine.New(ctx, txnOp)
+	if err != nil {
+		return
+	}
+	result, err := ExecWithResult(ctx, sql, cnUUID, txnOp)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	return
 }
