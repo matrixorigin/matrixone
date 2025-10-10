@@ -2,9 +2,24 @@
 
 [![PyPI version](https://badge.fury.io/py/matrixone-python-sdk.svg)](https://badge.fury.io/py/matrixone-python-sdk)
 [![Python Support](https://img.shields.io/pypi/pyversions/matrixone-python-sdk.svg)](https://pypi.org/project/matrixone-python-sdk/)
+[![Documentation Status](https://app.readthedocs.org/projects/matrixone/badge/?version=latest)](https://matrixone.readthedocs.io/en/latest/?badge=latest)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector similarity search, fulltext search, snapshot management, PITR, restore operations, table cloning, and more.
+
+---
+
+## 📚 Documentation
+
+**[📖 Complete Documentation on ReadTheDocs](https://matrixone.readthedocs.io/)** ⭐
+
+**Quick Links:**
+- 🚀 [Quick Start Guide](https://matrixone.readthedocs.io/en/latest/quickstart.html)
+- 🧠 [Vector Search & IVF Index Monitoring](https://matrixone.readthedocs.io/en/latest/vector_guide.html)
+- 📋 [Best Practices](https://matrixone.readthedocs.io/en/latest/best_practices.html)
+- 📖 [API Reference](https://matrixone.readthedocs.io/en/latest/api/index.html)
+
+---
 
 ## ✨ Features
 
@@ -13,6 +28,7 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
 - 🧠 **Vector Search**: Advanced vector similarity search with HNSW and IVF indexing
   - Support for f32 and f64 precision vectors
   - Multiple distance metrics (L2, Cosine, Inner Product)
+  - ⭐ **IVF Index Health Monitoring** with `get_ivf_stats()` - Critical for production!
   - High-performance indexing for AI/ML applications
 - 🔍 **Fulltext Search**: Powerful fulltext indexing and search with BM25 and TF-IDF
   - Natural language and boolean search modes
@@ -190,25 +206,36 @@ client.restore.restore_cluster('my_snapshot')
 ### Account Management
 
 ```python
+from matrixone.account import AccountManager
+
+# Initialize account manager
+account_manager = AccountManager(client)
+
 # Create user
-user = client.account.create_user(
-    'newuser',
-    'password123',
+user = account_manager.create_user(
+    username='newuser',
+    password='password123',
     comment='New user account'
 )
 
 # Create role
-role = client.account.create_role(
-    'analyst',
+role = account_manager.create_role(
+    role_name='analyst',
     comment='Data analyst role'
 )
 
-# Grant privileges
-client.account.grant_privilege(
-    'SELECT',
-    'TABLE',
-    '*',
-    to_user='newuser'
+# Grant privileges to role
+account_manager.grant_privilege(
+    role_or_user='analyst',
+    privilege='SELECT',
+    database='test',
+    table='users'
+)
+
+# Grant role to user
+account_manager.grant_role(
+    role_name='analyst',
+    username='newuser'
 )
 ```
 
@@ -280,11 +307,74 @@ client.drop_table(Document)  # Use client API
 client.disconnect()
 ```
 
+### ⭐ IVF Index Health Monitoring (Production Critical)
+
+**Monitor your IVF indexes to ensure optimal performance!**
+
+```python
+from matrixone import Client
+import numpy as np
+
+client = Client()
+client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+# After creating IVF index and inserting data...
+
+# Get IVF index statistics
+stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+
+# Analyze index balance
+counts = stats['distribution']['centroid_count']
+total_centroids = len(counts)
+total_vectors = sum(counts)
+min_count = min(counts) if counts else 0
+max_count = max(counts) if counts else 0
+balance_ratio = max_count / min_count if min_count > 0 else float('inf')
+
+print(f"📊 IVF Index Health Report:")
+print(f"  - Total centroids: {total_centroids}")
+print(f"  - Total vectors: {total_vectors}")
+print(f"  - Balance ratio: {balance_ratio:.2f}")
+print(f"  - Min vectors in centroid: {min_count}")
+print(f"  - Max vectors in centroid: {max_count}")
+
+# Check if index needs rebuilding
+if balance_ratio > 2.5:
+    print("⚠️  WARNING: Index is imbalanced and needs rebuilding!")
+    print("   Rebuild the index for optimal performance:")
+    
+    # Rebuild process
+    client.vector_ops.drop("documents", "idx_embedding")
+    client.vector_ops.create_ivf(
+        "documents",
+        name="idx_embedding",
+        column="embedding",
+        lists=100
+    )
+    print("✅ Index rebuilt successfully")
+else:
+    print("✅ Index is healthy and well-balanced")
+
+client.disconnect()
+```
+
+**Why IVF Stats Matter:**
+- 🎯 **Performance**: Unbalanced indexes lead to slow searches
+- 📊 **Load Distribution**: Identify hot spots and imbalances
+- 🔄 **Rebuild Timing**: Know when to rebuild for optimal performance
+- 📈 **Capacity Planning**: Understand data distribution patterns
+
+**When to Rebuild:**
+- Balance ratio > 2.5 (moderate imbalance)
+- Balance ratio > 3.0 (severe imbalance - rebuild immediately)
+- After bulk inserts (>20% of data)
+- Performance degradation in searches
+
 ### Fulltext Search Operations
 
 ```python
 from matrixone import Client
-from matrixone.sqlalchemy_ext.fulltext_search import boolean_match, natural_match
+from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, Text
 
@@ -329,21 +419,26 @@ client.fulltext_index.create(
     columns=['title', 'content']
 )
 
-# Natural language search using ORM
-results = client.query(Article).filter(
-    natural_match('title', 'content', query='machine learning tutorial')
-).all()
+# Boolean search with encourage (like natural language)
+results = client.query(
+    Article.title,
+    Article.content,
+    boolean_match('title', 'content').encourage('machine learning tutorial')
+).execute()
 
-# Boolean search with operators using ORM
-results = client.query(Article).filter(
+# Boolean search with must/should operators
+results = client.query(
+    Article.title,
+    Article.content,
     boolean_match('title', 'content')
-    .must('machine')
-    .must('learning')
-    .discourage('basics')
-).all()
+        .must('machine')
+        .must('learning')
+        .must_not('basics')
+).execute()
 
-for article in results:
-    print(f"Title: {article.title}, Category: {article.category}")
+# Results is a ResultSet object
+for row in results.rows:
+    print(f"Title: {row[0]}, Content: {row[1][:50]}...")
 
 # Cleanup
 client.drop_table(Article)  # Use client API
@@ -396,12 +491,22 @@ client.disconnect()
 ### Pub/Sub Operations
 
 ```python
-# Create subscription (publication must be created separately)
-subscription = client.pubsub.create_subscription(
-    'data_sync',
-    'data_changes',
-    'root'
-)
+# List publications
+publications = client.pubsub.list_publications()
+for pub in publications:
+    print(f"Publication: {pub}")
+
+# List subscriptions
+subscriptions = client.pubsub.list_subscriptions()
+for sub in subscriptions:
+    print(f"Subscription: {sub}")
+
+# Drop publication/subscription when needed
+try:
+    client.pubsub.drop_publication("test_publication")
+    client.pubsub.drop_subscription("test_subscription")
+except Exception as e:
+    print(f"Cleanup: {e}")
 ```
 
 ## Configuration
@@ -458,12 +563,12 @@ except SnapshotError as e:
     print(f"Snapshot operation failed: {e}")
 ```
 
-## 📖 Documentation
+## 🔗 Links
 
-For comprehensive documentation, visit:
-- **PyPI Package**: https://pypi.org/project/matrixone-python-sdk/
-- **GitHub Repository**: https://github.com/matrixorigin/matrixone/tree/main/clients/python
-- **MatrixOne Docs**: https://docs.matrixorigin.cn/
+- **📚 Full Documentation**: https://matrixone.readthedocs.io/
+- **📦 PyPI Package**: https://pypi.org/project/matrixone-python-sdk/
+- **💻 GitHub Repository**: https://github.com/matrixorigin/matrixone/tree/main/clients/python
+- **🌐 MatrixOne Docs**: https://docs.matrixorigin.cn/
 
 ### Online Examples
 
@@ -478,8 +583,9 @@ The SDK includes 25+ comprehensive examples covering all features:
 **Vector Search:**
 - Vector data types and distance functions
 - IVF and HNSW index creation and tuning
+- ⭐ **IVF Index Health Monitoring** - Essential for production systems
 - Similarity search operations
-- Advanced vector optimizations
+- Advanced vector optimizations and index rebuilding
 
 **Advanced Features:**
 - Fulltext search with BM25/TF-IDF

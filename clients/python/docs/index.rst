@@ -11,22 +11,42 @@ type safety and extensive documentation.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Getting Started
 
    installation
    quickstart
    configuration_guide
-   connection_hooks_guide
-   orm_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Core Features
+
    vector_guide
    fulltext_guide
+   orm_guide
    metadata_guide
-   account_guide
-   pubsub_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Advanced Features
+
    snapshot_restore_guide
    clone_guide
+   account_guide
+   pubsub_guide
    moctl_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Production Guide
+
    best_practices
+   connection_hooks_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference
+
    api/index
    examples
    contributing
@@ -99,15 +119,14 @@ Quick Start
        content = Column(Text)
        embedding = create_vector_column(384, 'f32')
 
-   # Create table and HNSW index
+   # Create table and IVF index for large-scale search
    client.create_table(Document)
-   client.vector_ops.enable_hnsw()
-   client.vector_ops.create_hnsw(
-       table_name='documents',
+   client.vector_ops.enable_ivf()
+   client.vector_ops.create_ivf(
+       'documents',  # Table name as positional argument
        name='idx_embedding',
        column='embedding',
-       m=16,
-       ef_construction=200
+       lists=100  # Number of clusters
    )
 
    # Insert and search
@@ -119,12 +138,32 @@ Quick Start
    })
 
    results = client.vector_ops.similarity_search(
-       table_name='documents',
+       'documents',  # Table name as positional argument
        vector_column='embedding',
        query_vector=np.random.rand(384).tolist(),
        limit=5,
        distance_type='cosine'
    )
+
+**⭐ Monitor IVF Index Health (Critical for Production):**
+
+.. code-block:: python
+
+   # Get IVF index statistics - Essential for monitoring index quality
+   stats = client.vector_ops.get_ivf_stats("documents", "embedding")
+   
+   # Check index balance
+   counts = stats['distribution']['centroid_count']
+   balance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+   
+   print(f"Total centroids: {len(counts)}")
+   print(f"Total vectors: {sum(counts)}")
+   print(f"Balance ratio: {balance_ratio:.2f}")
+   
+   # Rebuild if imbalanced (ratio > 2.5)
+   if balance_ratio > 2.5:
+       print("⚠️  Index needs rebuilding for optimal performance!")
+       # See vector_guide for detailed monitoring and rebuild procedures
 
 **Fulltext Search:**
 
