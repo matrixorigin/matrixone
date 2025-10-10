@@ -275,11 +275,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 					if valid {
 						// index table may not be fully sync'd with source table via ISCP during alter table
-						// clone index table (with ISCP) may not be a complete clone.
-						// We have to clone the index table anyway so that user can use it right away without
-						// waiting for index to rebuild.  Register ISCP job with startFromNow = false will
-						// re-build from the beginning and we have to check the duplicate entry by
-						// REPLACE INTO and check primary key found in HNSW model building
+						// clone index table (with ISCP) may not be a complete clone
+						// so register ISCP job with startFromNow = false
 						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
 						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false)
 						if err != nil {
@@ -773,6 +770,19 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
+		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		if err != nil {
+			return err
+		}
+
+		if !oriIdxTblNames.Unique &&
+			((catalog.IsFullTextIndexAlgo(oriIdxTblNames.IndexAlgo) && async) ||
+				catalog.IsHnswIndexAlgo(oriIdxTblNames.IndexAlgo)) {
+			// skip fultext async index and hsnw index clone because index table may not be fully sync'd
+			logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
+			continue
+		}
+
 		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
 
 			var newIdxTblName IndexTypeInfo
@@ -790,7 +800,7 @@ func cloneUnaffectedIndexes(
 			}
 
 			// IVF index table is NOT empty and clone will have duplicate rows
-			// Delete the table before clone
+			// Delete the table
 			if !oriIdxTblNames.Unique &&
 				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
 				// delete all content but avoid truncate table with WHERE TRUE
@@ -799,6 +809,15 @@ func cloneUnaffectedIndexes(
 				if err != nil {
 					return err
 				}
+			}
+
+			if !oriIdxTblNames.Unique &&
+				async &&
+				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) &&
+				oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+				// skip async IVF entries index table
+				logutil.Infof("cloneUnaffectedIndex: skip async IVF entries index table %v\n", oriIdxTblName)
+				continue
 			}
 
 			logutil.Infof("cloneUnaffectedIndex: clone %v -> %v\n", oriIdxTblName, newIdxTblName)
