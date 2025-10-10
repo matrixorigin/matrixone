@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/prashantv/gostub"
@@ -300,4 +301,92 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		defer stubs.Reset()
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
 	})
+}
+
+func TestEscapeJSONControl(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "normal characters",
+			input:    `{"a":"hello world 123"}`,
+			expected: `{"a":"hello world 123"}`,
+		},
+		{
+			name:     "UTF-8 characters",
+			input:    `{"a":"hello 世界 😊"}`,
+			expected: `{"a":"hello 世界 😊"}`,
+		},
+		{
+			name:     "single newline",
+			input:    `{"a":"abc` + `\n` + `def"}`,
+			expected: `{"a":"abc\\ndef"}`,
+		},
+		{
+			name:     "single carriage return",
+			input:    `{"a":"abc` + `\r` + `def"}`,
+			expected: `{"a":"abc\\rdef"}`,
+		},
+		{
+			name:     "single tab",
+			input:    `{"a":"abc` + `\t` + `def"}`,
+			expected: `{"a":"abc\\tdef"}`,
+		},
+		{
+			name:     "single form feed",
+			input:    `{"a":"abc` + `\f` + `def"}`,
+			expected: `{"a":"abc\\fdef"}`,
+		},
+		{
+			name:     "multiple newlines",
+			input:    `{"a":"abc` + `\n\n` + `def"}`,
+			expected: `{"a":"abc\\n\\ndef"}`,
+		},
+		{
+			name:     "escaped sequences unchanged",
+			input:    `{"a":"abc\\n\\r\\t\\b\\fdef"}`,
+			expected: `{"a":"abc\\\\n\\\\r\\\\t\\\\b\\\\fdef"}`,
+		},
+		{
+			name:     "mixed escaped and actual",
+			input:    `{"a":"abc\\n` + `\t` + `def\\r"}`,
+			expected: `{"a":"abc\\\\n\\tdef\\\\r"}`,
+		},
+		{
+			name:     "control at start",
+			input:    `\n` + `{"a":"def"}`,
+			expected: `\\n{"a":"def"}`,
+		},
+		{
+			name:     "control at end",
+			input:    `{"a":"def"}` + `\n`,
+			expected: `{"a":"def"}\\n`,
+		},
+		{
+			name:     "long string with controls",
+			input:    strings.Repeat("a", 10000) + `\n` + strings.Repeat("b", 10000) + `\t` + strings.Repeat("c", 10000),
+			expected: strings.Repeat("a", 10000) + `\\n` + strings.Repeat("b", 10000) + `\\t` + strings.Repeat("c", 10000),
+		},
+		{
+			name:     "backslash literal",
+			input:    `{"a":"abc\\def"}`,
+			expected: `{"a":"abc\\\\def"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := escapeJSONControlChars(tt.input)
+			if res != tt.expected {
+				t.Errorf("EscapeJSONControl(%v) =\n%v,\nwant\n%v", tt.input, res, tt.expected)
+			}
+		})
+	}
 }
