@@ -17,6 +17,7 @@ package iscp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -653,6 +654,11 @@ func ProcessInitSQL(
 	cnTxnClient client.TxnClient,
 	sql string,
 ) (err error) {
+	decoded, err := base64.StdEncoding.DecodeString(sql)
+	if err != nil {
+		return
+	}
+	sql = string(decoded)
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
 		0,

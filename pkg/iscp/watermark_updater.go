@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -239,6 +240,10 @@ func registerJob(
 	}
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
+	}
+	if jobSpec.ConsumerInfo.InitSQL != "" {
+		encoded := base64.StdEncoding.EncodeToString([]byte(jobSpec.ConsumerInfo.InitSQL))
+		jobSpec.ConsumerInfo.InitSQL = encoded
 	}
 	var dbID uint64
 	tableID, dbID, err = getTableID(
