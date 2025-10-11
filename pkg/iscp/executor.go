@@ -304,6 +304,8 @@ func (exec *ISCPTaskExecutor) Stop() {
 }
 
 func (exec *ISCPTaskExecutor) initState() (err error) {
+	ctxWithTimeout, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
 	sql := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_iscp_log
         SET job_state = %d
@@ -319,15 +321,15 @@ func (exec *ISCPTaskExecutor) initState() (err error) {
 		"",
 		"iscp init state",
 		0)
-	txnOp, err := exec.cnTxnClient.New(exec.ctx, nowTs, createByOpt)
+	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(exec.ctx)
+		defer txnOp.Commit(ctxWithTimeout)
 	}
-	err = exec.txnEngine.New(exec.ctx, txnOp)
+	err = exec.txnEngine.New(ctxWithTimeout, txnOp)
 	if err != nil {
 		return
 	}
-	result, err := ExecWithResult(exec.ctx, sql, exec.cnUUID, txnOp)
+	result, err := ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
 	if err != nil {
 		return
 	}

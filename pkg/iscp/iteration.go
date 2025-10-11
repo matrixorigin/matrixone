@@ -126,6 +126,7 @@ func ExecuteIteration(
 		if err != nil {
 			return
 		}
+		statuses[0] = prevStatus[0]
 		statuses[0].Stage = JobStage_Running
 		err = retry(
 			ctx,
@@ -173,8 +174,9 @@ func ExecuteIteration(
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
 	for i := range iterCtx.jobNames {
 		statuses[i] = &JobStatus{
-			From: iterCtx.fromTS,
-			To:   iterCtx.toTS,
+			From:  iterCtx.fromTS,
+			To:    iterCtx.toTS,
+			Stage: prevStatus[i].Stage,
 		}
 		statuses[i].StartAt = startAt
 	}

@@ -241,9 +241,12 @@ func registerJob(
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
+	emptyJobStatus := JobStatus{}
 	if jobSpec.ConsumerInfo.InitSQL != "" {
 		encoded := base64.StdEncoding.EncodeToString([]byte(jobSpec.ConsumerInfo.InitSQL))
 		jobSpec.ConsumerInfo.InitSQL = encoded
+	} else {
+		emptyJobStatus.Stage = JobStage_Running
 	}
 	var dbID uint64
 	tableID, dbID, err = getTableID(
@@ -282,7 +285,6 @@ func registerJob(
 	if err != nil {
 		return
 	}
-	emptyJobStatus := JobStatus{}
 	jobStatusJson, err := json.Marshal(emptyJobStatus)
 	if err != nil {
 		return
