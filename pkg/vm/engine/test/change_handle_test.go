@@ -4326,3 +4326,112 @@ func TestStaleRead(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, ts.GE(&now))
 }
+
+func TestInitSql(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	defer bats.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	opts := &iscp.ISCPExecutorOption{
+		GCInterval:             time.Hour,
+		GCTTL:                  time.Hour,
+		SyncTaskInterval:       time.Millisecond * 100,
+		FlushWatermarkInterval: time.Hour,
+		RetryTimes:             1,
+	}
+	opts.GCTTL = time.Hour
+	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		opts,
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := iscp.RegisterJob(
+		ctx, "", txn,
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+				InitSQL:      "create database t;",
+			},
+		},
+		&iscp.JobID{
+			JobName:   "idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+		false,
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	now := taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "idx")
+			if !ok || !ts.GE(&now) {
+				return false
+			}
+			return true
+		},
+	)
+	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "idx")
+	assert.True(t, ok)
+	assert.True(t, ts.GE(&now))
+
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	_, err = disttaeEngine.Engine.Database(ctx, "t", txn)
+	require.NoError(t, err)
+	err = txn.Commit(ctxWithTimeout)
+	require.NoError(t, err)
+
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "idx")
+}
