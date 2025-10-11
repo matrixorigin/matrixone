@@ -142,7 +142,7 @@ func ExecuteIteration(
 					iterCtx.jobIDs,
 					iterCtx.lsn,
 					statuses,
-					types.TS{},
+					iterCtx.fromTS,
 					ISCPJobState_Completed,
 				)
 			},

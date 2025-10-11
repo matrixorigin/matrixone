@@ -3495,20 +3495,24 @@ func TestCancelIteration1(t *testing.T) {
 			types.TS,
 			[]*iscp.JobStatus,
 			[]uint64,
-		) (jobSpec []*iscp.JobSpec, err error) {
+		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, err error) {
 			cancelCh <- struct{}{}
 			<-cancelCh
 			return []*iscp.JobSpec{
-				{
-					ConsumerInfo: iscp.ConsumerInfo{
-						ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-						SrcTable: iscp.TableInfo{
-							DBName:    "srcdb",
-							TableName: "src_table",
+					{
+						ConsumerInfo: iscp.ConsumerInfo{
+							ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+							SrcTable: iscp.TableInfo{
+								DBName:    "srcdb",
+								TableName: "src_table",
+							},
 						},
 					},
-				},
-			}, nil
+				}, []*iscp.JobStatus{
+					{
+						Stage: iscp.JobStage_Running,
+					},
+				}, nil
 		},
 	)
 	defer stub.Reset()
@@ -3587,18 +3591,22 @@ func TestCancelIteration2(t *testing.T) {
 			types.TS,
 			[]*iscp.JobStatus,
 			[]uint64,
-		) (jobSpec []*iscp.JobSpec, err error) {
+		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, err error) {
 			return []*iscp.JobSpec{
-				{
-					ConsumerInfo: iscp.ConsumerInfo{
-						ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-						SrcTable: iscp.TableInfo{
-							DBName:    "srcdb",
-							TableName: "src_table",
+					{
+						ConsumerInfo: iscp.ConsumerInfo{
+							ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+							SrcTable: iscp.TableInfo{
+								DBName:    "srcdb",
+								TableName: "src_table",
+							},
 						},
 					},
-				},
-			}, nil
+				}, []*iscp.JobStatus{
+					{
+						Stage: iscp.JobStage_Running,
+					},
+				}, nil
 		},
 	)
 	defer stub.Reset()
