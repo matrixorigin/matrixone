@@ -267,6 +267,34 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 		midx[i] = -1
 	}
 
+	// reset counter
+	s.ninsert.Store(0)
+	s.nupdate.Store(0)
+	s.ndelete.Store(0)
+
+	ninsert := int32(0)
+	nupdate := int32(0)
+	ndelete := int32(0)
+	for _, row := range cdc.Data {
+		switch row.Type {
+		case vectorindex.CDC_INSERT:
+			ninsert++
+		case vectorindex.CDC_UPSERT:
+			nupdate++
+		case vectorindex.CDC_DELETE:
+			ndelete++
+		}
+	}
+
+	s.ninsert.Store(ninsert)
+	s.nupdate.Store(nupdate)
+	s.ndelete.Store(ndelete)
+
+	if ninsert == int32(len(cdc.Data)) {
+		// all insert
+		return maxcap, midx, nil
+	}
+
 	// find corresponding indexes
 	for i, m := range s.indexes {
 		err = m.LoadIndex(sqlproc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
@@ -291,6 +319,10 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 						continue
 					}
 
+					if row.Type == vectorindex.CDC_INSERT {
+						continue
+					}
+
 					// IMPORTANT: always check key exists even with INSERT.  Even it is INSERT, key may exist in model
 					if midx[j] == -1 {
 						found, err := m.Contains(row.PKey)
@@ -301,13 +333,6 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 						if found {
 							//os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
 							midx[j] = i
-
-							switch row.Type {
-							case vectorindex.CDC_UPSERT:
-								s.nupdate.Add(1)
-							case vectorindex.CDC_DELETE:
-								s.ndelete.Add(1)
-							}
 						}
 					}
 
@@ -504,8 +529,6 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 
 	checkidxElapsed := t.Sub(start)
 
-	s.ninsert.Store(int32(len(cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
-
 	// setup s.last and s.current model. s.late will point to the last model in metadata and s.current is nil
 	err = s.setupModel(sqlproc, maxcap)
 	if err != nil {
@@ -536,7 +559,7 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 
 	t3 := time.Now()
 	saveElapsed := t3.Sub(t2)
-	logutil.Debugf("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms, save %d ms",
+	logutil.Infof("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms, save %d ms",
 		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds(), saveElapsed.Milliseconds())
 	return nil
 }
