@@ -4433,11 +4433,10 @@ func TestInitSql(t *testing.T) {
 	err = txn.Commit(ctxWithTimeout)
 	require.NoError(t, err)
 
-
 	txn2, rel2 := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), "srcdb", "src_table")
 	require.Nil(t, rel2.Append(ctx, bats))
 	require.Nil(t, txn2.Commit(ctx))
-	
+
 	now = taeHandler.GetDB().TxnMgr.Now()
 	testutils.WaitExpect(
 		4000,
