@@ -4433,5 +4433,25 @@ func TestInitSql(t *testing.T) {
 	err = txn.Commit(ctxWithTimeout)
 	require.NoError(t, err)
 
+
+	txn2, rel2 := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), "srcdb", "src_table")
+	require.Nil(t, rel2.Append(ctx, bats))
+	require.Nil(t, txn2.Commit(ctx))
+	
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "idx")
+			if !ok || !ts.GE(&now) {
+				return false
+			}
+			return true
+		},
+	)
+	ts, ok = cdcExecutor.GetWatermark(accountId, tableID, "idx")
+	assert.True(t, ok)
+	assert.True(t, ts.GE(&now))
+
 	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "idx")
 }
