@@ -232,6 +232,7 @@ import (
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
+    diffAsOpt   *tree.DiffAsOpt
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -565,6 +566,7 @@ import (
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
+%type <diffAsOpt> diff_as_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -7996,6 +7998,17 @@ branch_stmt:
     	$$ = t
     }
 
+
+diff_as_opt:
+    {
+       $$ = nil
+    }
+    | AS table_name
+    {
+        $$ = &tree.DiffAsOpt {
+            As: *$2,
+        }
+    }
 
 conflict_opt:
      {
