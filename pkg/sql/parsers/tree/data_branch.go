@@ -292,11 +292,16 @@ const (
 	CONFLICT_ACCEPT
 )
 
+type DiffAsOpt struct {
+	As TableName
+}
+
 type SnapshotDiff struct {
 	statementImpl
 
 	TargetTable TableName
 	BaseTable   TableName
+	DiffAsOpts  *DiffAsOpt
 }
 
 func (s *SnapshotDiff) TypeName() string {
@@ -313,7 +318,7 @@ func NewSnapshotDiff() *SnapshotDiff {
 }
 
 func (s *SnapshotDiff) StmtKind() StmtKind {
-	return frontendStatusTyp
+	return compositeResRowType
 }
 
 func (s *SnapshotDiff) Format(ctx *FmtCtx) {
@@ -340,6 +345,7 @@ func (s *SnapshotDiff) Free() {
 type ConflictOpt struct {
 	Opt int
 }
+
 type SnapshotMerge struct {
 	statementImpl
 	SrcTable    TableName

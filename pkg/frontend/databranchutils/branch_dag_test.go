@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package frontend
+package databranchutils
 
 import "testing"
 
@@ -33,7 +33,7 @@ func TestDAGFunctionality(t *testing.T) {
 	//           |
 	//        1121(1121)
 	//
-	rows := []branchMetadata{
+	rows := []DataBranchMetadata{
 		// Tree 1
 		{TableID: 100, CloneTS: 100, PTableID: 0}, // PTableID: 0 indicates a root node
 		{TableID: 110, CloneTS: 110, PTableID: 100},
@@ -60,7 +60,7 @@ func TestDAGFunctionality(t *testing.T) {
 	}
 
 	// Assuming your newDAG function has been updated to handle PTableID=0 as a root.
-	dag := newDAG(rows)
+	dag := NewDAG(rows)
 
 	// Sub-test for node existence
 	t.Run("Node Existence Checks", func(t *testing.T) {
