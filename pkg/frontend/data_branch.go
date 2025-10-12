@@ -17,13 +17,16 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -51,15 +54,6 @@ func handleDataBranch(
 	}
 
 	return nil
-}
-
-var CollectChanges = func(
-	ctx context.Context,
-	rel engine.Relation,
-	fromTs, toTs types.TS,
-	mp *mpool.MPool,
-) (engine.ChangesHandle, error) {
-	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
 func handleSnapshotDiff(
@@ -96,13 +90,16 @@ func handleSnapshotDiff(
 	}
 
 	var (
+		tarTxnOp  TxnOperator
+		baseTxnOp TxnOperator
+
 		tarDB   engine.Database
 		baseDB  engine.Database
 		tarRel  engine.Relation
 		baseRel engine.Relation
 
-		tarTxnOp  TxnOperator
-		baseTxnOp TxnOperator
+		eng         engine.Engine
+		txnSnapshot timestamp.Timestamp
 	)
 
 	if tarSnapshot, err = resolveSnapshot(ses, stmt.TargetTable.AtTsExpr); err != nil {
@@ -124,7 +121,8 @@ func handleSnapshotDiff(
 		baseTxnOp = baseTxnOp.CloneSnapshotOp(*baseSnapshot.TS)
 	}
 
-	if tarDB, err = ses.proc.GetSessionInfo().StorageEngine.Database(
+	eng = ses.proc.GetSessionInfo().StorageEngine
+	if tarDB, err = eng.Database(
 		execCtx.reqCtx, tarDbName, tarTxnOp,
 	); err != nil {
 		return err
@@ -134,7 +132,7 @@ func handleSnapshotDiff(
 		return err
 	}
 
-	if baseDB, err = ses.proc.GetSessionInfo().StorageEngine.Database(
+	if baseDB, err = eng.Database(
 		execCtx.reqCtx, baseDbName, baseTxnOp,
 	); err != nil {
 		return err
@@ -150,14 +148,18 @@ func handleSnapshotDiff(
 	}
 
 	var (
-		dag    *branchDAG
+		dag    *databranchutils.DataBranchDAG
 		hasLca bool
 
+		lcaTableID uint64
 		tarHandle  engine.ChangesHandle
 		baseHandle engine.ChangesHandle
 
 		tarBranchTS  int64
 		baseBranchTS int64
+
+		tarIsClonedTable  bool
+		baseIsClonedTable bool
 
 		tarToTS  timestamp.Timestamp
 		baseToTS timestamp.Timestamp
@@ -175,33 +177,93 @@ func handleSnapshotDiff(
 		}
 	}()
 
-	if dag, err = constructBranchDAG(execCtx, ses); err != nil {
+	if dag, err = constructBranchDAG(execCtx.reqCtx, ses); err != nil {
 		return
 	}
 
-	tarToTS = ses.GetTxnHandler().GetTxn().SnapshotTS()
-	baseToTS = ses.GetTxnHandler().GetTxn().SnapshotTS()
+	txnSnapshot = ses.GetTxnHandler().GetTxn().SnapshotTS()
+	tarToTS = txnSnapshot
+	baseToTS = txnSnapshot
 
-	if _, tarBranchTS, baseBranchTS, hasLca = dag.FindLCA(
+	// 1. has no lca
+	//		[0, now] join [0, now]
+	// 2. t1 and t2 has lca
+	//		1. t0 is the lca
+	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t2_ts + 1, now]
+	// 		2. t1 is the lca
+	//			t1's [branch_t2_ts + 1, now] join t2's [branch_t2_ts + 1, now]
+	//      3. t2 is the lca
+	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t1_ts + 1, now]
+	//
+	// if a table is cloned table, the commit ts of the cloned data
+	// should be the creation time of the table.
+	if lcaTableID, tarBranchTS, baseBranchTS, hasLca = dag.FindLCA(
 		tarRel.GetTableID(execCtx.reqCtx), baseRel.GetTableID(execCtx.reqCtx),
 	); hasLca {
-		tarFromTS = timestamp.Timestamp{PhysicalTime: tarBranchTS}
-		baseFromTS = timestamp.Timestamp{PhysicalTime: baseBranchTS}
+		if lcaTableID == baseRel.GetTableID(execCtx.reqCtx) {
+			ts := timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
+			tarFromTS = ts
+			baseFromTS = ts
+			tarIsClonedTable = true
+			baseIsClonedTable = dag.HasParent(baseRel.GetTableID(execCtx.reqCtx))
+		} else if lcaTableID == tarRel.GetTableID(execCtx.reqCtx) {
+			ts := timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
+			tarFromTS = ts
+			baseFromTS = ts
+			baseIsClonedTable = true
+			tarIsClonedTable = dag.HasParent(tarRel.GetTableID(execCtx.reqCtx))
+		} else {
+			tarIsClonedTable = true
+			baseIsClonedTable = true
+			tarFromTS = timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
+			baseFromTS = timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
+		}
+
+		fmt.Printf("hasLca, tar(%d-%d), base(%d-%d)\n",
+			tarFromTS.PhysicalTime, tarToTS.PhysicalTime,
+			baseFromTS.PhysicalTime, baseToTS.PhysicalTime)
 	}
 
-	if tarHandle, err = CollectChanges(
-		execCtx.reqCtx, tarRel, types.TimestampToTS(tarFromTS), types.TimestampToTS(tarToTS), ses.proc.Mp(),
+	if tarHandle, err = databranchutils.CollectChanges(
+		execCtx.reqCtx,
+		eng,
+		ses.GetAccountId(),
+		txnSnapshot,
+		tarRel,
+		types.TimestampToTS(tarFromTS),
+		types.TimestampToTS(tarToTS),
+		ses.proc.Mp(),
+		tarIsClonedTable,
 	); err != nil {
 		return
 	}
 
-	if baseHandle, err = CollectChanges(
-		execCtx.reqCtx, tarRel, types.TimestampToTS(baseFromTS), types.TimestampToTS(baseToTS), ses.proc.Mp(),
+	if baseHandle, err = databranchutils.CollectChanges(
+		execCtx.reqCtx,
+		eng,
+		ses.GetAccountId(),
+		txnSnapshot,
+		baseRel,
+		types.TimestampToTS(baseFromTS),
+		types.TimestampToTS(baseToTS),
+		ses.proc.Mp(),
+		baseIsClonedTable,
 	); err != nil {
 		return
 	}
 
-	err = diff(execCtx.reqCtx, ses.proc.Mp(), tarHandle, baseHandle)
+	if err = diff(
+		execCtx.reqCtx,
+		ses,
+		ses.proc.Mp(),
+		tarRel.GetTableDef(execCtx.reqCtx),
+		baseRel.GetTableDef(execCtx.reqCtx),
+		tarHandle,
+		baseHandle,
+	); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -216,24 +278,54 @@ func handleSnapshotMerge(
 
 func diff(
 	ctx context.Context,
+	ses *Session,
 	mp *mpool.MPool,
+	tarTblDef *plan.TableDef,
+	baseTblDef *plan.TableDef,
 	tarHandle engine.ChangesHandle,
 	baseHandle engine.ChangesHandle,
 ) (err error) {
 
 	var (
-		hint         engine.ChangesHandle_Hint
+		//hint         engine.ChangesHandle_Hint
 		dataBat      *batch.Batch
 		tombstoneBat *batch.Batch
+
+		pkIdxes []int
+
+		baseTableHashmap databranchutils.BranchHashmap
 	)
 
-	// data:
-	// 	cols, ts, row_id
-	// tombstone:
-	// 	pk, ts, row_id
+	defer func() {
+		if dataBat != nil {
+			dataBat.Clean(mp)
+		}
+		if tombstoneBat != nil {
+			tombstoneBat.Clean(mp)
+		}
+		if baseTableHashmap != nil {
+			baseTableHashmap.Close()
+		}
+	}()
 
+	if baseTableHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+		return
+	}
+
+	if baseTblDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		pkIdxes = append(pkIdxes, int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]))
+	} else {
+		for i, col := range baseTblDef.Cols {
+			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
+				pkIdxes = append(pkIdxes, i)
+			}
+		}
+	}
+
+	d := time.Duration(0)
+	// build hash for base table
 	for {
-		if dataBat, tombstoneBat, hint, err = tarHandle.Next(
+		if dataBat, tombstoneBat, _, err = baseHandle.Next(
 			ctx, mp,
 		); err != nil {
 			return
@@ -242,17 +334,140 @@ func diff(
 			break
 		}
 
-		switch hint {
-		case engine.ChangesHandle_Snapshot:
-			fmt.Println("data", dataBat.Attrs)
-		case engine.ChangesHandle_Tail_done:
-			fmt.Println("tombstone", tombstoneBat.Attrs)
-		default:
-			panic(fmt.Sprintf("unexpected hint: %v", hint))
+		if dataBat != nil {
+			s := time.Now()
+			if err = baseTableHashmap.PutByVectors(dataBat.Vecs, pkIdxes); err != nil {
+				return
+			}
+			d += time.Since(s)
+			//fmt.Println("putByVectors", time.Since(s), dataBat.RowCount())
+			dataBat.Clean(mp)
 		}
 	}
 
-	return
+	fmt.Println("build hashmap takes", d)
+	d = time.Duration(0)
+
+	var (
+		rows          [][]interface{}
+		showCols      []*MysqlColumn
+		pkVecs        []*vector.Vector
+		checkRet      []databranchutils.GetResult
+		tableColIdxes []int
+	)
+
+	//  -----------------------------------------
+	// |  tar_table_name  | flag |  columns data |
+	//  -----------------------------------------
+	showCols = append(showCols, new(MysqlColumn), new(MysqlColumn))
+	showCols[0].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	showCols[0].SetName("target_table_name")
+	showCols[1].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	showCols[1].SetName("flag")
+
+	for i, col := range tarTblDef.Cols {
+		if col.Name == catalog.Row_ID ||
+			col.Name == catalog.FakePrimaryKeyColName ||
+			col.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
+
+		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+
+		nCol := new(MysqlColumn)
+
+		switch t.Oid {
+		case types.T_bool:
+			nCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
+		case types.T_char, types.T_varchar:
+			nCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		case types.T_datetime, types.T_date:
+			nCol.SetColumnType(defines.MYSQL_TYPE_DATE)
+		case types.T_int8, types.T_uint8:
+			nCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+		case types.T_int16, types.T_uint16:
+			nCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
+		case types.T_int32, types.T_uint32:
+			nCol.SetColumnType(defines.MYSQL_TYPE_LONG)
+		case types.T_int64, types.T_uint64:
+			nCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		case types.T_json:
+			nCol.SetColumnType(defines.MYSQL_TYPE_JSON)
+		case types.T_blob:
+			nCol.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		}
+
+		nCol.SetName(col.Name)
+		showCols = append(showCols, nCol)
+		tableColIdxes = append(tableColIdxes, i)
+	}
+
+	mrs := ses.GetMysqlResultSet()
+	for _, col := range showCols {
+		mrs.AddColumn(col)
+	}
+
+	// check existence
+	for {
+		if dataBat, tombstoneBat, _, err = tarHandle.Next(
+			ctx, mp,
+		); err != nil {
+			return
+		} else if dataBat == nil && tombstoneBat == nil {
+			// out of data
+			break
+		}
+
+		if dataBat != nil {
+			pkVecs = pkVecs[:0]
+			for _, idx := range pkIdxes {
+				pkVecs = append(pkVecs, dataBat.Vecs[idx])
+			}
+			s := time.Now()
+			if checkRet, err = baseTableHashmap.PopByVectors(pkVecs); err != nil {
+				return
+			}
+			d += time.Since(s)
+
+			for i := range checkRet {
+				// not exists in the base table
+				if !checkRet[i].Exists {
+					row := append([]interface{}{}, tarTblDef.Name, "+")
+					for _, idx := range tableColIdxes {
+						row = append(row, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
+					}
+					rows = append(rows, row)
+				} else {
+					// exists in the base table, do nothing
+				}
+			}
+		}
+	}
+
+	fmt.Println("pop hashmap takes", d)
+
+	if err = baseTableHashmap.ForEach(func(key []byte, data [][]byte) error {
+		row := append([]interface{}{}, tarTblDef.Name, "-")
+		for _, r := range data {
+			if t, err := baseTableHashmap.DecodeRow(r); err != nil {
+				return err
+			} else {
+				for i := range t {
+					row = append(row, t[i])
+				}
+			}
+		}
+		rows = append(rows, row)
+		return nil
+	}); err != nil {
+		return
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return trySaveQueryResult(ctx, ses, mrs)
 }
 
 func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
@@ -290,16 +505,16 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 }
 
 func constructBranchDAG(
-	execCtx *ExecCtx,
+	ctx context.Context,
 	ses *Session,
-) (dag *branchDAG, err error) {
+) (dag *databranchutils.DataBranchDAG, err error) {
 
 	var (
-		data    branchMetadata
-		rowData []branchMetadata
+		data    databranchutils.DataBranchMetadata
+		rowData []databranchutils.DataBranchMetadata
 		sqlRet  []ExecResult
 
-		bh = ses.GetBackgroundExec(execCtx.reqCtx)
+		bh = ses.GetBackgroundExec(ctx)
 	)
 
 	bh.ClearExecResultSet()
@@ -307,10 +522,10 @@ func constructBranchDAG(
 		bh.Close()
 	}()
 
-	sysCtx := defines.AttachAccountId(execCtx.reqCtx, sysAccountID)
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	if err = bh.Exec(
 		sysCtx,
-		fmt.Sprintf(scanBranchMetadataSql, moCatalog, catalog.MO_BRANCH_METADATA),
+		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
 	); err != nil {
 		return
 	}
@@ -320,7 +535,7 @@ func constructBranchDAG(
 	}
 
 	if execResultArrayHasData(sqlRet) {
-		rowData = make([]branchMetadata, 0, sqlRet[0].GetRowCount())
+		rowData = make([]databranchutils.DataBranchMetadata, 0, sqlRet[0].GetRowCount())
 		for i := uint64(0); i < sqlRet[0].GetRowCount(); i++ {
 			if data.TableID, err = sqlRet[0].GetUint64(sysCtx, i, 0); err != nil {
 				return
@@ -340,329 +555,10 @@ func constructBranchDAG(
 			if v == 1 {
 				data.TableDeleted = true
 			}
+
+			rowData = append(rowData, data)
 		}
 	}
 
-	return newDAG(rowData), nil
+	return databranchutils.NewDAG(rowData), nil
 }
-
-type branchMetadata struct {
-	TableID      uint64
-	CloneTS      int64
-	PTableID     uint64
-	TableDeleted bool
-}
-
-type dagNode struct {
-	TableID  uint64
-	CloneTS  int64
-	ParentID uint64
-
-	Parent *dagNode
-	Depth  int
-}
-
-type branchDAG struct {
-	nodes map[uint64]*dagNode
-}
-
-func newDAG(rows []branchMetadata) *branchDAG {
-	dag := &branchDAG{
-		nodes: make(map[uint64]*dagNode, len(rows)),
-	}
-
-	// --- Pass 1: Create all Node objects ---
-	// Iterate through each row and create a corresponding Node object.
-	// We store them in the map but do not link them yet, as parent nodes may not have been processed.
-	for _, row := range rows {
-		node := &dagNode{
-			TableID: row.TableID,
-			Depth:   -1, // Initialize depth as -1 to mark it as "not calculated".
-		}
-
-		node.CloneTS = row.CloneTS
-		node.ParentID = row.PTableID
-		dag.nodes[node.TableID] = node
-	}
-
-	// --- Pass 2: Link Parent pointers ---
-	// Now that all nodes exist in the map, we can iterate through them again
-	// and set the `Parent` pointer based on the `ParentID`.
-	for _, node := range dag.nodes {
-		if node.ParentID != 0 {
-			if parentNode, ok := dag.nodes[node.ParentID]; ok {
-				node.Parent = parentNode
-			}
-		}
-	}
-
-	// --- Pass 3: Calculate the depth for every node ---
-	// Depth is crucial for an efficient LCA algorithm. We calculate it once during setup.
-	for _, node := range dag.nodes {
-		dag.calculateDepth(node)
-	}
-
-	return dag
-}
-
-// calculateDepth computes the depth of a given dagNode.
-// It uses memoization (by checking if `dagNode.Depth != -1`) to avoid re-computation.
-func (d *branchDAG) calculateDepth(node *dagNode) int {
-	// If depth is already calculated, return it immediately.
-	if node.Depth != -1 {
-		return node.Depth
-	}
-
-	// If a node has no parent, it's a root node, so its depth is 0.
-	if node.Parent == nil {
-		node.Depth = 0
-		return 0
-	}
-
-	// Otherwise, the depth is the parent's depth + 1.
-	// This recursive call will eventually reach a root or a pre-calculated node.
-	node.Depth = d.calculateDepth(node.Parent) + 1
-	return node.Depth
-}
-
-func (d *branchDAG) Exists(tableID uint64) bool {
-	_, ok := d.nodes[tableID]
-	return ok
-}
-
-// FindLCA finds the Lowest Common Ancestor (LCA) for two given table IDs.
-// It returns:
-// 1. lcaTableID: The table_id of the common ancestor.
-// 2. branchTS1: The clone_ts of the direct child of the LCA that is on the path to tableID1.
-// 3. branchTS2: The clone_ts of the direct child of the LCA that is on the path to tableID2.
-// 4. ok: A boolean indicating if a common ancestor was found.
-func (d *branchDAG) FindLCA(tableID1, tableID2 uint64) (lcaTableID uint64, branchTS1 int64, branchTS2 int64, ok bool) {
-	node1, exists1 := d.nodes[tableID1]
-	node2, exists2 := d.nodes[tableID2]
-
-	// Ensure both nodes exist in our DAG.
-	if !exists1 || !exists2 {
-		return 0, 0, 0, false
-	}
-
-	// If it's the same node, it is its own LCA.
-	// Both branch timestamps can be defined as the node's own creation timestamp.
-	if tableID1 == tableID2 {
-		return tableID1, node1.CloneTS, node1.CloneTS, true
-	}
-
-	// Keep references to the original nodes for the final step of finding branch timestamps.
-	originalNode1 := node1
-	originalNode2 := node2
-
-	// --- Step 1: Bring both nodes to the same depth ---
-	// Move the deeper node up the tree until it is at the same depth as the shallower node.
-	if node1.Depth < node2.Depth {
-		for node2.Depth > node1.Depth {
-			node2 = node2.Parent
-		}
-	} else if node2.Depth < node1.Depth {
-		for node1.Depth > node2.Depth {
-			node1 = node1.Parent
-		}
-	}
-
-	// --- Step 2: Move both nodes up in lockstep until they meet ---
-	// Now that they are at the same depth, we move them up one parent at a time.
-	// The first node they both share is the LCA.
-	for node1 != node2 {
-		// If either path hits a root before they meet, they are in different trees.
-		if node1.Parent == nil || node2.Parent == nil {
-			return 0, 0, 0, false
-		}
-		node1 = node1.Parent
-		node2 = node2.Parent
-	}
-
-	lcaNode := node1
-	if lcaNode == nil {
-		// Should not happen if they are in the same tree and not both nil roots.
-		return 0, 0, 0, false
-	}
-
-	lcaTableID = lcaNode.TableID
-
-	// --- Step 3: Find the specific children of the LCA that lead to the original nodes ---
-
-	// Find the branch timestamp for the path to tableID1
-	child1 := originalNode1
-	if child1 != lcaNode { // If the original node is not the LCA itself
-		for child1 != nil && child1.Parent != lcaNode {
-			child1 = child1.Parent
-		}
-		branchTS1 = child1.CloneTS
-	} else { // If the original node IS the LCA (ancestor case)
-		branchTS1 = lcaNode.CloneTS
-	}
-
-	// Find the branch timestamp for the path to tableID2
-	child2 := originalNode2
-	if child2 != lcaNode { // If the original node is not the LCA itself
-		for child2 != nil && child2.Parent != lcaNode {
-			child2 = child2.Parent
-		}
-		branchTS2 = child2.CloneTS
-	} else { // If the original node IS the LCA (ancestor case)
-		branchTS2 = lcaNode.CloneTS
-	}
-
-	ok = true
-	return
-}
-
-//func dataBranchCreateTable(
-//	execCtx *ExecCtx,
-//	ses *Session,
-//	stmt *tree.DataBranchCreateTable,
-//) (err error) {
-//
-//	var (
-//		reqCtx = execCtx.reqCtx
-//		bh     = ses.GetBackgroundExec(reqCtx)
-//
-//		deferred    func(error) error
-//		newSql      string
-//		tempExecCtx *ExecCtx
-//		cloneTable  *tree.CloneTable
-//	)
-//
-//	// do not open another transaction,
-//	// if the clone already executed within a transaction.
-//	if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
-//		return err
-//	}
-//
-//	defer func() {
-//		if deferred != nil {
-//			err = deferred(err)
-//		}
-//	}()
-//
-//	newSql = rewriteBranchNewTableToClone(execCtx.input.sql, stmt)
-//
-//	tempExecCtx = &ExecCtx{
-//		reqCtx: execCtx.reqCtx,
-//		input: &UserInput{
-//			sql: newSql,
-//		},
-//	}
-//
-//	cloneTable = &tree.CloneTable{
-//		CreateTable:  stmt.CreateTable,
-//		SrcTable:     stmt.SrcTable,
-//		ToAccountOpt: stmt.ToAccountOpt,
-//	}
-//
-//	var (
-//		srcTblDef *plan.TableDef
-//		dstTblDef *plan.TableDef
-//
-//		dstDB      engine.Database
-//		dstRel     engine.Relation
-//		cloneTxnOp TxnOperator
-//		receipt    cloneReceipt
-//	)
-//
-//	// 1. clone table
-//	if err = handleCloneTable(
-//		tempExecCtx, ses, cloneTable, &receipt, bh,
-//	); err != nil {
-//		return err
-//	}
-//
-//	// 2.1 get src table id
-//	if _, srcTblDef, err = ses.GetTxnCompileCtx().Resolve(
-//		receipt.srcDb, receipt.srcTbl, receipt.snapshot,
-//	); err != nil {
-//		return err
-//	}
-//
-//	// 2.2 get dst table id
-//	// the back session did the clone operation,
-//	// we need it's txnOp to read the uncommit table info.
-//	cloneTxnOp = bh.(*backExec).backSes.GetTxnHandler().GetTxn()
-//	if dstDB, err = ses.proc.GetSessionInfo().StorageEngine.Database(
-//		reqCtx, receipt.dstDb, cloneTxnOp,
-//	); err != nil {
-//		return err
-//	}
-//
-//	if dstRel, err = dstDB.Relation(reqCtx, receipt.dstTbl, nil); err != nil {
-//		return err
-//	}
-//
-//	dstTblDef = dstRel.GetTableDef(reqCtx)
-//
-//	if receipt.snapshot != nil {
-//		receipt.snapshotTS = receipt.snapshot.TS.PhysicalTime
-//	}
-//
-//	// 2.3 write branch info into branch_metadata table
-//	updateMetadataSql := fmt.Sprintf(
-//		insertIntoBranchMetadataSql,
-//		catalog.MO_CATALOG,
-//		catalog.MO_BRANCH_METADATA,
-//		dstTblDef.TblId,
-//		receipt.snapshotTS,
-//		srcTblDef.TblId,
-//		receipt.opAccount,
-//		dataBranchLevel_Table,
-//	)
-//
-//	tempCtx := reqCtx
-//	if receipt.opAccount != sysAccountID {
-//		tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
-//	}
-//
-//	if err = bh.Exec(tempCtx, updateMetadataSql); err != nil {
-//		return err
-//	}
-//
-//	return nil
-//}
-
-//func rewriteBranchNewTableToClone(
-//	oldSql string,
-//	stmt *tree.DataBranchCreateTable,
-//) (newSql string) {
-//	// create table d2.t2 clone d1.t1 {snapshot} to x
-//
-//	var (
-//		dstTable    string
-//		srcTable    string
-//		dstDatabase string
-//		srcDatabase string
-//
-//		sp, src, dst string
-//	)
-//
-//	dstTable = stmt.CreateTable.Table.ObjectName.String()
-//	dstDatabase = stmt.CreateTable.Table.SchemaName.String()
-//
-//	srcTable = stmt.SrcTable.ObjectName.String()
-//	srcDatabase = stmt.SrcTable.SchemaName.String()
-//
-//	src = srcTable
-//	if srcDatabase != "" {
-//		src = fmt.Sprintf("`%s`.`%s`", srcDatabase, srcTable)
-//	}
-//
-//	dst = dstTable
-//	if dstDatabase != "" {
-//		dst = fmt.Sprintf("`%s`.`%s`", dstDatabase, dstTable)
-//	}
-//
-//	sp = snapConditionRegex.FindString(oldSql)
-//	newSql = fmt.Sprintf("create table %s clone %s %s", dst, src, sp)
-//
-//	if stmt.ToAccountOpt != nil {
-//		newSql += fmt.Sprintf(" to account %s", stmt.ToAccountOpt.AccountName.String())
-//	}
-//
-//	return newSql
-//}
