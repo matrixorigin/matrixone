@@ -55,7 +55,6 @@ var (
 
 // PartitionService is used to maintaining the metadata of the partition table.
 type PartitionService interface {
-	// Create creates metadata of the partition table.
 	Create(
 		ctx context.Context,
 		tableID uint64,
@@ -63,9 +62,44 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
+	Redefine(
+		ctx context.Context,
+		tableID uint64,
+		stmt *tree.PartitionOption,
+		txnOp client.TxnOperator,
+	) error
+
+	Rename(
+		ctx context.Context,
+		tableID uint64,
+		oldName, newName string,
+		txnOp client.TxnOperator,
+	) error
+
 	Delete(
 		ctx context.Context,
 		tableID uint64,
+		txnOp client.TxnOperator,
+	) error
+
+	AddPartitions(
+		ctx context.Context,
+		tableID uint64,
+		partitions []*tree.Partition,
+		txnOp client.TxnOperator,
+	) error
+
+	DropPartitions(
+		ctx context.Context,
+		tableID uint64,
+		partitions []string,
+		txnOp client.TxnOperator,
+	) error
+
+	TruncatePartitions(
+		ctx context.Context,
+		tableID uint64,
+		partitions []string,
 		txnOp client.TxnOperator,
 	) error
 
@@ -92,6 +126,46 @@ type PartitionStorage interface {
 		def *plan.TableDef,
 		stmt *tree.CreateTable,
 		metadata partition.PartitionMetadata,
+		txnOp client.TxnOperator,
+	) error
+
+	Redefine(
+		ctx context.Context,
+		def *plan.TableDef,
+		options *tree.PartitionOption,
+		metadata partition.PartitionMetadata,
+		txnOp client.TxnOperator,
+	) error
+
+	Rename(
+		ctx context.Context,
+		def *plan.TableDef,
+		oldName, newName string,
+		metadata partition.PartitionMetadata,
+		txnOp client.TxnOperator,
+	) error
+
+	AddPartitions(
+		ctx context.Context,
+		def *plan.TableDef,
+		metadata partition.PartitionMetadata,
+		partitions []partition.Partition,
+		txnOp client.TxnOperator,
+	) error
+
+	DropPartitions(
+		ctx context.Context,
+		def *plan.TableDef,
+		metadata partition.PartitionMetadata,
+		partitions []string,
+		txnOp client.TxnOperator,
+	) error
+
+	TruncatePartitions(
+		ctx context.Context,
+		def *plan.TableDef,
+		metadata partition.PartitionMetadata,
+		partitions []string,
 		txnOp client.TxnOperator,
 	) error
 

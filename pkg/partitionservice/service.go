@@ -16,11 +16,12 @@ package partitionservice
 
 import (
 	"context"
-	"sync"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -32,13 +33,6 @@ var (
 type Service struct {
 	cfg   Config
 	store PartitionStorage
-
-	mu struct {
-		sync.RWMutex
-		// FIXME: MVCC cache instead. Alter table add/drop partition. Or delete cache if main table has ddl while
-		// log tail applied.
-		tables map[uint64]metadataCache
-	}
 }
 
 func NewService(
@@ -49,7 +43,6 @@ func NewService(
 		cfg:   cfg,
 		store: store,
 	}
-	s.mu.tables = make(map[uint64]metadataCache)
 	return s
 }
 
@@ -89,15 +82,235 @@ func (s *Service) Create(
 	)
 }
 
+func (s *Service) Redefine(
+	ctx context.Context,
+	tableID uint64,
+	stmt *tree.PartitionOption,
+	txnOp client.TxnOperator,
+) error {
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return s.store.Redefine(
+		ctx,
+		def,
+		stmt,
+		metadata,
+		txnOp,
+	)
+}
+
+func (s *Service) Rename(
+	ctx context.Context,
+	tableID uint64,
+	oldName, newName string,
+	txnOp client.TxnOperator,
+) error {
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return s.store.Rename(
+		ctx,
+		def,
+		oldName,
+		newName,
+		metadata,
+		txnOp,
+	)
+}
+
+func (s *Service) AddPartitions(
+	ctx context.Context,
+	tableID uint64,
+	partitions []*tree.Partition,
+	txnOp client.TxnOperator,
+) error {
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	switch metadata.Method {
+	case partition.PartitionMethod_Hash,
+		partition.PartitionMethod_Key,
+		partition.PartitionMethod_LinearHash,
+		partition.PartitionMethod_LinearKey:
+		return moerr.NewNotSupportedNoCtx("add partition is not supported for hash/key partitioned table")
+	case partition.PartitionMethod_Range:
+		// TODO: check overlapping range
+
+	case partition.PartitionMethod_List:
+		// TODO: check overlapping list values
+	}
+
+	values := make([]partition.Partition, 0, len(partitions))
+	n := len(metadata.Partitions)
+	for i, p := range partitions {
+		values = append(values,
+			partition.Partition{
+				Name:               p.Name.String(),
+				PartitionTableName: GetPartitionTableName(def.Name, p.Name.String()),
+				Position:           uint32(i + n),
+				ExprStr:            getExpr(p),
+				Expr:               newTestValuesInExpr2(p.Name.String()),
+			},
+		)
+	}
+
+	return s.store.AddPartitions(
+		ctx,
+		def,
+		metadata,
+		values,
+		txnOp,
+	)
+}
+
+func (s *Service) DropPartitions(
+	ctx context.Context,
+	tableID uint64,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	switch metadata.Method {
+	case partition.PartitionMethod_Hash,
+		partition.PartitionMethod_Key,
+		partition.PartitionMethod_LinearHash,
+		partition.PartitionMethod_LinearKey:
+		return moerr.NewNotSupportedNoCtx("drop partition is not supported for hash/key partitioned table")
+	case partition.PartitionMethod_Range:
+	case partition.PartitionMethod_List:
+	}
+
+	return s.store.DropPartitions(
+		ctx,
+		def,
+		metadata,
+		partitions,
+		txnOp,
+	)
+}
+
+func (s *Service) TruncatePartitions(
+	ctx context.Context,
+	tableID uint64,
+	partitions []string,
+	txnOp client.TxnOperator,
+) error {
+	metadata, ok, err := s.store.GetMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %d is not partitioned", tableID))
+	}
+
+	def, err := s.store.GetTableDef(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil {
+		return err
+	}
+
+	if len(partitions) == 0 {
+		for _, p := range metadata.Partitions {
+			partitions = append(partitions, p.Name)
+		}
+	}
+
+	return s.store.TruncatePartitions(
+		ctx,
+		def,
+		metadata,
+		partitions,
+		txnOp,
+	)
+}
+
 func (s *Service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if s.cfg.Disable {
-		return nil
-	}
-
 	metadata, ok, err := s.store.GetMetadata(
 		ctx,
 		tableID,
@@ -110,28 +323,11 @@ func (s *Service) Delete(
 		return nil
 	}
 
-	if txnOp != nil {
-		txnOp.AppendEventCallback(
-			client.CommitEvent,
-			func(te client.TxnEvent) {
-				s.mu.Lock()
-				delete(s.mu.tables, tableID)
-				s.mu.Unlock()
-			},
-		)
-	}
-
-	err = s.store.Delete(
+	return s.store.Delete(
 		ctx,
 		metadata,
 		txnOp,
 	)
-	if err == nil && txnOp == nil {
-		s.mu.Lock()
-		delete(s.mu.tables, tableID)
-		s.mu.Unlock()
-	}
-	return err
 }
 
 func (s *Service) GetPartitionMetadata(
@@ -194,13 +390,7 @@ func (s *Service) readMetadata(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) (partition.PartitionMetadata, error) {
-	s.mu.RLock()
-	c, ok := s.mu.tables[tableID]
-	s.mu.RUnlock()
-	if ok {
-		return c.metadata, nil
-	}
-
+	// TODO: use cache
 	metadata, ok, err := s.store.GetMetadata(
 		ctx,
 		tableID,
@@ -212,10 +402,6 @@ func (s *Service) readMetadata(
 	if !ok {
 		return partition.PartitionMetadata{}, nil
 	}
-
-	s.mu.Lock()
-	s.mu.tables[tableID] = newMetadataCache(metadata)
-	s.mu.Unlock()
 	return metadata, nil
 }
 
@@ -254,21 +440,97 @@ func (s *Service) getManualPartitions(
 	return metadata, nil
 }
 
-type metadataCache struct {
-	metadata partition.PartitionMetadata
-}
-
-func newMetadataCache(
-	metadata partition.PartitionMetadata,
-) metadataCache {
-	return metadataCache{
-		metadata: metadata,
-	}
-}
-
 func GetPartitionTableName(
 	tableName string,
 	partitionName string,
 ) string {
 	return "%!%" + partitionName + "%!%" + tableName
+}
+
+func getExpr(p *tree.Partition) string {
+	ctx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	p.Values.Format(ctx)
+	return ctx.String()
+}
+
+func newTestValuesInExpr2(col string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: 10},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "in",
+					Obj:     506806140934,
+				},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{Id: 22},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: col},
+						},
+					},
+					{
+						Typ: plan.Type{Id: 202},
+						Expr: &plan.Expr_List{
+							List: &plan.ExprList{
+								List: []*plan.Expr{
+									{
+										Typ: plan.Type{Id: 22},
+										Expr: &plan.Expr_F{
+											F: &plan.Function{
+												Func: &plan.ObjectRef{
+													Obj:     90194313216,
+													ObjName: "cast",
+												},
+												Args: []*plan.Expr{
+													{
+														Typ: plan.Type{Id: 23},
+														Expr: &plan.Expr_Lit{
+															Lit: &plan.Literal{
+																Value: &plan.Literal_I64Val{I64Val: 1},
+															},
+														},
+													},
+													{
+														Typ:  plan.Type{Id: 23},
+														Expr: &plan.Expr_T{T: &plan.TargetType{}},
+													},
+												},
+											},
+										},
+									},
+									{
+										Typ: plan.Type{Id: 22},
+										Expr: &plan.Expr_F{
+											F: &plan.Function{
+												Func: &plan.ObjectRef{ObjName: "cast", Obj: 90194313216},
+												Args: []*plan.Expr{
+													{
+														Typ: plan.Type{Id: 23},
+														Expr: &plan.Expr_Lit{
+															Lit: &plan.Literal{
+																Value: &plan.Literal_I64Val{I64Val: 2},
+															},
+														},
+													},
+													{
+														Typ:  plan.Type{Id: 22},
+														Expr: &plan.Expr_T{T: &plan.TargetType{}},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
