@@ -112,7 +112,7 @@ class AdvancedORMFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client()
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Create demo database
             demo_db = "demo_advanced_orm"

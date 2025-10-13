@@ -71,7 +71,7 @@ class LoggerIntegrationDemo:
             self.logger.info("Test: Default Logger Configuration")
             try:
                 # Connect to MatrixOne
-                client.connect(host, port, user, password, database)
+                client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Execute some queries to see logging in action
                 client.execute("SELECT 1 as test_value")
@@ -127,7 +127,7 @@ class LoggerIntegrationDemo:
             try:
                 # Create client with custom logger
                 client = Client(logger=custom_logger)
-                client.connect(host, port, user, password, database)
+                client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Execute queries with custom logging
                 client.execute("SELECT 1 as custom_test")
@@ -276,7 +276,7 @@ class LoggerIntegrationDemo:
             try:
                 # Create client with auto SQL logging
                 client = Client(sql_log_mode="auto")
-                client.connect(host, port, user, password, database)
+                client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Execute queries to test performance logging
                 client.execute("SELECT 1 as performance_test")
@@ -312,7 +312,7 @@ class LoggerIntegrationDemo:
             try:
                 # Create async client with auto SQL logging
                 client = AsyncClient(sql_log_mode="auto")
-                await client.connect(host, port, user, password, database)
+                await client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 # Execute async queries
                 await client.execute("SELECT 1 as async_test")

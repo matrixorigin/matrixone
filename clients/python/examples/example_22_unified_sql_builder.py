@@ -71,8 +71,9 @@ class UnifiedSQLBuilderDemo:
         try:
             print("🔗 Setting up database connection...")
             connection_params = get_connection_params()
-            self.client = Client(*connection_params)
-            self.client.connect(*connection_params)
+            self.client = Client()
+            host, port, user, password, database = connection_params
+            self.client.connect(host=host, port=port, user=user, password=password, database=database)
             print("✅ Connected to MatrixOne successfully")
             return True
         except Exception as e:

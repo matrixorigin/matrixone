@@ -71,7 +71,7 @@ class TestUnifiedFilterOnline(unittest.TestCase):
 
         # Create client
         cls.client = Client()
-        cls.client.connect(host, port, user, password, database)
+        cls.client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Create test database
         cls.test_db = "unified_filter_test"

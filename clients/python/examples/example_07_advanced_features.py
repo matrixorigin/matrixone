@@ -64,7 +64,7 @@ class AdvancedFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test PubSub operations
             self.logger.info("Test: PubSub Operations")
@@ -111,7 +111,7 @@ class AdvancedFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test clone operations
             self.logger.info("Test: Clone Operations")
@@ -157,7 +157,7 @@ class AdvancedFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test MoCTL integration
             self.logger.info("Test: MoCTL Integration")
@@ -202,7 +202,7 @@ class AdvancedFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test version information
             self.logger.info("Test: Version Information")
@@ -251,7 +251,7 @@ class AdvancedFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test performance monitoring
             self.logger.info("Test: Performance Monitoring")
@@ -297,7 +297,7 @@ class AdvancedFeaturesDemo:
             host, port, user, password, database = get_connection_params()
 
             client = AsyncClient(logger=self.logger, sql_log_mode="full")
-            await client.connect(host, port, user, password, database)
+            await client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test async advanced features
             self.logger.info("Test: Async Advanced Features")

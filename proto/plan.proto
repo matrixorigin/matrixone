@@ -1426,6 +1426,7 @@ message AlterTable {
 	string RawSQL            = 12;
 	AlterCopyOpt Options = 13;
 	repeated string AffectedCols = 14;
+	AlterPartitionOption alterPartition = 15;
 }
 
 message DropTable {
@@ -1494,7 +1495,6 @@ message DropIndex {
 	string database = 1;
 	string table = 2;
 	string index_name = 3;
-	string index_table_name = 4;
 }
 
 message TruncateTable {
@@ -1651,4 +1651,15 @@ message CloneTable {
 	ObjectRef src_obj_def = 4;
 	string dst_database_name = 5;
 	string dst_table_name = 6;
+}
+
+message AlterPartitionOption {
+	AlterPartitionType AlterType = 1;
+}
+
+enum AlterPartitionType {
+	AddPartitionTables = 0;
+	DropPartitionTables = 1;
+	TruncatePartitionTables = 2;
+	RedefinePartitionTables = 3;
 }

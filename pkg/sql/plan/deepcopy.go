@@ -721,10 +721,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropIndex:
 		newDf.Definition = &plan.DataDefinition_DropIndex{
 			DropIndex: &plan.DropIndex{
-				Database:       df.DropIndex.Database,
-				Table:          df.DropIndex.Table,
-				IndexName:      df.DropIndex.IndexName,
-				IndexTableName: df.DropIndex.IndexTableName,
+				Database:  df.DropIndex.Database,
+				Table:     df.DropIndex.Table,
+				IndexName: df.DropIndex.IndexName,
 			},
 		}
 

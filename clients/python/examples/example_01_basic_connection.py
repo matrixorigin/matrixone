@@ -66,7 +66,7 @@ class BasicConnectionDemo:
             # Test 1: Simple connection
             self.logger.info("Test 1: Simple Connection")
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
             self.logger.info("✅ Basic connection successful")
 
             # Test basic query
@@ -99,7 +99,7 @@ class BasicConnectionDemo:
             # Format 1: Legacy format (simple username)
             self.logger.info("Format 1: Legacy format (simple username)")
             client = Client(logger=self.logger, sql_log_mode="auto")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
             login_info = client.get_login_info()
             self.logger.info(f"   ✅ Login info: {login_info}")
             client.disconnect()
@@ -107,7 +107,7 @@ class BasicConnectionDemo:
             # Format 2: Direct format (account#user)
             self.logger.info("Format 2: Direct format (account#user)")
             client = Client(logger=self.logger, sql_log_mode="auto")
-            client.connect(host, port, 'sys#root', password, database)
+            client.connect(host=host, port=port, user='sys#root', password=password, database=database)
             login_info = client.get_login_info()
             self.logger.info(f"   ✅ Login info: {login_info}")
             client.disconnect()
@@ -116,7 +116,7 @@ class BasicConnectionDemo:
             self.logger.info("Format 3: User with role (separate parameters)")
             try:
                 client = Client(logger=self.logger, sql_log_mode="auto")
-                client.connect(host, port, user, password, database, role='admin')
+                client.connect(host=host, port=port, user=user, password=password, database=database, role='admin')
                 # Try to execute a query to trigger role validation
                 client.execute("SELECT 1")
                 login_info = client.get_login_info()
@@ -128,7 +128,7 @@ class BasicConnectionDemo:
             # Format 4: Account with separate parameters
             self.logger.info("Format 4: Account with separate parameters")
             client = Client(logger=self.logger, sql_log_mode="auto")
-            client.connect(host, port, user, password, database, account='sys')
+            client.connect(host=host, port=port, user=user, password=password, database=database, account='sys')
             login_info = client.get_login_info()
             self.logger.info(f"   ✅ Login info: {login_info}")
             client.disconnect()
@@ -154,7 +154,7 @@ class BasicConnectionDemo:
             self.logger.info("Test invalid credentials")
             try:
                 client = Client(logger=self.logger, sql_log_mode="auto")
-                client.connect(host, port, 'invalid_user', 'invalid_pass', database)
+                client.connect(host=host, port=port, user='invalid_user', password='invalid_pass', database=database)
                 # Try to execute a query to trigger authentication
                 client.execute("SELECT 1")
                 self.logger.error("   ❌ Should have failed but didn't!")
@@ -165,7 +165,7 @@ class BasicConnectionDemo:
             self.logger.info("Test invalid host")
             try:
                 client = Client(logger=self.logger, sql_log_mode="auto")
-                client.connect('192.168.1.999', port, user, password, database)
+                client.connect(host='192.168.1.999', port=port, user=user, password=password, database=database)
                 # Try to execute a query to trigger connection validation
                 client.execute("SELECT 1")
                 self.logger.error("   ❌ Should have failed but didn't!")
@@ -176,7 +176,7 @@ class BasicConnectionDemo:
             self.logger.info("Test invalid port")
             try:
                 client = Client(logger=self.logger, sql_log_mode="auto")
-                client.connect(host, 9999, user, password, database)
+                client.connect(host=host, port=9999, user=user, password=password, database=database)
                 # Try to execute a query to trigger connection validation
                 client.execute("SELECT 1")
                 self.logger.error("   ❌ Should have failed but didn't!")
@@ -234,7 +234,7 @@ def demo_connection_info():
 
     try:
         client = Client(logger=logger, sql_log_mode="auto")
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Get login info
         login_info = client.get_login_info()
@@ -266,7 +266,7 @@ async def demo_async_connection():
     client = None
     try:
         client = AsyncClient(logger=logger)
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
         logger.info("✅ Async connection successful")
 
         # Test async query
@@ -300,7 +300,7 @@ def demo_connection_pooling():
         # Create multiple connections
         for i in range(3):
             client = Client(logger=logger, sql_log_mode="auto")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")
 

@@ -713,11 +713,7 @@ func buildCreateTable(
 		tblName := formatStr(string(oldTable.ObjectName))
 		dbName := formatStr(string(oldTable.SchemaName))
 
-		var snapshot *Snapshot
-		snapshot = ctx.GetSnapshot()
-		if snapshot == nil {
-			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
-		}
+		snapshot := ctx.GetSnapshot()
 
 		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot); err != nil {
 			return nil, err
@@ -3422,7 +3418,6 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 	for _, indexdef := range tableDef.Indexes {
 		if dropIndex.IndexName == indexdef.IndexName {
-			dropIndex.IndexTableName = indexdef.IndexTableName
 			found = true
 			break
 		}
@@ -4190,12 +4185,24 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	if stmt.PartitionOption != nil {
-		// TODO: reimplement partition
-		return nil, moerr.NewNotSupportedf(
-			ctx.GetContext(),
-			unsupportedErrFmt,
-			formatTreeNode(stmt.PartitionOption),
-		)
+		alterTable.AlterPartition = &plan.AlterPartitionOption{}
+
+		switch stmt.PartitionOption.(type) {
+		case *tree.AlterPartitionAddPartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_AddPartitionTables
+		case *tree.AlterPartitionDropPartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_DropPartitionTables
+		case *tree.AlterPartitionTruncatePartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_TruncatePartitionTables
+		case *tree.AlterPartitionRedefinePartitionClause:
+			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_RedefinePartitionTables
+		default:
+			return nil, moerr.NewNotSupportedf(
+				ctx.GetContext(),
+				unsupportedErrFmt,
+				formatTreeNode(stmt.PartitionOption),
+			)
+		}
 	}
 
 	// check Constraint Name (include index/ unique)

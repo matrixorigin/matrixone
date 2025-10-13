@@ -107,7 +107,7 @@ class RestoreManager:
             result = self._client.execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}")
+            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}") from None
 
     def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
         """
@@ -153,7 +153,7 @@ class RestoreManager:
             result = self._client.execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
+            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}") from None
 
     def restore_database(
         self,
@@ -204,7 +204,9 @@ class RestoreManager:
             result = self._client.execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}")
+            raise RestoreError(
+                f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}"
+            ) from None
 
     def restore_table(
         self,
@@ -259,7 +261,7 @@ class RestoreManager:
             result = self._client.execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}")
+            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}") from None
 
     def restore_with_executor(
         self,
@@ -293,7 +295,7 @@ class RestoreManager:
                 sql = f"RESTORE CLUSTER FROM SNAPSHOT {self._client._escape_identifier(snapshot_name)}"
             elif restore_type == "tenant":
                 if not account_name:
-                    raise RestoreError("Account name is required for tenant restore")
+                    raise RestoreError("Account name is required for tenant restore") from None
                 if to_account:
                     sql = (
                         f"RESTORE ACCOUNT {self._client._escape_identifier(account_name)} "
@@ -307,7 +309,7 @@ class RestoreManager:
                     )
             elif restore_type == "database":
                 if not account_name or not database_name:
-                    raise RestoreError("Account name and database name are required for database restore")
+                    raise RestoreError("Account name and database name are required for database restore") from None
                 if to_account:
                     sql = (
                         f"RESTORE ACCOUNT {self._client._escape_identifier(account_name)} "
@@ -323,7 +325,9 @@ class RestoreManager:
                     )
             elif restore_type == "table":
                 if not all([account_name, database_name, table_name]):
-                    raise RestoreError("Account name, database name, and table name are required for table restore")
+                    raise RestoreError(
+                        "Account name, database name, and table name are required for table restore"
+                    ) from None
                 if to_account:
                     sql = (
                         f"RESTORE ACCOUNT {self._client._escape_identifier(account_name)} "
@@ -340,7 +344,7 @@ class RestoreManager:
                         f"FROM SNAPSHOT {self._client._escape_identifier(snapshot_name)}"
                     )
             else:
-                raise RestoreError(f"Invalid restore type: {restore_type}")
+                raise RestoreError(f"Invalid restore type: {restore_type}") from None
 
             if executor:
                 result = executor.execute(sql)
@@ -349,7 +353,7 @@ class RestoreManager:
 
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore {restore_type} from snapshot '{snapshot_name}': {e}")
+            raise RestoreError(f"Failed to restore {restore_type} from snapshot '{snapshot_name}': {e}") from None
 
 
 class TransactionRestoreManager(RestoreManager):

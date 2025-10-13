@@ -44,9 +44,22 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
 
 ## 🚀 Installation
 
+### From PyPI (Stable Release)
+
 ```bash
 pip install matrixone-python-sdk
 ```
+
+### From test.pypi (Latest Pre-release)
+
+```bash
+pip install \
+    --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    matrixone-python-sdk
+```
+
+**Note**: The `--extra-index-url` is required to install dependencies (PyMySQL, SQLAlchemy, etc.) from the official PyPI.
 
 ### Development Installation
 
@@ -129,6 +142,22 @@ print(f"MatrixOne version: {version}")
 
 client.disconnect()
 ```
+
+> **📝 Connection Parameters**
+> 
+> The `connect()` method requires **keyword arguments** (not positional):
+> - `database` - **Required**, no default value
+> - `host` - Default: `'localhost'`
+> - `port` - Default: `6001`
+> - `user` - Default: `'root'`
+> - `password` - Default: `'111'`
+> 
+> **Minimal connection** (uses all defaults):
+> ```python
+> client.connect(database='test')
+> ```
+> 
+> By default, all features (IVF, HNSW, fulltext) are automatically enabled via `on_connect=[ConnectionAction.ENABLE_ALL]`.
 
 ### Async Usage
 

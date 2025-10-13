@@ -59,7 +59,7 @@ class TransactionManagementDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test 1: Simple transaction with commit
             self.logger.info("Test 1: Simple Transaction with Commit")
@@ -163,7 +163,7 @@ class TransactionManagementDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger, sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test error handling in transaction
             self.logger.info("Test: Transaction Error Handling")
@@ -236,7 +236,7 @@ class TransactionManagementDemo:
             host, port, user, password, database = get_connection_params()
 
             client = AsyncClient(logger=self.logger, sql_log_mode="full")
-            await client.connect(host, port, user, password, database)
+            await client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test async transaction
             self.logger.info("Test: Async Transaction Management")

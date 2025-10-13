@@ -625,4 +625,17 @@ truncate table t1;
 load data infile '$resources/into_outfile/load_data/t1.csv' into table t1 ignore 1 lines;
 select count(*) from t1;
 
+
+create table t2 (a int primary key, b json);
+
+insert into t2 values(1, '{"key1":"你好\\t不\\r好\\f呀\\n\\\\"}');
+insert into t2 values(2, '{"key2":"谢谢\\t你，\\r我非常\\f好\\n\\\\"}');
+select * from t2 order by a asc;
+
+select * from t2 into outfile '$resources/into_outfile/load_data/t2.csv';
+truncate table t2;
+
+load data infile '$resources/into_outfile/load_data/t2.csv' into table t2 ignore 1 lines;
+select * from t2 order by a asc;
+
 drop database test;

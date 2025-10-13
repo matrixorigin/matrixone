@@ -247,7 +247,21 @@ class IVFVectorIndex(Index):
                 # Enable IVF indexing
                 _exec_sql_safe(conn, "SET experimental_ivf_index = 1")
                 _exec_sql_safe(conn, "SET probe_limit = 1")
+
+                # Execute CREATE INDEX
                 _exec_sql_safe(conn, sql)
+
+                # Try to log using the connection's info attribute if available
+                try:
+                    from ..client import logger
+
+                    logger.info(
+                        f"✓ | CREATE INDEX {name} USING ivfflat ON {table_name}({column}) "
+                        f"LISTS {lists} op_type '{op_type}'"
+                    )
+                except Exception:
+                    pass  # Silently skip logging if not available (for tests)
+
             return True
         except Exception as e:
             print(f"Failed to create IVFFLAT vector index: {e}")
@@ -648,7 +662,21 @@ class HnswVectorIndex(Index):
             with engine.begin() as conn:
                 # Enable HNSW indexing
                 _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
+
+                # Execute CREATE INDEX
                 _exec_sql_safe(conn, sql)
+
+                # Try to log using the connection's info attribute if available
+                try:
+                    from ..client import logger
+
+                    logger.info(
+                        f"✓ | CREATE INDEX {name} USING hnsw ON {table_name}({column}) "
+                        f"M {m} EF_CONSTRUCTION {ef_construction} EF_SEARCH {ef_search} op_type '{op_type}'"
+                    )
+                except Exception:
+                    pass  # Silently skip logging if not available (for tests)
+
             return True
         except Exception as e:
             print(f"Failed to create HNSW vector index: {e}")
