@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"fmt"
 
 	"sync"
 	"time"
@@ -58,7 +59,8 @@ const (
 	DefaultFlushWatermarkTTL      = time.Hour
 
 	DefaultRetryTimes    = 5
-	DefaultRetryDuration = time.Second
+	DefaultRetryInterval = time.Second
+	DefaultRetryDuration = time.Minute * 10
 )
 
 type ISCPExecutorOption struct {
@@ -257,10 +259,25 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	exec.ctx = ctx
 	exec.cancel = cancel
 	err := retry(
+		ctx,
 		func() error {
 			return exec.replay(exec.ctx)
 		},
 		exec.option.RetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
+	)
+	if err != nil {
+		return err
+	}
+	err = retry(
+		ctx,
+		func() error {
+			return exec.initState()
+		},
+		exec.option.RetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 	if err != nil {
 		return err
@@ -284,6 +301,40 @@ func (exec *ISCPTaskExecutor) Stop() {
 	exec.wg.Wait()
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
+}
+
+func (exec *ISCPTaskExecutor) initState() (err error) {
+	ctxWithTimeout, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
+	sql := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_iscp_log
+        SET job_state = %d
+        WHERE job_state IN (%d, %d);
+        `,
+		ISCPJobState_Completed,
+		ISCPJobState_Pending,
+		ISCPJobState_Running,
+	)
+	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"iscp init state",
+		0)
+	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(ctxWithTimeout)
+	}
+	err = exec.txnEngine.New(ctxWithTimeout, txnOp)
+	if err != nil {
+		return
+	}
+	result, err := ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) run(ctx context.Context) {
@@ -865,13 +916,30 @@ func (exec *ISCPTaskExecutor) String() string {
 	return str
 }
 
-func retry(fn func() error, retryTimes int) (err error) {
+func retry(
+	ctx context.Context,
+	fn func() error,
+	retryTimes int,
+	firstInterval time.Duration,
+	totalDuration time.Duration,
+) (err error) {
+	interval := firstInterval
+	startTime := time.Now()
 	for i := 0; i < retryTimes; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if time.Since(startTime) > totalDuration {
+			break
+		}
 		err = fn()
 		if err == nil {
 			return
 		}
-		time.Sleep(DefaultRetryDuration)
+		time.Sleep(interval)
+		interval *= 2
 	}
 	logutil.Errorf("ISCP-Task retry failed, err: %v", err)
 	return
