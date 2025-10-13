@@ -30,7 +30,7 @@ class TestTransactionInsertMethods:
         """Setup sync client for testing"""
         client = Client()
         host, port, user, password, database = online_config.get_connection_params()
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Create test database
         test_db = "sync_insert_test"
@@ -64,7 +64,7 @@ class TestTransactionInsertMethods:
         """Setup async client for testing"""
         client = AsyncClient()
         host, port, user, password, database = online_config.get_connection_params()
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
 
         # Create test database
         test_db = "async_insert_test"

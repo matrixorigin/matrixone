@@ -120,6 +120,22 @@ print(f"MatrixOne version: {version}")
 client.disconnect()
 ```
 
+> **📝 Connection Parameters**
+> 
+> The `connect()` method requires **keyword arguments** (not positional):
+> - `database` - **Required**, no default value
+> - `host` - Default: `'localhost'`
+> - `port` - Default: `6001`
+> - `user` - Default: `'root'`
+> - `password` - Default: `'111'`
+> 
+> **Minimal connection** (uses all defaults):
+> ```python
+> client.connect(database='test')
+> ```
+> 
+> By default, all features (IVF, HNSW, fulltext) are automatically enabled via `on_connect=[ConnectionAction.ENABLE_ALL]`.
+
 ### Async Usage
 
 ```python

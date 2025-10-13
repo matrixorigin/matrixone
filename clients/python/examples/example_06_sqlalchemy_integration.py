@@ -30,8 +30,8 @@ This example shows the complete SQLAlchemy integration capabilities.
 
 import logging
 import asyncio
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, ForeignKey, text
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, ForeignKey, text, and_
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, foreign
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.pool import QueuePool
 from matrixone import Client, AsyncClient
@@ -67,8 +67,8 @@ class User(Base):
     email = Column(String(100), unique=True, nullable=False)
     created_at = Column(DateTime)
 
-    # Relationship
-    posts = relationship("Post", back_populates="author")
+    # Relationship (ORM-level only)
+    posts = relationship("Post", back_populates="author", primaryjoin="User.id==foreign(Post.author_id)")
 
 
 class Post(Base):
@@ -77,11 +77,13 @@ class Post(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String(200), nullable=False)
     content = Column(Text)
-    author_id = Column(Integer, ForeignKey('users.id'))
+    # Note: MatrixOne may have limitations with foreign key constraints
+    # Using Integer column without FK constraint, but keeping ORM relationship
+    author_id = Column(Integer)
     created_at = Column(DateTime)
 
-    # Relationship
-    author = relationship("User", back_populates="posts")
+    # Relationship (ORM-level only, no database FK constraint)
+    author = relationship("User", back_populates="posts", primaryjoin="foreign(Post.author_id)==User.id")
 
 
 class SQLAlchemyIntegrationDemo:
@@ -156,7 +158,8 @@ class SQLAlchemyIntegrationDemo:
             # Test ORM operations
             self.logger.info("Test: ORM Operations")
             try:
-                # Create tables
+                # Drop and recreate tables to ensure clean state
+                Base.metadata.drop_all(engine)
                 Base.metadata.create_all(engine)
                 self.logger.info("   Created tables")
 
@@ -218,7 +221,8 @@ class SQLAlchemyIntegrationDemo:
             # Test transactions
             self.logger.info("Test: SQLAlchemy Transactions")
             try:
-                # Create tables
+                # Drop and recreate tables to ensure clean state
+                Base.metadata.drop_all(engine)
                 Base.metadata.create_all(engine)
 
                 # Test transaction with commit

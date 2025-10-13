@@ -67,7 +67,7 @@ class AccountManagementDemo:
 
             # Connect as root for account management
             root_client = Client(logger=self.logger, sql_log_mode="full")
-            root_client.connect(host, port, user, password, database)
+            root_client.connect(host=host, port=port, user=user, password=password, database=database)
             account_manager = AccountManager(root_client)
 
             # Clean up any existing demo accounts
@@ -112,7 +112,9 @@ class AccountManagementDemo:
             try:
                 # Connect as demo account admin
                 demo_admin_client = Client(sql_log_mode="full")
-                demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+                demo_admin_client.connect(
+                    host=host, port=port, user='demo_account#demo_admin', password='adminpass123', database='mo_catalog'
+                )
                 demo_account_manager = AccountManager(demo_admin_client)
 
                 # Create users
@@ -145,7 +147,9 @@ class AccountManagementDemo:
             try:
                 # Connect as demo account admin
                 demo_admin_client = Client(sql_log_mode="full")
-                demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+                demo_admin_client.connect(
+                    host=host, port=port, user='demo_account#demo_admin', password='adminpass123', database='mo_catalog'
+                )
                 demo_account_manager = AccountManager(demo_admin_client)
 
                 # Create roles
@@ -219,7 +223,7 @@ class AccountManagementDemo:
 
             # Connect as root
             root_client = AsyncClient(sql_log_mode="full")
-            await root_client.connect(host, port, user, password, database)
+            await root_client.connect(host=host, port=port, user=user, password=password, database=database)
             self.logger.info("✅ Async connection successful")
 
             # Test basic async operations

@@ -86,7 +86,7 @@ class SQLAlchemyStyleORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger)
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test sync SQLAlchemy-style ORM
             self.logger.info("Test: Sync SQLAlchemy-style ORM")
@@ -94,10 +94,13 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 client.execute("CREATE DATABASE IF NOT EXISTS sqlalchemy_orm_test")
                 client.execute("USE sqlalchemy_orm_test")
-                client.drop_table(Product)
 
-                # Create table using ORM
-                Base.metadata.create_all(client._engine)
+                # Drop both tables to ensure clean state
+                client.drop_table(Product)
+                client.drop_table(Order)
+
+                # Create only the Product table (we don't need Order in this test)
+                Product.__table__.create(client._engine)
 
                 # Insert test data
                 client.execute(
@@ -145,7 +148,7 @@ class SQLAlchemyStyleORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = AsyncClient(logger=self.logger)
-            await client.connect(host, port, user, password, database)
+            await client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test async SQLAlchemy-style ORM
             self.logger.info("Test: Async SQLAlchemy-style ORM")
@@ -153,11 +156,14 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 await client.execute("CREATE DATABASE IF NOT EXISTS async_sqlalchemy_orm_test")
                 await client.execute("USE async_sqlalchemy_orm_test")
-                await client.drop_table(Order)
 
-                # Create table using ORM
+                # Drop both tables to ensure clean state
+                await client.drop_table(Order)
+                await client.drop_table(Product)
+
+                # Create only the Order table (we don't need Product in async test)
                 async with client._engine.begin() as conn:
-                    await conn.run_sync(Base.metadata.create_all)
+                    await conn.run_sync(Order.__table__.create)
 
                 # Insert test data
                 await client.execute(
@@ -205,7 +211,7 @@ class SQLAlchemyStyleORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger)
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test ORM query methods
             self.logger.info("Test: ORM Query Methods")
@@ -213,10 +219,13 @@ class SQLAlchemyStyleORMDemo:
                 # Create test database and table
                 client.execute("CREATE DATABASE IF NOT EXISTS orm_query_methods_test")
                 client.execute("USE orm_query_methods_test")
-                client.drop_table(Product)
 
-                # Create table using ORM
-                Base.metadata.create_all(client._engine)
+                # Drop both tables to ensure clean state
+                client.drop_table(Product)
+                client.drop_table(Order)
+
+                # Create only the Product table (we don't need Order in this test)
+                Product.__table__.create(client._engine)
 
                 # Insert test data
                 client.execute(
@@ -271,7 +280,7 @@ class SQLAlchemyStyleORMDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(logger=self.logger)
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test ORM with snapshots
             self.logger.info("Test: ORM with Snapshots")
@@ -282,8 +291,8 @@ class SQLAlchemyStyleORMDemo:
                 client.drop_table(Product)
                 client.drop_table(Order)
 
-                # Create table using ORM
-                Base.metadata.create_all(client._engine)
+                # Create only the Product table (we only use Product in this test)
+                Product.__table__.create(client._engine)
 
                 # Insert test data
                 client.execute(

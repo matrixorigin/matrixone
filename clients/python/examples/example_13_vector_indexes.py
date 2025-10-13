@@ -554,7 +554,7 @@ class VectorIndexDemo:
                 # Create async client
                 host, port, user, password, database = get_connection_params()
                 async_client = AsyncClient()
-                await async_client.connect(host, port, user, password, database)
+                await async_client.connect(host=host, port=port, user=user, password=password, database=database)
 
                 try:
                     # Enable fulltext indexing

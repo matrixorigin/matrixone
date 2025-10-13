@@ -29,7 +29,7 @@ class TestAsyncTransactionSimpleQuery:
     async def async_client_setup(self):
         """Setup async client for testing"""
         client = AsyncClient()
-        await client.connect("127.0.0.1", 6001, "root", "111", "test")
+        await client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
 
         # Enable fulltext indexing
         await client.execute("SET experimental_fulltext_index=1")

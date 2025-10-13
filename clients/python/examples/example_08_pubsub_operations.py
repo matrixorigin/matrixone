@@ -62,7 +62,7 @@ class PubSubOperationsDemo:
             host, port, user, password, database = get_connection_params()
 
             client = Client(sql_log_mode="full")
-            client.connect(host, port, user, password, database)
+            client.connect(host=host, port=port, user=user, password=password, database=database)
 
             # Test basic PubSub operations
             self.logger.info("Test: Basic PubSub Operations")
@@ -145,7 +145,7 @@ def demo_cross_account_pubsub():
 
     try:
         # Connect as admin
-        admin_client.connect(host, port, user, password, "mo_catalog")
+        admin_client.connect(host=host, port=port, user=user, password=password, database="mo_catalog")
         logger.info("✅ Connected as admin")
 
         # Clean up any existing accounts first
@@ -193,23 +193,31 @@ def demo_cross_account_pubsub():
         publisher_client = Client(sql_log_mode="full")
 
         # Connect as publisher account admin
-        publisher_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
+        publisher_client.connect(
+            host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="mo_catalog"
+        )
         logger.info("   ✅ Connected as publisher account admin")
 
         # Create publisher database
         pub_admin_client = Client(sql_log_mode="full")
-        pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
+        pub_admin_client.connect(
+            host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="mo_catalog"
+        )
         pub_admin_client.execute("CREATE DATABASE IF NOT EXISTS publisher_data")
         pub_admin_client.disconnect()
 
         # Connect to publisher database
         publisher_client.disconnect()
-        publisher_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
+        publisher_client.connect(
+            host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="publisher_data"
+        )
         logger.info("   ✅ Connected to publisher database")
 
         # Create tables for publishing
         pub_admin_client = Client(sql_log_mode="full")
-        pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
+        pub_admin_client.connect(
+            host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="publisher_data"
+        )
 
         pub_admin_client.execute(
             """
@@ -281,7 +289,9 @@ def demo_cross_account_pubsub():
         subscriber_client = Client(sql_log_mode="full")
 
         # Connect as subscriber account admin
-        subscriber_client.connect(host, port, "pub_subscriber#sub_admin", "sub_pass", "mo_catalog")
+        subscriber_client.connect(
+            host=host, port=port, user="pub_subscriber#sub_admin", password="sub_pass", database="mo_catalog"
+        )
         logger.info("   ✅ Connected as subscriber account admin")
 
         # Create subscriptions
@@ -300,7 +310,9 @@ def demo_cross_account_pubsub():
 
         # Add new data as publisher
         pub_admin_client = Client(sql_log_mode="full")
-        pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
+        pub_admin_client.connect(
+            host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="publisher_data"
+        )
 
         pub_admin_client.execute(f"INSERT INTO sales_data (product_name, quantity, price) VALUES ('Apple Watch', 3, 399.99)")
         logger.info("   📤 Added new sales data: Apple Watch")
@@ -334,7 +346,9 @@ def demo_cross_account_pubsub():
         try:
             # Create new connection for cleanup
             cleanup_client = Client(sql_log_mode="full")
-            cleanup_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
+            cleanup_client.connect(
+                host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="mo_catalog"
+            )
             cleanup_client.execute("DROP DATABASE publisher_data")
             cleanup_client.disconnect()
             logger.info("   ✅ Dropped publisher database")
@@ -376,7 +390,7 @@ async def demo_async_pubsub_operations():
 
     try:
         # Connect to MatrixOne
-        await client.connect(host, port, user, password, database)
+        await client.connect(host=host, port=port, user=user, password=password, database=database)
         logger.info("✅ Connected to MatrixOne (async)")
 
         # Create test database and tables
@@ -497,7 +511,7 @@ def demo_pubsub_best_practices():
 
     try:
         # Connect to MatrixOne
-        client.connect(host, port, user, password, database)
+        client.connect(host=host, port=port, user=user, password=password, database=database)
         logger.info("✅ Connected to MatrixOne")
 
         # Create a realistic e-commerce scenario

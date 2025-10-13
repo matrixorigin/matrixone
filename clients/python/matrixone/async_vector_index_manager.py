@@ -395,7 +395,9 @@ class AsyncVectorManager:
 
         # Convert distance type to enum
         if distance_type == "l2":
-            distance_func = DistanceFunction.L2_SQ
+            distance_func = DistanceFunction.L2  # Use L2 for consistency with ORM l2_distance()
+        elif distance_type == "l2_sq":
+            distance_func = DistanceFunction.L2_SQ  # Explicitly use squared distance if needed
         elif distance_type == "cosine":
             distance_func = DistanceFunction.COSINE
         elif distance_type == "inner_product":
