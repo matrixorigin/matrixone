@@ -15,9 +15,10 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"time"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -63,44 +65,31 @@ func handleSnapshotDiff(
 ) (err error) {
 
 	var (
-		tarDbName   string
-		tarTblName  string
-		baseDbName  string
-		baseTblName string
-
-		tarSnapshot  *plan.Snapshot
-		baseSnapshot *plan.Snapshot
-	)
-
-	baseDbName = stmt.BaseTable.SchemaName.String()
-	baseTblName = stmt.BaseTable.ObjectName.String()
-	if len(baseDbName) == 0 {
-		baseDbName = ses.GetTxnCompileCtx().DefaultDatabase()
-	}
-
-	tarDbName = stmt.TargetTable.SchemaName.String()
-	tarTblName = stmt.TargetTable.ObjectName.String()
-	if len(tarDbName) == 0 {
-		tarDbName = ses.GetTxnCompileCtx().DefaultDatabase()
-	}
-
-	if len(baseDbName) == 0 || len(tarDbName) == 0 {
-		err = moerr.NewInternalErrorNoCtxf("the base or target database cannot be empty.")
-		return
-	}
-
-	var (
-		tarTxnOp  TxnOperator
-		baseTxnOp TxnOperator
-
-		tarDB   engine.Database
-		baseDB  engine.Database
 		tarRel  engine.Relation
 		baseRel engine.Relation
 
-		eng         engine.Engine
-		txnSnapshot timestamp.Timestamp
+		eng          engine.Engine
+		tarSnapshot  *plan.Snapshot
+		baseSnapshot *plan.Snapshot
+
+		bh       BackgroundExec
+		deferred func(error) error
 	)
+
+	// do not open another transaction,
+	// if the clone already executed within a transaction.
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return err
+	}
+
+	defer func() {
+		if deferred != nil {
+			//if r := recover(); r != nil {
+			//	err = moerr.ConvertPanicError(reqCtx, r)
+			//}
+			err = deferred(err)
+		}
+	}()
 
 	if tarSnapshot, err = resolveSnapshot(ses, stmt.TargetTable.AtTsExpr); err != nil {
 		return
@@ -110,62 +99,22 @@ func handleSnapshotDiff(
 		return
 	}
 
-	tarTxnOp = ses.GetTxnHandler().GetTxn()
-	baseTxnOp = ses.GetTxnHandler().GetTxn()
-
-	if tarSnapshot != nil && tarSnapshot.TS != nil {
-		tarTxnOp = tarTxnOp.CloneSnapshotOp(*tarSnapshot.TS)
-	}
-
-	if baseSnapshot != nil && baseSnapshot.TS != nil {
-		baseTxnOp = baseTxnOp.CloneSnapshotOp(*baseSnapshot.TS)
-	}
-
 	eng = ses.proc.GetSessionInfo().StorageEngine
-	if tarDB, err = eng.Database(
-		execCtx.reqCtx, tarDbName, tarTxnOp,
+	if tarRel, baseRel, err = getRelations(
+		execCtx.reqCtx, ses, eng, stmt.TargetTable, stmt.BaseTable, tarSnapshot, baseSnapshot,
 	); err != nil {
-		return err
-	}
-
-	if tarRel, err = tarDB.Relation(execCtx.reqCtx, tarTblName, nil); err != nil {
-		return err
-	}
-
-	if baseDB, err = eng.Database(
-		execCtx.reqCtx, baseDbName, baseTxnOp,
-	); err != nil {
-		return err
-	}
-
-	if baseRel, err = baseDB.Relation(execCtx.reqCtx, baseTblName, nil); err != nil {
-		return err
-	}
-
-	if !isSchemaEquivalent(tarRel.GetTableDef(execCtx.reqCtx), baseRel.GetTableDef(execCtx.reqCtx)) {
-		err = moerr.NewInternalErrorNoCtx("the target table schema is not equivalent to the base table.")
 		return
 	}
 
 	var (
-		dag    *databranchutils.DataBranchDAG
-		hasLca bool
+		hasLca       bool
+		tarBranchTS  timestamp.Timestamp
+		baseBranchTS timestamp.Timestamp
+		tarHandle    engine.ChangesHandle
+		baseHandle   engine.ChangesHandle
 
-		lcaTableID uint64
-		tarHandle  engine.ChangesHandle
-		baseHandle engine.ChangesHandle
-
-		tarBranchTS  int64
-		baseBranchTS int64
-
-		tarIsClonedTable  bool
-		baseIsClonedTable bool
-
-		tarToTS  timestamp.Timestamp
-		baseToTS timestamp.Timestamp
-
-		tarFromTS  timestamp.Timestamp
-		baseFromTS timestamp.Timestamp
+		tarTblDef  = tarRel.GetTableDef(execCtx.reqCtx)
+		baseTblDef = baseRel.GetTableDef(execCtx.reqCtx)
 	)
 
 	defer func() {
@@ -177,89 +126,26 @@ func handleSnapshotDiff(
 		}
 	}()
 
-	if dag, err = constructBranchDAG(execCtx.reqCtx, ses); err != nil {
-		return
-	}
-
-	txnSnapshot = ses.GetTxnHandler().GetTxn().SnapshotTS()
-	tarToTS = txnSnapshot
-	baseToTS = txnSnapshot
-
-	// 1. has no lca
-	//		[0, now] join [0, now]
-	// 2. t1 and t2 has lca
-	//		1. t0 is the lca
-	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t2_ts + 1, now]
-	// 		2. t1 is the lca
-	//			t1's [branch_t2_ts + 1, now] join t2's [branch_t2_ts + 1, now]
-	//      3. t2 is the lca
-	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t1_ts + 1, now]
-	//
-	// if a table is cloned table, the commit ts of the cloned data
-	// should be the creation time of the table.
-	if lcaTableID, tarBranchTS, baseBranchTS, hasLca = dag.FindLCA(
-		tarRel.GetTableID(execCtx.reqCtx), baseRel.GetTableID(execCtx.reqCtx),
-	); hasLca {
-		if lcaTableID == baseRel.GetTableID(execCtx.reqCtx) {
-			ts := timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
-			tarFromTS = ts
-			baseFromTS = ts
-			tarIsClonedTable = true
-			baseIsClonedTable = dag.HasParent(baseRel.GetTableID(execCtx.reqCtx))
-		} else if lcaTableID == tarRel.GetTableID(execCtx.reqCtx) {
-			ts := timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
-			tarFromTS = ts
-			baseFromTS = ts
-			baseIsClonedTable = true
-			tarIsClonedTable = dag.HasParent(tarRel.GetTableID(execCtx.reqCtx))
-		} else {
-			tarIsClonedTable = true
-			baseIsClonedTable = true
-			tarFromTS = timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
-			baseFromTS = timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
-		}
-
-		fmt.Printf("hasLca, tar(%d-%d), base(%d-%d)\n",
-			tarFromTS.PhysicalTime, tarToTS.PhysicalTime,
-			baseFromTS.PhysicalTime, baseToTS.PhysicalTime)
-	}
-
-	if tarHandle, err = databranchutils.CollectChanges(
-		execCtx.reqCtx,
-		eng,
-		ses.GetAccountId(),
-		txnSnapshot,
-		tarRel,
-		types.TimestampToTS(tarFromTS),
-		types.TimestampToTS(tarToTS),
-		ses.proc.Mp(),
-		tarIsClonedTable,
-	); err != nil {
-		return
-	}
-
-	if baseHandle, err = databranchutils.CollectChanges(
-		execCtx.reqCtx,
-		eng,
-		ses.GetAccountId(),
-		txnSnapshot,
-		baseRel,
-		types.TimestampToTS(baseFromTS),
-		types.TimestampToTS(baseToTS),
-		ses.proc.Mp(),
-		baseIsClonedTable,
-	); err != nil {
-		return
+	if hasLca, tarBranchTS, baseBranchTS, tarHandle, baseHandle, err =
+		constructChangeHandle(
+			execCtx.reqCtx, ses, eng, tarRel, baseRel, tarSnapshot, baseSnapshot,
+		); err != nil {
+		return err
 	}
 
 	if err = diff(
 		execCtx.reqCtx,
 		ses,
 		ses.proc.Mp(),
-		tarRel.GetTableDef(execCtx.reqCtx),
-		baseRel.GetTableDef(execCtx.reqCtx),
+		tarTblDef,
+		baseTblDef,
 		tarHandle,
 		baseHandle,
+		stmt.DiffAsOpts,
+		hasLca,
+		tarBranchTS,
+		baseBranchTS,
+		bh,
 	); err != nil {
 		return
 	}
@@ -284,33 +170,28 @@ func diff(
 	baseTblDef *plan.TableDef,
 	tarHandle engine.ChangesHandle,
 	baseHandle engine.ChangesHandle,
+	diffAsOpt *tree.DiffAsOpt,
+	hasLca bool,
+	tarBranchTS timestamp.Timestamp,
+	baseBranchTS timestamp.Timestamp,
+	bh BackgroundExec,
 ) (err error) {
 
 	var (
-		//hint         engine.ChangesHandle_Hint
-		dataBat      *batch.Batch
-		tombstoneBat *batch.Batch
-
 		pkIdxes []int
 
-		baseTableHashmap databranchutils.BranchHashmap
+		baseDataHashmap      databranchutils.BranchHashmap
+		baseTombstoneHashmap databranchutils.BranchHashmap
 	)
 
 	defer func() {
-		if dataBat != nil {
-			dataBat.Clean(mp)
+		if baseDataHashmap != nil {
+			baseDataHashmap.Close()
 		}
-		if tombstoneBat != nil {
-			tombstoneBat.Clean(mp)
-		}
-		if baseTableHashmap != nil {
-			baseTableHashmap.Close()
+		if baseTombstoneHashmap != nil {
+			baseTombstoneHashmap.Close()
 		}
 	}()
-
-	if baseTableHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
-		return
-	}
 
 	if baseTblDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		pkIdxes = append(pkIdxes, int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]))
@@ -322,90 +203,43 @@ func diff(
 		}
 	}
 
-	d := time.Duration(0)
-	// build hash for base table
-	for {
-		if dataBat, tombstoneBat, _, err = baseHandle.Next(
-			ctx, mp,
-		); err != nil {
-			return
-		} else if dataBat == nil && tombstoneBat == nil {
-			// out of data
-			break
-		}
-
-		if dataBat != nil {
-			s := time.Now()
-			if err = baseTableHashmap.PutByVectors(dataBat.Vecs, pkIdxes); err != nil {
-				return
-			}
-			d += time.Since(s)
-			//fmt.Println("putByVectors", time.Since(s), dataBat.RowCount())
-			dataBat.Clean(mp)
-		}
+	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
+		ctx, mp, hasLca, pkIdxes, baseHandle,
+	); err != nil {
+		return
 	}
-
-	fmt.Println("build hashmap takes", d)
-	d = time.Duration(0)
 
 	var (
-		rows          [][]interface{}
-		showCols      []*MysqlColumn
-		pkVecs        []*vector.Vector
-		checkRet      []databranchutils.GetResult
-		tableColIdxes []int
+		mrs      *MysqlResultSet
+		tmpRows  [][]interface{}
+		rows     [][]interface{}
+		pkVecs   []*vector.Vector
+		checkRet []databranchutils.GetResult
+
+		dataBat        *batch.Batch
+		tombstoneBat   *batch.Batch
+		neededColIdxes []int
+
+		tarDelsOnLCA  *vector.Vector
+		baseDelsOnLCA *vector.Vector
 	)
 
-	//  -----------------------------------------
-	// |  tar_table_name  | flag |  columns data |
-	//  -----------------------------------------
-	showCols = append(showCols, new(MysqlColumn), new(MysqlColumn))
-	showCols[0].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	showCols[0].SetName("target_table_name")
-	showCols[1].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	showCols[1].SetName("flag")
-
-	for i, col := range tarTblDef.Cols {
-		if col.Name == catalog.Row_ID ||
-			col.Name == catalog.FakePrimaryKeyColName ||
-			col.Name == catalog.CPrimaryKeyColName {
-			continue
+	defer func() {
+		if dataBat != nil {
+			dataBat.Clean(mp)
 		}
-
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-
-		nCol := new(MysqlColumn)
-
-		switch t.Oid {
-		case types.T_bool:
-			nCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
-		case types.T_char, types.T_varchar:
-			nCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-		case types.T_datetime, types.T_date:
-			nCol.SetColumnType(defines.MYSQL_TYPE_DATE)
-		case types.T_int8, types.T_uint8:
-			nCol.SetColumnType(defines.MYSQL_TYPE_TINY)
-		case types.T_int16, types.T_uint16:
-			nCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
-		case types.T_int32, types.T_uint32:
-			nCol.SetColumnType(defines.MYSQL_TYPE_LONG)
-		case types.T_int64, types.T_uint64:
-			nCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-		case types.T_json:
-			nCol.SetColumnType(defines.MYSQL_TYPE_JSON)
-		case types.T_blob:
-			nCol.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		if tombstoneBat != nil {
+			tombstoneBat.Clean(mp)
 		}
+		if tarDelsOnLCA != nil {
+			tarDelsOnLCA.Free(mp)
+		}
+		if baseDelsOnLCA != nil {
+			baseDelsOnLCA.Free(mp)
+		}
+	}()
 
-		nCol.SetName(col.Name)
-		showCols = append(showCols, nCol)
-		tableColIdxes = append(tableColIdxes, i)
-	}
-
-	mrs := ses.GetMysqlResultSet()
-	for _, col := range showCols {
-		mrs.AddColumn(col)
-	}
+	mrs, neededColIdxes = buildShowDiffSchema(ses, tarTblDef, baseTblDef)
 
 	// check existence
 	for {
@@ -418,22 +252,26 @@ func diff(
 			break
 		}
 
+		if !hasLca && tombstoneBat != nil {
+			// if there has no LCA, the tombstones are not expected
+			err = moerr.NewInternalErrorNoCtx("tombstone are not expected from target table with no LCA")
+			return
+		}
+
 		if dataBat != nil {
 			pkVecs = pkVecs[:0]
 			for _, idx := range pkIdxes {
 				pkVecs = append(pkVecs, dataBat.Vecs[idx])
 			}
-			s := time.Now()
-			if checkRet, err = baseTableHashmap.PopByVectors(pkVecs); err != nil {
+			if checkRet, err = baseDataHashmap.PopByVectors(pkVecs); err != nil {
 				return
 			}
-			d += time.Since(s)
 
 			for i := range checkRet {
 				// not exists in the base table
 				if !checkRet[i].Exists {
 					row := append([]interface{}{}, tarTblDef.Name, "+")
-					for _, idx := range tableColIdxes {
+					for _, idx := range neededColIdxes {
 						row = append(row, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
 					}
 					rows = append(rows, row)
@@ -441,15 +279,51 @@ func diff(
 					// exists in the base table, do nothing
 				}
 			}
+
+			dataBat.Clean(mp)
+		}
+
+		if tombstoneBat != nil {
+			pkVecs = pkVecs[:0]
+			pkVecs = append(pkVecs, tombstoneBat.Vecs[0])
+			if checkRet, err = baseTombstoneHashmap.PopByVectors(pkVecs); err != nil {
+				return
+			}
+
+			for i := range checkRet {
+				// target table delete on the LCA, but base table not
+				if !checkRet[i].Exists {
+					if tarDelsOnLCA == nil {
+						tarDelsOnLCA = vector.NewVec(*tombstoneBat.Vecs[0].GetType())
+					}
+
+					if err = tarDelsOnLCA.UnionOne(tombstoneBat.Vecs[0], int64(i), mp); err != nil {
+						return
+					}
+
+					if tarDelsOnLCA.Length() >= objectio.BlockMaxRows {
+						if tmpRows, err = handleDelsOnLCA(
+							ctx, bh, tarDelsOnLCA, true, tarTblDef, baseTblDef, tarBranchTS,
+						); err != nil {
+							return
+						}
+						tarDelsOnLCA.CleanOnlyData()
+						rows = append(rows, tmpRows...)
+					}
+
+				} else {
+					// both delete on the LCA
+					// do nothing
+				}
+			}
 		}
 	}
 
-	fmt.Println("pop hashmap takes", d)
-
-	if err = baseTableHashmap.ForEach(func(key []byte, data [][]byte) error {
+	// iterate the left base table data
+	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
 		row := append([]interface{}{}, tarTblDef.Name, "-")
 		for _, r := range data {
-			if t, err := baseTableHashmap.DecodeRow(r); err != nil {
+			if t, err := baseDataHashmap.DecodeRow(r); err != nil {
 				return err
 			} else {
 				for i := range t {
@@ -461,6 +335,54 @@ func diff(
 		return nil
 	}); err != nil {
 		return
+	}
+
+	// iterate the left base table tombstones on the LCA
+	if err = baseTombstoneHashmap.ForEach(func(key []byte, _ [][]byte) error {
+		if t, err := baseTombstoneHashmap.DecodeRow(key); err != nil {
+			return err
+		} else {
+			if baseDelsOnLCA == nil {
+				pkCol := baseTblDef.Cols[baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]]
+				pkType := types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale)
+				baseDelsOnLCA = vector.NewVec(pkType)
+			}
+
+			if err = vector.AppendAny(baseDelsOnLCA, t[0], false, mp); err != nil {
+				return err
+			}
+
+			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows {
+				if tmpRows, err = handleDelsOnLCA(
+					ctx, bh, baseDelsOnLCA, false, tarTblDef, baseTblDef, baseBranchTS,
+				); err != nil {
+					return err
+				}
+				baseDelsOnLCA.CleanOnlyData()
+				rows = append(rows, tmpRows...)
+			}
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	if tarDelsOnLCA != nil && tarDelsOnLCA.Length() > 0 {
+		if tmpRows, err = handleDelsOnLCA(
+			ctx, bh, tarDelsOnLCA, true, tarTblDef, baseTblDef, tarBranchTS,
+		); err != nil {
+			return
+		}
+		rows = append(rows, tmpRows...)
+	}
+
+	if baseDelsOnLCA != nil && baseDelsOnLCA.Length() > 0 {
+		if tmpRows, err = handleDelsOnLCA(
+			ctx, bh, baseDelsOnLCA, false, tarTblDef, baseTblDef, baseBranchTS,
+		); err != nil {
+			return
+		}
+		rows = append(rows, tmpRows...)
 	}
 
 	for _, row := range rows {
@@ -502,6 +424,634 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 	}
 
 	return true
+}
+
+func handleDelsOnLCA(
+	ctx context.Context,
+	bh BackgroundExec,
+	dels *vector.Vector,
+	isTarDels bool,
+	tarTblDef *plan.TableDef,
+	baseTblDef *plan.TableDef,
+	snapshot timestamp.Timestamp,
+) (rows [][]interface{}, err error) {
+
+	var (
+		sql    string
+		buf    bytes.Buffer
+		tblDef = tarTblDef
+		flag   = "-"
+		mots   = fmt.Sprintf(" {MO_TS=%d} ", snapshot.PhysicalTime)
+	)
+
+	if !isTarDels {
+		flag = "+"
+		tblDef = baseTblDef
+	}
+
+	// composite pk
+	if baseTblDef.Pkey.CompPkeyCol != nil {
+		var (
+			pks     types.Tuple
+			pkNames = tblDef.Pkey.Names
+		)
+
+		cols, area := vector.MustVarlenaRawData(dels)
+		for i := range cols {
+			b := cols[i].GetByteSlice(area)
+			if pks, err = types.Unpack(b); err != nil {
+				return nil, err
+			}
+
+			buf.WriteString("(")
+
+			for j, pk := range pks {
+				buf.WriteString(pkNames[j])
+				buf.WriteString(" = ")
+
+				switch pk.(type) {
+				case string:
+					buf.WriteString("'")
+					buf.WriteString(pk.(string))
+					buf.WriteString("'")
+				case float32:
+					buf.WriteString(strconv.FormatFloat(pk.(float64), 'f', -1, 32))
+				case float64:
+					buf.WriteString(strconv.FormatFloat(pk.(float64), 'f', -1, 64))
+				case bool:
+					buf.WriteString(strconv.FormatBool(pk.(bool)))
+				case uint8:
+					buf.WriteString(strconv.FormatUint(uint64(pk.(uint8)), 10))
+				case int8:
+					buf.WriteString(strconv.FormatInt(int64(pk.(int8)), 10))
+				case uint16:
+					buf.WriteString(strconv.FormatUint(uint64(pk.(uint16)), 10))
+				case int16:
+					buf.WriteString(strconv.FormatInt(int64(pk.(int16)), 10))
+				case uint32:
+					buf.WriteString(strconv.FormatUint(uint64(pk.(uint32)), 10))
+				case int32:
+					buf.WriteString(strconv.FormatInt(int64(pk.(int32)), 10))
+				case uint64:
+					buf.WriteString(strconv.FormatUint(pk.(uint64), 10))
+				case int64:
+					buf.WriteString(strconv.FormatInt(pk.(int64), 10))
+				default:
+					return nil, fmt.Errorf("unknown pk type: %T", pk)
+				}
+
+				if j != len(pks)-1 {
+					buf.WriteString(" AND ")
+				}
+			}
+
+			buf.WriteString(")")
+
+			if i != len(cols)-1 {
+				buf.WriteString(" OR ")
+			}
+		}
+
+		sql = fmt.Sprintf(
+			"select * from %s.%s %s where %s ",
+			tblDef.DbName, tblDef.Name, mots, buf.String(),
+		)
+
+		// fake pk
+	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
+		for i, pk := range pks {
+			buf.WriteString(strconv.FormatUint(pk, 10))
+			if i != len(pks)-1 {
+				buf.WriteString(",")
+			}
+		}
+
+		sql = fmt.Sprintf(
+			"select * from %s.%s %s where `__mo_fake_pk_col` in (%s) ",
+			tblDef.DbName, tblDef.Name, mots, buf.String(),
+		)
+
+		// real pk
+	} else {
+		//switch dels.GetType().Oid {
+		//case types.T_bool:
+		//	pks := vector.MustFixedColNoTypeCheck[bool](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatBool(pk))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_uint8:
+		//	pks := vector.MustFixedColNoTypeCheck[uint8](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_int8:
+		//	pks := vector.MustFixedColNoTypeCheck[int8](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_uint16:
+		//	pks := vector.MustFixedColNoTypeCheck[uint16](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_int16:
+		//	pks := vector.MustFixedColNoTypeCheck[int16](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_uint32:
+		//	pks := vector.MustFixedColNoTypeCheck[uint32](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_int32:
+		//	pks := vector.MustFixedColNoTypeCheck[int32](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_uint64:
+		//	pks := vector.MustFixedColNoTypeCheck[uint64](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(pk, 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_int64:
+		//	pks := vector.MustFixedColNoTypeCheck[int64](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_float32:
+		//	pks := vector.MustFixedColNoTypeCheck[float32](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatFloat(float64(pk), 'f', -1, 32))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_float64:
+		//	pks := vector.MustFixedColNoTypeCheck[float64](dels)
+		//	for i, pk := range pks {
+		//		buf.WriteString(strconv.FormatFloat(pk, 'f', -1, 64))
+		//		if i != len(pks)-1 {
+		//			buf.WriteString(",")
+		//		}
+		//	}
+		//case types.T_char, types.T_varchar, types.T_json, types.T_text:
+		//	var (
+		//		val string
+		//	)
+		//
+		//	cols, area := vector.MustVarlenaRawData(dels)
+		//	for i := range cols {
+		//		b := cols[i].GetByteSlice(area)
+		//		types.DecodeValue(b, dels.GetType().Oid)
+		//	}
+		//}
+
+		for i := range dels.Length() {
+			b := dels.GetRawBytesAt(i)
+			val := types.DecodeValue(b, dels.GetType().Oid)
+			switch val.(type) {
+			case []byte:
+				buf.WriteString("'")
+				buf.WriteString(string(val.([]byte)))
+				buf.WriteString("'")
+			default:
+				buf.WriteString(fmt.Sprintf("%v", val))
+			}
+
+			if i != dels.Length()-1 {
+				buf.WriteString(",")
+			}
+		}
+
+		sql = fmt.Sprintf(
+			"select * from %s.%s %s where %s in (%s) ",
+			tblDef.DbName, tblDef.Name, mots, tblDef.Pkey.PkeyColName, buf.String(),
+		)
+	}
+
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	var (
+		val    interface{}
+		tmpV   []ExecResult
+		sqlRet *MysqlResultSet
+	)
+
+	if tmpV, err = getResultSet(ctx, bh); err != nil {
+		return
+	}
+
+	if execResultArrayHasData(tmpV) {
+		sqlRet = tmpV[0].(*MysqlResultSet)
+		for i := range sqlRet.GetRowCount() {
+			row := append([]interface{}{}, tarTblDef.Name, flag)
+			for j := range sqlRet.GetColumnCount() {
+				if val, err = sqlRet.GetValue(ctx, i, j); err != nil {
+					return
+				}
+				row = append(row, val)
+			}
+			rows = append(rows, row)
+		}
+	}
+
+	return
+}
+
+func buildShowDiffSchema(
+	ses *Session,
+	tarTblDef *plan.TableDef,
+	baseTblDef *plan.TableDef,
+) (mrs *MysqlResultSet, neededColIdxes []int) {
+
+	var (
+		showCols []*MysqlColumn
+	)
+
+	//  -----------------------------------------
+	// |  tar_table_name  | flag |  columns data |
+	//  -----------------------------------------
+	showCols = append(showCols, new(MysqlColumn), new(MysqlColumn))
+	showCols[0].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	showCols[0].SetName(fmt.Sprintf("diff %s against %s", tarTblDef.Name, baseTblDef.Name))
+	showCols[1].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	showCols[1].SetName("flag")
+
+	for i, col := range tarTblDef.Cols {
+		if col.Name == catalog.Row_ID ||
+			col.Name == catalog.FakePrimaryKeyColName ||
+			col.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
+
+		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+
+		nCol := new(MysqlColumn)
+
+		switch t.Oid {
+		case types.T_bool:
+			nCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
+		case types.T_char, types.T_varchar:
+			nCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		case types.T_datetime, types.T_date:
+			nCol.SetColumnType(defines.MYSQL_TYPE_DATE)
+		case types.T_int8, types.T_uint8:
+			nCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+		case types.T_int16, types.T_uint16:
+			nCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
+		case types.T_int32, types.T_uint32:
+			nCol.SetColumnType(defines.MYSQL_TYPE_LONG)
+		case types.T_int64, types.T_uint64:
+			nCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		case types.T_json:
+			nCol.SetColumnType(defines.MYSQL_TYPE_JSON)
+		case types.T_blob:
+			nCol.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		}
+
+		nCol.SetName(col.Name)
+		showCols = append(showCols, nCol)
+		neededColIdxes = append(neededColIdxes, i)
+	}
+
+	mrs = ses.GetMysqlResultSet()
+	for _, col := range showCols {
+		mrs.AddColumn(col)
+	}
+
+	return mrs, neededColIdxes
+}
+
+func buildHashmapForBaseTable(
+	ctx context.Context,
+	mp *mpool.MPool,
+	hasLca bool,
+	pkIdxes []int,
+	baseHandle engine.ChangesHandle,
+) (
+	dataHashmap databranchutils.BranchHashmap,
+	tombstoneHashmap databranchutils.BranchHashmap,
+	err error,
+) {
+
+	var (
+		dataBat      *batch.Batch
+		tombstoneBat *batch.Batch
+	)
+
+	defer func() {
+		if dataBat != nil {
+			dataBat.Clean(mp)
+		}
+
+		if tombstoneBat != nil {
+			tombstoneBat.Clean(mp)
+		}
+	}()
+
+	if dataHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+		return
+	}
+
+	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+		return
+	}
+
+	for {
+		if dataBat, tombstoneBat, _, err = baseHandle.Next(
+			ctx, mp,
+		); err != nil {
+			return
+		} else if dataBat == nil && tombstoneBat == nil {
+			// out of data
+			break
+		}
+
+		if !hasLca && tombstoneBat != nil {
+			// if there has no LCA, the tombstones are not expected
+			err = moerr.NewInternalErrorNoCtx("tombstone are not expected from base table with no LCA")
+			return
+		}
+
+		if dataBat != nil {
+			if err = dataHashmap.PutByVectors(dataBat.Vecs, pkIdxes); err != nil {
+				return
+			}
+			dataBat.Clean(mp)
+		}
+
+		if tombstoneBat != nil {
+			if err = tombstoneHashmap.PutByVectors(tombstoneBat.Vecs, []int{0}); err != nil {
+				return
+			}
+			tombstoneBat.Clean(mp)
+		}
+	}
+
+	return
+}
+
+func getRelations(
+	ctx context.Context,
+	ses *Session,
+	eng engine.Engine,
+	tarTable tree.TableName,
+	baseTable tree.TableName,
+	tarSnapshot *plan.Snapshot,
+	baseSnapshot *plan.Snapshot,
+) (
+	tarRel engine.Relation,
+	baseRel engine.Relation,
+	err error,
+) {
+
+	var (
+		tarDB  engine.Database
+		baseDB engine.Database
+
+		tarDbName   string
+		tarTblName  string
+		baseDbName  string
+		baseTblName string
+	)
+
+	tarTxnOp := ses.GetTxnHandler().GetTxn()
+	baseTxnOp := ses.GetTxnHandler().GetTxn()
+
+	if tarSnapshot != nil && tarSnapshot.TS != nil {
+		tarTxnOp = tarTxnOp.CloneSnapshotOp(*tarSnapshot.TS)
+	}
+
+	if baseSnapshot != nil && baseSnapshot.TS != nil {
+		baseTxnOp = baseTxnOp.CloneSnapshotOp(*baseSnapshot.TS)
+	}
+
+	baseDbName = baseTable.SchemaName.String()
+	baseTblName = baseTable.ObjectName.String()
+	if len(baseDbName) == 0 {
+		baseDbName = ses.GetTxnCompileCtx().DefaultDatabase()
+	}
+
+	tarDbName = tarTable.SchemaName.String()
+	tarTblName = tarTable.ObjectName.String()
+	if len(tarDbName) == 0 {
+		tarDbName = ses.GetTxnCompileCtx().DefaultDatabase()
+	}
+
+	if len(baseDbName) == 0 || len(tarDbName) == 0 {
+		err = moerr.NewInternalErrorNoCtxf("the base or target database cannot be empty.")
+		return
+	}
+
+	if tarDB, err = eng.Database(
+		ctx, tarDbName, tarTxnOp,
+	); err != nil {
+		return
+	}
+
+	if tarRel, err = tarDB.Relation(ctx, tarTblName, nil); err != nil {
+		return
+	}
+
+	if baseDB, err = eng.Database(
+		ctx, baseDbName, baseTxnOp,
+	); err != nil {
+		return
+	}
+
+	if baseRel, err = baseDB.Relation(ctx, baseTblName, nil); err != nil {
+		return
+	}
+
+	if !isSchemaEquivalent(tarRel.GetTableDef(ctx), baseRel.GetTableDef(ctx)) {
+		err = moerr.NewInternalErrorNoCtx("the target table schema is not equivalent to the base table.")
+		return
+	}
+
+	return
+}
+
+func constructChangeHandle(
+	ctx context.Context,
+	ses *Session,
+	eng engine.Engine,
+	tarRel engine.Relation,
+	baseRel engine.Relation,
+	tarSnapshot *plan.Snapshot,
+	baseSnapshot *plan.Snapshot,
+) (
+	hasLca bool,
+	tarBranchTS timestamp.Timestamp,
+	baseBranchTS timestamp.Timestamp,
+	tarHandle engine.ChangesHandle,
+	baseHandle engine.ChangesHandle,
+	err error,
+) {
+
+	var (
+		tarIsClonedTable  bool
+		baseIsClonedTable bool
+
+		tarToTS  timestamp.Timestamp
+		baseToTS timestamp.Timestamp
+
+		tarFromTS   timestamp.Timestamp
+		baseFromTS  timestamp.Timestamp
+		txnSnapshot timestamp.Timestamp
+
+		tarScanSnapshot  timestamp.Timestamp
+		baseScanSnapshot timestamp.Timestamp
+	)
+
+	txnSnapshot = ses.GetTxnHandler().GetTxn().SnapshotTS()
+	tarToTS = txnSnapshot
+	baseToTS = txnSnapshot
+
+	if hasLca, tarFromTS, baseFromTS, tarIsClonedTable, baseIsClonedTable, err = decideFromTS(
+		ctx, ses, tarRel, baseRel,
+	); err != nil {
+		return
+	}
+
+	if hasLca {
+		tarBranchTS = tarFromTS.Prev()
+		baseBranchTS = baseFromTS.Prev()
+	}
+
+	tarScanSnapshot = txnSnapshot
+	if tarSnapshot != nil && tarSnapshot.TS != nil {
+		tarScanSnapshot = *tarSnapshot.TS
+	}
+
+	if tarHandle, err = databranchutils.CollectChanges(
+		ctx,
+		eng,
+		ses.GetAccountId(),
+		tarScanSnapshot,
+		tarRel,
+		types.TimestampToTS(tarFromTS),
+		types.TimestampToTS(tarToTS),
+		ses.proc.Mp(),
+		tarIsClonedTable,
+	); err != nil {
+		return
+	}
+
+	baseScanSnapshot = txnSnapshot
+	if baseSnapshot != nil && baseSnapshot.TS != nil {
+		baseScanSnapshot = *baseSnapshot.TS
+	}
+
+	if baseHandle, err = databranchutils.CollectChanges(
+		ctx,
+		eng,
+		ses.GetAccountId(),
+		baseScanSnapshot,
+		baseRel,
+		types.TimestampToTS(baseFromTS),
+		types.TimestampToTS(baseToTS),
+		ses.proc.Mp(),
+		baseIsClonedTable,
+	); err != nil {
+		return
+	}
+
+	return
+}
+
+func decideFromTS(
+	ctx context.Context,
+	ses *Session,
+	tarRel engine.Relation,
+	baseRel engine.Relation,
+) (
+	hasLca bool,
+	tarFromTS timestamp.Timestamp,
+	baseFromTS timestamp.Timestamp,
+	tarIsClonedTable bool,
+	baseIsClonedTable bool,
+	err error,
+) {
+
+	var (
+		dag *databranchutils.DataBranchDAG
+
+		lcaTableID   uint64
+		tarBranchTS  int64
+		baseBranchTS int64
+	)
+
+	if dag, err = constructBranchDAG(ctx, ses); err != nil {
+		return
+	}
+
+	// 1. has no lca
+	//		[0, now] join [0, now]
+	// 2. t1 and t2 has lca
+	//		1. t0 is the lca
+	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t2_ts + 1, now]
+	// 		2. t1 is the lca
+	//			t1's [branch_t2_ts + 1, now] join t2's [branch_t2_ts + 1, now]
+	//      3. t2 is the lca
+	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t1_ts + 1, now]
+	//
+	// if a table is cloned table, the commit ts of the cloned data
+	// should be the creation time of the table.
+	if lcaTableID, tarBranchTS, baseBranchTS, hasLca = dag.FindLCA(
+		tarRel.GetTableID(ctx), baseRel.GetTableID(ctx),
+	); hasLca {
+		if lcaTableID == baseRel.GetTableID(ctx) {
+			ts := timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
+			tarFromTS = ts
+			baseFromTS = ts
+			tarIsClonedTable = true
+			baseIsClonedTable = dag.HasParent(baseRel.GetTableID(ctx))
+		} else if lcaTableID == tarRel.GetTableID(ctx) {
+			ts := timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
+			tarFromTS = ts
+			baseFromTS = ts
+			baseIsClonedTable = true
+			tarIsClonedTable = dag.HasParent(tarRel.GetTableID(ctx))
+		} else {
+			tarIsClonedTable = true
+			baseIsClonedTable = true
+			tarFromTS = timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
+			baseFromTS = timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
+		}
+	}
+
+	return
 }
 
 func constructBranchDAG(
