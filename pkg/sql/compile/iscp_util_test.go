@@ -288,7 +288,7 @@ func TestISCPCreateIndexCdcTask(t *testing.T) {
 	c.proc = testutil.NewProcess(t)
 
 	{
-		err := CreateIndexCdcTask(c, "dbname", "tname", "a", 0, true)
+		err := CreateIndexCdcTask(c, "dbname", "tname", "a", 0, true, "")
 		require.NotNil(t, err)
 		fmt.Println(err)
 
