@@ -232,6 +232,7 @@ create snapshot sp10 for account acc02;
 create database db09 clone test102 {snapshot = 'sp10'};
 drop account acc02;
 drop snapshot sp10;
+drop database db09;
 
 
 
