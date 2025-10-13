@@ -150,6 +150,9 @@ func ExecuteIteration(
 			DefaultRetryInterval,
 			SubmitRetryDuration,
 		)
+		if err != nil {
+			return
+		}
 		return nil
 	}
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName

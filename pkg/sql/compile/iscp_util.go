@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 var (
@@ -208,47 +206,4 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		}
 	}
 	return nil
-}
-
-type TxnCallbackData struct {
-	cnUUID              string
-	txnClient           client.TxnClient
-	cnEngine            engine.Engine
-	accountId           uint32
-	dbname              string
-	tablename           string
-	indexname           string
-	sinker_type         int8
-	startFromNow        bool
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	sql                 string
-}
-
-func iscpRegisterEventCallbackFn(sqlproc *sqlexec.SqlProcess, data any) (err error) {
-	sqlctx := sqlproc.SqlCtx
-	cbdata := data.(TxnCallbackData)
-
-	// if sql is not empty, execute the SQL
-	if len(cbdata.sql) > 0 {
-		res, err := sqlexec.RunSql(sqlproc, cbdata.sql)
-		if err != nil {
-			return err
-		}
-		res.Close()
-	}
-
-	// register ISCP job
-	spec := &iscp.JobSpec{
-		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: cbdata.sinker_type,
-			DBName:    cbdata.dbname,
-			TableName: cbdata.tablename,
-			IndexName: cbdata.indexname},
-	}
-	job := &iscp.JobID{DBName: cbdata.dbname, TableName: cbdata.tablename, JobName: genCdcTaskJobID(cbdata.indexname)}
-
-	_, err = RegisterJob(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn(), spec, job, cbdata.startFromNow)
-	if err != nil {
-		return
-	}
-	return
 }
