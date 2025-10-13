@@ -145,7 +145,6 @@ drop database mo_catalog_new;
 
 
 -- table level snapshot, clone db
--- @bvt:issue#22350
 drop database if exists test100;
 create database test100;
 use test100;
@@ -161,7 +160,78 @@ create database test_1000 clone test100 {snapshot = 'sp07'};
 drop database test100;
 drop database test_1000;
 drop snapshot sp07;
+
+
+
+-- clone table a where table a does not have snapshot
+drop database if exists test101;
+create database test101;
+use test101;
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+drop table if exists table02;
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+drop snapshot if exists sp08;
+create snapshot sp08 for table test100 table01;
+drop database if exists db08;
+create database db08;
+create table db08.table01 clone test100.table01 {snapshot = 'sp08'};
+drop database test101;
+drop database db08;
+drop snapshot sp08;
+
+
+
+-- clone database a where database a does not have snapshot
+-- @bvt:issue#22615
+drop database if exists test102;
+create database test102;
+use test102;
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+drop database if exists test103;
+create database test103;
+use test103;
+drop table if exists table02;
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+drop snapshot if exists sp09;
+create snapshot sp09 for database test102;
+drop database if exists db09;
+create database db09 clone test103 {snapshot = 'sp09'};
+drop database test102;
+drop database test103;
+drop snapshot sp09;
 -- @bvt:issue
+
+
+
+-- account level snapshot for account acc01, clone db from snapshot acc02
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+-- @session:id=7&user=acc02:test_account&password=111
+drop database if exists test102;
+create database test102;
+use test102;
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+drop database if exists test103;
+create database test103;
+use test103;
+drop table if exists table02;
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+-- @session
+drop snapshot if exists sp10;
+create snapshot sp10 for account acc02;
+
+create database db09 clone test102 {snapshot = 'sp10'};
+drop account acc02;
+drop snapshot sp10;
 
 
 
