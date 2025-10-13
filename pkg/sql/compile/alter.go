@@ -278,7 +278,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						// clone index table (with ISCP) may not be a complete clone
 						// so register ISCP job with startFromNow = false
 						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false)
+						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
 						if err != nil {
 							return err
 						}

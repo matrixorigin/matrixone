@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -105,11 +106,14 @@ func RegisterJob(
 	startFromNow bool,
 ) (ok bool, err error) {
 	return ok, retry(
+		ctx,
 		func() error {
 			ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
 			return err
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -120,11 +124,14 @@ func UnregisterJobsByDBName(
 	dbName string,
 ) (err error) {
 	return retry(
+		ctx,
 		func() error {
 			err = unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
 			return err
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -234,6 +241,13 @@ func registerJob(
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
+	emptyJobStatus := JobStatus{}
+	if jobSpec.ConsumerInfo.InitSQL != "" {
+		encoded := base64.StdEncoding.EncodeToString([]byte(jobSpec.ConsumerInfo.InitSQL))
+		jobSpec.ConsumerInfo.InitSQL = encoded
+	} else {
+		emptyJobStatus.Stage = JobStage_Running
+	}
 	var dbID uint64
 	tableID, dbID, err = getTableID(
 		ctxWithSysAccount,
@@ -271,7 +285,6 @@ func registerJob(
 	if err != nil {
 		return
 	}
-	emptyJobStatus := JobStatus{}
 	jobStatusJson, err := json.Marshal(emptyJobStatus)
 	if err != nil {
 		return
@@ -303,11 +316,14 @@ func UnregisterJob(
 	jobID *JobID,
 ) (ok bool, err error) {
 	return ok, retry(
+		ctx,
 		func() error {
 			ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
 			return err
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -319,10 +335,13 @@ func RenameSrcTable(
 	oldTableName, newTableName string,
 ) (err error) {
 	return retry(
+		ctx,
 		func() error {
 			return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 
@@ -416,10 +435,13 @@ func UpdateJobSpec(
 	jobSpec *JobSpec,
 ) (err error) {
 	return retry(
+		ctx,
 		func() error {
 			return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
 		},
 		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
 	)
 }
 

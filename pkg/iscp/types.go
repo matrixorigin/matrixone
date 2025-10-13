@@ -102,8 +102,14 @@ type ISCPData struct {
 	err         error
 }
 
+const (
+	JobStage_Init int8 = iota
+	JobStage_Running
+)
+
 type JobStatus struct {
 	LSN       uint64
+	Stage     int8
 	TaskID    uint64
 	From      types.TS
 	To        types.TS
@@ -211,6 +217,7 @@ type ConsumerInfo struct {
 	DBName       string
 	Columns      []string
 	SrcTable     TableInfo
+	InitSQL      string
 }
 
 type TableInfo struct {

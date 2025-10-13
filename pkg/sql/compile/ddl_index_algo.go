@@ -163,7 +163,7 @@ func (s *Scope) handleFullTextIndexTable(
 		logutil.Infof("fulltext index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDef.IndexName, sinker_type, false)
+			indexDef.IndexName, sinker_type, false, "")
 		if err != nil {
 			return err
 		}
@@ -340,7 +340,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-		err = AppendIscpRegisterEvent(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, false, sql)
+		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, false, sql)
 		if err != nil {
 			return err
 		}
@@ -631,7 +631,7 @@ func (s *Scope) handleVectorHnswIndex(
 		// register ISCP job with startFromNow = true
 		// 4. register ISCP job for async update
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, true)
+		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, true, "")
 		if err != nil {
 			return err
 		}
@@ -646,7 +646,7 @@ func (s *Scope) handleVectorHnswIndex(
 
 		// 4. register ISCP job for async update with startFromNow = false
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false)
+		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false, "")
 		if err != nil {
 			return err
 		}
