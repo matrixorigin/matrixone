@@ -16,14 +16,11 @@ package compile
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -97,14 +94,15 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) (bool, error)
 }
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
-func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool) error {
+func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool, sql string) error {
 	var err error
 
 	spec := &iscp.JobSpec{
 		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type,
 			DBName:    dbname,
 			TableName: tablename,
-			IndexName: indexname},
+			IndexName: indexname,
+			InitSQL:   sql},
 	}
 	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 
@@ -203,7 +201,7 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		if valid {
 			idxmap[idx.IndexName] = true
 			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type, startFromNow)
+			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type, startFromNow, "")
 			if e != nil {
 				return e
 			}
@@ -253,69 +251,4 @@ func iscpRegisterEventCallbackFn(sqlproc *sqlexec.SqlProcess, data any) (err err
 		return
 	}
 	return
-}
-
-func AppendIscpRegisterEvent(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool, sql string) error {
-
-	accountId, err := defines.GetAccountId(c.proc.Ctx)
-	if err != nil {
-		return err
-	}
-
-	cbdata := TxnCallbackData{cnUUID: c.proc.GetService(),
-		txnClient:           c.proc.Base.TxnClient,
-		cnEngine:            c.proc.Base.SessionInfo.StorageEngine,
-		accountId:           accountId,
-		dbname:              dbname,
-		tablename:           tablename,
-		indexname:           indexname,
-		sinker_type:         sinker_type,
-		startFromNow:        startFromNow,
-		resolveVariableFunc: c.proc.GetResolveVariableFunc(),
-		sql:                 sql,
-	}
-	txnop := c.proc.GetTxnOperator()
-	txnop.AppendEventCallback(client.ClosedEvent,
-		client.NewTxnEventCallbackWithValue(
-			func(ctx context.Context, _ client.TxnOperator, evt client.TxnEvent, data any) (err error) {
-				//commitTs := evt.Txn.CommitTS
-
-				cbdata := data.(TxnCallbackData)
-				logutil.Infof("AppendIscpRegisterEvent: closed event detected\n %v", cbdata)
-				if evt.Txn.Status != txn.TxnStatus_Committed {
-					return
-				}
-
-				if len(cbdata.sql) > 0 {
-					// long running SQL so run in separate thread
-					go func() {
-						sqlexec.RunTxnWithSqlContext(ctx,
-							cbdata.cnEngine,
-							cbdata.txnClient,
-							cbdata.cnUUID,
-							cbdata.accountId,
-							24*time.Hour,
-							cbdata.resolveVariableFunc,
-							cbdata,
-							iscpRegisterEventCallbackFn)
-
-					}()
-					return
-
-				} else {
-					return sqlexec.RunTxnWithSqlContext(ctx,
-						cbdata.cnEngine,
-						cbdata.txnClient,
-						cbdata.cnUUID,
-						cbdata.accountId,
-						5*time.Minute,
-						cbdata.resolveVariableFunc,
-						cbdata,
-						iscpRegisterEventCallbackFn)
-				}
-
-			}, cbdata))
-
-	return nil
-
 }

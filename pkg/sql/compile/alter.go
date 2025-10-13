@@ -281,7 +281,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						// re-build from the beginning and we have to check the duplicate entry by
 						// REPLACE INTO and check primary key found in HNSW model building
 						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false)
+						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
 						if err != nil {
 							return err
 						}
