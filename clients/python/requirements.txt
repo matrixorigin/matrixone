@@ -1,0 +1,29 @@
+# MatrixOne Python SDK Dependencies
+
+# Core database connectivity
+PyMySQL>=1.0.0
+
+# Async support
+aiomysql>=0.2.0
+
+# SQLAlchemy integration
+SQLAlchemy>=1.4.0,<2.0.0
+
+# Type hints support
+typing-extensions>=4.0.0
+
+# Date and time utilities
+python-dateutil>=2.8.0
+
+# Vector operations dependencies
+numpy>=1.20.0
+
+# Optional: Enhanced JSON support
+# ujson>=4.0.0
+
+# Optional: Performance monitoring
+# psutil>=5.8.0
+
+# Documentation generation (for development)
+# sphinx>=4.0.0
+# sphinx-rtd-theme>=1.0.0

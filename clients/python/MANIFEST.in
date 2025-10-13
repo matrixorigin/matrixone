@@ -1,0 +1,45 @@
+# MatrixOne Python SDK Manifest
+
+# Include documentation
+include README.md
+include LICENSE
+
+# Include requirements
+include requirements.txt
+
+# Include examples (recommended for user experience)
+recursive-include examples *.py
+
+# Include user-facing README for PyPI
+include README_USER.md
+
+# Exclude test files (not needed for end users)
+recursive-exclude tests *.py
+exclude pytest.ini
+
+# Include configuration files
+include pyproject.toml
+include setup.py
+include .gitignore
+
+# Exclude build artifacts
+exclude dist/
+exclude build/
+exclude *.egg-info/
+exclude *.whl
+exclude *.tar.gz
+
+# Exclude development files
+exclude *.pyc
+exclude *.pyo
+exclude *.pyd
+exclude __pycache__
+exclude .git*
+exclude .DS_Store
+exclude .vscode
+exclude .idea
+
+# Include package data
+recursive-include matrixone *.py
+recursive-include matrixone *.pyi
+include matrixone/py.typed

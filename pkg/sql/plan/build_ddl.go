@@ -3418,7 +3418,6 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 	for _, indexdef := range tableDef.Indexes {
 		if dropIndex.IndexName == indexdef.IndexName {
-			dropIndex.IndexTableName = indexdef.IndexTableName
 			found = true
 			break
 		}
