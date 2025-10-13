@@ -52,6 +52,7 @@
 
 * [MatrixOne 是什么？](#what-is-matrixone)
 * [60秒快速上手](#️-60秒快速上手)
+* [教程与示例](#-教程与示例)
 * [安装与部署](#️-安装与部署)
 * [架构](#architecture)
 * [Python SDK](#python-sdk)
@@ -226,6 +227,44 @@ for row in results.rows:
 > 💡 **需要更多控制？** 查看下方的 [安装与部署](#️-安装与部署) 章节了解生产级安装选项。
 
 📖 **[Python SDK 文档 →](clients/python/README.md)**
+
+## 📚 教程与示例
+
+深入了解 MatrixOne！浏览我们全面的实践教程和真实案例：
+
+### 🎯 入门教程
+
+| 教程 | 语言/框架 | 说明 |
+|----------|-------------------|-------------|
+| [Java CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-java-crud-demo/) | Java | Java 应用开发 |
+| [SpringBoot 和 JPA CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/springboot-hibernate-crud-demo/) | Java | SpringBoot + Hibernate/JPA |
+| [PyMySQL CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-python-crud-demo/) | Python | Python 基础数据库操作 |
+| [SQLAlchemy CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/sqlalchemy-python-crud-demo/) | Python | Python + SQLAlchemy ORM |
+| [Django CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/django-python-crud-demo/) | Python | Django Web 框架 |
+| [Golang CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-golang-crud-demo/) | Go | Go 应用开发 |
+| [Gorm CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/gorm-golang-crud-demo/) | Go | Go + Gorm ORM |
+| [C# CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/c-net-crud-demo/) | C# | .NET 应用开发 |
+| [TypeScript CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/typescript-crud-demo/) | TypeScript | TypeScript 应用开发 |
+
+### 🚀 高级功能教程
+
+| 教程 | 使用场景 | 相关 MatrixOne 特性 |
+|----------|----------|---------------------------|
+| [Pinecone 兼容向量检索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/pinecone-vector-demo/) | AI 与搜索 | 向量检索，Pinecone 兼容 API |
+| [IVF 索引健康监控](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/ivf-index-health-demo/) | AI 与搜索 | 向量检索，IVF 索引 |
+| [HNSW 向量索引](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hnsw-vector-demo/) | AI 与搜索 | 向量检索，HNSW 索引 |
+| [全文自然语言搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-natural-search-demo/) | AI 与搜索 | 全文检索，自然语言 |
+| [全文布尔搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-boolean-search-demo/) | AI 与搜索 | 全文检索，布尔运算符 |
+| [全文 JSON 搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-json-search-demo/) | AI 与搜索 | 全文检索，JSON 数据 |
+| [混合搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hybrid-search-demo/) | AI 与搜索 | 混合搜索，向量+全文+SQL |
+| [RAG 应用示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/rag-demo/) | AI 与搜索 | RAG，向量检索，全文检索 |
+| [图文搜索应用](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/search-picture-demo/) | AI 与搜索 | 多模态搜索，图像相似度 |
+| [Dify 集成示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/dify-mo-demo/) | AI 与搜索 | AI 平台集成 |
+| [HTAP 应用示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/htap-demo/) | 性能 | HTAP，实时分析 |
+| [多团队开发即时克隆](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/efficient-clone-demo/) | 性能 | 即时克隆，Git for Data |
+| [生产环境安全升级与即时回滚](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/) | 性能 | 快照，回滚，Git for Data |
+
+📖 **[查看所有教程 →](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/)**
 
 ## 🛠️ <a id="installation--deployment">安装与部署</a>
 
