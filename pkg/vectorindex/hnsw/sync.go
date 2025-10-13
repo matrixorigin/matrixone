@@ -256,8 +256,6 @@ func (s *HnswSync[T]) DownloadAll(sqlproc *sqlexec.SqlProcess) (err error) {
 func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (maxcap uint, midx []int, err error) {
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
 
-	maxcap = uint(s.tblcfg.IndexCapacity)
-
 	// try to find index cap
 	cdclen := len(cdc.Data)
 
@@ -266,11 +264,6 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 	for i := range midx {
 		midx[i] = -1
 	}
-
-	// reset counter
-	s.ninsert.Store(0)
-	s.nupdate.Store(0)
-	s.ndelete.Store(0)
 
 	ninsert := int32(0)
 	nupdate := int32(0)
@@ -290,6 +283,15 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 	s.nupdate.Store(nupdate)
 	s.ndelete.Store(ndelete)
 
+	// update max capacity from indexes
+	maxcap = uint(s.tblcfg.IndexCapacity)
+	for _, m := range s.indexes {
+		if maxcap < m.MaxCapacity {
+			maxcap = m.MaxCapacity
+		}
+	}
+
+	// skip check when all cdc are inserts
 	if ninsert == int32(len(cdc.Data)) {
 		// all insert
 		return maxcap, midx, nil
@@ -300,10 +302,6 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 		err = m.LoadIndex(sqlproc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		if err != nil {
 			return 0, nil, err
-		}
-
-		if maxcap < m.MaxCapacity {
-			maxcap = m.MaxCapacity
 		}
 
 		var wg sync.WaitGroup
@@ -345,7 +343,10 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 			return 0, nil, <-err_chan
 		}
 
-		m.Unload()
+		err = m.Unload()
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 
 	return maxcap, midx, nil
@@ -554,13 +555,26 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 		}
 	}
 
+	// Unload models which are full
+	for _, m := range s.indexes {
+		if m.Index != nil {
+			full, err := m.Full()
+			if err != nil {
+				return err
+			}
+			if full {
+				err = m.Unload()
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	t2 := time.Now()
 	updateElapsed := t2.Sub(t)
-
-	t3 := time.Now()
-	saveElapsed := t3.Sub(t2)
-	logutil.Infof("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms, save %d ms",
-		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds(), saveElapsed.Milliseconds())
+	logutil.Infof("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms",
+		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds())
 	return nil
 }
 
