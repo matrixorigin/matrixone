@@ -119,8 +119,18 @@ Quick Start
        content = Column(Text)
        embedding = create_vector_column(384, 'f32')
 
-   # Create table and IVF index for large-scale search
+   # Create table and insert initial data first (recommended)
    client.create_table(Document)
+   
+   # ⚠️ Best practice: Insert initial data BEFORE creating IVF index
+   client.insert('documents', {
+       'id': 1,
+       'title': 'AI Research',
+       'content': 'Machine learning paper...',
+       'embedding': np.random.rand(384).tolist()
+   })
+   
+   # Create IVF index after initial data (better clustering)
    client.vector_ops.enable_ivf()
    client.vector_ops.create_ivf(
        'documents',  # Table name as positional argument
@@ -128,14 +138,9 @@ Quick Start
        column='embedding',
        lists=100  # Number of clusters
    )
-
-   # Insert and search
-   client.insert('documents', {
-       'id': 1,
-       'title': 'AI Research',
-       'content': 'Machine learning paper...',
-       'embedding': np.random.rand(384).tolist()
-   })
+   
+   # IVF supports dynamic updates - can continue inserting
+   client.insert('documents', {'id': 2, ...})  # ✅ Works fine
 
    results = client.vector_ops.similarity_search(
        'documents',  # Table name as positional argument
@@ -164,6 +169,15 @@ Quick Start
    if balance_ratio > 2.5:
        print("⚠️  Index needs rebuilding for optimal performance!")
        # See vector_guide for detailed monitoring and rebuild procedures
+
+.. note::
+   **HNSW Index Notes:**
+   
+   * Requires ``BigInteger`` primary key (not ``Integer``)
+   * 🚧 Currently read-only after creation (*dynamic updates coming soon*)
+   * Workaround: Drop index → Modify data → Recreate index
+   
+   See :doc:`vector_guide` for details on HNSW vs IVF selection.
 
 **Fulltext Search:**
 

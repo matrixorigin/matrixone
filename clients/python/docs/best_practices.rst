@@ -893,6 +893,289 @@ Monitoring and Logging
        slow_query_threshold=1.0      # Log queries > 1 second
    )
 
+Index Maintenance Best Practices
+----------------------------------
+
+⭐ **Critical for Production**: Regular index maintenance ensures optimal performance, especially for vector indexes.
+
+IVF Index Creation Timing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. important::
+   **Critical Issue: Index Creation Timing**
+   
+   IVF indexes should be created **AFTER** inserting initial data for optimal clustering:
+   
+   .. code-block:: python
+   
+      # ✅ CORRECT ORDER:
+      client.create_table(Document)
+      client.batch_insert(Document, initial_data)  # Insert first
+      client.vector_ops.create_ivf("documents", "idx", "embedding", lists=50)  # Index last
+      
+      # Then continue normal operations
+      client.insert(Document, new_doc)  # ✅ IVF supports dynamic updates
+   
+   .. code-block:: python
+   
+      # ❌ AVOID: Creating index on empty table
+      client.create_table(Document)
+      client.vector_ops.create_ivf("documents", "idx", "embedding", lists=50)
+      client.batch_insert(Document, data)  # Poor initial clustering
+   
+   **Why?** Initial data helps IVF algorithm create better balanced clusters.
+   
+   **Key Difference from HNSW**:
+   
+   * **IVF**: Insert data → Create index → Continue updates ✅ (dynamic)
+   * **HNSW**: Insert ALL data → Create index → Read-only 🚧 (static, updates coming soon)
+
+IVF Index Health Monitoring
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import math
+   from datetime import datetime
+   
+   def monitor_ivf_health(client, table_name, column_name, expected_lists):
+       """
+       Monitor IVF index health - CRITICAL for production vector search.
+       
+       Args:
+           client: MatrixOne client
+           table_name: Table with IVF index
+           column_name: Vector column name
+           expected_lists: Expected number of centroids
+       """
+       # ✅ GOOD: Get comprehensive IVF statistics
+       stats = client.vector_ops.get_ivf_stats(table_name, column_name)
+       
+       distribution = stats['distribution']
+       centroid_counts = distribution['centroid_count']
+       
+       # Calculate health metrics
+       total_centroids = len(centroid_counts)
+       total_vectors = sum(centroid_counts)
+       min_count = min(centroid_counts) if centroid_counts else 0
+       max_count = max(centroid_counts) if centroid_counts else 0
+       avg_count = total_vectors / total_centroids if total_centroids > 0 else 0
+       
+       # ⭐ KEY METRIC: Balance ratio
+       balance_ratio = max_count / min_count if min_count > 0 else float('inf')
+       
+       # Health assessment
+       print(f"\n{'='*60}")
+       print(f"IVF Health Report - {table_name}.{column_name}")
+       print(f"Timestamp: {datetime.now().isoformat()}")
+       print(f"{'='*60}")
+       print(f"Total Centroids:  {total_centroids} (expected: {expected_lists})")
+       print(f"Total Vectors:    {total_vectors}")
+       print(f"Avg/Centroid:     {avg_count:.2f}")
+       print(f"Balance Ratio:    {balance_ratio:.2f}")
+       
+       # Status assessment (threshold: <2.0 good, >2.5 rebuild)
+       if balance_ratio < 2.0:
+           status = "✅ HEALTHY"
+           action = "Continue monitoring"
+       elif balance_ratio < 2.5:
+           status = "⚠️  FAIR"
+           action = "Plan rebuild"
+       else:
+           status = "❌ CRITICAL"
+           action = "Rebuild immediately"
+       
+       print(f"Status:           {status}")
+       print(f"Action:           {action}")
+       print(f"{'='*60}\n")
+       
+       return {
+           'balance_ratio': balance_ratio,
+           'total_vectors': total_vectors,
+           'status': status,
+           'action': action
+       }
+   
+   # ✅ GOOD: Regular health checks (schedule daily/weekly)
+   health = monitor_ivf_health(
+       client, 
+       "documents", 
+       "embedding",
+       expected_lists=100
+   )
+   
+   # ✅ GOOD: Automated alerting
+   if health['balance_ratio'] > 2.5:
+       # Send alert (email, Slack, PagerDuty, etc.)
+       print(f"🚨 ALERT: Index needs attention! Balance ratio: {health['balance_ratio']:.2f}")
+
+IVF Index Rebuild Strategy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   def rebuild_ivf_index(client, table_name, column_name, index_name):
+       """
+       Rebuild IVF index with optimal parameters.
+       
+       When to rebuild:
+       - Balance ratio > 2.5
+       - After bulk inserts (>20% new data)
+       - Query performance degradation
+       - After major deletes or updates
+       """
+       print(f"Rebuilding IVF index: {table_name}.{column_name}")
+       
+       # ✅ GOOD: Get current stats before rebuild
+       old_stats = client.vector_ops.get_ivf_stats(table_name, column_name)
+       old_counts = old_stats['distribution']['centroid_count']
+       total_vectors = sum(old_counts)
+       old_balance = max(old_counts) / min(old_counts) if min(old_counts) > 0 else float('inf')
+       
+       print(f"  Old stats: {total_vectors} vectors, balance {old_balance:.2f}")
+       
+       # ✅ GOOD: Calculate optimal lists parameter
+       # Rule: lists = √N to 4×√N (where N = total vectors)
+       optimal_lists = int(math.sqrt(total_vectors) * 2)  # Using 2×√N
+       optimal_lists = max(10, min(optimal_lists, 1000))  # Clamp between 10-1000
+       
+       print(f"  Calculated optimal lists: {optimal_lists}")
+       
+       # ✅ GOOD: Drop and recreate index
+       try:
+           # Drop old index
+           client.vector_ops.drop(table_name, index_name)
+           print(f"  ✓ Dropped old index")
+           
+           # Recreate with optimal parameters
+           client.vector_ops.create_ivf(
+               table_name,
+               name=index_name,
+               column=column_name,
+               lists=optimal_lists,
+               op_type="vector_l2_ops"
+           )
+           print(f"  ✓ Created new index with {optimal_lists} lists")
+           
+           # ✅ GOOD: Verify new index health
+           import time
+           time.sleep(2)  # Give index time to stabilize
+           
+           new_stats = client.vector_ops.get_ivf_stats(table_name, column_name)
+           new_counts = new_stats['distribution']['centroid_count']
+           new_balance = max(new_counts) / min(new_counts) if min(new_counts) > 0 else float('inf')
+           
+           improvement = ((old_balance - new_balance) / old_balance * 100)
+           
+           print(f"\nRebuild Results:")
+           print(f"  Old balance: {old_balance:.2f}")
+           print(f"  New balance: {new_balance:.2f}")
+           print(f"  Improvement: {improvement:.1f}%")
+           
+           if new_balance < 2.0:
+               print(f"  ✅ Index is now healthy!")
+           else:
+               print(f"  ⚠️  Consider adjusting lists parameter")
+               
+       except Exception as e:
+           print(f"  ❌ Rebuild failed: {e}")
+           raise
+   
+   # Usage in production
+   # ✅ GOOD: Schedule during low-traffic periods
+   # ✅ GOOD: Check health first, rebuild only if needed
+   health = monitor_ivf_health(client, "documents", "embedding", expected_lists=100)
+   if health['balance_ratio'] > 2.5:
+       rebuild_ivf_index(client, "documents", "embedding", "idx_embedding_ivf")
+
+IVF Index Parameter Selection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   import math
+   
+   # ✅ GOOD: Calculate optimal lists (guideline: <1K: 10-20, 1K-100K: 50-200, >100K: √N to 4×√N)
+   total_vectors = 50000
+   optimal_lists = int(math.sqrt(total_vectors) * 2)  # Using 2×√N = ~316 lists
+   
+   client.vector_ops.create_ivf(
+       "large_table",
+       name="idx_vectors",
+       column="embedding",
+       lists=optimal_lists,
+       op_type="vector_l2_ops"
+   )
+
+Fulltext Index Maintenance
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import FulltextParserType
+   
+   # ✅ GOOD: BM25 for most cases, choose parser by content type
+   client.fulltext_index.create("articles", "idx_content", ["title", "content"], algorithm="BM25")
+   
+   # For Chinese: NGRAM parser
+   client.fulltext_index.create("chinese_docs", "idx_cn", "content", algorithm="BM25", 
+                                 parser=FulltextParserType.NGRAM)
+   
+   # For JSON: JSON parser (indexes values, not keys)
+   client.fulltext_index.create("json_docs", "idx_json", "data", algorithm="BM25",
+                                 parser=FulltextParserType.JSON)
+
+HNSW Index Considerations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from sqlalchemy import BigInteger, Column
+   from matrixone.sqlalchemy_ext import create_vector_column
+   
+   # ✅ GOOD: HNSW requires BigInteger primary key
+   class Document(Base):
+       __tablename__ = 'documents'
+       id = Column(BigInteger, primary_key=True)  # Must be BigInteger
+       embedding = create_vector_column(128, 'f32')
+   
+   # ✅ GOOD: Current workflow
+   client.create_table(Document)
+   client.batch_insert(Document, all_documents)  # Insert data first
+   
+   client.vector_ops.enable_hnsw()
+   client.vector_ops.create_hnsw(Document, "idx_embedding", "embedding", m=16)
+   
+   # 🚧 Coming Soon: Dynamic updates after index creation
+   # Current workaround: Drop index → Modify data → Recreate index
+
+Batch Operation Size Optimization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # ✅ GOOD: Optimal batch sizes for different operations
+   
+   # For inserts: 1000-10000 rows per batch
+   batch_size = 5000
+   for i in range(0, len(large_dataset), batch_size):
+       batch = large_dataset[i:i + batch_size]
+       client.batch_insert("table_name", batch)
+       print(f"Inserted batch {i//batch_size + 1}")
+   
+   # For vector data: smaller batches (vectors are larger)
+   vector_batch_size = 1000
+   for i in range(0, len(vector_data), vector_batch_size):
+       batch = vector_data[i:i + vector_batch_size]
+       client.batch_insert("vectors_table", batch)
+   
+   # ❌ AVOID: Too large batches (memory issues)
+   # client.batch_insert("table", million_rows)  # May cause OOM
+   
+   # ❌ AVOID: Too small batches (performance issues)
+   # for row in data:
+   #     client.insert("table", row)  # Very slow!
+
 Error Handling Best Practices
 ------------------------------
 

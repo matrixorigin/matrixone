@@ -76,6 +76,15 @@ MatrixOne supports specialized parsers for different content types:
 
 **JSON Parser** - For searching within JSON documents:
 
+.. note::
+   **JSON Parser Key Points:**
+   
+   * The JSON parser indexes **VALUES** in JSON documents, not keys
+   * Perfect for searching product specifications, user preferences, configuration data
+   * Supports nested JSON structures
+   * Works with both JSON columns and TEXT columns containing JSON
+   * Can be combined with regular SQL filters for powerful queries
+
 .. code-block:: python
 
    from matrixone import Client, FulltextParserType
@@ -408,6 +417,172 @@ Basic Fulltext Search
    print("Search with scoring using model:")
    for row in result.fetchall():
        print(f"  {row[1]} (Relevance: {row[4]:.4f})")
+
+Fulltext Search Modes and Operators
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MatrixOne supports two fulltext search modes with different operators and use cases:
+
+Natural Language Mode
+^^^^^^^^^^^^^^^^^^^^^^
+
+**Best for**: User-facing search, Google-style queries, general search applications
+
+**Features**:
+
+* Automatic stopword removal (e.g., "the", "a", "is", "to")
+* Automatic word stemming (e.g., "running" → "run")
+* Natural relevance scoring (BM25 or TF-IDF)
+* No special operators needed
+* Perfect for search boxes and user queries
+
+**Usage:**
+
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import natural_match
+   
+   # Simple keyword search
+   result = client.query(Article).filter(
+       natural_match(Article.content, query="machine learning")
+   ).execute()
+   
+   # Multi-word natural query
+   result = client.query(Article).filter(
+       natural_match(Article.title, Article.content, 
+                    query="how to learn python programming")
+   ).execute()
+   
+   # Question-like queries (stopwords handled automatically)
+   result = client.query(Article).filter(
+       natural_match(Article.content, query="what is deep learning")
+   ).execute()
+
+**Best for**: User queries, search boxes, general search
+
+Boolean Mode
+^^^^^^^^^^^^^
+
+**Best for**: Precise control, advanced filters, complex logic
+
+**Boolean Mode Operators:**
+
+1. **MUST** (+ operator, required terms):
+   
+   .. code-block:: python
+   
+      from matrixone.sqlalchemy_ext import boolean_match
+      
+      # Must contain "machine" AND "learning"
+      result = client.query(Article).filter(
+          boolean_match(Article.content).must("machine", "learning")
+      ).execute()
+      
+      # Must contain "Python"
+      result = client.query(Article).filter(
+          boolean_match(Article.content).must("Python")
+      ).execute()
+
+2. **MUST_NOT** (- operator, excluded terms):
+   
+   .. code-block:: python
+   
+      # Contains "programming" but NOT "legacy"
+      result = client.query(Article).filter(
+          boolean_match(Article.content)
+          .must("programming")
+          .must_not("legacy")
+      ).execute()
+      
+      # Contains "learning" but NOT "deep"
+      result = client.query(Article).filter(
+          boolean_match(Article.content)
+          .must("learning")
+          .must_not("deep")
+      ).execute()
+
+3. **ENCOURAGE** (boost relevance, optional terms):
+   
+   .. code-block:: python
+   
+      # Must have "Python", boost if has "data" or "science"
+      result = client.query(Article).filter(
+          boolean_match(Article.content)
+          .must("Python")
+          .encourage("data", "science")
+      ).execute()
+      
+      # Articles with encouraged terms rank higher
+
+4. **DISCOURAGE** (~ operator, reduce relevance):
+   
+   .. code-block:: python
+   
+      # Must have "Python", discourage "legacy" (still matches but ranks lower)
+      result = client.query(Article).filter(
+          boolean_match(Article.content)
+          .must("Python")
+          .encourage("modern")
+          .discourage("legacy")
+      ).execute()
+
+5. **PHRASE** ("" operator, exact phrase matching):
+   
+   .. code-block:: python
+   
+      # Exact phrase "neural networks"
+      result = client.query(Article).filter(
+          boolean_match(Article.content).phrase("neural networks")
+      ).execute()
+      
+      # Exact phrase "best practices"
+      result = client.query(Article).filter(
+          boolean_match(Article.content).phrase("best practices")
+      ).execute()
+
+6. **GROUP** (combine terms with OR logic):
+   
+   .. code-block:: python
+   
+      from matrixone.sqlalchemy_ext.fulltext_search import group
+      
+      # Must contain either "programming" OR "development"
+      result = client.query(Article).filter(
+          boolean_match(Article.content)
+          .must(group().medium("programming", "development"))
+      ).execute()
+
+**Complex Boolean Queries:**
+
+.. code-block:: python
+
+   # Complex example: All operators combined
+   result = client.query(Article).filter(
+       boolean_match(Article.content)
+       .must("learning")                              # Required term
+       .must(group().medium("machine", "deep"))       # Required: either "machine" OR "deep"
+       .encourage("tutorial")                          # Optional: boosts relevance
+       .discourage("advanced")                         # Optional: reduces relevance
+       .must_not("legacy")                            # Excluded term
+   ).execute()
+   
+   # Practical example: Python articles
+   result = client.query(Article).filter(
+       boolean_match(Article.title, Article.content)
+       .must("Python")                                # Must contain Python
+       .encourage("beginner", "tutorial", "guide")    # Prefer beginner content
+       .must_not("deprecated", "outdated")            # Exclude old content
+   ).execute()
+
+**Quick Comparison:**
+
+==================  =======================  =======================
+Feature             Natural Mode             Boolean Mode
+==================  =======================  =======================
+Query Style         "how to learn python"    must("python")
+Processing          Auto (stopwords/stem)    Exact terms
+Best For            Search boxes             Advanced filters
+==================  =======================  =======================
 
 Advanced Fulltext Search
 ~~~~~~~~~~~~~~~~~~~~~~~~
