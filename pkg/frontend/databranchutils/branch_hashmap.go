@@ -55,11 +55,36 @@ type branchHashmap struct {
 		states [][3]uint64
 	}
 
-	concurrency int
-	pool        *ants.Pool
+	concurrency    int
+	pool           *ants.Pool
+	entryBatchPool sync.Pool
 }
 
 const branchHashSeed uint64 = 0x9e3779b97f4a7c15
+
+type preparedEntry struct {
+	key   []byte
+	value []byte
+}
+
+type entryBlock struct {
+	deallocator malloc.Deallocator
+	remaining   int
+}
+
+func (eb *entryBlock) release() {
+	if eb == nil {
+		return
+	}
+	if eb.remaining <= 0 {
+		return
+	}
+	eb.remaining--
+	if eb.remaining == 0 && eb.deallocator != nil {
+		eb.deallocator.Deallocate(malloc.NoHints)
+		eb.deallocator = nil
+	}
+}
 
 // BranchHashmapOption configures a branchHashmap instance.
 type BranchHashmapOption func(*branchHashmap)
@@ -181,11 +206,6 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 		return nil
 	}
 
-	type preparedEntry struct {
-		key   []byte
-		value []byte
-	}
-
 	entryCh := make(chan []preparedEntry, concurrency)
 	var wg sync.WaitGroup
 	var encodeErr atomic.Pointer[error]
@@ -201,11 +221,19 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 			if encodeErr.Load() != nil {
 				return
 			}
-			keyPacker := types.NewPacker()
-			valuePacker := types.NewPacker()
-			defer keyPacker.Close()
-			defer valuePacker.Close()
-			chunk := make([]preparedEntry, 0, end-start)
+			keyPacker := bh.getPacker()
+			valuePacker := bh.getPacker()
+			defer bh.putPacker(keyPacker)
+			defer bh.putPacker(valuePacker)
+
+			chunk := bh.getPreparedEntryBatch(end - start)
+			submitted := false
+			defer func() {
+				if !submitted {
+					bh.putPreparedEntryBatch(chunk)
+				}
+			}()
+
 			for idx := start; idx < end; idx++ {
 				if encodeErr.Load() != nil {
 					return
@@ -228,6 +256,7 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 				})
 			}
 			if len(chunk) > 0 {
+				submitted = true
 				entryCh <- chunk
 			}
 		})
@@ -254,23 +283,66 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 
 	for chunk := range entryCh {
 		if encodeErr.Load() != nil {
+			bh.putPreparedEntryBatch(chunk)
 			continue
 		}
-		for _, prepared := range chunk {
-			hash := bh.hashKey(prepared.key)
-			entry, err := bh.newEntry(hash, prepared.key, prepared.value)
+		if len(chunk) == 0 {
+			bh.putPreparedEntryBatch(chunk)
+			continue
+		}
+
+		totalBytes := 0
+		for i := range chunk {
+			totalBytes += len(chunk[i].key) + len(chunk[i].value)
+		}
+
+		var (
+			buf         []byte
+			deallocator malloc.Deallocator
+			err         error
+		)
+		if totalBytes > 0 {
+			buf, deallocator, err = bh.allocateBuffer(uint64(totalBytes))
 			if err != nil {
 				errCopy := err
 				encodeErr.CompareAndSwap(nil, &errCopy)
-				break
+				bh.putPreparedEntryBatch(chunk)
+				continue
+			}
+		}
+
+		block := &entryBlock{
+			deallocator: deallocator,
+			remaining:   len(chunk),
+		}
+		offset := 0
+		for i := range chunk {
+			prepared := &chunk[i]
+			entrySize := len(prepared.key) + len(prepared.value)
+			var entryBuf []byte
+			if entrySize > 0 {
+				entryBuf = buf[offset : offset+entrySize]
+				copy(entryBuf[:len(prepared.key)], prepared.key)
+				copy(entryBuf[len(prepared.key):], prepared.value)
+			}
+			offset += entrySize
+			entry := &hashEntry{
+				hash:     bh.hashKey(prepared.key),
+				buf:      entryBuf,
+				keyLen:   uint32(len(prepared.key)),
+				valueLen: uint32(len(prepared.value)),
+				block:    block,
 			}
 			bh.insertEntry(entry)
 		}
+		bh.memInUse += uint64(totalBytes)
+		bh.putPreparedEntryBatch(chunk)
 	}
 
 	if errPtr := encodeErr.Load(); errPtr != nil {
 		return *errPtr
 	}
+
 	return nil
 }
 
@@ -290,29 +362,35 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, remove bool) 
 	bh.mu.Lock()
 	defer bh.mu.Unlock()
 
+	var (
+		rowCount = keyVecs[0].Length()
+		results  = make([]GetResult, rowCount)
+	)
+
 	if bh.closed {
 		return nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
 	if len(bh.keyTypes) == 0 {
-		return nil, nil
+		// empty hashmap
+		return results, nil
 	}
+
 	if len(keyVecs) != len(bh.keyTypes) {
 		return nil, moerr.NewInvalidInputNoCtxf("expected %d key vectors, got %d", len(bh.keyTypes), len(keyVecs))
 	}
 
-	rowCount := keyVecs[0].Length()
 	for i := 1; i < len(keyVecs); i++ {
 		if keyVecs[i].Length() != rowCount {
 			return nil, moerr.NewInvalidInputNoCtxf("key vector length mismatch at column %d", i)
 		}
 	}
+
 	for i, vec := range keyVecs {
 		if *vec.GetType() != bh.keyTypes[i] {
 			return nil, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
 		}
 	}
 
-	results := make([]GetResult, rowCount)
 	keyIndexes := make([]int, len(keyVecs))
 	for i := range keyVecs {
 		keyIndexes[i] = i
@@ -596,30 +674,32 @@ func (bh *branchHashmap) putPacker(p *types.Packer) {
 	bh.packerPool.Put(p)
 }
 
+func (bh *branchHashmap) getPreparedEntryBatch(capacity int) []preparedEntry {
+	if capacity <= 0 {
+		capacity = 1
+	}
+	if v := bh.entryBatchPool.Get(); v != nil {
+		batch := v.([]preparedEntry)
+		if cap(batch) < capacity {
+			return make([]preparedEntry, 0, capacity)
+		}
+		return batch[:0]
+	}
+	return make([]preparedEntry, 0, capacity)
+}
+
+func (bh *branchHashmap) putPreparedEntryBatch(batch []preparedEntry) {
+	for i := range batch {
+		batch[i].key = nil
+		batch[i].value = nil
+	}
+	bh.entryBatchPool.Put(batch[:0])
+}
+
 func (bh *branchHashmap) hashKey(key []byte) uint64 {
 	bh.hashScratch.rows[0] = key
 	hashtable.BytesBatchGenHashStatesWithSeed(&bh.hashScratch.rows[0], &bh.hashScratch.states[0], 1, branchHashSeed)
 	return bh.hashScratch.states[0][0]
-}
-
-func (bh *branchHashmap) newEntry(hash uint64, key, value []byte) (*hashEntry, error) {
-	total := len(key) + len(value)
-	buf, deallocator, err := bh.allocateBuffer(uint64(total))
-	if err != nil {
-		return nil, err
-	}
-	copy(buf[:len(key)], key)
-	copy(buf[len(key):], value)
-
-	e := &hashEntry{
-		hash:        hash,
-		buf:         buf,
-		deallocator: deallocator,
-		keyLen:      uint32(len(key)),
-		valueLen:    uint32(len(value)),
-	}
-	bh.memInUse += uint64(total)
-	return e, nil
 }
 
 func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator, error) {
@@ -884,27 +964,33 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 }
 
 type hashEntry struct {
-	hash        uint64
-	buf         []byte
-	deallocator malloc.Deallocator
-	keyLen      uint32
-	valueLen    uint32
+	hash     uint64
+	buf      []byte
+	keyLen   uint32
+	valueLen uint32
+	block    *entryBlock
 }
 
 func (e *hashEntry) keyBytes() []byte {
+	if e.keyLen == 0 {
+		return nil
+	}
 	return e.buf[:e.keyLen]
 }
 
 func (e *hashEntry) valueBytes() []byte {
+	if e.valueLen == 0 {
+		return nil
+	}
 	return e.buf[e.keyLen : e.keyLen+e.valueLen]
 }
 
 func (e *hashEntry) release() {
-	if e.deallocator != nil {
-		e.deallocator.Deallocate(malloc.NoHints)
-	}
 	e.buf = nil
-	e.deallocator = nil
+	if e.block != nil {
+		e.block.release()
+		e.block = nil
+	}
 }
 
 type hashBucket struct {

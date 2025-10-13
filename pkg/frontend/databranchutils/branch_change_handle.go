@@ -6,6 +6,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -48,13 +49,13 @@ var CollectChanges = func(
 	ctx context.Context,
 	eng engine.Engine,
 	accountId uint32,
-	txnSnapshot timestamp.Timestamp,
+	snapshot timestamp.Timestamp,
 	rel engine.Relation,
 	fromTs, toTs types.TS,
 	mp *mpool.MPool,
 	isClonedTable bool,
 ) (engine.ChangesHandle, error) {
-	//return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
+
 	var (
 		err error
 	)
@@ -66,7 +67,7 @@ var CollectChanges = func(
 		item := eng.(*disttae.Engine).GetLatestCatalogCache().GetTableByIdAndTime(
 			accountId,
 			rel.GetDBID(ctx), rel.GetTableID(ctx),
-			txnSnapshot,
+			snapshot,
 		)
 
 		t := types.TimestampToTS(item.Ts)
@@ -81,24 +82,26 @@ var CollectChanges = func(
 		return nil, err
 	}
 
-	//handle.filterData = func(bat *batch.Batch) error {
-	//	var (
-	//		sels []int64
-	//	)
-	//
-	//	tsCol := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[bat.VectorCount()-1])
-	//	for i, ts := range tsCol {
-	//		if ts.LT(&minTS) {
-	//			sels = append(sels, int64(i))
-	//		}
-	//	}
-	//
-	//	if len(sels) > 0 {
-	//		bat.Shrink(sels, true)
-	//	}
-	//
-	//	return nil
-	//}
+	// for now, we cannot ignore this, since the change collector
+	// may be collected some rows that not belongs to the range [minTS, now].
+	handle.filterData = func(bat *batch.Batch) error {
+		var (
+			sels []int64
+		)
+
+		tsCol := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[bat.VectorCount()-1])
+		for i, ts := range tsCol {
+			if ts.LT(&minTS) {
+				sels = append(sels, int64(i))
+			}
+		}
+
+		if len(sels) > 0 {
+			bat.Shrink(sels, true)
+		}
+
+		return nil
+	}
 
 	return handle, nil
 }
