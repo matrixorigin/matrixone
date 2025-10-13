@@ -459,7 +459,7 @@ func (mr *MockTxnOperatorMockRecorder) AddWorkspace(workspace interface{}) *gomo
 }
 
 // AppendEventCallback mocks base method.
-func (m *MockTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(client.TxnEvent)) {
+func (m *MockTxnOperator) AppendEventCallback(event client.EventType, callbacks ...client.TxnEventCallback) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{event}
 	for _, a := range callbacks {
