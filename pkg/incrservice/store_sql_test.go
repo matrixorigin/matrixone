@@ -285,7 +285,7 @@ func (tTxnOp *testTxnOperator) GetWorkspace() client.Workspace {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(client.TxnEvent)) {
+func (tTxnOp *testTxnOperator) AppendEventCallback(event client.EventType, callbacks ...client.TxnEventCallback) {
 	//TODO implement me
 	panic("implement me")
 }
