@@ -3632,6 +3632,12 @@ class VectorManager:
         if not success:
             raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}")
 
+        # Add summary log
+        op_type_str = op_type.value if hasattr(op_type, 'value') else op_type
+        self.client.logger.info(
+            f"✓ Created IVF index '{name}' on {table_name}.{column} | " f"lists={lists} | op_type={op_type_str}"
+        )
+
         return self
 
     def create_hnsw(
@@ -3685,6 +3691,7 @@ class VectorManager:
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
+        # Build index creation SQL
         success = HnswVectorIndex.create_index(
             engine=self.client.get_sqlalchemy_engine(),
             table_name=table_name,
@@ -3698,6 +3705,13 @@ class VectorManager:
 
         if not success:
             raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}")
+
+        # Add summary log
+        op_type_str = op_type.value if hasattr(op_type, 'value') else op_type
+        self.client.logger.info(
+            f"✓ Created HNSW index '{name}' on {table_name}.{column} | "
+            f"m={m} | ef_construction={ef_construction} | ef_search={ef_search} | op_type={op_type_str}"
+        )
 
         return self
 
@@ -3837,6 +3851,9 @@ class VectorManager:
 
         if not success:
             raise Exception(f"Failed to drop vector index {name} from table {table_name}")
+
+        # Add summary log
+        self.client.logger.info(f"✓ Dropped vector index '{name}' from {table_name}")
 
         return self
 
@@ -4051,7 +4068,9 @@ class VectorManager:
 
         # Convert distance type to enum
         if distance_type == "l2":
-            distance_func = DistanceFunction.L2_SQ
+            distance_func = DistanceFunction.L2  # Use L2 for consistency with ORM l2_distance()
+        elif distance_type == "l2_sq":
+            distance_func = DistanceFunction.L2_SQ  # Explicitly use squared distance if needed
         elif distance_type == "cosine":
             distance_func = DistanceFunction.COSINE
         elif distance_type == "inner_product":

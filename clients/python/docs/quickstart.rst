@@ -174,7 +174,7 @@ Vector Operations with Table Models
    # Create table using model
    client.create_table(Document)
 
-   # Insert vector data
+   # ⚠️ Insert initial data BEFORE creating IVF index (recommended)
    client.insert("documents", {
        "id": 1,
        "title": "Introduction to AI",
@@ -185,8 +185,11 @@ Vector Operations with Table Models
    # Enable IVF indexing
    client.vector_ops.enable_ivf()
 
-   # Create IVF index (first argument is positional)
+   # Create IVF index after initial data (better clustering)
    client.vector_ops.create_ivf(Document, name="idx_embedding", column="embedding", lists=100)
+   
+   # IVF supports dynamic updates (can continue inserting)
+   client.insert("documents", {"id": 2, ...})  # ✅ Works fine
 
    # Vector similarity search using simple interface (first argument is positional)
    query_vector = [0.1] * 384
