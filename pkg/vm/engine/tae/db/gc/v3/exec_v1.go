@@ -354,9 +354,10 @@ func MakeSnapshotAndPitrFineFilter(
 			if transObjects[name] != nil {
 				tables := transObjects[name]
 				if entry := tables[tableID]; entry != nil {
-
+					// Check if the table still exists
+					_, ok := snapshotMeta.GetAccountId(tableID)
 					// The table has not been dropped, and the dropTS is empty, so it cannot be deleted.
-					if entry.dropTS.IsEmpty() {
+					if entry.dropTS.IsEmpty() && ok {
 						continue
 					}
 

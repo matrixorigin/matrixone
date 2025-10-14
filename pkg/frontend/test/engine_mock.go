@@ -1075,16 +1075,16 @@ func (mr *MockRelationMockRecorder) BuildShardingReaders(ctx, proc, expr, relDat
 // CollectChanges mocks base method.
 func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CollectChanges", ctx, from, to, mp)
+	ret := m.ctrl.Call(m, "CollectChanges", ctx, from, to, skipDeletes, mp)
 	ret0, _ := ret[0].(engine.ChangesHandle)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CollectChanges indicates an expected call of CollectChanges.
-func (mr *MockRelationMockRecorder) CollectChanges(ctx, from, to, mp interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) CollectChanges(ctx, from, to, skipDeletes, mp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectChanges", reflect.TypeOf((*MockRelation)(nil).CollectChanges), ctx, from, to, mp)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectChanges", reflect.TypeOf((*MockRelation)(nil).CollectChanges), ctx, from, to, skipDeletes, mp)
 }
 
 // CollectTombstones mocks base method.
@@ -1201,6 +1201,7 @@ func (mr *MockRelationMockRecorder) GetExtraInfo() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExtraInfo", reflect.TypeOf((*MockRelation)(nil).GetExtraInfo))
 }
 
+// GetNonAppendableObjectStats mocks base method.
 func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
@@ -1318,18 +1319,18 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize in
 }
 
 // PrimaryKeysMayBeModified mocks base method.
-func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex, _ int32) (bool, error) {
+func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex, partitionIndex int32) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, batch, pkIndex)
+	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, batch, pkIndex, partitionIndex)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // PrimaryKeysMayBeModified indicates an expected call of PrimaryKeysMayBeModified.
-func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, batch, pkIndex interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, batch, pkIndex, partitionIndex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeModified", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeModified), ctx, from, to, batch, pkIndex)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeModified", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeModified), ctx, from, to, batch, pkIndex, partitionIndex)
 }
 
 // PrimaryKeysMayBeUpserted mocks base method.
@@ -2011,6 +2012,20 @@ func (mr *MockEngineMockRecorder) GetService() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetService", reflect.TypeOf((*MockEngine)(nil).GetService))
 }
 
+// HasTempEngine mocks base method.
+func (m *MockEngine) HasTempEngine() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasTempEngine")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasTempEngine indicates an expected call of HasTempEngine.
+func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
+}
+
 // Hints mocks base method.
 func (m *MockEngine) Hints() engine.Hints {
 	m.ctrl.T.Helper()
@@ -2037,19 +2052,6 @@ func (m *MockEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 func (mr *MockEngineMockRecorder) LatestLogtailAppliedTime() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LatestLogtailAppliedTime", reflect.TypeOf((*MockEngine)(nil).LatestLogtailAppliedTime))
-}
-
-// HasTempEngine mocks base method.
-func (m *MockEngine) HasTempEngine() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HasTempEngine")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
 }
 
 // New mocks base method.
