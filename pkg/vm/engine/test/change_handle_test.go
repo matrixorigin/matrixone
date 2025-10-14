@@ -4341,7 +4341,7 @@ func TestInitSql(t *testing.T) {
 	// idAllocator := common.NewIdAllocator(1000)
 
 	var (
-		accountId = catalog.System_Account
+		accountId      = catalog.System_Account
 		tableAccountID = uint32(1)
 	)
 
