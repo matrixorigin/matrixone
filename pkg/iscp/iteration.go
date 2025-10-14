@@ -192,9 +192,11 @@ func ExecuteIteration(
 	if changes != nil {
 		defer changes.Close()
 	}
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iteration:") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
@@ -289,6 +291,7 @@ func ExecuteIteration(
 			}
 			var data *ISCPData
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
@@ -317,22 +320,27 @@ func ExecuteIteration(
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
 						if typ != ISCPDataType_Snapshot {
-							panic("logic error")
+							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be snapshot", typ))
+							data = NewISCPData(true, nil, nil, err)
+						} else {
+							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+							data = NewISCPData(false, insertAtmBatch, nil, nil)
 						}
-						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						data = NewISCPData(false, insertAtmBatch, nil, nil)
 					case engine.ChangesHandle_Tail_wip:
-						panic("logic error")
+						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
+						data = NewISCPData(true, nil, nil, err)
 					case engine.ChangesHandle_Tail_done:
 						if typ != ISCPDataType_Tail {
-							panic("logic error")
+							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be tail", typ))
+							data = NewISCPData(true, nil, nil, err)
+						} else {
+							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+							deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
+							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+							deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+							data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
 						}
-						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-						data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
 
 					}
 				}
