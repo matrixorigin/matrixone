@@ -871,6 +871,9 @@ message Node {
 	string dedup_col_name = 67;
 	repeated Type dedup_col_types = 68 [(gogoproto.nullable) = false];
 	bool rollup_filter = 69;
+
+    // compile time performance setting
+    int64 spill_mem = 70;
 }
 
 message SnapshotExtraInfo {
