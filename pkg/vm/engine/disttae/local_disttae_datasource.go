@@ -661,7 +661,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		physicalColumn    vector.Vector
 		physicalColumnPtr *vector.Vector
 		physicalColumnPos int
+		commitTSColumnPos int
+		commitTSColumnPtr *vector.Vector
 	)
+
 	if physicalColumnPos = slices.Index(
 		outBatch.Attrs,
 		objectio.PhysicalAddr_Attr,
@@ -671,6 +674,13 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		defer physicalColumn.Free(mp)
 	} else {
 		physicalColumnPtr = outBatch.Vecs[physicalColumnPos]
+	}
+
+	if commitTSColumnPos = slices.Index(
+		outBatch.Attrs,
+		objectio.DefaultCommitTS_Attr,
+	); commitTSColumnPos != -1 {
+		commitTSColumnPtr = outBatch.Vecs[commitTSColumnPos]
 	}
 
 	applyPolicy := engine.TombstoneApplyPolicy(
@@ -723,8 +733,19 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				return err
 			}
 
+			if commitTSColumnPtr != nil {
+				if err = vector.AppendFixed(
+					commitTSColumnPtr,
+					vector.GetFixedAtNoTypeCheck[types.TS](entry.Batch.Vecs[1], int(entry.Offset)),
+					false,
+					mp,
+				); err != nil {
+					return err
+				}
+			}
+
 			for i := range outBatch.Attrs {
-				if i == physicalColumnPos {
+				if i == physicalColumnPos || i == commitTSColumnPos {
 					continue
 				}
 				idx := 2 /*rowid and commits*/ + seqNums[i]
