@@ -934,7 +934,8 @@ func constructChangeHandle(
 		baseScanSnapshot timestamp.Timestamp
 	)
 
-	txnSnapshot = ses.GetTxnHandler().GetTxn().SnapshotTS()
+	txnOp := ses.GetTxnHandler().GetTxn()
+	txnSnapshot = txnOp.SnapshotTS()
 	tarToTS = txnSnapshot
 	baseToTS = txnSnapshot
 
@@ -959,6 +960,7 @@ func constructChangeHandle(
 		eng,
 		ses.GetAccountId(),
 		tarScanSnapshot,
+		txnOp,
 		tarRel,
 		types.TimestampToTS(tarFromTS),
 		types.TimestampToTS(tarToTS),
@@ -978,6 +980,7 @@ func constructChangeHandle(
 		eng,
 		ses.GetAccountId(),
 		baseScanSnapshot,
+		txnOp,
 		baseRel,
 		types.TimestampToTS(baseFromTS),
 		types.TimestampToTS(baseToTS),

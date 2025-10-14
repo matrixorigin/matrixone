@@ -130,7 +130,6 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 			bh.concurrency = 1
 		}
 	}
-	fmt.Println("concurrency", bh.concurrency)
 	pool, err := ants.NewPool(bh.concurrency, ants.WithPreAlloc(true))
 	if err != nil {
 		return nil, err
