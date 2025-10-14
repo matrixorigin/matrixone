@@ -4342,6 +4342,7 @@ func TestInitSql(t *testing.T) {
 
 	var (
 		accountId = catalog.System_Account
+		tableAccountID = uint32(1)
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -4364,15 +4365,21 @@ func TestInitSql(t *testing.T) {
 	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	ctxWithAccount := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, tableAccountID)
+	err = mock_mo_indexes(disttaeEngine, ctxWithAccount)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithAccount)
+	require.NoError(t, err)
+	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithAccount, "srcdb", "src_table", 10)
 	defer bats.Close()
 
-	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithAccount, "srcdb", "src_table")
 	require.Nil(t, err)
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithTimeout)
+	txn.Commit(ctxWithAccount)
 
 	// init cdc executor
 	opts := &iscp.ISCPExecutorOption{
@@ -4400,7 +4407,7 @@ func TestInitSql(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn,
+		ctxWithAccount, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -4422,26 +4429,26 @@ func TestInitSql(t *testing.T) {
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "idx")
+			ts, ok := cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
 			if !ok || !ts.GE(&now) {
 				return false
 			}
 			return true
 		},
 	)
-	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "idx")
+	ts, ok := cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
 	assert.True(t, ok)
 	assert.True(t, ts.GE(&now))
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
 	require.NoError(t, err)
 
-	_, err = disttaeEngine.Engine.Database(ctx, "t", txn)
+	_, err = disttaeEngine.Engine.Database(ctxWithAccount, "t", txn)
 	require.NoError(t, err)
 	err = txn.Commit(ctxWithTimeout)
 	require.NoError(t, err)
 
-	txn2, rel2 := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), "srcdb", "src_table")
+	txn2, rel2 := testutil2.GetRelation(t, tableAccountID, taeHandler.GetDB(), "srcdb", "src_table")
 	require.Nil(t, rel2.Append(ctx, bats))
 	require.Nil(t, txn2.Commit(ctx))
 
@@ -4449,16 +4456,17 @@ func TestInitSql(t *testing.T) {
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "idx")
+			ts, ok := cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
 			if !ok || !ts.GE(&now) {
 				return false
 			}
 			return true
 		},
 	)
-	ts, ok = cdcExecutor.GetWatermark(accountId, tableID, "idx")
+	ts, ok = cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
 	assert.True(t, ok)
 	assert.True(t, ts.GE(&now))
 
-	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "idx")
+	CheckTableData(t, disttaeEngine, ctxWithAccount, "srcdb", "src_table", tableID, "idx")
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }

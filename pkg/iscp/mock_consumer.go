@@ -95,6 +95,8 @@ type interalSqlConsumer struct {
 	preRowType RowType
 
 	maxAllowedPacket uint64
+
+	inited bool
 }
 
 func NewInteralSqlConsumer(
@@ -125,10 +127,6 @@ func NewInteralSqlConsumer(
 	s.internalSqlExecutor = exec
 	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, jobID.JobName)
 	logutil.Infof("iscp %v->%vs", tableDef.Name, s.targetTableName)
-	err := s.createTargetTable(context.Background())
-	if err != nil {
-		return nil, err
-	}
 
 	s.rowBuf = make([]byte, 0, 1024)
 
@@ -195,6 +193,7 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 	tableEnd := strings.Index(srcCreateSql, "(")
 	newTablePart := fmt.Sprintf("%s.%s", TargetDbName, s.targetTableName)
 	createTableSql := srcCreateSql[:tableStart] + " " + newTablePart + srcCreateSql[tableEnd:]
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, s.dataRetriever.GetAccountID())
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	result, err := s.internalSqlExecutor.Exec(ctx, createDBSql, executor.Options{})
@@ -211,6 +210,14 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	s.dataRetriever = data
 	data.GetAccountID()
 	data.GetTableID()
+
+	if !s.inited {
+
+		err := s.createTargetTable(context.Background())
+		if err != nil {
+			return err
+		}
+	}
 
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "consume" {
 		return moerr.NewInternalErrorNoCtx(msg)
@@ -451,7 +458,7 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(ctx context.Context, txn client.TxnO
 		return
 	}
 	if txn == nil {
-		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+		ctx := context.WithValue(ctx, defines.TenantIDKey{}, s.dataRetriever.GetAccountID())
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		var result executor.Result
@@ -464,6 +471,7 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(ctx context.Context, txn client.TxnO
 		return
 	}
 	var result executor.Result
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, s.dataRetriever.GetAccountID())
 	result, err = ExecWithResult(ctx, string(sqlBuffer), s.cnUUID, txn)
 	result.Close()
 	if err != nil {
