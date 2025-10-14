@@ -122,7 +122,8 @@ func ExecuteIteration(
 		}
 	}
 	if needInit {
-		err = ProcessInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL)
+		ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+		err = ProcessInitSQL(ctxWithAccount, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL)
 		if err != nil {
 			return
 		}

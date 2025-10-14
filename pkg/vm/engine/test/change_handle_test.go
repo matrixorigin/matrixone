@@ -4364,15 +4364,21 @@ func TestInitSql(t *testing.T) {
 	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	ctxWithAccount := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, uint32(1))
+	err = mock_mo_indexes(disttaeEngine, ctxWithAccount)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithAccount)
+	require.NoError(t, err)
+	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithAccount, "srcdb", "src_table", 10)
 	defer bats.Close()
 
-	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithAccount, "srcdb", "src_table")
 	require.Nil(t, err)
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithTimeout)
+	txn.Commit(ctxWithAccount)
 
 	// init cdc executor
 	opts := &iscp.ISCPExecutorOption{
@@ -4400,7 +4406,7 @@ func TestInitSql(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn,
+		ctxWithAccount, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -4461,4 +4467,5 @@ func TestInitSql(t *testing.T) {
 	assert.True(t, ts.GE(&now))
 
 	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "idx")
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
