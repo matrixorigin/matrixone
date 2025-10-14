@@ -536,7 +536,8 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 		return err
 	}
 
-	logutil.Infof("hnsw_cdc_update: db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+	logutil.Infof("hnsw_cdc_update[%p]: db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+		s,
 		s.tblcfg.DbName, s.tblcfg.SrcTable,
 		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
@@ -573,13 +574,14 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 
 	t2 := time.Now()
 	updateElapsed := t2.Sub(t)
-	logutil.Infof("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms",
-		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds())
+	logutil.Infof("hnsw_cdc_update[%p]: time elapsed: checkidx %d ms, update %d ms",
+		s, checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds())
 	return nil
 }
 
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
+	s.ts = time.Now().Unix()
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
 		return err
@@ -749,6 +751,7 @@ func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 		fs := finfo.Size()
 
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
+		ts++
 	}
 
 	if len(metas) > 0 {
