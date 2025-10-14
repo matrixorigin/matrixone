@@ -326,6 +326,12 @@ func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli ch
 	// First, copy all table IDs from snapshotMeta
 	tableExistenceMap := snapshotMeta.GetAllTableIDs()
 	catalog := checkpointCli.GetCatalog()
+	count := len(tableExistenceMap)
+	defer func() {
+		logutil.Warn("GC-TRACE-TABLE-LIST",
+			zap.Int("gc-table-count", count),
+			zap.Int("all-table-count", len(tableExistenceMap)))
+	}()
 	if catalog == nil {
 		return tableExistenceMap, nil
 	}
