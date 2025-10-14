@@ -328,7 +328,7 @@ func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli ch
 	catalog := checkpointCli.GetCatalog()
 	count := len(tableExistenceMap)
 	defer func() {
-		logutil.Warn("GC-TRACE-TABLE-LIST",
+		logutil.Info("GC-TRACE-TABLE-LIST",
 			zap.Int("gc-table-count", count),
 			zap.Int("all-table-count", len(tableExistenceMap)))
 	}()
@@ -342,8 +342,11 @@ func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli ch
 		itTable := db.MakeTableIt(true)
 		for itTable.Valid() {
 			table := itTable.Get().GetPayload()
-			tableID := table.GetID()
-			tableExistenceMap[tableID] = true
+			drop := table.GetDeleteAtLocked()
+			if drop.IsEmpty() {
+				tableID := table.GetID()
+				tableExistenceMap[tableID] = true
+			}
 			itTable.Next()
 		}
 	}
