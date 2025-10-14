@@ -109,7 +109,7 @@ func NewPartitionChangesHandle(
 		return nil, err
 	}
 	if end {
-		panic(fmt.Sprintf("logic error: from %s to %s", from.ToString(), to.ToString()))
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("logic error:from %s to %s", from.ToString(), to.ToString()))
 	}
 	return handle, err
 }
