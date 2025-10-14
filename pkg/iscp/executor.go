@@ -450,6 +450,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		err = moerr.NewErrStaleReadNoCtx("0-0", "0-0")
 		return
 	}
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "invalid timestamp" {
+		to = types.TS{}
+	}
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
