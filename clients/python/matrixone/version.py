@@ -519,8 +519,6 @@ def requires_version(
 class VersionError(MatrixOneError):
     """Raised when version compatibility check fails"""
 
-    pass
-
 
 # Initialize common feature requirements
 def _initialize_default_features():

@@ -30,7 +30,7 @@ from sqlalchemy.engine import Engine
 
 from .account import AccountManager, TransactionAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
-from .connection_hooks import ConnectionHook, ConnectionAction, create_connection_hook
+from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager, TransactionMetadataManager
@@ -1698,8 +1698,9 @@ class Client(BaseMatrixOneClient):
             table_name = model_class.__tablename__
             table = model_class.__table__
 
+            from sqlalchemy.schema import CreateIndex, CreateTable
+
             from .sqlalchemy_ext import FulltextIndex, VectorIndex
-            from sqlalchemy.schema import CreateTable, CreateIndex
 
             try:
                 engine_context = self.get_sqlalchemy_engine().begin()
@@ -2611,6 +2612,99 @@ class Client(BaseMatrixOneClient):
                 print(f"Warning: Failed to drop table {table_name}: {e}")
 
         return self
+
+    def get_secondary_index_tables(self, table_name: str) -> List[str]:
+        """
+        Get all secondary index table names for a given table.
+
+        Args:
+            table_name: Name of the table to get secondary indexes for
+
+        Returns:
+            List of secondary index table names
+
+        Examples::
+
+            >>> client = Client()
+            >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> index_tables = client.get_secondary_index_tables('cms_all_content_chunk_info')
+            >>> print(index_tables)
+            ['__mo_index_secondary_..._cms_id', '__mo_index_secondary_..._idx_all_content_length']
+        """
+        from .index_utils import build_get_index_tables_sql
+
+        sql, params = build_get_index_tables_sql(table_name)
+        result = self.execute(sql, params)
+        return [row[0] for row in result.fetchall()]
+
+    def get_secondary_index_table_by_name(self, table_name: str, index_name: str) -> Optional[str]:
+        """
+        Get the physical table name of a secondary index by its index name.
+
+        Args:
+            table_name: Name of the table
+            index_name: Name of the secondary index
+
+        Returns:
+            Physical table name of the secondary index, or None if not found
+
+        Examples::
+
+            >>> client = Client()
+            >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> index_table = client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id')
+            >>> print(index_table)
+            '__mo_index_secondary_018cfbda-bde1-7c3e-805c-3f8e71769f75_cms_id'
+        """
+        from .index_utils import build_get_index_table_by_name_sql
+
+        sql, params = build_get_index_table_by_name_sql(table_name, index_name)
+        result = self.execute(sql, params)
+        row = result.fetchone()
+        return row[0] if row else None
+
+    def verify_table_index_counts(self, table_name: str) -> int:
+        """
+        Verify that the main table and all its secondary index tables have the same row count.
+
+        This method compares the COUNT(*) of the main table with all its secondary index tables
+        in a single SQL query for consistency. If counts don't match, raises an exception.
+
+        Args:
+            table_name: Name of the table to verify
+
+        Returns:
+            Row count (int) if verification succeeds
+
+        Raises:
+            ValueError: If any secondary index table has a different count than the main table,
+                       with details about all counts in the error message
+
+        Examples::
+
+            >>> client = Client()
+            >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> count = client.verify_table_index_counts('cms_all_content_chunk_info')
+            >>> print(f"✓ Verification passed, row count: {count}")
+
+            >>> # If verification fails:
+            >>> try:
+            ...     count = client.verify_table_index_counts('some_table')
+            ... except ValueError as e:
+            ...     print(f"Verification failed: {e}")
+        """
+        from .index_utils import build_verify_counts_sql, process_verify_result
+
+        # Get all secondary index tables
+        index_tables = self.get_secondary_index_tables(table_name)
+
+        # Build and execute verification SQL
+        sql = build_verify_counts_sql(table_name, index_tables)
+        result = self.execute(sql)
+        row = result.fetchone()
+
+        # Process result and raise exception if verification fails
+        return process_verify_result(table_name, index_tables, row)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()

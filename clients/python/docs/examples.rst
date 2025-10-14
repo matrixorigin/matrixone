@@ -930,6 +930,90 @@ Modern ORM-style fulltext search with boolean_match and natural_match:
 
    orm_fulltext_search_example()
 
+Secondary Index Verification Examples
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Verify consistency of secondary indexes with the main table:
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.config import get_connection_params
+   from matrixone.orm import declarative_base
+   from sqlalchemy import Column, Integer, String, Index
+
+   def index_verification_example():
+       host, port, user, password, database = get_connection_params()
+       client = Client()
+       client.connect(host=host, port=port, user=user, password=password, database=database)
+
+       # Define model with secondary indexes
+       Base = declarative_base()
+
+       class Product(Base):
+           __tablename__ = 'products'
+           
+           id = Column(Integer, primary_key=True)
+           name = Column(String(100))
+           category = Column(String(50))
+           price = Column(Integer)
+           
+           # Define secondary indexes
+           __table_args__ = (
+               Index('idx_name', 'name'),
+               Index('idx_category', 'category'),
+               Index('idx_price', 'price'),
+           )
+
+       # Create table with indexes
+       client.create_table(Product)
+
+       # Insert data
+       products = [
+           {'id': i, 'name': f'Product {i}', 'category': f'Cat {i % 5}', 'price': i * 100}
+           for i in range(1, 1001)
+       ]
+       client.batch_insert(Product, products)
+
+       # 1. Get all secondary index tables
+       index_tables = client.get_secondary_index_tables('products')
+       print(f"Found {len(index_tables)} secondary indexes:")
+       for idx_table in index_tables:
+           print(f"  {idx_table}")
+
+       # 2. Get specific index by name
+       name_index = client.get_secondary_index_table_by_name('products', 'idx_name')
+       category_index = client.get_secondary_index_table_by_name('products', 'idx_category')
+       
+       print(f"\nIndex mappings:")
+       print(f"  idx_name -> {name_index}")
+       print(f"  idx_category -> {category_index}")
+
+       # 3. Verify all indexes have consistent row counts
+       try:
+           count = client.verify_table_index_counts('products')
+           print(f"\n✓ All indexes verified! Row count: {count}")
+       except ValueError as e:
+           print(f"\n✗ Verification failed:")
+           print(e)
+
+       # 4. Use in production monitoring
+       import time
+       for i in range(3):
+           try:
+               count = client.verify_table_index_counts('products')
+               print(f"{time.ctime()}: ✓ Indexes OK ({count} rows)")
+           except ValueError as e:
+               print(f"{time.ctime()}: ✗ INDEX MISMATCH!")
+               print(e)
+           time.sleep(1)
+
+       # Clean up
+       client.drop_table(Product)
+       client.disconnect()
+
+   index_verification_example()
+
 Error Handling Examples
 ~~~~~~~~~~~~~~~~~~~~~~~
 

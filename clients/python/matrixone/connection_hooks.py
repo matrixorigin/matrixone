@@ -18,6 +18,7 @@ Connection hooks for MatrixOne clients
 
 from enum import Enum
 from typing import Callable, List, Optional, Union
+
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine

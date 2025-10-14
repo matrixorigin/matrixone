@@ -31,6 +31,10 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Table size and row count statistics
   - Column data distribution analysis
   - Index usage metrics
+- 🔍 **Secondary Index Verification**: Verify consistency of secondary indexes with main table
+  - Get all secondary index table names
+  - Get specific index table by index name
+  - Verify row counts across main table and all indexes in single query
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
@@ -321,6 +325,27 @@ table_stats = brief_stats['documents']
 print(f"Total rows: {table_stats['row_cnt']}")
 print(f"Original size: {table_stats['original_size']} bytes")
 print(f"Compressed size: {table_stats['compress_size']} bytes")
+```
+
+### Secondary Index Verification
+
+```python
+# Get all secondary index tables
+index_tables = client.get_secondary_index_tables('my_table')
+print(f"Found {len(index_tables)} secondary indexes")
+
+# Get specific index by name
+physical_table = client.get_secondary_index_table_by_name('my_table', 'idx_name')
+print(f"Index 'idx_name' -> {physical_table}")
+
+# Verify all indexes have same count as main table
+try:
+    count = client.verify_table_index_counts('my_table')
+    print(f"✓ Verification passed! Row count: {count}")
+except ValueError as e:
+    print(f"✗ Index mismatch detected:")
+    print(e)
+    # Error includes all count details for debugging
 ```
 
 ### Version Management
