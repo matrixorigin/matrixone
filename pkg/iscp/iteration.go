@@ -158,16 +158,17 @@ func ExecuteIteration(
 	}
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
 	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
-	db, err := cnEngine.Database(ctx, dbName, txnOp)
+	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
 	if err != nil {
 		return
 	}
-	rel, err := db.Relation(ctx, tableName, nil)
+	rel, err := db.Relation(ctxWithAccount, tableName, nil)
 	if err != nil {
 		return
 	}
-	tableDef := rel.CopyTableDef(ctx)
-	if rel.GetTableID(ctx) != iterCtx.tableID {
+	tableDef := rel.CopyTableDef(ctxWithAccount)
+	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
 		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
 
