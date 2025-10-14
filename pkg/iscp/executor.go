@@ -383,6 +383,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			}
 			// check if there are any dirty tables
 			tables, toTS, minTS, err := exec.getDirtyTables(exec.ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
+			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
@@ -497,6 +498,7 @@ func (exec *ISCPTaskExecutor) GetJobType(accountID uint32, srcTableID uint64, jo
 }
 
 func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.TS) (err error) {
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "stale read" {
 		err = moerr.NewErrStaleReadNoCtx("0-0", "0-0")
 		return
@@ -527,6 +529,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		return
 	}
 	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
@@ -633,6 +636,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 }
 
 func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "replay" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 		return
@@ -686,7 +690,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 			if !dropAtVector.IsNull(uint64(i)) {
 				dropAt = dropAts[i]
 			}
-			exec.addOrUpdateJob(
+			err = exec.addOrUpdateJob(
 				accountIDs[i],
 				tableIDs[i],
 				jobNameVector.GetStringAt(i),
@@ -698,6 +702,9 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 				dropAt,
 				true,
 			)
+			if err != nil {
+				return false
+			}
 		}
 		return true
 	})
@@ -716,7 +723,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	jobStatusStr []byte,
 	dropAt types.Timestamp,
 	notPrint bool,
-) {
+) error {
 	var newCreate bool
 
 	var watermark types.TS
@@ -738,17 +745,17 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	watermark = types.StringToTS(watermarkStr)
 	jobSpec, err := UnmarshalJobSpec(jobSpecStr)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	jobStatus, err := UnmarshalJobStatus(jobStatusStr)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
 		if dropAt != 0 {
-			return
+			return nil
 		}
 		table = NewTableEntry(
 			exec,
@@ -761,6 +768,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		exec.setTable(table)
 	}
 	newCreate = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
