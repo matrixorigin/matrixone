@@ -106,7 +106,7 @@ class TestConnectionHook:
         # Verify that cursor.execute was called with the correct SQL
         self.mock_cursor.execute.assert_called_with("SET experimental_ivf_index = 1")
         self.mock_cursor.close.assert_called_once()
-        self.mock_client.logger.info.assert_called_with("✓ Enabled IVF vector operations")
+        self.mock_client.logger.debug.assert_called_with("✓ Enabled IVF vector operations")
 
     def test_execute_sync_with_hnsw_action(self):
         """Test synchronous execution with HNSW action"""
@@ -117,7 +117,7 @@ class TestConnectionHook:
         # Verify that cursor.execute was called with the correct SQL
         self.mock_cursor.execute.assert_called_with("SET experimental_hnsw_index = 1")
         self.mock_cursor.close.assert_called_once()
-        self.mock_client.logger.info.assert_called_with("✓ Enabled HNSW vector operations")
+        self.mock_client.logger.debug.assert_called_with("✓ Enabled HNSW vector operations")
 
     def test_execute_sync_with_fulltext_action(self):
         """Test synchronous execution with fulltext action"""
@@ -128,7 +128,7 @@ class TestConnectionHook:
         # Verify that cursor.execute was called with the correct SQL
         self.mock_cursor.execute.assert_called_with("SET experimental_fulltext_index = 1")
         self.mock_cursor.close.assert_called_once()
-        self.mock_client.logger.info.assert_called_with("✓ Enabled fulltext search operations")
+        self.mock_client.logger.debug.assert_called_with("✓ Enabled fulltext search operations")
 
     def test_execute_sync_with_vector_action(self):
         """Test synchronous execution with vector action (enables both IVF and HNSW)"""
@@ -140,8 +140,8 @@ class TestConnectionHook:
         expected_calls = [call("SET experimental_ivf_index = 1"), call("SET experimental_hnsw_index = 1")]
         self.mock_cursor.execute.assert_has_calls(expected_calls, any_order=True)
         self.mock_cursor.close.assert_called()
-        self.mock_client.logger.info.assert_any_call("✓ Enabled IVF vector operations")
-        self.mock_client.logger.info.assert_any_call("✓ Enabled HNSW vector operations")
+        self.mock_client.logger.debug.assert_any_call("✓ Enabled IVF vector operations")
+        self.mock_client.logger.debug.assert_any_call("✓ Enabled HNSW vector operations")
 
     def test_execute_sync_with_all_action(self):
         """Test synchronous execution with all action"""
@@ -157,9 +157,9 @@ class TestConnectionHook:
         ]
         self.mock_cursor.execute.assert_has_calls(expected_calls, any_order=True)
         self.mock_cursor.close.assert_called()
-        self.mock_client.logger.info.assert_any_call("✓ Enabled IVF vector operations")
-        self.mock_client.logger.info.assert_any_call("✓ Enabled HNSW vector operations")
-        self.mock_client.logger.info.assert_any_call("✓ Enabled fulltext search operations")
+        self.mock_client.logger.debug.assert_any_call("✓ Enabled IVF vector operations")
+        self.mock_client.logger.debug.assert_any_call("✓ Enabled HNSW vector operations")
+        self.mock_client.logger.debug.assert_any_call("✓ Enabled fulltext search operations")
 
     def test_execute_sync_with_custom_hook(self):
         """Test synchronous execution with custom hook"""

@@ -25,6 +25,7 @@ type safety and extensive documentation.
    fulltext_guide
    orm_guide
    metadata_guide
+   index_verification_guide
 
 .. toctree::
    :maxdepth: 2

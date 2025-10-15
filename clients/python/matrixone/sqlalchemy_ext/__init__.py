@@ -147,6 +147,7 @@ __all__ = [
     "FulltextIndex",
     "FulltextAlgorithmType",
     "FulltextModeType",
+    "FulltextParserType",
     "FulltextSearchBuilder",
     "create_fulltext_index",
     "fulltext_search_builder",

@@ -34,9 +34,10 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .account import Account, User
+from .async_metadata_manager import AsyncMetadataManager
 from .async_vector_index_manager import AsyncVectorManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
-from .connection_hooks import ConnectionHook, ConnectionAction, create_connection_hook
+from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import (
     AccountError,
     ConnectionError,
@@ -48,7 +49,6 @@ from .exceptions import (
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
-from .async_metadata_manager import AsyncMetadataManager
 from .pitr import Pitr
 from .pubsub import Publication, Subscription
 from .snapshot import Snapshot, SnapshotLevel
@@ -1837,7 +1837,6 @@ class AsyncClient(BaseMatrixOneClient):
         """Cleanup when object is garbage collected"""
         # Don't try to cleanup in __del__ as it can cause issues with event loops
         # The fixture should handle proper cleanup
-        pass
 
     def get_sqlalchemy_engine(self) -> AsyncEngine:
         """
@@ -1920,6 +1919,7 @@ class AsyncClient(BaseMatrixOneClient):
             and other SDK components. External users should use execute() instead.
         """
         import time
+
         from sqlalchemy import text
 
         start_time = time.time()
@@ -2553,6 +2553,103 @@ class AsyncClient(BaseMatrixOneClient):
                 raise QueryError("Failed to get git version information")
         except Exception as e:
             raise QueryError(f"Failed to get git version: {e}")
+
+    async def get_secondary_index_tables(self, table_name: str) -> List[str]:
+        """
+        Get all secondary index table names for a given table in the current database (async version).
+
+        Args:
+            table_name: Name of the table to get secondary indexes for
+
+        Returns:
+            List of secondary index table names
+
+        Examples::
+
+            >>> async with AsyncClient() as client:
+            ...     await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            ...     index_tables = await client.get_secondary_index_tables('cms_all_content_chunk_info')
+            ...     print(index_tables)
+        """
+        from .index_utils import build_get_index_tables_sql
+
+        # Get current database from connection params
+        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+
+        sql, params = build_get_index_tables_sql(table_name, database)
+        result = await self.execute(sql, params)
+        return [row[0] for row in result.fetchall()]
+
+    async def get_secondary_index_table_by_name(self, table_name: str, index_name: str) -> Optional[str]:
+        """
+        Get the physical table name of a secondary index by its index name in the current database (async version).
+
+        Args:
+            table_name: Name of the table
+            index_name: Name of the secondary index
+
+        Returns:
+            Physical table name of the secondary index, or None if not found
+
+        Examples::
+
+            >>> async with AsyncClient() as client:
+            ...     await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            ...     index_table = await client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id')
+            ...     print(index_table)
+        """
+        from .index_utils import build_get_index_table_by_name_sql
+
+        # Get current database from connection params
+        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+
+        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database)
+        result = await self.execute(sql, params)
+        row = result.fetchone()
+        return row[0] if row else None
+
+    async def verify_table_index_counts(self, table_name: str) -> int:
+        """
+        Verify that the main table and all its secondary index tables have the same row count (async version).
+
+        This method compares the COUNT(*) of the main table with all its secondary index tables
+        in a single SQL query for consistency. If counts don't match, raises an exception.
+
+        Args:
+            table_name: Name of the table to verify
+
+        Returns:
+            Row count (int) if verification succeeds
+
+        Raises:
+            ValueError: If any secondary index table has a different count than the main table,
+                       with details about all counts in the error message
+
+        Examples::
+
+            >>> async with AsyncClient() as client:
+            ...     await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            ...     count = await client.verify_table_index_counts('cms_all_content_chunk_info')
+            ...     print(f"✓ Verification passed, row count: {count}")
+
+            >>> # If verification fails:
+            >>> try:
+            ...     count = await client.verify_table_index_counts('some_table')
+            ... except ValueError as e:
+            ...     print(f"Verification failed: {e}")
+        """
+        from .index_utils import build_verify_counts_sql, process_verify_result
+
+        # Get all secondary index tables
+        index_tables = await self.get_secondary_index_tables(table_name)
+
+        # Build and execute verification SQL
+        sql = build_verify_counts_sql(table_name, index_tables)
+        result = await self.execute(sql)
+        row = result.fetchone()
+
+        # Process result and raise exception if verification fails
+        return process_verify_result(table_name, index_tables, row)
 
     async def __aenter__(self):
         return self
