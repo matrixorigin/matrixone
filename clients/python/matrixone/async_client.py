@@ -2556,7 +2556,7 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def get_secondary_index_tables(self, table_name: str) -> List[str]:
         """
-        Get all secondary index table names for a given table (async version).
+        Get all secondary index table names for a given table in the current database (async version).
 
         Args:
             table_name: Name of the table to get secondary indexes for
@@ -2573,13 +2573,16 @@ class AsyncClient(BaseMatrixOneClient):
         """
         from .index_utils import build_get_index_tables_sql
 
-        sql, params = build_get_index_tables_sql(table_name)
+        # Get current database from connection params
+        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+
+        sql, params = build_get_index_tables_sql(table_name, database)
         result = await self.execute(sql, params)
         return [row[0] for row in result.fetchall()]
 
     async def get_secondary_index_table_by_name(self, table_name: str, index_name: str) -> Optional[str]:
         """
-        Get the physical table name of a secondary index by its index name (async version).
+        Get the physical table name of a secondary index by its index name in the current database (async version).
 
         Args:
             table_name: Name of the table
@@ -2597,7 +2600,10 @@ class AsyncClient(BaseMatrixOneClient):
         """
         from .index_utils import build_get_index_table_by_name_sql
 
-        sql, params = build_get_index_table_by_name_sql(table_name, index_name)
+        # Get current database from connection params
+        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+
+        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database)
         result = await self.execute(sql, params)
         row = result.fetchone()
         return row[0] if row else None

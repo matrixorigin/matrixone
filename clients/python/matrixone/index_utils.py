@@ -19,43 +19,65 @@ Index utilities - Shared logic for secondary index operations
 from typing import List, Tuple
 
 
-def build_get_index_tables_sql(table_name: str) -> Tuple[str, Tuple]:
+def build_get_index_tables_sql(table_name: str, database: str = None) -> Tuple[str, Tuple]:
     """
     Build SQL to get all secondary index table names for a given table.
 
     Args:
         table_name: Name of the table
+        database: Name of the database (optional, but recommended to avoid cross-database conflicts)
 
     Returns:
         Tuple of (sql, params)
     """
-    sql = """
-        SELECT DISTINCT index_table_name
-        FROM mo_catalog.mo_indexes
-        JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-        WHERE relname = ? AND type = 'MULTIPLE'
-    """
-    return sql, (table_name,)
+    if database:
+        sql = """
+            SELECT DISTINCT index_table_name
+            FROM mo_catalog.mo_indexes
+            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
+            WHERE relname = ? AND reldatabase = ? AND type = 'MULTIPLE'
+        """
+        return sql, (table_name, database)
+    else:
+        # Fallback to old behavior if database is not provided
+        sql = """
+            SELECT DISTINCT index_table_name
+            FROM mo_catalog.mo_indexes
+            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
+            WHERE relname = ? AND type = 'MULTIPLE'
+        """
+        return sql, (table_name,)
 
 
-def build_get_index_table_by_name_sql(table_name: str, index_name: str) -> Tuple[str, Tuple]:
+def build_get_index_table_by_name_sql(table_name: str, index_name: str, database: str = None) -> Tuple[str, Tuple]:
     """
     Build SQL to get the physical table name of a secondary index by its index name.
 
     Args:
         table_name: Name of the table
         index_name: Name of the secondary index
+        database: Name of the database (optional, but recommended to avoid cross-database conflicts)
 
     Returns:
         Tuple of (sql, params)
     """
-    sql = """
-        SELECT DISTINCT index_table_name
-        FROM mo_catalog.mo_indexes
-        JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-        WHERE relname = ? AND name = ?
-    """
-    return sql, (table_name, index_name)
+    if database:
+        sql = """
+            SELECT DISTINCT index_table_name
+            FROM mo_catalog.mo_indexes
+            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
+            WHERE relname = ? AND name = ? AND reldatabase = ?
+        """
+        return sql, (table_name, index_name, database)
+    else:
+        # Fallback to old behavior if database is not provided
+        sql = """
+            SELECT DISTINCT index_table_name
+            FROM mo_catalog.mo_indexes
+            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
+            WHERE relname = ? AND name = ?
+        """
+        return sql, (table_name, index_name)
 
 
 def build_verify_counts_sql(table_name: str, index_tables: List[str]) -> str:

@@ -69,13 +69,13 @@ class ConnectionHook:
             event.listen(engine.sync_engine, "connect", self._on_connect_sync)
             event.listen(engine.sync_engine, "before_cursor_execute", self._on_before_cursor_execute)
             if hasattr(self._client_ref, 'logger'):
-                self._client_ref.logger.info("Attached connection hook to async engine")
+                self._client_ref.logger.debug("Attached connection hook to async engine")
         else:
             # For sync engines, listen to both connect and before_cursor_execute events
             event.listen(engine, "connect", self._on_connect_sync)
             event.listen(engine, "before_cursor_execute", self._on_before_cursor_execute)
             if hasattr(self._client_ref, 'logger'):
-                self._client_ref.logger.info("Attached connection hook to sync engine")
+                self._client_ref.logger.debug("Attached connection hook to sync engine")
 
     def _on_connect_sync(self, dbapi_connection, connection_record):
         """SQLAlchemy event handler for new connections (sync)"""
@@ -86,7 +86,7 @@ class ConnectionHook:
                 try:
                     # Log that the hook is being executed
                     if hasattr(self._client_ref, 'logger'):
-                        self._client_ref.logger.info(f"Executing connection hook on new connection {conn_id}")
+                        self._client_ref.logger.debug(f"Executing connection hook on new connection {conn_id}")
                     # Pass the connection to avoid creating new connections
                     self.execute_sync_with_connection(self._client_ref, dbapi_connection)
                     self._executed_connections.add(conn_id)
@@ -104,7 +104,7 @@ class ConnectionHook:
                 try:
                     # Log that the hook is being executed
                     if hasattr(self._client_ref, 'logger'):
-                        self._client_ref.logger.info(f"Executing connection hook on connection {conn_id}")
+                        self._client_ref.logger.debug(f"Executing connection hook on connection {conn_id}")
                     # Use the connection to avoid creating new connections
                     self.execute_sync_with_connection(self._client_ref, conn.connection)
                     self._executed_connections.add(conn_id)
@@ -212,7 +212,7 @@ class ConnectionHook:
             cursor = dbapi_connection.cursor()
             cursor.execute("SET experimental_ivf_index = 1")
             cursor.close()
-            client.logger.info("✓ Enabled IVF vector operations")
+            client.logger.debug("✓ Enabled IVF vector operations")
         except Exception as e:
             client.logger.warning(f"Failed to enable IVF: {e}")
 
@@ -223,7 +223,7 @@ class ConnectionHook:
             cursor = dbapi_connection.cursor()
             cursor.execute("SET experimental_hnsw_index = 1")
             cursor.close()
-            client.logger.info("✓ Enabled HNSW vector operations")
+            client.logger.debug("✓ Enabled HNSW vector operations")
         except Exception as e:
             client.logger.warning(f"Failed to enable HNSW: {e}")
 
@@ -234,7 +234,7 @@ class ConnectionHook:
             cursor = dbapi_connection.cursor()
             cursor.execute("SET experimental_fulltext_index = 1")
             cursor.close()
-            client.logger.info("✓ Enabled fulltext search operations")
+            client.logger.debug("✓ Enabled fulltext search operations")
         except Exception as e:
             client.logger.warning(f"Failed to enable fulltext: {e}")
 
