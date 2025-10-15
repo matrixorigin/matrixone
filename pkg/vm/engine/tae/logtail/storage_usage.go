@@ -784,7 +784,7 @@ func FillUsageBatOfCompacted(
 	usage *TNUsageMemo,
 	data *batch.Batch,
 	meta *SnapshotMeta,
-	accountSnapshots *SnapshotInfo,
+	snapshots *SnapshotInfo,
 	pitrs *PitrInfo,
 	_ int,
 ) {
@@ -798,7 +798,7 @@ func FillUsageBatOfCompacted(
 	}()
 	usageData := make(map[[3]uint64]UsageData)
 	tableSnapshots, tablePitrs := meta.AccountToTableSnapshots(
-		accountSnapshots,
+		snapshots,
 		pitrs,
 	)
 	objectsName := make(map[string]struct{})

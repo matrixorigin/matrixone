@@ -1653,12 +1653,12 @@ func (sm *SnapshotMeta) TableInfoString() string {
 	return buf.String()
 }
 
-func (sm *SnapshotMeta) GetSnapshotListLocked(snapshotList map[uint32][]types.TS, tid uint64) []types.TS {
+func (sm *SnapshotMeta) GetSnapshotListLocked(snapshots *SnapshotInfo, tid uint64) []types.TS {
 	if sm.tableIDIndex[tid] == nil {
 		return nil
 	}
 	accID := sm.tableIDIndex[tid].accountID
-	return snapshotList[accID]
+	return snapshots.account[accID]
 }
 
 // AccountToTableSnapshots returns a map from table id to its snapshots.
@@ -1737,7 +1737,7 @@ func (sm *SnapshotMeta) GetPitrByTable(
 }
 
 func (sm *SnapshotMeta) MergeTableInfo(
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *SnapshotInfo,
 	pitr *PitrInfo,
 ) error {
 	sm.Lock()
@@ -1746,7 +1746,8 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		return nil
 	}
 	for accID, tables := range sm.tables {
-		if accountSnapshots[accID] == nil && pitr.IsEmpty() {
+		accountSnapshots := snapshots.account[accID]
+		if len(accountSnapshots) == 0 && pitr.IsEmpty() {
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
 					delete(sm.tables[accID], table.tid)
@@ -1761,7 +1762,7 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		for _, table := range tables {
 			ts := sm.GetPitrByTable(pitr, table.dbID, table.tid)
 			if !table.deleteAt.IsEmpty() &&
-				!isSnapshotRefers(table, accountSnapshots[accID], ts) {
+				!isSnapshotRefers(table, accountSnapshots, ts) {
 				delete(sm.tables[accID], table.tid)
 				delete(sm.tableIDIndex, table.tid)
 				if sm.objects[table.tid] != nil {
