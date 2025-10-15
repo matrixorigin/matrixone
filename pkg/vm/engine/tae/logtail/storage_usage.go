@@ -784,7 +784,7 @@ func FillUsageBatOfCompacted(
 	usage *TNUsageMemo,
 	data *batch.Batch,
 	meta *SnapshotMeta,
-	accountSnapshots map[uint32][]types.TS,
+	accountSnapshots *SnapshotInfo,
 	pitrs *PitrInfo,
 	_ int,
 ) {

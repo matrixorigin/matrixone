@@ -72,6 +72,8 @@ func MakeLoadFunc(
 	}, releaseFn
 }
 
+// TransformToTSList is no longer needed as SnapshotInfo directly contains []types.TS
+// Keeping for backward compatibility but it's deprecated
 func TransformToTSList(
 	fromKV map[uint32]containers.Vector,
 ) map[uint32][]types.TS {
