@@ -40,9 +40,112 @@ try:
     from prompt_toolkit.styles import Style
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.completion import Completer, Completion
     PROMPT_TOOLKIT_AVAILABLE = True
 except ImportError:
     PROMPT_TOOLKIT_AVAILABLE = False
+
+
+# Custom completer for mo-diag commands
+if PROMPT_TOOLKIT_AVAILABLE:
+    class MODiagCompleter(Completer):
+        """Smart completer for mo-diag commands that provides table and database name completion"""
+        
+        def __init__(self, cli_instance):
+            self.cli = cli_instance
+        
+        def get_completions(self, document, complete_event):
+            """Generate completions based on current input"""
+            text = document.text_before_cursor
+            words = text.split()
+            
+            # Available commands
+            all_commands = ['show_indexes', 'show_all_indexes', 'verify_counts', 'show_ivf_status', 
+                           'show_table_stats', 'flush_table', 'tables', 'databases', 'sql', 
+                           'use', 'connect', 'history', 'help', 'exit']
+            
+            # If empty or only whitespace, suggest commands
+            if not words:
+                for cmd in all_commands:
+                    yield Completion(cmd, start_position=0)
+                return
+            
+            # If we're typing the first word (command), complete it
+            if len(words) == 1 and not text.endswith(' '):
+                partial_command = words[0]
+                for cmd in all_commands:
+                    if cmd.startswith(partial_command):
+                        yield Completion(cmd, start_position=-len(partial_command))
+                return
+            
+            command = words[0]
+            
+            # Commands that expect table name as first argument
+            table_commands = ['show_indexes', 'verify_counts', 'show_table_stats', 'flush_table']
+            # Commands that expect database name
+            database_commands = ['use']
+            
+            # Determine what to complete
+            if command in table_commands:
+                # If we're on the first argument after the command
+                if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                    # Complete table names
+                    partial = words[1] if len(words) == 2 else ''
+                    for table in self._get_tables():
+                        if table.startswith(partial):
+                            yield Completion(table, start_position=-len(partial))
+                # Second argument might be database name
+                elif len(words) == 2 or (len(words) == 3 and not text.endswith(' ')):
+                    partial = words[2] if len(words) == 3 else ''
+                    for db in self._get_databases():
+                        if db.startswith(partial):
+                            yield Completion(db, start_position=-len(partial))
+            
+            elif command in database_commands:
+                # Complete database names
+                if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                    partial = words[1] if len(words) == 2 else ''
+                    for db in self._get_databases():
+                        if db.startswith(partial):
+                            yield Completion(db, start_position=-len(partial))
+            
+            elif command == 'show_ivf_status':
+                # Can take -t <table> or database name
+                if '-t' in words:
+                    # After -t, complete table names
+                    t_index = words.index('-t')
+                    if len(words) == t_index + 1 or (len(words) == t_index + 2 and not text.endswith(' ')):
+                        partial = words[t_index + 1] if len(words) == t_index + 2 else ''
+                        for table in self._get_tables():
+                            if table.startswith(partial):
+                                yield Completion(table, start_position=-len(partial))
+                else:
+                    # First argument is database name
+                    if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                        partial = words[1] if len(words) == 2 else ''
+                        for db in self._get_databases():
+                            if db.startswith(partial):
+                                yield Completion(db, start_position=-len(partial))
+        
+        def _get_tables(self):
+            """Get list of tables in current database"""
+            if not self.cli.client or not self.cli.current_database:
+                return []
+            try:
+                result = self.cli.client.execute(f"SHOW TABLES")
+                return [row[0] for row in result.fetchall()]
+            except:
+                return []
+        
+        def _get_databases(self):
+            """Get list of all databases"""
+            if not self.cli.client:
+                return []
+            try:
+                result = self.cli.client.execute("SHOW DATABASES")
+                return [row[0] for row in result.fetchall()]
+            except:
+                return []
 
 
 # ANSI Color codes for terminal output
@@ -126,6 +229,11 @@ class MatrixOneCLI(cmd.Cmd):
 ║                                                              ║
 ║  Type help or ? to list commands.                            ║
 ║  Type help <command> for detailed help on a command.         ║
+║                                                              ║
+║  Tips:                                                       ║
+║    • Press Tab for auto-completion (tables/databases)        ║
+║    • Use ↑/↓ arrows to browse command history                ║
+║    • Press Ctrl+R for history search                         ║
 ╚══════════════════════════════════════════════════════════════╝
 """
     
@@ -147,8 +255,13 @@ class MatrixOneCLI(cmd.Cmd):
             # Setup command history file
             history_file = Path.home() / '.mo_diag_history'
             
+            # Create completer
+            completer = MODiagCompleter(self)
+            
             self.session = PromptSession(
                 history=FileHistory(str(history_file)),
+                completer=completer,
+                complete_while_typing=False,  # Only complete on Tab
                 style=Style.from_dict({
                     'prompt': 'bold ansigreen',
                     'database': 'bold ansiyellow',
