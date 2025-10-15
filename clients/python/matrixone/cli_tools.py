@@ -23,8 +23,10 @@ especially secondary indexes and vector indexes.
 
 import cmd
 import sys
+import os
 import logging
 from typing import Optional
+from pathlib import Path
 
 # Set default logging level to ERROR to keep output clean
 # Users can override this with --log-level parameter
@@ -37,6 +39,7 @@ try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.styles import Style
     from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.history import FileHistory
     PROMPT_TOOLKIT_AVAILABLE = True
 except ImportError:
     PROMPT_TOOLKIT_AVAILABLE = False
@@ -141,7 +144,11 @@ class MatrixOneCLI(cmd.Cmd):
         
         # Setup prompt_toolkit session if available
         if PROMPT_TOOLKIT_AVAILABLE:
+            # Setup command history file
+            history_file = Path.home() / '.mo_diag_history'
+            
             self.session = PromptSession(
+                history=FileHistory(str(history_file)),
                 style=Style.from_dict({
                     'prompt': 'bold ansigreen',
                     'database': 'bold ansiyellow',
@@ -1390,6 +1397,96 @@ class MatrixOneCLI(cmd.Cmd):
             
         except Exception as e:
             print(f"{error('❌ Error:')} {e}")
+    
+    def do_history(self, arg):
+        """Show command history
+        
+        Usage:
+            history           - Show last 20 commands
+            history <n>       - Show last n commands
+            history -c        - Clear history
+        
+        Example:
+            history
+            history 50
+            history -c
+        """
+        if not PROMPT_TOOLKIT_AVAILABLE or not self.session:
+            print(f"{warning('⚠️')} History is only available when prompt_toolkit is installed.")
+            print(f"{info('Tip:')} Install with: pip install prompt_toolkit")
+            return
+        
+        # Parse arguments
+        arg = arg.strip()
+        
+        # Clear history
+        if arg == '-c':
+            try:
+                history_file = Path.home() / '.mo_diag_history'
+                if history_file.exists():
+                    history_file.unlink()
+                    print(f"{success('✓')} History cleared")
+                else:
+                    print(f"{info('ℹ️')} No history file found")
+                # Recreate the history
+                self.session.history = FileHistory(str(history_file))
+            except Exception as e:
+                print(f"{error('❌ Error:')} Failed to clear history: {e}")
+            return
+        
+        # Determine how many commands to show
+        try:
+            count = int(arg) if arg else 20
+        except ValueError:
+            print(f"{error('❌ Error:')} Invalid number: {arg}")
+            return
+        
+        # Get history
+        try:
+            history_file = Path.home() / '.mo_diag_history'
+            if not history_file.exists():
+                print(f"{info('ℹ️')} No history yet")
+                return
+            
+            # Read history file
+            with open(history_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Parse prompt_toolkit FileHistory format:
+            # Empty line
+            # # timestamp (comment)
+            # +command
+            # Empty line
+            commands = []
+            seen = set()
+            for line in lines:
+                line = line.strip()
+                # Skip empty lines and timestamp comments
+                if not line or line.startswith('#'):
+                    continue
+                # Commands start with '+'
+                if line.startswith('+'):
+                    cmd = line[1:]  # Remove the '+' prefix
+                    if cmd and cmd not in seen:
+                        commands.append(cmd)
+                        seen.add(cmd)
+            
+            # Show last N commands
+            if commands:
+                start_idx = max(0, len(commands) - count)
+                print(f"\n{header('📜 Command History')} (last {min(count, len(commands))} commands):")
+                print("=" * 80)
+                
+                for i, cmd in enumerate(commands[start_idx:], start=start_idx + 1):
+                    print(f"{i:4}. {cmd}")
+                
+                print("=" * 80)
+                print(f"{info('Total:')} {len(commands)} commands in history\n")
+            else:
+                print(f"{info('ℹ️')} No history yet")
+                
+        except Exception as e:
+            print(f"{error('❌ Error:')} Failed to read history: {e}")
     
     def do_sql(self, arg):
         """
