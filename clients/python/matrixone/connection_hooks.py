@@ -135,7 +135,7 @@ class ConnectionHook:
             for action in self.actions:
                 if isinstance(action, str):
                     action = ConnectionAction(action)
-                
+
                 # Execute SQL directly on async connection
                 if action == ConnectionAction.ENABLE_IVF:
                     await async_connection.execute(text("SET experimental_ivf_index = 1"))
@@ -157,7 +157,7 @@ class ConnectionHook:
                     client.logger.debug("✓ Enabled all operations")
                 else:
                     client.logger.warning(f"Unknown connection action: {action}")
-            
+
             # Execute custom hook if provided
             if self.custom_hook:
                 if hasattr(self.custom_hook, '__call__'):
@@ -174,10 +174,10 @@ class ConnectionHook:
                         except TypeError as e:
                             if "object NoneType can't be used in 'await' expression" in str(e):
                                 client.logger.warning("Custom hook appears to be async but was called synchronously")
-        
+
         except Exception as e:
             client.logger.warning(f"Connection hook execution failed: {e}")
-    
+
     async def execute_async_with_connection(self, client, dbapi_connection) -> None:
         """Execute hook actions asynchronously using the provided connection"""
         try:

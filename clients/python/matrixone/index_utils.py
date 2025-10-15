@@ -22,7 +22,7 @@ from typing import List, Tuple
 def build_get_index_tables_sql(table_name: str, database: str = None) -> Tuple[str, Tuple]:
     """
     Build SQL to get all secondary index table names for a given table.
-    
+
     This includes both MULTIPLE (regular secondary indexes) and UNIQUE indexes.
 
     Args:

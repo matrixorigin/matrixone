@@ -2557,7 +2557,7 @@ class AsyncClient(BaseMatrixOneClient):
     async def get_secondary_index_tables(self, table_name: str, database_name: str = None) -> List[str]:
         """
         Get all secondary index table names for a given table (async version).
-        
+
         This includes both regular secondary indexes (MULTIPLE type) and UNIQUE indexes.
 
         Args:
@@ -2587,7 +2587,9 @@ class AsyncClient(BaseMatrixOneClient):
         result = await self.execute(sql, params)
         return [row[0] for row in result.fetchall()]
 
-    async def get_secondary_index_table_by_name(self, table_name: str, index_name: str, database_name: str = None) -> Optional[str]:
+    async def get_secondary_index_table_by_name(
+        self, table_name: str, index_name: str, database_name: str = None
+    ) -> Optional[str]:
         """
         Get the physical table name of a secondary index by its index name (async version).
 
@@ -2606,7 +2608,9 @@ class AsyncClient(BaseMatrixOneClient):
             ...     # Use current database
             ...     index_table = await client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id')
             ...     # Or specify database explicitly
-            ...     index_table = await client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id', 'test')
+            ...     index_table = await client.get_secondary_index_table_by_name(
+            ...         'cms_all_content_chunk_info', 'cms_id', 'test'
+            ...     )
             ...     print(index_table)
         """
         from .index_utils import build_get_index_table_by_name_sql
