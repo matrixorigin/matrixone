@@ -2557,13 +2557,15 @@ class AsyncClient(BaseMatrixOneClient):
     async def get_secondary_index_tables(self, table_name: str, database_name: str = None) -> List[str]:
         """
         Get all secondary index table names for a given table (async version).
+        
+        This includes both regular secondary indexes (MULTIPLE type) and UNIQUE indexes.
 
         Args:
             table_name: Name of the table to get secondary indexes for
             database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
-            List of secondary index table names
+            List of secondary index table names (includes both __mo_index_secondary_... and __mo_index_unique_... tables)
 
         Examples::
 

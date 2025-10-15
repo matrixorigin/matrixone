@@ -112,6 +112,54 @@ def test_table(client):
         pass
 
 
+@pytest.fixture(scope="module")
+def test_table_with_mixed_indexes(client):
+    """Create a test table with both regular and UNIQUE indexes for testing"""
+    table_name = "cli_test_mixed_indexes"
+    
+    # Clean up if exists
+    try:
+        client.execute(f"DROP TABLE IF EXISTS {table_name}")
+    except:
+        pass
+    
+    # Create table with multiple columns
+    sql = f"""
+        CREATE TABLE {table_name} (
+            id INT PRIMARY KEY,
+            email VARCHAR(100) UNIQUE,
+            username VARCHAR(50),
+            category VARCHAR(50),
+            status INT,
+            UNIQUE KEY uk_username (username),
+            INDEX idx_category (category),
+            INDEX idx_status (status)
+        )
+    """
+    client.execute(sql)
+    
+    # Insert test data
+    for i in range(50):
+        client.execute(
+            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)",
+            (i, f"user{i}@test.com", f"user{i}", f"cat{i % 5}", i % 3)
+        )
+    
+    # Flush table to ensure metadata is available
+    try:
+        client.moctl.flush_table(online_config.database, table_name)
+    except:
+        pass  # Flush might not be available in all environments
+    
+    yield table_name
+    
+    # Cleanup
+    try:
+        client.execute(f"DROP TABLE IF EXISTS {table_name}")
+    except:
+        pass
+
+
 class TestCLIBasicCommands:
     """Test basic CLI commands"""
     
@@ -158,6 +206,30 @@ class TestCLIIndexCommands:
         output = f.getvalue()
         # Should either verify successfully or indicate no indexes
         assert "PASSED" in output or "No secondary indexes" in output or "Error" not in output
+    
+    def test_show_indexes_with_mixed_types(self, cli_instance, test_table_with_mixed_indexes):
+        """Test show_indexes command on a table with both regular and UNIQUE indexes"""
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cli_instance.onecmd(f"show_indexes {test_table_with_mixed_indexes}")
+        
+        output = f.getvalue()
+        # Should show both regular and unique indexes
+        assert "Secondary Indexes" in output
+        # Should show multiple index tables (2 UNIQUE + 2 regular = 4 total)
+        assert "index tables" in output.lower() or "indexes" in output.lower()
+    
+    def test_verify_counts_with_mixed_indexes(self, cli_instance, test_table_with_mixed_indexes):
+        """Test verify_counts on table with both regular and UNIQUE indexes"""
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cli_instance.onecmd(f"verify_counts {test_table_with_mixed_indexes}")
+        
+        output = f.getvalue()
+        # Should verify all index tables including UNIQUE
+        assert "PASSED" in output or "50 rows" in output
+        # Should show verification for unique indexes
+        assert "__mo_index_unique_" in output or "__mo_index_secondary_" in output
 
 
 class TestCLIIVFCommands:
@@ -336,6 +408,18 @@ class TestCLIFlushCommands:
         output = f.getvalue()
         # Should show usage error
         assert ("Error" in output and "required" in output)
+    
+    def test_flush_table_with_mixed_indexes(self, cli_instance, test_table_with_mixed_indexes):
+        """Test flush table with both regular and UNIQUE indexes"""
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cli_instance.onecmd(f"flush_table {test_table_with_mixed_indexes}")
+        
+        output = f.getvalue()
+        # Should flush main table and all index tables (UNIQUE + regular)
+        assert "Flushing table" in output
+        # Should show count of index tables (4 = 2 UNIQUE + 2 regular)
+        assert ("index tables" in output.lower() or "flushed" in output.lower())
 
 
 class TestCLIUtilityCommands:

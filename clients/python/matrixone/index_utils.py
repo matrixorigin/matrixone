@@ -22,6 +22,8 @@ from typing import List, Tuple
 def build_get_index_tables_sql(table_name: str, database: str = None) -> Tuple[str, Tuple]:
     """
     Build SQL to get all secondary index table names for a given table.
+    
+    This includes both MULTIPLE (regular secondary indexes) and UNIQUE indexes.
 
     Args:
         table_name: Name of the table
@@ -35,7 +37,7 @@ def build_get_index_tables_sql(table_name: str, database: str = None) -> Tuple[s
             SELECT DISTINCT index_table_name
             FROM mo_catalog.mo_indexes
             JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-            WHERE relname = ? AND reldatabase = ? AND type = 'MULTIPLE'
+            WHERE relname = ? AND reldatabase = ? AND type IN ('MULTIPLE', 'UNIQUE')
         """
         return sql, (table_name, database)
     else:
@@ -44,7 +46,7 @@ def build_get_index_tables_sql(table_name: str, database: str = None) -> Tuple[s
             SELECT DISTINCT index_table_name
             FROM mo_catalog.mo_indexes
             JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-            WHERE relname = ? AND type = 'MULTIPLE'
+            WHERE relname = ? AND type IN ('MULTIPLE', 'UNIQUE')
         """
         return sql, (table_name,)
 

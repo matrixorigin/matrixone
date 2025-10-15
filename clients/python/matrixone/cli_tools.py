@@ -248,9 +248,12 @@ class MatrixOneCLI(cmd.Cmd):
     
     def do_show_indexes(self, arg):
         """
-        Show all secondary indexes for a table.
+        Show all secondary indexes for a table, including IVF, HNSW, Fulltext, and regular indexes.
+        
+        Uses vertical output format (like MySQL \\G) for easy reading of long table names.
         
         Usage: show_indexes <table_name> [database]
+        
         Example: 
             show_indexes cms_all_content_chunk_info
             show_indexes cms_all_content_chunk_info repro3
@@ -270,49 +273,125 @@ class MatrixOneCLI(cmd.Cmd):
         database = args[1] if len(args) > 1 else self.current_database
         
         try:
-            # Get index information with algo_table_type
-            sql = """
-                SELECT DISTINCT
-                    mo_indexes.name AS index_name,
-                    mo_indexes.index_table_name AS physical_table,
-                    mo_indexes.algo_table_type AS table_type,
-                    mo_indexes.type AS index_type,
-                    GROUP_CONCAT(mo_indexes.column_name ORDER BY mo_indexes.ordinal_position SEPARATOR ', ') AS columns
-                FROM mo_catalog.mo_indexes
-                JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-                WHERE mo_tables.relname = ? AND mo_tables.reldatabase = ? AND mo_indexes.type = 'MULTIPLE'
-                GROUP BY mo_indexes.name, mo_indexes.index_table_name, mo_indexes.algo_table_type, mo_indexes.type
-                ORDER BY mo_indexes.name, mo_indexes.algo_table_type
-            """
-            result = self.client.execute(sql, (table_name, database))
-            rows = result.fetchall()
+            # Use the new comprehensive index detail API
+            indexes = self.client.get_table_indexes_detail(table_name, database)
             
-            if not rows:
+            if not indexes:
                 print(f"⚠️  No secondary indexes found for table '{table_name}' in database '{database}'")
                 return
             
             table_info = f"'{database}.{table_name}'"
-            print(f"\n{header('📊 Secondary Indexes for')} {bold(table_info)}")
-            print(info("=" * 130))
-            print(bold(f"{'Index Name':<30} | {'Table Type':<12} | {'Physical Table':<50} | {'Columns'}"))
-            print(info("-" * 130))
+            print(f"\n{header('📊 Secondary Indexes for')} {bold(table_info)}\n")
             
-            for row in rows:
-                index_name = row[0]
-                physical_table = row[1]
-                table_type = row[2] if row[2] else "N/A"
-                columns = row[4] if len(row) > 4 else "N/A"
-                print(f"{Colors.CYAN}{index_name:<30}{Colors.RESET} | {table_type:<12} | {physical_table:<50} | {columns}")
+            # Vertical display format (like MySQL \G)
+            for i, idx in enumerate(indexes, 1):
+                index_name = idx['index_name']
+                algo = idx['algo'] if idx['algo'] else 'regular'
+                table_type = idx['algo_table_type'] if idx['algo_table_type'] else '-'
+                physical_table = idx['physical_table_name']
+                
+                # Filter out internal columns like __mo_alias___mo_cpkey_col
+                user_columns = [col for col in idx['columns'] if not col.startswith('__mo_alias_')]
+                columns = ', '.join(user_columns) if user_columns else 'N/A'
+                
+                # Color code by algorithm type
+                if algo == 'ivfflat':
+                    algo_display = f"{Colors.CYAN}{algo}{Colors.RESET}"
+                elif algo == 'hnsw':
+                    algo_display = f"{Colors.GREEN}{algo}{Colors.RESET}"
+                elif algo == 'fulltext':
+                    algo_display = f"{Colors.YELLOW}{algo}{Colors.RESET}"
+                else:
+                    algo_display = algo
+                
+                # Print in vertical format
+                print(info(f"{'*' * 27} {i}. row {'*' * 27}"))
+                print(f"      {bold('Index Name')}: {Colors.CYAN}{index_name}{Colors.RESET}")
+                print(f"       {bold('Algorithm')}: {algo_display}")
+                print(f"      {bold('Table Type')}: {table_type}")
+                print(f"  {bold('Physical Table')}: {physical_table}")
+                print(f"         {bold('Columns')}: {columns}")
+                
+                # For vector/fulltext indexes, show table statistics using metadata.scan interface
+                if algo in ['ivfflat', 'hnsw', 'fulltext']:
+                    try:
+                        # Use SDK's metadata.scan interface with columns="*" to get structured results
+                        stats = self.client.metadata.scan(database, physical_table, columns="*")
+                        
+                        if stats:
+                            # Aggregate statistics from all objects
+                            total_rows = 0
+                            total_compress_size = 0
+                            total_origin_size = 0
+                            
+                            # Deduplicate by object_name (same logic as show_table_stats)
+                            seen_objects = set()
+                            object_count = 0
+                            
+                            for obj in stats:
+                                # MetadataRow has attributes, not dictionary keys
+                                object_name = getattr(obj, 'object_name', None)
+                                if object_name and object_name not in seen_objects:
+                                    seen_objects.add(object_name)
+                                    object_count += 1
+                                    
+                                    # Sum up statistics using attributes
+                                    row_cnt = getattr(obj, 'row_cnt', None) or getattr(obj, 'rows_cnt', 0) or 0
+                                    total_rows += int(row_cnt) if row_cnt else 0
+                                    
+                                    compress_size = getattr(obj, 'compress_size', 0) or 0
+                                    total_compress_size += int(compress_size) if compress_size else 0
+                                    
+                                    origin_size = getattr(obj, 'origin_size', 0) or 0
+                                    total_origin_size += int(origin_size) if origin_size else 0
+                            
+                            # Format sizes
+                            def format_size(size_bytes):
+                                if size_bytes >= 1024 * 1024:
+                                    return f"{size_bytes / (1024 * 1024):.2f} MB"
+                                elif size_bytes >= 1024:
+                                    return f"{size_bytes / 1024:.2f} KB"
+                                else:
+                                    return f"{size_bytes} B"
+                            
+                            compress_size_str = format_size(total_compress_size)
+                            origin_size_str = format_size(total_origin_size)
+                            
+                            print(f"      {bold('Statistics')}:")
+                            print(f"                   - Objects: {object_count}")
+                            print(f"                   - Rows: {total_rows:,}")
+                            print(f"                   - Compressed Size: {compress_size_str}")
+                            print(f"                   - Original Size: {origin_size_str}")
+                    except Exception as e:
+                        # If stats not available, just skip (no error message needed)
+                        pass
             
-            print(info("=" * 130))
-            print(bold(f"Total: {len(rows)} index tables") + "\n")
+            # Summary
+            print(info("=" * 60))
+            
+            algo_counts = {}
+            for idx in indexes:
+                algo = idx['algo'] if idx['algo'] else 'regular'
+                algo_counts[algo] = algo_counts.get(algo, 0) + 1
+            
+            summary_parts = []
+            for algo, count in sorted(algo_counts.items()):
+                summary_parts.append(f"{count} {algo}")
+            
+            print(bold(f"Total: {len(indexes)} index tables") + f" ({', '.join(summary_parts)})" + "\n")
             
         except Exception as e:
             print(f"❌ Error: {e}")
     
     def do_show_all_indexes(self, arg):
         """
-        Show all tables with secondary indexes in the current or specified database.
+        Show index health report for all tables with secondary indexes.
+        
+        This command performs diagnostic checks including:
+        - Row count consistency between main table and index tables
+        - Vector index building status (IVF/HNSW)
+        - Index type distribution
+        - Problem detection
         
         Usage: show_all_indexes [database]
         Example: 
@@ -332,39 +411,175 @@ class MatrixOneCLI(cmd.Cmd):
             return
         
         try:
+            # Get all tables with indexes
             sql = """
-                SELECT 
-                    mo_tables.relname AS table_name,
-                    COUNT(DISTINCT mo_indexes.name) AS index_count,
-                    GROUP_CONCAT(DISTINCT mo_indexes.name ORDER BY mo_indexes.name SEPARATOR ', ') AS index_names
+                SELECT DISTINCT mo_tables.relname AS table_name
                 FROM mo_catalog.mo_indexes
                 JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-                WHERE mo_indexes.type = 'MULTIPLE' AND mo_tables.reldatabase = ?
-                GROUP BY mo_tables.relname
+                WHERE mo_indexes.type IN ('MULTIPLE', 'UNIQUE') AND mo_tables.reldatabase = ?
                 ORDER BY mo_tables.relname
             """
             result = self.client.execute(sql, (database,))
-            rows = result.fetchall()
+            tables = [row[0] for row in result.fetchall()]
             
-            if not rows:
+            if not tables:
                 print(f"⚠️  No tables with secondary indexes found in database '{database}'")
                 return
             
-            print(f"\n📊 Tables with Secondary Indexes in '{database}':")
-            print("=" * 100)
-            print(f"{'Table Name':<40} | {'Index Count':<12} | {'Index Names'}")
-            print("-" * 100)
+            print(f"\n{header('📊 Index Health Report')} for Database '{database}':")
+            print("=" * 120)
             
-            total_indexes = 0
-            for row in rows:
-                table_name = row[0]
-                index_count = row[1]
-                index_names = row[2]
-                total_indexes += index_count
-                print(f"{table_name:<40} | {index_count:<12} | {index_names}")
+            healthy_tables = []
+            attention_tables = []
             
-            print("=" * 100)
-            print(f"Total: {len(rows)} tables, {total_indexes} indexes\n")
+            # Check each table
+            for table_name in tables:
+                try:
+                    # Get index details
+                    indexes = self.client.get_table_indexes_detail(table_name, database)
+                    index_count = len(set(idx['index_name'] for idx in indexes))
+                    
+                    # Determine if table has special indexes (IVF/HNSW/Fulltext)
+                    has_vector_or_fulltext = any(idx['algo'] in ['ivfflat', 'hnsw', 'fulltext'] for idx in indexes)
+                    
+                    # Check row consistency (only for regular/UNIQUE indexes)
+                    consistency_status = None
+                    has_issue = False
+                    issue_detail = None
+                    
+                    if not has_vector_or_fulltext:
+                        # Only check row consistency for tables with regular/UNIQUE indexes
+                        try:
+                            row_count = self.client.verify_table_index_counts(table_name)
+                            consistency_status = f"✓ {row_count:,} rows"
+                        except ValueError as e:
+                            consistency_status = "❌ Mismatch"
+                            has_issue = True
+                            issue_detail = str(e).split('\n')[0]  # First line of error
+                        except Exception:
+                            consistency_status = "⚠️  Unknown"
+                    else:
+                        # For vector/fulltext indexes, just show row count without verification
+                        try:
+                            result = self.client.execute(f"SELECT COUNT(*) FROM `{table_name}`")
+                            row_count = result.fetchone()[0]
+                            consistency_status = f"{row_count:,} rows"
+                        except:
+                            consistency_status = "Unknown"
+                    
+                    # Check IVF/HNSW/Fulltext status
+                    special_index_status = None
+                    for idx in indexes:
+                        if idx['algo'] == 'ivfflat':
+                            try:
+                                stats = self.client.vector_ops.get_ivf_stats(table_name, idx['columns'][0])
+                                if stats and 'distribution' in stats:
+                                    centroid_ids = stats['distribution'].get('centroid_id', [])
+                                    centroid_counts = stats['distribution'].get('centroid_count', [])
+                                    centroid_count = len(centroid_ids)
+                                    total_vectors = sum(centroid_counts) if centroid_counts else 0
+                                    
+                                    if centroid_count > 0 and total_vectors > 0:
+                                        special_index_status = f"IVF: {centroid_count} centroids, {total_vectors} vectors"
+                                    elif centroid_count > 0:
+                                        special_index_status = f"IVF: {centroid_count} centroids"
+                                    else:
+                                        special_index_status = "IVF: building"
+                                        has_issue = True
+                                        issue_detail = "IVF index not built yet"
+                                else:
+                                    special_index_status = "IVF: no stats available"
+                            except Exception as e:
+                                error_msg = str(e)
+                                # Truncate long error messages for display
+                                if len(error_msg) > 30:
+                                    error_short = error_msg[:27] + "..."
+                                else:
+                                    error_short = error_msg
+                                special_index_status = f"IVF: error ({error_short})"
+                                has_issue = True
+                                if not issue_detail:
+                                    issue_detail = f"Failed to get IVF stats: {error_msg}"
+                        elif idx['algo'] == 'hnsw':
+                            special_index_status = "HNSW index"
+                        elif idx['algo'] == 'fulltext':
+                            special_index_status = "Fulltext index"
+                    
+                    # Categorize table
+                    table_info = {
+                        'name': table_name,
+                        'index_count': index_count,
+                        'consistency': consistency_status,
+                        'special_index_status': special_index_status,
+                        'has_issue': has_issue,
+                        'issue_detail': issue_detail
+                    }
+                    
+                    if has_issue:
+                        attention_tables.append(table_info)
+                    else:
+                        healthy_tables.append(table_info)
+                        
+                except Exception as e:
+                    # If we can't check this table, mark it as needing attention
+                    attention_tables.append({
+                        'name': table_name,
+                        'index_count': '?',
+                        'consistency': '❌ Error',
+                        'special_index_status': None,
+                        'has_issue': True,
+                        'issue_detail': str(e)[:50]
+                    })
+            
+            # Display healthy tables
+            if healthy_tables:
+                print(f"\n{success('✓ HEALTHY')} ({len(healthy_tables)} tables)")
+                print("-" * 120)
+                print(f"{'Table Name':<35} | {'Indexes':<8} | {'Row Count':<20} | {'Notes'}")
+                print("-" * 120)
+                
+                for table in healthy_tables:
+                    notes = table['special_index_status'] if table['special_index_status'] else '-'
+                    print(f"{table['name']:<35} | {table['index_count']:<8} | {table['consistency']:<20} | {notes}")
+            
+            # Display tables needing attention
+            if attention_tables:
+                print(f"\n{warning('⚠️  ATTENTION NEEDED')} ({len(attention_tables)} tables)")
+                print("-" * 120)
+                print(f"{'Table Name':<35} | {'Issue':<40} | {'Details'}")
+                print("-" * 120)
+                
+                for table in attention_tables:
+                    if 'Mismatch' in (table['consistency'] or ''):
+                        issue = "Row count mismatch between indexes"
+                        details = table['issue_detail'] if table['issue_detail'] else "Check with verify_counts"
+                    elif 'building' in (table.get('special_index_status') or ''):
+                        issue = "Vector index building incomplete"
+                        details = table['issue_detail'] if table['issue_detail'] else "Check with show_ivf_status"
+                    elif 'error' in (table.get('special_index_status') or '').lower():
+                        issue = "Vector index error"
+                        details = table['issue_detail'] if table['issue_detail'] else "Check index status"
+                    elif 'Error' in (table['consistency'] or ''):
+                        issue = "Unable to verify table"
+                        details = table['issue_detail'] if table['issue_detail'] else "Unknown error"
+                    else:
+                        issue = "Unknown issue"
+                        details = str(table.get('issue_detail', '-'))
+                    
+                    print(f"{table['name']:<35} | {issue:<40} | {details[:38]}")
+            
+            # Summary
+            print("\n" + "=" * 120)
+            print(f"{bold('Summary:')}")
+            print(f"  {success('✓')} {len(healthy_tables)} healthy tables")
+            if attention_tables:
+                print(f"  {warning('⚠️ ')} {len(attention_tables)} tables need attention")
+            else:
+                print(f"  {success('✓')} All indexes healthy!")
+            print(f"  Total: {len(tables)} tables with indexes\n")
+            
+            if attention_tables:
+                print(f"{info('💡 Tip:')} Use 'verify_counts <table>' or 'show_ivf_status' for detailed diagnostics")
             
         except Exception as e:
             print(f"❌ Error: {e}")
@@ -722,6 +937,135 @@ class MatrixOneCLI(cmd.Cmd):
                     include_indexes = None
             
             if show_detail:
+                # Check if showing all indexes (-a -d together = hierarchical view)
+                if include_all:
+                    # Show hierarchical view: Table -> Index Name -> Physical Table (with type) -> Object List
+                    print(f"\n📊 Detailed Table Statistics for '{database}.{table_name}':")
+                    print("=" * 150)
+                    
+                    # Helper functions
+                    def format_size(size_bytes):
+                        if isinstance(size_bytes, str):
+                            return size_bytes
+                        if size_bytes >= 1024 * 1024:
+                            return f"{size_bytes / (1024 * 1024):.2f} MB"
+                        elif size_bytes >= 1024:
+                            return f"{size_bytes / 1024:.2f} KB"
+                        else:
+                            return f"{size_bytes} B"
+                    
+                    def deduplicate_objects(objects):
+                        seen = set()
+                        unique_objects = []
+                        for obj in objects:
+                            # Handle both dict and MetadataRow objects
+                            if hasattr(obj, 'object_name'):
+                                obj_name = getattr(obj, 'object_name', None)
+                            elif isinstance(obj, dict):
+                                obj_name = obj.get('object_name')
+                            else:
+                                obj_name = None
+                            if obj_name and obj_name not in seen:
+                                seen.add(obj_name)
+                                unique_objects.append(obj)
+                        return unique_objects
+                    
+                    # 1. Show main table with aggregated stats
+                    try:
+                        main_table_objects = self.client.metadata.scan(database, table_name, columns="*")
+                        if main_table_objects:
+                            unique_objs = deduplicate_objects(list(main_table_objects))
+                            total_rows = sum(getattr(obj, 'row_cnt', 0) or 0 for obj in unique_objs)
+                            total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
+                            total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
+                            total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs)
+                            
+                            print(f"\n{bold('Table:')} {Colors.CYAN}{table_name}{Colors.RESET}")
+                            print(f"  Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}")
+                            
+                            # Show object details
+                            if unique_objs:
+                                print(f"\n  {bold('Objects:')}")
+                                print(f"  {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}")
+                                print("  " + "-" * 148)
+                                for obj in unique_objs:
+                                    obj_name = getattr(obj, 'object_name', 'N/A')
+                                    rows = getattr(obj, 'row_cnt', 0) or 0
+                                    nulls = getattr(obj, 'null_cnt', 0) or 0
+                                    orig_size = getattr(obj, 'origin_size', 0) or 0
+                                    comp_size = getattr(obj, 'compress_size', 0) or 0
+                                    print(f"  {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}")
+                    except Exception:
+                        pass
+                    
+                    # 2. Get all indexes and their physical tables
+                    try:
+                        indexes = self.client.get_table_indexes_detail(table_name, database)
+                        
+                        if indexes:
+                            # Group indexes by index name
+                            indexes_by_name = {}
+                            for idx in indexes:
+                                idx_name = idx['index_name']
+                                if idx_name not in indexes_by_name:
+                                    indexes_by_name[idx_name] = []
+                                indexes_by_name[idx_name].append(idx)
+                            
+                            # Display each index with its physical tables
+                            for idx_name, idx_tables in indexes_by_name.items():
+                                print(f"\n{bold('Index:')} {Colors.CYAN}{idx_name}{Colors.RESET}")
+                                
+                                # Show each physical table for this index
+                                for idx_table in idx_tables:
+                                    physical_table = idx_table['physical_table_name']
+                                    table_type = idx_table['algo_table_type'] if idx_table['algo_table_type'] else 'index'
+                                    
+                                    # Get objects for this physical table
+                                    try:
+                                        phys_objects = self.client.metadata.scan(database, physical_table, columns="*")
+                                        if phys_objects:
+                                            unique_objs = deduplicate_objects(list(phys_objects))
+                                            total_rows = sum(getattr(obj, 'row_cnt', 0) or 0 for obj in unique_objs)
+                                            total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
+                                            total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
+                                            total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs)
+                                            
+                                            # Color code by table type
+                                            if table_type == 'metadata':
+                                                type_display = f"{Colors.YELLOW}{table_type}{Colors.RESET}"
+                                            elif table_type == 'centroids':
+                                                type_display = f"{Colors.GREEN}{table_type}{Colors.RESET}"
+                                            elif table_type == 'entries':
+                                                type_display = f"{Colors.CYAN}{table_type}{Colors.RESET}"
+                                            else:
+                                                type_display = table_type
+                                            
+                                            print(f"  └─ Physical Table ({type_display}): {physical_table}")
+                                            print(f"     Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}")
+                                            
+                                            # Show object details
+                                            if unique_objs:
+                                                print(f"\n     {bold('Objects:')}")
+                                                print(f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}")
+                                                print("     " + "-" * 148)
+                                                for obj in unique_objs:
+                                                    obj_name = getattr(obj, 'object_name', 'N/A')
+                                                    rows = getattr(obj, 'row_cnt', 0) or 0
+                                                    nulls = getattr(obj, 'null_cnt', 0) or 0
+                                                    orig_size = getattr(obj, 'origin_size', 0) or 0
+                                                    comp_size = getattr(obj, 'compress_size', 0) or 0
+                                                    print(f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}")
+                                    except Exception:
+                                        # If can't get stats for this physical table, skip
+                                        pass
+                    except Exception:
+                        pass
+                    
+                    print("\n" + "=" * 150)
+                    print()
+                    return
+                
+                # Regular detailed view (not hierarchical)
                 # Get detailed statistics with object list
                 stats = self.client.metadata.get_table_detail_stats(
                     dbname=database,
@@ -910,28 +1254,46 @@ class MatrixOneCLI(cmd.Cmd):
                 print(f"{error('❌')} Failed to flush main table: {e}")
                 return
             
-            # Get all secondary index tables
+            # Get all index tables (including IVF/HNSW/Fulltext physical tables)
             try:
-                index_tables = self.client.get_secondary_index_tables(table_name, database_name)
-                if index_tables:
-                    print(f"{info('📋 Found')} {len(index_tables)} secondary index tables")
+                indexes = self.client.get_table_indexes_detail(table_name, database_name)
+                if indexes:
+                    # Extract all unique physical table names
+                    physical_tables = list(set(idx['physical_table_name'] for idx in indexes if idx['physical_table_name']))
                     
-                    # Flush each index table
-                    success_count = 0
-                    for idx_table_name in index_tables:
-                        if idx_table_name:
-                            try:
-                                self.client.moctl.flush_table(database_name, idx_table_name)
-                                print(f"{success('✓')} Index table '{idx_table_name}' flushed")
-                                success_count += 1
-                            except Exception as e:
-                                print(f"{error('❌')} Failed to flush index table '{idx_table_name}': {e}")
-                    
-                    print(f"\n{info('📊 Summary:')}")
-                    print(f"  Main table: {success('✓')} flushed")
-                    print(f"  Index tables: {success_count}/{len(index_tables)} flushed successfully")
+                    if physical_tables:
+                        print(f"{info('📋 Found')} {len(physical_tables)} index physical tables")
+                        
+                        # Group by index name for better display
+                        indexes_by_name = {}
+                        for idx in indexes:
+                            idx_name = idx['index_name']
+                            if idx_name not in indexes_by_name:
+                                indexes_by_name[idx_name] = []
+                            indexes_by_name[idx_name].append(idx)
+                        
+                        # Flush each physical table
+                        success_count = 0
+                        for idx_name, idx_tables in indexes_by_name.items():
+                            print(f"\n{info('📑 Index:')} {idx_name}")
+                            for idx_table in idx_tables:
+                                physical_table = idx_table['physical_table_name']
+                                table_type = idx_table['algo_table_type'] if idx_table['algo_table_type'] else 'index'
+                                try:
+                                    self.client.moctl.flush_table(database_name, physical_table)
+                                    print(f"  {success('✓')} {table_type}: {physical_table}")
+                                    success_count += 1
+                                except Exception as e:
+                                    print(f"  {error('❌')} {table_type}: {physical_table} - {e}")
+                        
+                        print(f"\n{info('📊 Summary:')}")
+                        print(f"  Main table: {success('✓')} flushed")
+                        print(f"  Index physical tables: {success_count}/{len(physical_tables)} flushed successfully")
+                    else:
+                        print(f"{info('ℹ️')} No index physical tables found")
+                        print(f"{info('📊 Summary:')} Main table: {success('✓')} flushed")
                 else:
-                    print(f"{info('ℹ️')} No secondary index tables found")
+                    print(f"{info('ℹ️')} No indexes found")
                     print(f"{info('📊 Summary:')} Main table: {success('✓')} flushed")
             
             except Exception as e:
