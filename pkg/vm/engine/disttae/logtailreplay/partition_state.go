@@ -23,7 +23,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"go.uber.org/zap"
 
 	"github.com/tidwall/btree"
@@ -784,13 +783,6 @@ func (p *PartitionState) HandleRowsInsert(
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
-		if p.tid == catalog.MO_TABLES_ID {
-			fmt.Println("create table",
-				timeVector[i].ToString(),
-				vector.GetFixedAtNoTypeCheck[uint64](batch.Vecs[2], i),
-			)
-		}
-
 		blockID := rowID.CloneBlockID()
 		pivot := &RowEntry{
 			BlockID: blockID,

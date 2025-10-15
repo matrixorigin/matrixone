@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -32,7 +33,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+const (
+	fakePKType = iota
+	normalPKType
+	compositePKType
 )
 
 func handleDataBranch(
@@ -68,7 +76,6 @@ func handleSnapshotDiff(
 		tarRel  engine.Relation
 		baseRel engine.Relation
 
-		eng          engine.Engine
 		tarSnapshot  *plan.Snapshot
 		baseSnapshot *plan.Snapshot
 
@@ -99,15 +106,14 @@ func handleSnapshotDiff(
 		return
 	}
 
-	eng = ses.proc.GetSessionInfo().StorageEngine
 	if tarRel, baseRel, err = getRelations(
-		execCtx.reqCtx, ses, eng, stmt.TargetTable, stmt.BaseTable, tarSnapshot, baseSnapshot,
+		execCtx.reqCtx, ses, stmt.TargetTable, stmt.BaseTable, tarSnapshot, baseSnapshot,
 	); err != nil {
 		return
 	}
 
 	var (
-		hasLca       bool
+		lcaTableID   uint64
 		tarBranchTS  timestamp.Timestamp
 		baseBranchTS timestamp.Timestamp
 		tarHandle    engine.ChangesHandle
@@ -126,23 +132,23 @@ func handleSnapshotDiff(
 		}
 	}()
 
-	if hasLca, tarBranchTS, baseBranchTS, tarHandle, baseHandle, err =
+	if lcaTableID, tarBranchTS, baseBranchTS, tarHandle, baseHandle, err =
 		constructChangeHandle(
-			execCtx.reqCtx, ses, eng, tarRel, baseRel, tarSnapshot, baseSnapshot,
+			execCtx.reqCtx, ses, tarRel, baseRel, tarSnapshot, baseSnapshot,
 		); err != nil {
 		return err
 	}
 
+	hasLCA := lcaTableID != 0
 	if err = diff(
 		execCtx.reqCtx,
 		ses,
-		ses.proc.Mp(),
 		tarTblDef,
 		baseTblDef,
 		tarHandle,
 		baseHandle,
 		stmt.DiffAsOpts,
-		hasLca,
+		hasLCA,
 		tarBranchTS,
 		baseBranchTS,
 		bh,
@@ -165,7 +171,6 @@ func handleSnapshotMerge(
 func diff(
 	ctx context.Context,
 	ses *Session,
-	mp *mpool.MPool,
 	tarTblDef *plan.TableDef,
 	baseTblDef *plan.TableDef,
 	tarHandle engine.ChangesHandle,
@@ -178,7 +183,10 @@ func diff(
 ) (err error) {
 
 	var (
-		pkIdxes []int
+		mp     = ses.proc.Mp()
+		pkType int
+
+		pkColIdxes []int
 
 		baseDataHashmap      databranchutils.BranchHashmap
 		baseTombstoneHashmap databranchutils.BranchHashmap
@@ -193,18 +201,30 @@ func diff(
 		}
 	}()
 
-	if baseTblDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-		pkIdxes = append(pkIdxes, int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]))
-	} else {
+	// case 1: fake pk, combined all columns as the PK
+	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		pkType = fakePKType
 		for i, col := range baseTblDef.Cols {
 			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				pkIdxes = append(pkIdxes, i)
+				pkColIdxes = append(pkColIdxes, i)
 			}
 		}
+	} else if baseTblDef.Pkey.CompPkeyCol != nil {
+		// case 2: composite pk, combined all pks columns as the PK
+		pkType = compositePKType
+		pkNames := baseTblDef.Pkey.Names
+		for _, name := range pkNames {
+			pkColIdxes = append(pkColIdxes, int(baseTblDef.Name2ColIndex[name]))
+		}
+	} else {
+		// normal pk
+		pkType = normalPKType
+		pkName := baseTblDef.Pkey.PkeyColName
+		pkColIdxes = append(pkColIdxes, int(baseTblDef.Name2ColIndex[pkName]))
 	}
 
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
-		ctx, mp, hasLca, pkIdxes, baseHandle,
+		ctx, mp, hasLca, pkColIdxes, baseHandle,
 	); err != nil {
 		return
 	}
@@ -260,7 +280,7 @@ func diff(
 
 		if dataBat != nil {
 			pkVecs = pkVecs[:0]
-			for _, idx := range pkIdxes {
+			for _, idx := range pkColIdxes {
 				pkVecs = append(pkVecs, dataBat.Vecs[idx])
 			}
 			if checkRet, err = baseDataHashmap.PopByVectors(pkVecs); err != nil {
@@ -276,7 +296,42 @@ func diff(
 					}
 					rows = append(rows, row)
 				} else {
-					// exists in the base table, do nothing
+					// exists in the base table, we should compare the left columns
+					if pkType == fakePKType {
+						// already compared, do nothing here
+					} else {
+						var (
+							allEqual = true
+							tuple    types.Tuple
+						)
+
+						if tuple, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
+							return
+						}
+
+						for _, idx := range neededColIdxes {
+							// skip the keys, already compared
+							if slices.Index(pkColIdxes, idx) != -1 {
+								continue
+							}
+
+							left := types.EncodeValue(tuple[idx], dataBat.Vecs[idx].GetType().Oid)
+							if !bytes.Equal(left, dataBat.Vecs[idx].GetRawBytesAt(i)) {
+								allEqual = false
+								break
+							}
+						}
+
+						if !allEqual { // the diff comes from the update operations
+							row1 := append([]interface{}{}, tarTblDef.Name, "-")
+							row2 := append([]interface{}{}, tarTblDef.Name, "+")
+							for _, idx := range neededColIdxes {
+								row1 = append(row1, tuple[idx])
+								row2 = append(row2, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
+							}
+							rows = append(rows, row1, row2)
+						}
+					}
 				}
 			}
 
@@ -805,6 +860,8 @@ func buildHashmapForBaseTable(
 		}
 
 		if dataBat != nil {
+			//fmt.Println("base", "\n", common.MoBatchToString(dataBat, dataBat.RowCount()))
+			//fmt.Println()
 			if err = dataHashmap.PutByVectors(dataBat.Vecs, pkIdxes); err != nil {
 				return
 			}
@@ -825,7 +882,6 @@ func buildHashmapForBaseTable(
 func getRelations(
 	ctx context.Context,
 	ses *Session,
-	eng engine.Engine,
 	tarTable tree.TableName,
 	baseTable tree.TableName,
 	tarSnapshot *plan.Snapshot,
@@ -874,9 +930,8 @@ func getRelations(
 		return
 	}
 
-	if tarDB, err = eng.Database(
-		ctx, tarDbName, tarTxnOp,
-	); err != nil {
+	eng := ses.proc.GetSessionInfo().StorageEngine
+	if tarDB, err = eng.Database(ctx, tarDbName, tarTxnOp); err != nil {
 		return
 	}
 
@@ -884,9 +939,7 @@ func getRelations(
 		return
 	}
 
-	if baseDB, err = eng.Database(
-		ctx, baseDbName, baseTxnOp,
-	); err != nil {
+	if baseDB, err = eng.Database(ctx, baseDbName, baseTxnOp); err != nil {
 		return
 	}
 
@@ -905,13 +958,12 @@ func getRelations(
 func constructChangeHandle(
 	ctx context.Context,
 	ses *Session,
-	eng engine.Engine,
 	tarRel engine.Relation,
 	baseRel engine.Relation,
 	tarSnapshot *plan.Snapshot,
 	baseSnapshot *plan.Snapshot,
 ) (
-	hasLca bool,
+	lcaTableID uint64,
 	tarBranchTS timestamp.Timestamp,
 	baseBranchTS timestamp.Timestamp,
 	tarHandle engine.ChangesHandle,
@@ -920,72 +972,43 @@ func constructChangeHandle(
 ) {
 
 	var (
-		tarIsClonedTable  bool
-		baseIsClonedTable bool
-
-		tarToTS  timestamp.Timestamp
-		baseToTS timestamp.Timestamp
-
-		tarFromTS   timestamp.Timestamp
-		baseFromTS  timestamp.Timestamp
-		txnSnapshot timestamp.Timestamp
-
-		tarScanSnapshot  timestamp.Timestamp
-		baseScanSnapshot timestamp.Timestamp
+		tarEnd   types.TS
+		baseEnd  types.TS
+		tarFrom  types.TS
+		baseFrom types.TS
 	)
 
-	txnOp := ses.GetTxnHandler().GetTxn()
-	txnSnapshot = txnOp.SnapshotTS()
-	tarToTS = txnSnapshot
-	baseToTS = txnSnapshot
-
-	if hasLca, tarFromTS, baseFromTS, tarIsClonedTable, baseIsClonedTable, err = decideFromTS(
+	if lcaTableID, tarBranchTS, baseBranchTS, err = decideLCABranchTSFromBranchDAG(
 		ctx, ses, tarRel, baseRel,
 	); err != nil {
 		return
 	}
 
-	if hasLca {
-		tarBranchTS = tarFromTS.Prev()
-		baseBranchTS = baseFromTS.Prev()
-	}
-
-	tarScanSnapshot = txnSnapshot
-	if tarSnapshot != nil && tarSnapshot.TS != nil {
-		tarScanSnapshot = *tarSnapshot.TS
-	}
-
-	if tarHandle, err = databranchutils.CollectChanges(
-		ctx,
-		eng,
-		ses.GetAccountId(),
-		tarScanSnapshot,
-		txnOp,
-		tarRel,
-		types.TimestampToTS(tarFromTS),
-		types.TimestampToTS(tarToTS),
-		ses.proc.Mp(),
-		tarIsClonedTable,
+	if tarEnd, baseEnd, tarFrom, baseFrom, err = decideCollectRange(
+		ctx, ses, tarRel, baseRel, lcaTableID,
+		types.TimestampToTS(tarBranchTS),
+		types.TimestampToTS(baseBranchTS),
+		tarSnapshot, baseSnapshot,
 	); err != nil {
 		return
 	}
 
-	baseScanSnapshot = txnSnapshot
-	if baseSnapshot != nil && baseSnapshot.TS != nil {
-		baseScanSnapshot = *baseSnapshot.TS
+	if tarHandle, err = databranchutils.CollectChanges(
+		ctx,
+		tarRel,
+		tarFrom,
+		tarEnd,
+		ses.proc.Mp(),
+	); err != nil {
+		return
 	}
 
 	if baseHandle, err = databranchutils.CollectChanges(
 		ctx,
-		eng,
-		ses.GetAccountId(),
-		baseScanSnapshot,
-		txnOp,
 		baseRel,
-		types.TimestampToTS(baseFromTS),
-		types.TimestampToTS(baseToTS),
+		baseFrom,
+		baseEnd,
 		ses.proc.Mp(),
-		baseIsClonedTable,
 	); err != nil {
 		return
 	}
@@ -993,26 +1016,260 @@ func constructChangeHandle(
 	return
 }
 
-func decideFromTS(
+func decideCollectRange(
+	ctx context.Context,
+	ses *Session,
+	tarRel engine.Relation,
+	baseRel engine.Relation,
+	lcaTableID uint64,
+	tarBranchTS types.TS,
+	baseBranchTS types.TS,
+	tarSnapshot *plan.Snapshot,
+	baseSnapshot *plan.Snapshot,
+) (
+	tarEndTS types.TS,
+	baseEndTS types.TS,
+	tarFromTS types.TS,
+	baseFromTS types.TS,
+	err error,
+) {
+
+	var (
+		tarSp  types.TS
+		baseSp types.TS
+
+		tarCTS  types.TS
+		baseCTS types.TS
+
+		tarTableID  = tarRel.GetTableID(ctx)
+		baseTableID = baseRel.GetTableID(ctx)
+
+		mp    = ses.proc.Mp()
+		eng   = ses.proc.GetSessionInfo().StorageEngine
+		txnOp = ses.GetTxnHandler().GetTxn()
+
+		txnSnapshot = types.TimestampToTS(txnOp.SnapshotTS())
+	)
+
+	tarSp = txnSnapshot
+	if tarSnapshot != nil && tarSnapshot.TS != nil {
+		tarSp = types.TimestampToTS(*tarSnapshot.TS)
+	}
+
+	baseSp = txnSnapshot
+	if baseSnapshot != nil && baseSnapshot.TS != nil {
+		baseSp = types.TimestampToTS(*baseSnapshot.TS)
+	}
+
+	// now we got the t1.snapshot, t1.branchTS, t2.snapshot, t2.branchTS and txnSnapshot,
+	// and then we need to decide the range that t1 and t2 should collect.
+	//
+	// case 1: t1 and t2 have no LCA
+	//	==> t1 collect [0, sp], t2 collect [0, sp]
+	//
+	// case 2: t1 and t2 have the LCA t0 (not t1 nor t2)
+	// 	i. t1 and t2 branched from to at the same ts
+	//		==> t1 collect [branchTS+1, sp], t2 collect [branchTS+1, sp]
+	//	ii. t1 and t2 have different branchTS
+	//		==> t1 collect [0, sp], t2 collect [0, sp]
+	//
+	// case 3: t1 is the LCA of t1 and t2
+	//	i. t1.sp < t2.branchTS
+	//		==> t1 collect [0, sp], t2 collect [0, sp]
+	//  ii. t1.sp == t2.branchTS
+	//		==> t1 collect nothing, t2 collect [branchTS+1, sp]
+	// iii. t1.sp > t2.branchTS
+	//		==> t1 collect [branchTS+1, sp], t2 collect [branchTS+1, sp]
+	//
+	// case 4: t2 is the LCA of t1 and t2
+	//	...
+
+	// Note That:
+	// 1. the branchTS+1 cannot skip the cloned data, we need get the clone commitTS (the table creation commitTS)
+
+	getTarCommitTS := func() (types.TS, error) {
+		return getTableCreationCommitTS(ctx, eng, mp, tarBranchTS, tarSp, txnOp, tarRel)
+	}
+
+	getBaseCommitTS := func() (types.TS, error) {
+		return getTableCreationCommitTS(ctx, eng, mp, baseBranchTS, baseSp, txnOp, baseRel)
+	}
+
+	worstRange := func() {
+		tarEndTS = tarSp
+		baseEndTS = baseSp
+		tarFromTS = types.MinTs()
+		baseFromTS = types.MinTs()
+	}
+
+	tarCollectNothing := func() {
+		tarFromTS = tarSp
+		tarEndTS = tarSp.Prev()
+	}
+
+	baseCollectNothing := func() {
+		baseFromTS = baseSp
+		baseEndTS = baseSp.Prev()
+	}
+
+	givenCommonBaseIsLCA := func() error {
+		tarCTS, err = getTarCommitTS()
+
+		tarEndTS = tarSp
+		tarFromTS = tarCTS.Next()
+		baseEndTS = tarCTS.Next()
+		baseFromTS = baseSp
+		return err
+	}
+
+	givenCommonTarIsLCA := func() error {
+		baseCTS, err = getBaseCommitTS()
+		tarFromTS = baseCTS.Next()
+		tarEndTS = tarSp
+		baseFromTS = baseCTS.Next()
+		baseEndTS = baseSp
+		return err
+	}
+
+	if lcaTableID == 0 {
+		// no LCA
+		worstRange()
+	} else if lcaTableID == baseTableID { // base is the LCA
+		if baseSp.LT(&tarBranchTS) {
+			worstRange()
+		} else if baseSp.EQ(&tarBranchTS) {
+			// base collect nothing, tar collect [branchTS+1, sp]
+			tarCTS, err = getTarCommitTS()
+			tarFromTS = tarCTS.Next()
+			tarEndTS = tarSp
+			baseCollectNothing()
+		} else {
+			// baseSp.GT(&tarBranchTS)
+			err = givenCommonBaseIsLCA()
+		}
+
+	} else if lcaTableID == tarTableID { // tar is the LCA
+		if tarSp.LT(&baseBranchTS) {
+			worstRange()
+		} else if tarSp.EQ(&baseBranchTS) {
+			// tar collect nothing, base collect [branchTS+1, sp]
+			tarCollectNothing()
+			baseCTS, err = getBaseCommitTS()
+			baseFromTS = baseCTS.Next()
+			baseEndTS = baseSp
+		} else {
+			// tarSp.GT(&baseBranchTS)
+			err = givenCommonTarIsLCA()
+		}
+
+	} else {
+		// LCA not tar or base
+		if tarBranchTS.EQ(&baseBranchTS) {
+			tarCTS, err = getTarCommitTS()
+			tarFromTS = tarCTS.Next()
+			tarEndTS = tarSp
+
+			if err != nil {
+				return
+			}
+
+			baseCTS, err = getBaseCommitTS()
+			baseEndTS = baseSp
+			baseFromTS = baseCTS.Next()
+		} else {
+			worstRange()
+		}
+	}
+
+	return
+}
+
+func getTableCreationCommitTS(
+	ctx context.Context,
+	eng engine.Engine,
+	mp *mpool.MPool,
+	branchTS types.TS,
+	snapshot types.TS,
+	txnOp client.TxnOperator,
+	rel engine.Relation,
+) (commitTS types.TS, err error) {
+
+	var (
+		data          *batch.Batch
+		tombstone     *batch.Batch
+		moTableRel    engine.Relation
+		moTableHandle engine.ChangesHandle
+	)
+
+	defer func() {
+		if data != nil {
+			data.Clean(mp)
+		}
+		if moTableHandle != nil {
+			moTableHandle.Close()
+		}
+	}()
+
+	if _, _, moTableRel, err = eng.GetRelationById(
+		ctx, txnOp, catalog.MO_TABLES_ID,
+	); err != nil {
+		return
+	}
+
+	if moTableHandle, err = moTableRel.CollectChanges(
+		ctx, branchTS, snapshot, true, mp,
+	); err != nil {
+		return
+	}
+
+	for commitTS.IsEmpty() {
+		if data, tombstone, _, err = moTableHandle.Next(ctx, mp); err != nil {
+			return
+		} else if data == nil && tombstone == nil {
+			break
+		}
+
+		if tombstone != nil {
+			tombstone.Clean(mp)
+		}
+
+		if data != nil {
+			relIdCol := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
+			commitTSCol := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
+
+			if idx := slices.Index(relIdCol, rel.GetTableID(ctx)); idx != -1 {
+				commitTS = commitTSCol[idx]
+			}
+
+			data.Clean(mp)
+		}
+	}
+
+	if commitTS.IsEmpty() {
+		err = moerr.NewInternalErrorNoCtx("cannot find the commit ts of the cloned table")
+	}
+
+	return commitTS, err
+}
+
+func decideLCABranchTSFromBranchDAG(
 	ctx context.Context,
 	ses *Session,
 	tarRel engine.Relation,
 	baseRel engine.Relation,
 ) (
-	hasLca bool,
-	tarFromTS timestamp.Timestamp,
-	baseFromTS timestamp.Timestamp,
-	tarIsClonedTable bool,
-	baseIsClonedTable bool,
+	lcaTableID uint64,
+	tarBranchTS timestamp.Timestamp,
+	baseBranchTS timestamp.Timestamp,
 	err error,
 ) {
 
 	var (
 		dag *databranchutils.DataBranchDAG
 
-		lcaTableID   uint64
-		tarBranchTS  int64
-		baseBranchTS int64
+		tarTS  int64
+		baseTS int64
+		hasLca bool
 	)
 
 	if dag, err = constructBranchDAG(ctx, ses); err != nil {
@@ -1031,26 +1288,20 @@ func decideFromTS(
 	//
 	// if a table is cloned table, the commit ts of the cloned data
 	// should be the creation time of the table.
-	if lcaTableID, tarBranchTS, baseBranchTS, hasLca = dag.FindLCA(
+	if lcaTableID, tarTS, baseTS, hasLca = dag.FindLCA(
 		tarRel.GetTableID(ctx), baseRel.GetTableID(ctx),
 	); hasLca {
 		if lcaTableID == baseRel.GetTableID(ctx) {
-			ts := timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
-			tarFromTS = ts
-			baseFromTS = ts
-			tarIsClonedTable = true
-			baseIsClonedTable = dag.HasParent(baseRel.GetTableID(ctx))
+			ts := timestamp.Timestamp{PhysicalTime: tarTS}
+			tarBranchTS = ts
+			baseBranchTS = ts
 		} else if lcaTableID == tarRel.GetTableID(ctx) {
-			ts := timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
-			tarFromTS = ts
-			baseFromTS = ts
-			baseIsClonedTable = true
-			tarIsClonedTable = dag.HasParent(tarRel.GetTableID(ctx))
+			ts := timestamp.Timestamp{PhysicalTime: baseTS}
+			baseBranchTS = ts
+			baseBranchTS = ts
 		} else {
-			tarIsClonedTable = true
-			baseIsClonedTable = true
-			tarFromTS = timestamp.Timestamp{PhysicalTime: tarBranchTS}.Next()
-			baseFromTS = timestamp.Timestamp{PhysicalTime: baseBranchTS}.Next()
+			tarBranchTS = timestamp.Timestamp{PhysicalTime: tarTS}
+			baseBranchTS = timestamp.Timestamp{PhysicalTime: baseTS}
 		}
 	}
 
