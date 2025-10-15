@@ -2613,12 +2613,13 @@ class Client(BaseMatrixOneClient):
 
         return self
 
-    def get_secondary_index_tables(self, table_name: str) -> List[str]:
+    def get_secondary_index_tables(self, table_name: str, database_name: str = None) -> List[str]:
         """
-        Get all secondary index table names for a given table in the current database.
+        Get all secondary index table names for a given table.
 
         Args:
             table_name: Name of the table to get secondary indexes for
+            database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
             List of secondary index table names
@@ -2627,26 +2628,31 @@ class Client(BaseMatrixOneClient):
 
             >>> client = Client()
             >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> # Use current database
             >>> index_tables = client.get_secondary_index_tables('cms_all_content_chunk_info')
+            >>> # Or specify database explicitly
+            >>> index_tables = client.get_secondary_index_tables('cms_all_content_chunk_info', 'test')
             >>> print(index_tables)
             ['__mo_index_secondary_..._cms_id', '__mo_index_secondary_..._idx_all_content_length']
         """
         from .index_utils import build_get_index_tables_sql
 
-        # Get current database from connection params
-        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
 
-        sql, params = build_get_index_tables_sql(table_name, database)
+        sql, params = build_get_index_tables_sql(table_name, database_name)
         result = self.execute(sql, params)
         return [row[0] for row in result.fetchall()]
 
-    def get_secondary_index_table_by_name(self, table_name: str, index_name: str) -> Optional[str]:
+    def get_secondary_index_table_by_name(self, table_name: str, index_name: str, database_name: str = None) -> Optional[str]:
         """
-        Get the physical table name of a secondary index by its index name in the current database.
+        Get the physical table name of a secondary index by its index name.
 
         Args:
             table_name: Name of the table
             index_name: Name of the secondary index
+            database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
             Physical table name of the secondary index, or None if not found
@@ -2655,16 +2661,20 @@ class Client(BaseMatrixOneClient):
 
             >>> client = Client()
             >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> # Use current database
             >>> index_table = client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id')
+            >>> # Or specify database explicitly
+            >>> index_table = client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id', 'test')
             >>> print(index_table)
             '__mo_index_secondary_018cfbda-bde1-7c3e-805c-3f8e71769f75_cms_id'
         """
         from .index_utils import build_get_index_table_by_name_sql
 
-        # Get current database from connection params
-        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
 
-        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database)
+        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database_name)
         result = self.execute(sql, params)
         row = result.fetchone()
         return row[0] if row else None
