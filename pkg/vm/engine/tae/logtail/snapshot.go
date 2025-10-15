@@ -1922,6 +1922,17 @@ func (sm *SnapshotMeta) GetAccountId(tid uint64) (uint32, bool) {
 	return sm.tableIDIndex[tid].accountID, true
 }
 
+// GetAllTableIDs returns a copy of all table IDs in the snapshot meta
+func (sm *SnapshotMeta) GetAllTableIDs() map[uint64]bool {
+	sm.RLock()
+	defer sm.RUnlock()
+	result := make(map[uint64]bool, len(sm.tableIDIndex))
+	for tableID := range sm.tableIDIndex {
+		result[tableID] = true
+	}
+	return result
+}
+
 // for test
 func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
 	sm.RLock()
