@@ -108,6 +108,9 @@ setup(
     include_package_data=True,
     zip_safe=False,
     entry_points={
+        "console_scripts": [
+            "mo-diag=matrixone.cli_tools:main_cli",
+        ],
         "sqlalchemy.dialects": [
             "matrixone = matrixone.sqlalchemy_ext.dialect:MatrixOneDialect",
         ],
