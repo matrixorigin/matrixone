@@ -1775,7 +1775,7 @@ def start_interactive_tool(host='localhost', port=6001, user='root', password='1
         handler.setLevel(level)
 
     # Create client with minimal SQL logging
-    sql_log_mode = 'of' if level >= logging.ERROR else 'auto'
+    sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
     client = Client(sql_log_mode=sql_log_mode)
 
     # Set level again after client creation (in case client adds handlers)
@@ -1846,7 +1846,7 @@ Examples:
             handler.setLevel(level)
 
         # Create client
-        sql_log_mode = 'of' if level >= logging.ERROR else 'auto'
+        sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
         client = Client(sql_log_mode=sql_log_mode)
 
         # Set level again after client creation
