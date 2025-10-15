@@ -21,10 +21,21 @@ import (
 
 // BranchHashmap exposes the operations supported by the adaptive hashmap.
 type BranchHashmap interface {
+	// PutByVectors stores the provided vectors. Each row across the vectors is
+	// treated as a single record and the columns referenced by keyCols build the key.
 	PutByVectors(vecs []*vector.Vector, keyCols []int) error
+	// GetByVectors probes the map using the supplied key vectors and returns one
+	// GetResult per probed row, preserving the order of the original vectors.
 	GetByVectors(keyVecs []*vector.Vector) ([]GetResult, error)
+	// PopByVectors behaves like GetByVectors but removes every matching key from
+	// the hashmap. The returned rows hold encoded payloads that can be decoded via
+	// DecodeRow to recover the original column values.
 	PopByVectors(keyVecs []*vector.Vector) ([]GetResult, error)
+	// ForEach iterates through all in-memory and spilled entries, invoking fn with
+	// the encoded key and all rows associated with that key.
 	ForEach(fn func(key []byte, rows [][]byte) error) error
+	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
+	// tuple of column values in the same order that was originally supplied.
 	DecodeRow(data []byte) (types.Tuple, error)
 	Close() error
 }
@@ -140,8 +151,11 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 
 // GetResult bundles the original rows associated with a probed key.
 type GetResult struct {
+	// Exists reports whether at least one row matched the probed key.
 	Exists bool
-	Rows   [][]byte
+	// Rows contains the encoded payloads for every row that matched the key.
+	// Each element can be decoded back into column values using DecodeRow.
+	Rows [][]byte
 }
 
 func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) error {
