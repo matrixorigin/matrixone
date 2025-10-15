@@ -176,7 +176,7 @@ func (r *TableMetaReader) Read(
 func (r *TableMetaReader) SetOrderBy(specs []*plan.OrderBySpec) {
 }
 
-func (r *TableMetaReader) SetLimit(limit uint64) {
+func (r *TableMetaReader) SetBlockTop(specs []*plan.OrderBySpec, limit uint64) {
 }
 
 func (r *TableMetaReader) GetOrderBy() []*plan.OrderBySpec {

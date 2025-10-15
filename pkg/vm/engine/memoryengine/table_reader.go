@@ -219,7 +219,7 @@ func (t *TableReader) GetOrderBy() []*plan.OrderBySpec {
 func (t *TableReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
-func (t *TableReader) SetLimit(limit uint64) {
+func (t *TableReader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
 }
 
 func (t *TableReader) Close() error {

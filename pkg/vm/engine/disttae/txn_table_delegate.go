@@ -1379,7 +1379,7 @@ func (r *shardingLocalReader) close() error {
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 }
 
-func (r *shardingLocalReader) SetLimit(limit uint64) {
+func (r *shardingLocalReader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {

@@ -17,6 +17,8 @@ package blockio
 import (
 	"container/heap"
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -211,7 +213,7 @@ func BlockDataRead(
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
 	filter objectio.BlockReadFilter,
-	orderByLimit objectio.BlockReadTopOp,
+	orderByLimit *objectio.BlockReadTopOp,
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
@@ -385,7 +387,7 @@ func BlockDataReadInner(
 	phyAddrColumnPos int,
 	ts types.TS,
 	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
-	orderByLimit objectio.BlockReadTopOp,
+	orderByLimit *objectio.BlockReadTopOp,
 	policy fileservice.Policy,
 	outputBat *batch.Batch,
 	cacheVectors containers.Vectors,
@@ -418,10 +420,10 @@ func BlockDataReadInner(
 
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
-		if orderByLimit.NumVec != nil && orderByLimit.Limit > 0 {
+		if orderByLimit != nil && int(orderByLimit.Limit) < len(selectRows) {
 			// apply topn if needed
 			hp := make(vectorindex.SearchResultHeap, 0, orderByLimit.Limit+1)
-			lhs := outputBat.Vecs[orderByLimit.ColPos]
+			lhs := cacheVectors[orderByLimit.ColPos]
 
 			switch orderByLimit.Typ {
 			case types.T_array_float32:
@@ -439,8 +441,12 @@ func BlockDataReadInner(
 					}
 					dist64 := float64(dist)
 
-					if len(hp) >= int(orderByLimit.Limit) && dist64 >= hp[0].GetDistance() {
-						continue
+					if len(hp) >= int(orderByLimit.Limit) {
+						if dist64 >= hp[0].GetDistance() {
+							continue
+						} else {
+							heap.Pop(&hp)
+						}
 					}
 
 					heap.Push(&hp, &vectorindex.SearchResult{
@@ -463,8 +469,12 @@ func BlockDataReadInner(
 						return err
 					}
 
-					if len(hp) >= int(orderByLimit.Limit) && dist64 >= hp[0].GetDistance() {
-						continue
+					if len(hp) >= int(orderByLimit.Limit) {
+						if dist64 >= hp[0].GetDistance() {
+							continue
+						} else {
+							heap.Pop(&hp)
+						}
 					}
 
 					heap.Push(&hp, &vectorindex.SearchResult{
@@ -474,7 +484,7 @@ func BlockDataReadInner(
 				}
 
 			default:
-				return moerr.NewInternalErrorNoCtx("only support float32/float64 type for topn")
+				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
 			}
 
 			sels := make([]int64, 0, orderByLimit.Limit)
@@ -482,6 +492,7 @@ func BlockDataReadInner(
 				sels = append(sels, heap.Pop(&hp).(*vectorindex.SearchResult).Id)
 			}
 
+			slices.Sort(sels)
 			selectRows = sels
 		}
 

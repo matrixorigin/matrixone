@@ -51,6 +51,9 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	if n.Limit != nil {
 		n.Limit = r.constantFold(n.Limit, proc)
 	}
+	if n.BlockLimit != nil {
+		n.BlockLimit = r.constantFold(n.BlockLimit, proc)
+	}
 	if n.Offset != nil {
 		n.Offset = r.constantFold(n.Offset, proc)
 	}
@@ -94,6 +97,10 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	}
 
 	for _, orderBy := range n.OrderBy {
+		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	}
+
+	for _, orderBy := range n.BlockOrderBy {
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
 	}
 

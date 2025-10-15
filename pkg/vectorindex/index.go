@@ -99,11 +99,15 @@ func (h *SearchResultHeap) Pop() any {
 type SearchResultSafeHeap struct {
 	mutex   sync.Mutex
 	resheap SearchResultHeap
+	size    int
 }
 
 func NewSearchResultSafeHeap(size int) *SearchResultSafeHeap {
-	h := &SearchResultSafeHeap{}
-	h.resheap = make(SearchResultHeap, 0, size)
+	h := &SearchResultSafeHeap{
+		resheap: make(SearchResultHeap, 0, size+1),
+		size:    size,
+	}
+
 	heap.Init(&h.resheap)
 	return h
 }
@@ -118,7 +122,14 @@ func (h *SearchResultSafeHeap) Push(srif SearchResultIf) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	heap.Push(&h.resheap, srif)
+	if h.resheap.Len() == h.size {
+		if srif.GetDistance() < h.resheap[0].GetDistance() {
+			heap.Pop(&h.resheap)
+			heap.Push(&h.resheap, srif)
+		}
+	} else {
+		heap.Push(&h.resheap, srif)
+	}
 }
 
 func (h *SearchResultSafeHeap) Pop() SearchResultIf {

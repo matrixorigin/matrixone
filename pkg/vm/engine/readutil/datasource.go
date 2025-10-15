@@ -192,9 +192,6 @@ func (rs *RemoteDataSource) GetTombstones(
 func (rs *RemoteDataSource) SetOrderBy(_ []*plan.OrderBySpec) {
 }
 
-func (rs *RemoteDataSource) SetLimit(limit uint64) {
-}
-
 func (rs *RemoteDataSource) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }

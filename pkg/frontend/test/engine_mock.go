@@ -780,18 +780,6 @@ func (mr *MockDataSourceMockRecorder) SetFilterZM(zm interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFilterZM", reflect.TypeOf((*MockDataSource)(nil).SetFilterZM), zm)
 }
 
-// SetLimit mocks base method.
-func (m *MockDataSource) SetLimit(limit uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetLimit", limit)
-}
-
-// SetLimit indicates an expected call of SetLimit.
-func (mr *MockDataSourceMockRecorder) SetLimit(limit interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLimit", reflect.TypeOf((*MockDataSource)(nil).SetLimit), limit)
-}
-
 // SetOrderBy mocks base method.
 func (m *MockDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	m.ctrl.T.Helper()
@@ -1624,6 +1612,18 @@ func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{})
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
+// SetBlockTop mocks base method.
+func (m *MockReader) SetBlockTop(arg0 []*plan.OrderBySpec, arg1 uint64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetBlockTop", arg0, arg1)
+}
+
+// SetBlockTop indicates an expected call of SetBlockTop.
+func (mr *MockReaderMockRecorder) SetBlockTop(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlockTop", reflect.TypeOf((*MockReader)(nil).SetBlockTop), arg0, arg1)
+}
+
 // SetFilterZM mocks base method.
 func (m *MockReader) SetFilterZM(arg0 objectio.ZoneMap) {
 	m.ctrl.T.Helper()
@@ -1634,18 +1634,6 @@ func (m *MockReader) SetFilterZM(arg0 objectio.ZoneMap) {
 func (mr *MockReaderMockRecorder) SetFilterZM(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFilterZM", reflect.TypeOf((*MockReader)(nil).SetFilterZM), arg0)
-}
-
-// SetLimit mocks base method.
-func (m *MockReader) SetLimit(arg0 uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetLimit", arg0)
-}
-
-// SetLimit indicates an expected call of SetLimit.
-func (mr *MockReaderMockRecorder) SetLimit(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLimit", reflect.TypeOf((*MockReader)(nil).SetLimit), arg0)
 }
 
 // SetOrderBy mocks base method.

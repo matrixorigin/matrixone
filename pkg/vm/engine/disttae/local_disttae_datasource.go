@@ -158,10 +158,6 @@ func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
 }
 
-func (ls *LocalDisttaeDataSource) SetLimit(limit uint64) {
-	ls.Limit = limit
-}
-
 func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
 	return ls.OrderBy
 }

@@ -1025,7 +1025,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)
 		}
-		if node.Limit != nil && len(node.OrderBy) == 0 {
+		if node.Limit != nil {
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
@@ -2162,8 +2162,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.SchemaName = node.ObjRef.SchemaName
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
-	s.DataSource.Limit = node.Limit.GetLit().GetU64Val()
 	s.DataSource.OrderBy = node.OrderBy
+	s.DataSource.BlockOrderBy = node.BlockOrderBy
+	s.DataSource.BlockLimit = node.BlockLimit.GetLit().GetU64Val()
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil

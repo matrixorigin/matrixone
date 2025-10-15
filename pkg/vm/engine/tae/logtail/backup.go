@@ -113,10 +113,6 @@ func (d *BackupDeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	panic("Not Support order by")
 }
 
-func (d *BackupDeltaLocDataSource) SetLimit(limit uint64) {
-	panic("Not Support limit")
-}
-
 func (d *BackupDeltaLocDataSource) GetOrderBy() []*plan.OrderBySpec {
 	panic("Not Support order by")
 }

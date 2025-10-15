@@ -634,23 +634,15 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 			return
 		}
 
-		scanNode.OrderBy = append(scanNode.OrderBy, &plan.OrderBySpec{
+		scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, &plan.OrderBySpec{
 			Expr:      DeepCopyExpr(orderFunc),
 			Collation: node.OrderBy[0].Collation,
 			Flag:      node.OrderBy[0].Flag,
 		})
-		scanNode.Limit = DeepCopyExpr(node.Limit)
+		scanNode.BlockLimit = DeepCopyExpr(node.Limit)
 
 		// if there is a limit, outcnt is limit number
-		scanNode.Stats.Outcnt = float64(limitVal)
-		if scanNode.Stats.Selectivity < 0.5 {
-			newblockNum := int32(limitVal / 2)
-			if newblockNum < scanNode.Stats.BlockNum {
-				scanNode.Stats.BlockNum = newblockNum
-			}
-		} else {
-			scanNode.Stats.BlockNum = 1
-		}
+		scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
 		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
 	}
 }
