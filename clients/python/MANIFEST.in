@@ -7,6 +7,9 @@ include LICENSE
 # Include requirements
 include requirements.txt
 
+# Include mo_diag script
+include mo_diag.py
+
 # Include examples (recommended for user experience)
 recursive-include examples *.py
 
