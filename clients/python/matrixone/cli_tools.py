@@ -825,6 +825,7 @@ class MatrixOneCLI(cmd.Cmd):
             show_ivf_status [database]             - Show compact summary
             show_ivf_status [database] -v          - Show detailed view
             show_ivf_status [database] -t table    - Filter by table name
+
         Example:
             show_ivf_status
             show_ivf_status test -v
