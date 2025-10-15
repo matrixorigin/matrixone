@@ -28,6 +28,7 @@ func TestExplainPhyPlan(t *testing.T) {
 		TimeConsumed:     5000,
 		WaitTimeConsumed: 2000,
 		MemorySize:       1024,
+		SpillSize:        1024,
 		InputRows:        1000,
 		OutputRows:       950,
 		InputSize:        2048,

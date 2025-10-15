@@ -14,10 +14,35 @@
 
 package common
 
+import "fmt"
+
 const (
 	KiB = 1024
 	MiB = 1024 * KiB
 	GiB = 1024 * MiB
 	TiB = 1024 * GiB
 	PiB = 1024 * TiB
+
+	THOUSAND    = 1000
+	MILLION     = 1000 * THOUSAND
+	BILLION     = 1000 * MILLION
+	TRILLION    = 1000 * BILLION
+	QUADRILLION = 1000 * TRILLION
 )
+
+func ConvertBytesToHumanReadable(bytes int64) string {
+	num := float64(bytes)
+	if bytes < KiB {
+		return fmt.Sprintf("%d bytes", bytes)
+	}
+	if bytes < MiB {
+		return fmt.Sprintf("%.2f KiB", num/KiB)
+	}
+	if bytes < GiB {
+		return fmt.Sprintf("%.2f MiB", num/MiB)
+	}
+	if bytes < TiB {
+		return fmt.Sprintf("%.2f GiB", num/GiB)
+	}
+	return fmt.Sprintf("%.2f TiB", num/TiB)
+}

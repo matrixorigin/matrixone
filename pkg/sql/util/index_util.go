@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	DefaultPackerSize = 4096
 )
 
 var SerialWithCompacted = serialWithCompacted
@@ -46,6 +51,18 @@ func (list *PackerList) Free() {
 		}
 	}
 	list.ps = nil
+}
+
+func (list *PackerList) Reset() {
+	for _, p := range list.ps {
+		p.Reset()
+	}
+}
+
+func (list *PackerList) ResetN(n int) {
+	for i := 0; i < n; i++ {
+		list.ps[i].Reset()
+	}
 }
 
 func (list *PackerList) PackerCount() int {
@@ -132,7 +149,7 @@ func BuildUniqueKeyBatch(
 			vs = append(vs, v)
 		}
 		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers)
+		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers, DefaultPackerSize)
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
@@ -177,17 +194,14 @@ func serialWithCompacted(
 	vec *vector.Vector,
 	proc *process.Process,
 	packers *PackerList,
+	packerSize uint64,
 ) (*nulls.Nulls, error) {
 	// resolve vs
 	length := vs[0].Length()
 	val := make([][]byte, 0, length)
 	if length > cap(packers.ps) {
-		for _, p := range packers.ps {
-			if p != nil {
-				p.Close()
-			}
-		}
-		packers.ps = types.NewPackerArray(length)
+		packers.Free()
+		packers.ps = types.NewPackerArrayWithSize(length, packerSize)
 	}
 	defer func() {
 		for i := 0; i < length; i++ {
@@ -528,6 +542,7 @@ func serialWithoutCompacted(
 	vec *vector.Vector,
 	proc *process.Process,
 	packers *PackerList,
+	packerSize uint64,
 ) (*nulls.Nulls, error) {
 	if len(vs) == 0 {
 		// return empty bitmap
@@ -536,17 +551,11 @@ func serialWithoutCompacted(
 
 	rowCount := vs[0].Length()
 	if rowCount > cap(packers.ps) {
-		for _, p := range packers.ps {
-			if p != nil {
-				p.Close()
-			}
-		}
-		packers.ps = types.NewPackerArray(rowCount)
+		packers.Free()
+		packers.ps = types.NewPackerArrayWithSize(rowCount, packerSize)
 	}
 	defer func() {
-		for i := 0; i < rowCount; i++ {
-			packers.ps[i].Reset()
-		}
+		packers.ResetN(rowCount)
 	}()
 
 	ps := packers.ps
@@ -968,4 +977,46 @@ func compactPrimaryCol(
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
 	return err
+}
+
+func XXHashVectors(vs []*vector.Vector,
+	proc *process.Process,
+	packers *PackerList,
+	hashCode []uint64) ([]uint64, int, error) {
+	if len(vs) == 0 {
+		return nil, 0, nil
+	}
+
+	// extend the hashCode slice if necessary
+	rowCount := vs[0].Length()
+	if rowCount > cap(hashCode) {
+		hashCode = make([]uint64, rowCount)
+	}
+
+	// extend the packers slice if necessary
+	if rowCount > cap(packers.ps) {
+		packers.Free()
+		// few hash values is longer than 512 bytes
+		packers.ps = types.NewPackerArrayWithSize(rowCount, 512)
+	}
+	defer func() {
+		packers.ResetN(rowCount)
+	}()
+
+	// pack them all.
+	for _, v := range vs {
+		if v.IsConstNull() {
+			for i := 0; i < v.Length(); i++ {
+				packers.ps[i].EncodeNull()
+			}
+			continue
+		}
+		function.SerialHelper(v, nil, packers.ps, true)
+	}
+
+	for i := 0; i < rowCount; i++ {
+		hashCode[i] = xxhash.Sum64(packers.ps[i].GetBuf())
+	}
+
+	return hashCode, rowCount, nil
 }
