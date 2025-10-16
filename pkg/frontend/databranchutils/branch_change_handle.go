@@ -67,7 +67,7 @@ var CollectChanges = func(
 
 	if end.GE(&from) {
 		if handle.handle, err = rel.CollectChanges(
-			ctx, from, end, true, mp,
+			ctx, from, end, false, mp,
 		); err != nil {
 			return nil, err
 		}

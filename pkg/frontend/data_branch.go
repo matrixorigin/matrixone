@@ -510,13 +510,14 @@ func compareRowsByPK(
 
 	for _, idx := range pkColIdxes {
 		if cmp := types.CompareValues(
-			row1[idx], row2[idx], pkTypes[idx].Oid,
+			row1[idx+2], row2[idx+2], pkTypes[idx].Oid,
 		); cmp == 0 {
 			continue
 		} else {
 			return cmp
 		}
 	}
+	// "+" < "-"
 	// duplicate pks, the "-" will be the first
 	return strings.Compare(row1[1].(string), row2[1].(string))
 }
@@ -1565,10 +1566,10 @@ func decideCollectRange(
 	givenCommonBaseIsLCA := func() error {
 		tarCTS, err = getTarCommitTS()
 
-		tarEndTS = tarSp
 		tarFromTS = tarCTS.Next()
-		baseEndTS = tarCTS.Next()
-		baseFromTS = baseSp
+		tarEndTS = tarSp
+		baseFromTS = tarCTS.Next()
+		baseEndTS = baseSp
 		return err
 	}
 
