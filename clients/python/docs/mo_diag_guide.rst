@@ -157,21 +157,53 @@ Uses vertical output format (like MySQL \\G) for easy reading.
 
 .. code-block:: text
 
-   📊 Secondary Indexes for 'test.documents'
+   📊 Secondary Indexes for 'test.ivf_health_demo_docs'
    
    *************************** 1. row ***************************
-         Index Name: idx_embedding
+         Index Name: idx_embedding_ivf_v2
           Algorithm: ivfflat
          Table Type: metadata
-     Physical Table: __mo_index_secondary_018e1234...
+     Physical Table: __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581
             Columns: embedding
          Statistics:
-                      - Objects: 5
-                      - Rows: 10,000
-                      - Compressed Size: 1.5 MB
-                      - Original Size: 2.1 MB
+                      - Objects: 1
+                      - Rows: 7
+                      - Compressed Size: 940 B
+                      - Original Size: 1.98 KB
    
-   Total: 3 index tables (1 ivfflat, 2 regular)
+   *************************** 2. row ***************************
+         Index Name: idx_embedding_ivf_v2
+          Algorithm: ivfflat
+         Table Type: centroids
+     Physical Table: __mo_index_secondary_0199e725-0a7b-706e-8f0a-a50edc3621a1
+            Columns: embedding
+         Statistics:
+                      - Objects: 1
+                      - Rows: 17
+                      - Compressed Size: 3.09 KB
+                      - Original Size: 6.83 KB
+   
+   *************************** 3. row ***************************
+         Index Name: idx_embedding_ivf_v2
+          Algorithm: ivfflat
+         Table Type: entries
+     Physical Table: __mo_index_secondary_0199e725-0a7c-77f4-8d0b-48fd8258098a
+            Columns: embedding
+         Statistics:
+                      - Objects: 1
+                      - Rows: 1,000
+                      - Compressed Size: 156.34 KB
+                      - Original Size: 176.07 KB
+   
+   Total: 3 index tables (1 ivfflat with 3 physical tables)
+
+**Output解析:**
+
+IVF索引有3个物理表：
+
+* **metadata**: 存储索引元数据（7行）
+* **centroids**: 存储质心向量（17个质心）
+* **entries**: 存储向量条目（1,000个向量）
 
 show_all_indexes
 ~~~~~~~~~~~~~~~~
@@ -204,20 +236,29 @@ This command performs diagnostic checks including:
 .. code-block:: text
 
    📊 Index Health Report for Database 'test':
+   ========================================================================================================================
    
-   ✓ HEALTHY (5 tables)
+   ✓ HEALTHY (3 tables)
+   ------------------------------------------------------------------------------------------------------------------------
    Table Name                          | Indexes  | Row Count            | Notes
-   documents                           | 2        | ✓ 10,000 rows        | IVF: 100 centroids, 10,000 vectors
-   users                              | 1        | ✓ 5,000 rows         | -
+   ------------------------------------------------------------------------------------------------------------------------
+   cms_all_content_chunk_info          | 3        | ✓ 32,712 rows        | -
+   demo_mixed_indexes                  | 4        | ✓ 20 rows            | -
+   ivf_health_demo_docs                | 1        | 300 rows             | IVF: 17 centroids, 300 vectors
    
-   ⚠️  ATTENTION NEEDED (1 tables)
-   Table Name                          | Issue                                    | Details
-   temp_vectors                        | Vector index building incomplete         | IVF index not built yet
-   
+   ========================================================================================================================
    Summary:
-     ✓ 5 healthy tables
-     ⚠️  1 tables need attention
-     Total: 6 tables with indexes
+     ✓ 3 healthy tables
+     Total: 3 tables with indexes
+   
+   💡 Tip: Use 'verify_counts <table>' or 'show_ivf_status' for detailed diagnostics
+
+**Output解析:**
+
+* **HEALTHY**: 所有索引表行数与主表一致
+* **Row Count**: 显示主表行数，带 ✓ 表示已验证
+* **Notes**: 对于IVF索引显示质心数和向量数
+* 如果有索引不一致会显示在 "ATTENTION NEEDED" 区域
 
 verify_counts
 ~~~~~~~~~~~~~
@@ -358,11 +399,36 @@ Shows aggregated statistics per component (table, tombstone, indexes).
 
 .. code-block:: text
 
-   📊 Table Statistics for 'test.documents':
+   📊 Table Statistics for 'test.ivf_health_demo_docs':
+   ========================================================================================================================
    Component                      | Objects    | Rows            | Null Count   | Original Size   | Compressed Size
-   documents                      | 5          | 10,000          | 0            | 2.5 MB          | 1.8 MB
-     └─ tombstone                 | 2          | 500             | 0            | 128 KB          | 85 KB
-     └─ index: idx_embedding      | 8          | 10,000          | 0            | 3.2 MB          | 2.1 MB
+   ------------------------------------------------------------------------------------------------------------------------
+   ivf_health_demo_docs           | 1          | 1,200           | 0            | 704.12 KB       | 624.94 KB
+   ========================================================================================================================
+
+**With -a flag (all indexes):**
+
+.. code-block:: text
+
+   📊 Table Statistics for 'test.ivf_health_demo_docs':
+   ========================================================================================================================
+   Component                      | Objects    | Rows            | Null Count   | Original Size   | Compressed Size
+   ------------------------------------------------------------------------------------------------------------------------
+   ivf_health_demo_docs           | 1          | 1,200           | 0            | 704.12 KB       | 624.94 KB
+     └─ index: idx_embedding_ivf_v2
+        └─ (metadata)              | 1          | 7               | 0            | 1.98 KB         | 940 B
+        └─ (centroids)             | 1          | 17              | 0            | 6.83 KB         | 3.09 KB
+        └─ (entries)               | 1          | 1,200           | 0            | 696.11 KB       | 626.37 KB
+   ========================================================================================================================
+
+**Output解析:**
+
+* 主表显示总体统计信息
+* IVF索引的3个物理表分别显示统计信息
+* Objects: 对象数（segment数）
+* Rows: 行数
+* Original Size: 原始大小
+* Compressed Size: 压缩后大小
 
 **Detailed view (-d):**
 
@@ -370,12 +436,23 @@ Shows individual object statistics.
 
 .. code-block:: text
 
-   📊 Detailed Table Statistics for 'test.documents':
+   📊 Detailed Table Statistics for 'test.ivf_health_demo_docs':
+   ======================================================================================================================================================
    
-   Table: documents (5 objects)
-   Object Name                                        | Create Time          | Rows         | Null Cnt   | Original Size   | Compressed Size
-   01234567-89ab-cdef-0123-456789abcdef              | 2024-01-15 10:30:00 | 2,000        | 0          | 512 KB          | 384 KB
-   ...
+   Table: ivf_health_demo_docs
+     Objects: 1 | Rows: 1,000 | Null: 0 | Original: 176.03 KB | Compressed: 156.24 KB
+     
+     Objects:
+     Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+     ----------------------------------------------------------------------------------------------------------------------------------------------------
+     0199e729-642e-71e0-b338-67c4980ee294_00000         | 1000         | 0          | 176.03 KB       | 156.24 KB
+
+**Output解析:**
+
+* 显示表的总体统计
+* 列出每个对象（segment）的详细信息
+* Object Name: 对象的唯一标识符
+* Rows/Null Cnt/Sizes: 该对象的统计信息
 
 **Hierarchical view (-a -d):**
 
@@ -383,25 +460,49 @@ Shows table → indexes → physical tables → objects in a tree structure.
 
 .. code-block:: text
 
-   📊 Detailed Table Statistics for 'test.documents':
+   📊 Detailed Table Statistics for 'test.ivf_health_demo_docs':
+   ======================================================================================================================================================
    
-   Table: documents
-     Objects: 5 | Rows: 10,000 | Null: 0 | Original: 2.5 MB | Compressed: 1.8 MB
+   Table: ivf_health_demo_docs
+     Objects: 1 | Rows: 1,000 | Null: 0 | Original: 176.03 KB | Compressed: 156.24 KB
      
      Objects:
      Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
-     ...
+     ----------------------------------------------------------------------------------------------------------------------------------------------------
+     0199e729-642e-71e0-b338-67c4980ee294_00000         | 1000         | 0          | 176.03 KB       | 156.24 KB
    
-   Index: idx_embedding
-     └─ Physical Table (metadata): __mo_index_secondary_018e1234_meta
-        Objects: 1 | Rows: 100 | Null: 0 | Original: 24 KB | Compressed: 18 KB
+   Index: idx_embedding_ivf_v2
+     └─ (metadata): __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581:272851
+        Objects: 1 | Rows: 7 | Null: 0 | Original: 1.98 KB | Compressed: 940 B
         
         Objects:
         Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
-        ...
+        ----------------------------------------------------------------------------------------------------------------------------------------------------
+        0199e729-642a-7d36-ac37-0ae17325f7ec_00000         | 7            | 0          | 1.98 KB         | 940 B
      
-     └─ Physical Table (centroids): __mo_index_secondary_018e1234_centroids
-        ...
+     └─ (centroids): __mo_index_secondary_0199e725-0a7b-706e-8f0a-a50edc3621a1:272852
+        Objects: 1 | Rows: 17 | Null: 0 | Original: 6.83 KB | Compressed: 3.09 KB
+        
+        Objects:
+        Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+        ----------------------------------------------------------------------------------------------------------------------------------------------------
+        0199e729-6431-794d-9c13-d10f2e4a59e7_00000         | 17           | 0          | 6.83 KB         | 3.09 KB
+     
+     └─ (entries): __mo_index_secondary_0199e725-0a7c-77f4-8d0b-48fd8258098a:272853
+        Objects: 1 | Rows: 1,000 | Null: 0 | Original: 696.11 KB | Compressed: 626.37 KB
+        
+        Objects:
+        Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+        ----------------------------------------------------------------------------------------------------------------------------------------------------
+        0199e729-6438-7db1-bcb6-7b74c59b0aee_00000         | 1000         | 0          | 696.11 KB       | 626.37 KB
+
+**Output解析:**
+
+* **层次结构**: 主表 → 索引 → 物理表 → 对象
+* **IVF索引的3个物理表**: metadata, centroids, entries
+* **物理表名格式**: ``table_name:table_id``
+* **Data vs Tombstone**: 如果使用 ``-t`` 参数，会显示 Data 和 Tombstone 两部分
+* **用途**: 用于深度分析表和索引的存储结构，定位具体对象
 
 Database Operations
 -------------------
@@ -432,19 +533,32 @@ Flush table and all its secondary index tables to disk.
 
 .. code-block:: text
 
-   🔄 Flushing table: test.documents
-   ✓ Main table flushed successfully
+   🔄 Flushing table: test.ivf_health_demo_docs
+   ✓ Main table flushed: ivf_health_demo_docs
    📋 Found 3 index physical tables
    
-   Index: idx_embedding (ivfflat)
-     ✓ Flushed metadata table
-     ✓ Flushed centroids table
-     ✓ Flushed entries table
+   Index: idx_embedding_ivf_v2
+     ✓ metadata: __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581
+     ✓ centroids: __mo_index_secondary_0199e725-0a7b-706e-8f0a-a50edc3621a1
+     ✓ entries: __mo_index_secondary_0199e725-0a7c-77f4-8d0b-48fd8258098a
    
-   Index: idx_title (regular)
-     ✓ Flushed index table
-   
-   ✅ All tables flushed successfully (4 total)
+   📊 Summary:
+     Main table: ✓ flushed
+     Index tables: 3/3 flushed successfully
+
+**Output解析:**
+
+* **主表 flush**: 首先 flush 主表
+* **索引表发现**: 自动发现所有索引物理表
+* **IVF 索引**: 对于 IVF 索引，会 flush 3个物理表（metadata, centroids, entries）
+* **普通索引**: 对于普通索引，flush 单个物理表
+* **成功率**: 显示成功 flush 的表数量
+
+**注意事项:**
+
+* 需要 sys 用户权限
+* 对于包含多个索引的表，flush 可能需要较长时间
+* 建议在低峰期执行 flush 操作
 
 sql
 ~~~
