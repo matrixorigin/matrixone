@@ -46,6 +46,40 @@ Getting Index Table by Name
     else:
         print("Index not found")
 
+Getting Detailed Index Information
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For comprehensive index information including IVF, HNSW, Fulltext, and regular indexes:
+
+.. code-block:: python
+
+    # Get detailed information about all indexes for a table
+    indexes = client.get_table_indexes_detail('my_table')
+    
+    for idx in indexes:
+        print(f"Index: {idx['index_name']}")
+        print(f"  Algorithm: {idx['algo'] or 'regular'}")
+        print(f"  Table Type: {idx['algo_table_type'] or 'index'}")
+        print(f"  Physical Table: {idx['physical_table_name']}")
+        print(f"  Columns: {', '.join(idx['columns'])}")
+        
+    # Example output for IVF index:
+    # Index: idx_embedding_ivf
+    #   Algorithm: ivfflat
+    #   Table Type: metadata
+    #   Physical Table: __mo_index_secondary_018e1234_meta
+    #   Columns: embedding
+    # Index: idx_embedding_ivf
+    #   Algorithm: ivfflat
+    #   Table Type: centroids
+    #   Physical Table: __mo_index_secondary_018e5678_centroids
+    #   Columns: embedding
+    # Index: idx_embedding_ivf
+    #   Algorithm: ivfflat
+    #   Table Type: entries
+    #   Physical Table: __mo_index_secondary_018e9abc_entries
+    #   Columns: embedding
+
 Verifying Index Consistency
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -109,6 +143,12 @@ Complete Example
     # Get specific index by name
     name_index = client.get_secondary_index_table_by_name('products', 'idx_name')
     print(f"\nName index table: {name_index}")
+    
+    # Get detailed index information
+    print("\nDetailed index information:")
+    indexes = client.get_table_indexes_detail('products')
+    for idx in indexes:
+        print(f"  {idx['index_name']} ({idx['algo'] or 'regular'}) - {idx['physical_table_name']}")
     
     # Verify consistency
     try:
@@ -213,6 +253,22 @@ Client.get_secondary_index_table_by_name
 .. automethod:: matrixone.Client.get_secondary_index_table_by_name
    :noindex:
 
+Client.get_table_indexes_detail
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automethod:: matrixone.Client.get_table_indexes_detail
+   :noindex:
+
+   This method provides comprehensive information about all indexes including:
+   
+   - Regular secondary indexes (MULTIPLE, UNIQUE)
+   - IVF vector indexes (with metadata, centroids, and entries tables)
+   - HNSW vector indexes
+   - Fulltext indexes
+   
+   Each index may have multiple physical tables (especially for IVF indexes which have
+   metadata, centroids, and entries tables).
+
 Client.verify_table_index_counts
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -226,6 +282,7 @@ All methods are also available in async form:
 
 - :meth:`~matrixone.AsyncClient.get_secondary_index_tables`
 - :meth:`~matrixone.AsyncClient.get_secondary_index_table_by_name`
+- :meth:`~matrixone.AsyncClient.get_table_indexes_detail`
 - :meth:`~matrixone.AsyncClient.verify_table_index_counts`
 
 Error Handling

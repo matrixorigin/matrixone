@@ -64,3 +64,4 @@ Utilities
    transaction_wrapper
    version_manager
    logger
+   cli_tools

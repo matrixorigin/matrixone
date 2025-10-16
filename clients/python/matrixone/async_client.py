@@ -2554,39 +2554,49 @@ class AsyncClient(BaseMatrixOneClient):
         except Exception as e:
             raise QueryError(f"Failed to get git version: {e}")
 
-    async def get_secondary_index_tables(self, table_name: str) -> List[str]:
+    async def get_secondary_index_tables(self, table_name: str, database_name: str = None) -> List[str]:
         """
-        Get all secondary index table names for a given table in the current database (async version).
+        Get all secondary index table names for a given table (async version).
+
+        This includes both regular secondary indexes (MULTIPLE type) and UNIQUE indexes.
 
         Args:
             table_name: Name of the table to get secondary indexes for
+            database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
-            List of secondary index table names
+            List of secondary index table names (includes both __mo_index_secondary_... and __mo_index_unique_... tables)
 
         Examples::
 
             >>> async with AsyncClient() as client:
             ...     await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            ...     # Use current database
             ...     index_tables = await client.get_secondary_index_tables('cms_all_content_chunk_info')
+            ...     # Or specify database explicitly
+            ...     index_tables = await client.get_secondary_index_tables('cms_all_content_chunk_info', 'test')
             ...     print(index_tables)
         """
         from .index_utils import build_get_index_tables_sql
 
-        # Get current database from connection params
-        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
 
-        sql, params = build_get_index_tables_sql(table_name, database)
+        sql, params = build_get_index_tables_sql(table_name, database_name)
         result = await self.execute(sql, params)
         return [row[0] for row in result.fetchall()]
 
-    async def get_secondary_index_table_by_name(self, table_name: str, index_name: str) -> Optional[str]:
+    async def get_secondary_index_table_by_name(
+        self, table_name: str, index_name: str, database_name: str = None
+    ) -> Optional[str]:
         """
-        Get the physical table name of a secondary index by its index name in the current database (async version).
+        Get the physical table name of a secondary index by its index name (async version).
 
         Args:
             table_name: Name of the table
             index_name: Name of the secondary index
+            database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
             Physical table name of the secondary index, or None if not found
@@ -2595,15 +2605,21 @@ class AsyncClient(BaseMatrixOneClient):
 
             >>> async with AsyncClient() as client:
             ...     await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            ...     # Use current database
             ...     index_table = await client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id')
+            ...     # Or specify database explicitly
+            ...     index_table = await client.get_secondary_index_table_by_name(
+            ...         'cms_all_content_chunk_info', 'cms_id', 'test'
+            ...     )
             ...     print(index_table)
         """
         from .index_utils import build_get_index_table_by_name_sql
 
-        # Get current database from connection params
-        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
 
-        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database)
+        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database_name)
         result = await self.execute(sql, params)
         row = result.fetchone()
         return row[0] if row else None

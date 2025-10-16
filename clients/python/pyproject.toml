@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matrixone-python-sdk"
-version = "0.1.4"
+version = "0.1.5"
 description = "A comprehensive Python SDK for MatrixOne database operations with vector search, fulltext search, and advanced features"
 readme = "README_USER.md"
 license = {text = "Apache-2.0"}
@@ -14,7 +14,7 @@ authors = [
 maintainers = [
     {name = "MatrixOne Team", email = "dev@matrixone.io"}
 ]
-keywords = ["matrixone", "database", "vector", "search", "sqlalchemy", "python"]
+keywords = ["matrixone", "database", "vector", "search", "sqlalchemy", "python", "diagnostic", "cli", "monitoring", "ivf", "hnsw"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -37,6 +37,7 @@ dependencies = [
     "typing-extensions>=4.0.0",
     "python-dateutil>=2.8.0",
     "numpy>=1.20.0",
+    "prompt_toolkit>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -76,7 +77,7 @@ Issues = "https://github.com/matrixorigin/matrixone/issues"
 Changelog = "https://github.com/matrixorigin/matrixone/blob/main/clients/python/CHANGELOG.md"
 
 [project.scripts]
-matrixone-sdk = "matrixone.cli:main"
+mo-diag = "matrixone.cli_tools:main_cli"
 
 [project.entry-points."sqlalchemy.dialects"]
 matrixone = "matrixone.sqlalchemy_ext.dialect:MatrixOneDialect"
