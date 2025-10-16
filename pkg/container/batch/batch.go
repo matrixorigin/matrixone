@@ -107,59 +107,8 @@ func (bat *Batch) Slice(from, to int) *Batch {
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	// --------------------------------------------------------------------
-	// | len | Zs... | len | Vecs... | len | Attrs... | len | AggInfos... |
-	// --------------------------------------------------------------------
 	var w bytes.Buffer
-
-	// row count.
-	rl := int64(bat.rowCount)
-	w.Write(types.EncodeInt64(&rl))
-
-	// Vecs
-	l := int32(len(bat.Vecs))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		data, err := bat.Vecs[i].MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		size := int32(len(data))
-		w.Write(types.EncodeInt32(&size))
-		w.Write(data)
-	}
-
-	// Attrs
-	l = int32(len(bat.Attrs))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		size := int32(len(bat.Attrs[i]))
-		w.Write(types.EncodeInt32(&size))
-		w.WriteString(bat.Attrs[i])
-	}
-
-	// AggInfos
-	aggInfos := make([][]byte, len(bat.Aggs))
-	for i, exec := range bat.Aggs {
-		data, err := aggexec.MarshalAggFuncExec(exec)
-		if err != nil {
-			return nil, err
-		}
-		aggInfos[i] = data
-	}
-
-	l = int32(len(aggInfos))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		size := int32(len(aggInfos[i]))
-		w.Write(types.EncodeInt32(&size))
-		w.Write(aggInfos[i])
-	}
-
-	w.Write(types.EncodeInt32(&bat.Recursive))
-	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
-
-	return w.Bytes(), nil
+	return bat.MarshalBinaryWithBuffer(&w)
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
@@ -194,6 +143,20 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
 		if int32(n) != size {
 			panic("unexpected length for string")
 		}
+	}
+
+	// ExtraBuf1
+	size := int32(len(bat.ExtraBuf1))
+	w.Write(types.EncodeInt32(&size))
+	if size > 0 {
+		w.Write(bat.ExtraBuf1)
+	}
+
+	// ExtraBuf2
+	size = int32(len(bat.ExtraBuf2))
+	w.Write(types.EncodeInt32(&size))
+	if size > 0 {
+		w.Write(bat.ExtraBuf2)
 	}
 
 	// AggInfos
@@ -269,6 +232,20 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		bat.Attrs[i] = string(data[:size])
 		data = data[size:]
 	}
+
+	// ExtraBuf1
+	l = types.DecodeInt32(data[:4])
+	data = data[4:]
+	bat.ExtraBuf1 = nil
+	bat.ExtraBuf1 = append(bat.ExtraBuf1, data[:l]...)
+	data = data[l:]
+
+	// ExtraBuf2
+	l = types.DecodeInt32(data[:4])
+	data = data[4:]
+	bat.ExtraBuf2 = nil
+	bat.ExtraBuf2 = append(bat.ExtraBuf2, data[:l]...)
+	data = data[l:]
 
 	l = types.DecodeInt32(data[:4])
 	aggs := make([][]byte, l)

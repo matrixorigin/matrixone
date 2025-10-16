@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -27,64 +26,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	H0 = iota
-	H8
-	HStr
-)
-
-const (
-	thisOperatorName = "group"
-)
-
-type ExprEvalVector struct {
-	Executor []colexec.ExpressionExecutor
-	Vec      []*vector.Vector
-	Typ      []types.Type
-}
-
-func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEvalVector, err error) {
-	if len(expressions) == 0 {
-		return
-	}
-
-	ev.Executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, expressions)
-	if err != nil {
-		return
-	}
-	ev.Vec = make([]*vector.Vector, len(ev.Executor))
-	ev.Typ = make([]types.Type, len(ev.Executor))
-	for i, expr := range expressions {
-		ev.Typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-	}
-	return
-}
-
-func (ev *ExprEvalVector) Free() {
-	for i := range ev.Executor {
-		if ev.Executor[i] != nil {
-			ev.Executor[i].Free()
-		}
-	}
-}
-
-func (ev *ExprEvalVector) ResetForNextQuery() {
-	for i := range ev.Executor {
-		if ev.Executor[i] != nil {
-			ev.Executor[i].ResetForNextQuery()
-		}
-	}
-}
-
-var _ vm.Operator = &Group{}
+var _ vm.Operator = &GroupOld{}
 
 // Group
 // the group operator using new implement.
-type Group struct {
+type GroupOld struct {
 	vm.OperatorBase
 	colexec.Projection
 
-	ctr          container
+	ctr          containerOld
 	NeedEval     bool
 	PreAllocSize uint64
 	SpillMem     int64
@@ -96,7 +46,7 @@ type Group struct {
 	Aggs []aggexec.AggFuncExecExpression
 }
 
-func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
+func (group *GroupOld) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
 
 	// group.
@@ -125,7 +75,7 @@ func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batc
 	return nil
 }
 
-func (group *Group) AnyDistinctAgg() bool {
+func (group *GroupOld) AnyDistinctAgg() bool {
 	for _, agg := range group.Aggs {
 		if agg.IsDistinct() {
 			return true
@@ -134,7 +84,7 @@ func (group *Group) AnyDistinctAgg() bool {
 	return false
 }
 
-func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+func (group *GroupOld) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	if group.ProjectList == nil {
 		return input, nil
 	}
@@ -143,7 +93,7 @@ func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*
 
 // container
 // running context.
-type container struct {
+type containerOld struct {
 	state             vm.CtrState
 	dataSourceIsEmpty bool
 
@@ -155,8 +105,8 @@ type container struct {
 
 	// x, y of `group by x, y`.
 	// m, n of `select agg1(m, n), agg2(m, n)`.
-	groupByEvaluate   ExprEvalVector
-	aggregateEvaluate []ExprEvalVector
+	groupByEvaluate   colexec.ExprEvalVector
+	aggregateEvaluate []colexec.ExprEvalVector
 
 	// result if NeedEval is true.
 	result1 GroupResultBuffer
@@ -164,11 +114,11 @@ type container struct {
 	result2 GroupResultNoneBlock
 }
 
-func (ctr *container) isDataSourceEmpty() bool {
+func (ctr *containerOld) isDataSourceEmpty() bool {
 	return ctr.dataSourceIsEmpty
 }
 
-func (group *Group) Free(proc *process.Process, _ bool, _ error) {
+func (group *GroupOld) Free(proc *process.Process, _ bool, _ error) {
 	group.freeCannotReuse(proc.Mp())
 
 	group.ctr.freeGroupEvaluate()
@@ -176,7 +126,7 @@ func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 	group.FreeProjection(proc)
 }
 
-func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
+func (group *GroupOld) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	group.freeCannotReuse(proc.Mp())
 
 	group.ctr.groupByEvaluate.ResetForNextQuery()
@@ -186,55 +136,55 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 	group.ResetProjection(proc)
 }
 
-func (group *Group) freeCannotReuse(mp *mpool.MPool) {
+func (group *GroupOld) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.hr.Free0()
 	group.ctr.result1.Free0(mp)
 	group.ctr.result2.Free0(mp)
 }
 
-func (ctr *container) freeAggEvaluate() {
+func (ctr *containerOld) freeAggEvaluate() {
 	for i := range ctr.aggregateEvaluate {
 		ctr.aggregateEvaluate[i].Free()
 	}
 	ctr.aggregateEvaluate = nil
 }
 
-func (ctr *container) freeGroupEvaluate() {
+func (ctr *containerOld) freeGroupEvaluate() {
 	ctr.groupByEvaluate.Free()
-	ctr.groupByEvaluate = ExprEvalVector{}
+	ctr.groupByEvaluate = colexec.ExprEvalVector{}
 }
 
-func (group *Group) OpType() vm.OpType {
+func (group *GroupOld) OpType() vm.OpType {
 	return vm.Group
 }
 
-func (group Group) TypeName() string {
+func (group GroupOld) TypeName() string {
 	return thisOperatorName
 }
 
-func (group *Group) GetOperatorBase() *vm.OperatorBase {
+func (group *GroupOld) GetOperatorBase() *vm.OperatorBase {
 	return &group.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool(
-		func() *Group {
-			return &Group{}
+	reuse.CreatePool[GroupOld](
+		func() *GroupOld {
+			return &GroupOld{}
 		},
-		func(a *Group) {
-			*a = Group{}
+		func(a *GroupOld) {
+			*a = GroupOld{}
 		},
-		reuse.DefaultOptions[Group]().
+		reuse.DefaultOptions[GroupOld]().
 			WithEnableChecker(),
 	)
 }
 
-func NewArgument() *Group {
-	return reuse.Alloc[Group](nil)
+func NewArgumentOld() *GroupOld {
+	return reuse.Alloc[GroupOld](nil)
 }
 
-func (group *Group) Release() {
+func (group *GroupOld) Release() {
 	if group != nil {
-		reuse.Free(group, nil)
+		reuse.Free[GroupOld](group, nil)
 	}
 }

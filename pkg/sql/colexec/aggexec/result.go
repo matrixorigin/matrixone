@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -306,6 +308,35 @@ func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]b
 	return nil
 }
 
+func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
+	rvec := vector.NewVec(r.resultType)
+	mvec := vector.NewVec(types.T_bool.ToType())
+
+	for i := range r.resultList {
+		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
+		mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
+	}
+
+	if err := rvec.MarshalBinaryWithBuffer(buf); err != nil {
+		return err
+	}
+	if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *optSplitResult) marshalChunkToBuffer(chunk int, buf *bytes.Buffer) error {
+	if err := r.resultList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+		return err
+	}
+
+	if err := r.emptyList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *optSplitResult) init(
 	mg AggMemoryManager, typ types.Type, needEmptyList bool) {
 	if mg != nil {
@@ -327,6 +358,13 @@ func (r *optSplitResult) init(
 
 func (r *optSplitResult) getChunkSize() int {
 	return r.optInformation.chunkSize
+}
+
+func (r *optSplitResult) getNthChunkSize(chunk int) int {
+	if chunk >= len(r.resultList) {
+		return -1
+	}
+	return r.resultList[chunk].Length()
 }
 
 func (r *optSplitResult) modifyChunkSize(n int) {
