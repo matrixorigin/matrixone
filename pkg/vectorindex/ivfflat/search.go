@@ -211,13 +211,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if _, err2 := runSql_streaming(
-			ctx, proc, sql, stream_chan, error_chan,
-		); err2 != nil {
+		res, err2 := runSql_streaming(ctx, proc, sql, stream_chan, error_chan)
+		if err2 != nil {
 			// consumer notify the producer to stop the sql streaming
 			cancel(err2)
 			return
 		}
+
+		rt.BackgroundQueries[0] = res.LogicalPlan
 	}()
 
 	distances = make([]float64, 0, rt.Limit)
@@ -252,6 +253,8 @@ loop:
 			return nil, nil, context.Cause(ctx)
 		}
 	}
+
+	wg.Wait()
 
 	return resid, distances, nil
 }

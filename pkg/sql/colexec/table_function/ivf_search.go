@@ -220,15 +220,15 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	switch faVec.GetType().Oid {
 	case types.T_array_float32:
-		return runIvfSearchVector[float32](u, proc, faVec, nthRow)
+		return runIvfSearchVector[float32](tf, u, proc, faVec, nthRow)
 	case types.T_array_float64:
-		return runIvfSearchVector[float64](u, proc, faVec, nthRow)
+		return runIvfSearchVector[float64](tf, u, proc, faVec, nthRow)
 	default:
 		return moerr.NewInternalError(proc.Ctx, "vector is not array_float32 or array_float64")
 	}
 }
 
-func runIvfSearchVector[T types.RealNumbers](u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) (err error) {
+func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) (err error) {
 	if faVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
@@ -243,10 +243,18 @@ func runIvfSearchVector[T types.RealNumbers](u *ivfSearchState, proc *process.Pr
 		return err
 	}
 	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version)
-	u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit), Probe: uint(u.tblcfg.Nprobe)})
+	rt := vectorindex.RuntimeConfig{
+		Limit:             uint(u.limit),
+		Probe:             uint(u.tblcfg.Nprobe),
+		BackgroundQueries: make([]*plan.Query, 1),
+	}
+	u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, fa, rt)
 	if err != nil {
 		return err
 	}
+
+	opStats := tf.OpAnalyzer.GetOpStats()
+	opStats.BackgroundQueries = append(opStats.BackgroundQueries, rt.BackgroundQueries...)
 
 	return nil
 }
