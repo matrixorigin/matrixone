@@ -410,12 +410,12 @@ func (r *reader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
 
 	orderFunc := orderby[0].Expr.GetF()
 	if orderFunc == nil {
-		logutil.Fatal("order function is nil")
+		panic("order function is nil")
 	}
 
 	col := orderFunc.Args[0].GetCol()
 	if col == nil {
-		logutil.Fatal("column is nil")
+		panic("column is nil")
 	}
 
 	numVec := orderFunc.Args[1].GetLit().GetVecVal()
@@ -425,7 +425,7 @@ func (r *reader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
 
 	metric, ok := metric.DistFuncNameToMetricType[orderFunc.Func.ObjName]
 	if !ok {
-		logutil.Fatal("unsupported order function")
+		panic("unsupported order function")
 	}
 
 	if r.orderByLimit == nil {
