@@ -2385,6 +2385,10 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 		}
 	}()
 	payload, err = mysqlRrWr.ReadLoadLocalPacket()
+	readTime = time.Since(start)
+	if readTime > time.Minute {
+		logutil.Infof("ReadLoadLocalPacket longtime %v, size %d", readTime, len(payload))
+	}
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return skipWrite, readTime, writeTime, err
@@ -2394,7 +2398,6 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 		}
 		return skipWrite, readTime, writeTime, err
 	}
-	readTime = time.Since(start)
 
 	//empty packet means the file is over.
 	size := len(payload)
@@ -2411,6 +2414,10 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	start = time.Now()
 	if !skipWrite {
 		_, err = writer.Write(payload)
+		writeTime = time.Since(start)
+		if writeTime > time.Minute {
+			logutil.Infof("WritePacket longtime %v, size %d", writeTime, len(payload))
+		}
 		if err != nil {
 			ses.Errorf(execCtx.reqCtx,
 				"Failed to load local file",
@@ -2419,7 +2426,6 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 				zap.Error(err))
 			skipWrite = true
 		}
-		writeTime = time.Since(start)
 
 	}
 	return skipWrite, readTime, writeTime, err
