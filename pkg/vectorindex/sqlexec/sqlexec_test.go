@@ -46,8 +46,9 @@ func TestSqlTxnError(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := NewSqlProcess(proc)
 	assert.Panics(t, func() {
-		RunTxn(proc, func(exec executor.TxnExecutor) error {
+		RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 			return nil
 		})
 	}, "logserivce panic")
@@ -66,7 +67,9 @@ func TestSqlTxn(t *testing.T) {
 	proc.Ctx = context.Background()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 
-	err := RunTxn(proc, func(exec executor.TxnExecutor) error {
+	sqlproc := NewSqlProcess(proc)
+
+	err := RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		return nil
 	})
 	require.Nil(t, err)

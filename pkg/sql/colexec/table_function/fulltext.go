@@ -240,7 +240,7 @@ func runWordStats(
 		return
 	}
 
-	result, err = ft_runSql_streaming(ctx, proc, sql, u.streamCh, u.errCh)
+	result, err = ft_runSql_streaming(ctx, sqlexec.NewSqlProcess(proc), sql, u.streamCh, u.errCh)
 
 	return
 }
@@ -414,7 +414,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	sql := fmt.Sprintf(countstar_sql, s.TblName, fulltext.DOC_LEN_WORD)
 
-	res, err := ft_runSql(proc, sql)
+	res, err := ft_runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return executor.Result{}, err
 	}

@@ -76,7 +76,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 
 	for _, s := range sqls {
-		res, err := hnsw_runSql(proc, s)
+		res, err := hnsw_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
 			return err
 		}
@@ -216,9 +216,9 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 		switch u.idxcfg.Usearch.Quantization {
 		case usearch.F32:
-			u.buildf32, err = hnsw.NewHnswBuild[float32](proc, uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+			u.buildf32, err = hnsw.NewHnswBuild[float32](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
 		case usearch.F64:
-			u.buildf64, err = hnsw.NewHnswBuild[float64](proc, uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+			u.buildf64, err = hnsw.NewHnswBuild[float64](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
 		}
 		if err != nil {
 			return err

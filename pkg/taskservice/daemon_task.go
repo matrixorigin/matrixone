@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
@@ -453,15 +454,27 @@ func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
 		}
 	}
 
+	newCreate := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_Created),
+		WithLabels(IN, labels),
+	)
+	stoppedRunning := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_Running),
+		WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+	)
+	for _, t := range newCreate {
+		if t.TaskType == task.TaskType_ISCP {
+			logutil.Infof("debug_iscp_start new iscp executor")
+		}
+	}
+	for _, t := range stoppedRunning {
+		if t.TaskType == task.TaskType_ISCP {
+			logutil.Infof("debug_iscp_start stopped iscp executor")
+		}
+	}
 	return r.mergeTasks(
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Created),
-			WithLabels(IN, labels),
-		),
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Running),
-			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-		),
+		newCreate,
+		stoppedRunning,
 	)
 }
 
@@ -562,6 +575,9 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 	r.daemonTasks.Lock()
 	tasks := make([]*daemonTask, 0, len(r.daemonTasks.m))
 	for _, dt := range r.daemonTasks.m {
+		if dt.task.TaskType == task.TaskType_ISCP {
+			logutil.Infof("debug_iscp_start do send heartbeat iscp executor")
+		}
 		tasks = append(tasks, dt)
 	}
 	r.daemonTasks.Unlock()

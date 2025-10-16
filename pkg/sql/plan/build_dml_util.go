@@ -299,18 +299,18 @@ func checkDeleteOptToTruncate(ctx CompilerContext) (bool, error) {
 
 // buildDeletePlans  build preinsert plan.
 /*
-[o1]sink_scan -> join[u1] -> sink
-	[u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
-	[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
-[o1]sink_scan -> join[u2] -> sink
-	[u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
-	[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
-[o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
+	[o1]sink_scan -> join[u1] -> sink
+		[u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
+		[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
+	[o1]sink_scan -> join[u2] -> sink
+		[u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
+		[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
+	[o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
 
-[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
-[o1]sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
-[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
-[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
+	[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
+	[o1]sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
+	[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
+	[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
 	if sinkOrUnionNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
@@ -3205,16 +3205,16 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 }
 
 /*
-Example on FkReferKey and FkReferDef:
+	Example on FkReferKey and FkReferDef:
 
-	In database `test`:
+		In database `test`:
 
-		create table t1(a int,primary key(a));
+			create table t1(a int,primary key(a));
 
-		create table t2(b int, constraint c1 foreign key(b) references t1(a));
+			create table t2(b int, constraint c1 foreign key(b) references t1(a));
 
-	So, the structure FkReferDef below denotes such relationships : test.t2(b) -> test.t1(a)
-	FkReferKey holds : db = test, tbl = t2
+		So, the structure FkReferDef below denotes such relationships : test.t2(b) -> test.t1(a)
+		FkReferKey holds : db = test, tbl = t2
 
 */
 
@@ -3510,6 +3510,16 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
+			// skip async
+			var async bool
+			async, err = catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			if async {
+				continue
+			}
+
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
@@ -3583,6 +3593,16 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
+			// skip async
+			var async bool
+			async, err = catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			if async {
+				continue
+			}
+
 			// Used by pre-insert vector index.
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
@@ -4300,6 +4320,15 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
 
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
+
 	isUpdate := (updateColLength > 0)
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
@@ -4721,6 +4750,15 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
+
 	//isUpdate := delCtx.updateColLength > 0
 	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
 	if err != nil {
@@ -4751,6 +4789,15 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 // build PostDml FullText Index node
 func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
 	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
+
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 	orgPkColPos, _ := getPkPos(tableDef, false)

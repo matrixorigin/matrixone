@@ -254,7 +254,8 @@ const (
 		` account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'` +
-		`AND job_id = %d`
+		`AND job_id = %d ` +
+		`AND job_state != 4`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
