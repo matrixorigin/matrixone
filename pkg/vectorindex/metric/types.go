@@ -35,10 +35,12 @@ const (
 	DistFn_L2sqDistance   = "l2_distance_sq"
 	DistFn_InnerProduct   = "inner_product"
 	DistFn_CosineDistance = "cosine_distance"
+	DistFn_L1Distance     = "l1_distance"
 
 	DistIntFn_L2Distance     = "l2_distance_sq"
 	DistIntFn_InnerProduct   = "inner_product"
 	DistIntFn_CosineDistance = "cosine_distance"
+	DistIntFn_L1Distance     = "l1_distance"
 )
 
 const (
@@ -86,6 +88,7 @@ var (
 		Metric_L2sqDistance:   DistFn_L2sqDistance,
 		Metric_InnerProduct:   DistFn_InnerProduct,
 		Metric_CosineDistance: DistFn_CosineDistance,
+		Metric_L1Distance:     DistFn_L1Distance,
 	}
 
 	DistFuncNameToMetricType = map[string]MetricType{
@@ -93,6 +96,7 @@ var (
 		DistFn_L2sqDistance:   Metric_L2sqDistance,
 		DistFn_InnerProduct:   Metric_InnerProduct,
 		DistFn_CosineDistance: Metric_CosineDistance,
+		DistFn_L1Distance:     Metric_L1Distance,
 	}
 )
 
