@@ -15,8 +15,8 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-USEARCH_DIR=usearch-2.21.0
-USEARCH_TAR=$(USEARCH_DIR).tar.gz
+USEARCH_DIR=USearch-2.21.1
+USEARCH_TAR=usearch-2.21.1.tar.gz
 STRINGZILLA_DIR=StringZilla-4.0.14
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
 SIMSIMD_DIR=SimSIMD-6.5.3
