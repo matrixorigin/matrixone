@@ -15,14 +15,16 @@
 package group
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestInitGroupResultBuffer(t *testing.T) {
@@ -70,12 +72,12 @@ func TestGetResultBatch(t *testing.T) {
 		[]*plan.Expr{newExpression(1)},
 		nil,
 	)
-	aEval := []ExprEvalVector{
+	aEval := []colexec.ExprEvalVector{
 		{
 			Typ: []types.Type{types.T_int32.ToType()},
 		},
 	}
-	gEval := &ExprEvalVector{
+	gEval := &colexec.ExprEvalVector{
 		Typ: []types.Type{types.T_int32.ToType()},
 	}
 	r := &GroupResultNoneBlock{

@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+	"encoding"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -108,6 +110,10 @@ type AggFuncExec interface {
 
 	// Flush return the aggregation result.
 	Flush() ([]*vector.Vector, error)
+
+	// Serialize intermediate result to bytes.
+	SaveIntermediateResult(buketIdx []int64, bucket int64, buf *bytes.Buffer) error
+	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
 
 	Size() int64
 
@@ -301,4 +307,127 @@ func makeWindowExec(
 		emptyNull: false,
 	}
 	return makeRankDenseRankRowNumber(mg, info), nil
+}
+
+// given buckets, and a specific bucket, compute the flags for vector union.
+func computeChunkFlags(bucketIdx []int64, bucket int64, chunkSize int) (int64, [][]uint8) {
+	// compute the number of chunks,
+	nChunks := (len(bucketIdx) + chunkSize - 1) / chunkSize
+
+	// return values
+	cnt := int64(0)
+	flags := make([][]uint8, nChunks)
+	for i := range flags {
+		flags[i] = make([]uint8, chunkSize)
+	}
+
+	nextX := 0
+	nextY := 0
+
+	for _, idx := range bucketIdx {
+		nextY += 1
+		if nextY == chunkSize {
+			nextX += 1
+			nextY = 0
+		}
+
+		if idx == bucket {
+			flags[nextX][nextY] = 1
+			cnt += 1
+		}
+	}
+	return cnt, flags
+}
+
+type dummyBinaryMarshaler struct {
+	encoding.BinaryMarshaler
+}
+
+func (d dummyBinaryMarshaler) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func marshalRetAndGroupsAndDistinctHashToBuffers[T encoding.BinaryMarshaler](
+	bucketIdx []int64, bucket int64, buf *bytes.Buffer,
+	ret *optSplitResult, groups []T,
+	isDistinct bool, distinctHash *distinctHash) error {
+	cnt, flags := computeChunkFlags(bucketIdx, bucket, ret.optInformation.chunkSize)
+	buf.Write(types.EncodeInt64(&cnt))
+	if cnt == 0 {
+		return nil
+	}
+	if err := ret.marshalToBuffers(flags, buf); err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		if len(groups) != len(bucketIdx) {
+			return moerr.NewInternalErrorNoCtx("approx_count: the number of groups does not match the number of buckets")
+		}
+		for i := range groups {
+			if bucketIdx[i] == bucket {
+				bs, err := groups[i].MarshalBinary()
+				if err != nil {
+					return err
+				}
+				nbs := int32(len(bs))
+				buf.Write(types.EncodeInt32(&nbs))
+				buf.Write(bs)
+			}
+		}
+	}
+
+	if isDistinct {
+		if err := distinctHash.marshalToBuffers(bucketIdx, bucket, buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func marshalRetAndGroupsToBuffers[T encoding.BinaryMarshaler](
+	bucketIdx []int64, bucket int64, buf *bytes.Buffer,
+	ret *optSplitResult, groups []T) error {
+	return marshalRetAndGroupsAndDistinctHashToBuffers(bucketIdx, bucket, buf, ret, groups, false, nil)
+}
+
+func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buffer,
+	ret *optSplitResult, groups []T,
+	isDistinct bool, distinctHash *distinctHash) error {
+	chunkSz := ret.optInformation.chunkSize
+	start := chunkSz * chunk
+	chunkNGroup := ret.getNthChunkSize(chunk)
+	if chunkSz < 0 {
+		return moerr.NewInternalErrorNoCtx("invalid chunk number.")
+	}
+
+	cnt := int64(chunkNGroup)
+	buf.Write(types.EncodeInt64(&cnt))
+
+	if err := ret.marshalChunkToBuffer(chunk, buf); err != nil {
+		return err
+	}
+
+	if len(groups) > 0 {
+		for i := 0; i < chunkNGroup; i++ {
+			bs, err := groups[start+i].MarshalBinary()
+			if err != nil {
+				return err
+			}
+			nbs := int32(len(bs))
+			buf.Write(types.EncodeInt32(&nbs))
+			buf.Write(bs)
+		}
+	}
+
+	if isDistinct {
+		if err := distinctHash.marshalChunkToBuffer(start, chunkNGroup, buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func marshalChunkRetAndGroupsToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buffer,
+	ret *optSplitResult, groups []T) error {
+	return marshalChunkToBuffer(chunk, buf, ret, groups, false, nil)
 }

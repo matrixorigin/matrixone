@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
@@ -71,6 +72,19 @@ func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [
 		}
 	}
 	return exec.ret.unmarshalFromBytes(result, empties)
+}
+
+func (exec *groupConcatExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsAndDistinctHashToBuffers[dummyBinaryMarshaler](
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, nil,
+		exec.IsDistinct(), &exec.distinctHash)
+}
+
+func (exec *groupConcatExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer[dummyBinaryMarshaler](chunk, buf,
+		&exec.ret.optSplitResult, nil,
+		exec.IsDistinct(), &exec.distinctHash)
 }
 
 func GroupConcatReturnType(args []types.Type) types.Type {

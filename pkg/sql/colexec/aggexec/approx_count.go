@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,6 +60,18 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 		}
 	}
 	return encoded.Marshal()
+}
+
+func (exec *approxCountFixedExec[T]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffers(
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, exec.groups)
+}
+
+func (exec *approxCountFixedExec[T]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkRetAndGroupsToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups)
 }
 
 func (exec *approxCountFixedExec[T]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
@@ -113,6 +127,17 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 		}
 	}
 	return encoded.Marshal()
+}
+
+func (exec *approxCountVarExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffers(
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, exec.groups)
+}
+
+func (exec *approxCountVarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkRetAndGroupsToBuffer(chunk, buf,
+		&exec.ret.optSplitResult, exec.groups)
 }
 
 func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {

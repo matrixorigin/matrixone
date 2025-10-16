@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,12 +27,19 @@ func SingleWindowReturnType(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
 
+type i64Slice []int64
+
+func (s i64Slice) MarshalBinary() ([]byte, error) {
+	return types.EncodeSlice[int64](s), nil
+}
+
 // special structure for a single column window function.
 type singleWindowExec struct {
 	singleAggInfo
 	ret aggResultWithFixedType[int64]
 
-	groups [][]int64
+	// groups [][]int64
+	groups []i64Slice
 }
 
 func makeRankDenseRankRowNumber(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
@@ -41,7 +50,7 @@ func makeRankDenseRankRowNumber(mg AggMemoryManager, info singleAggInfo) AggFunc
 }
 
 func (exec *singleWindowExec) GroupGrow(more int) error {
-	exec.groups = append(exec.groups, make([][]int64, more)...)
+	exec.groups = append(exec.groups, make([]i64Slice, more)...)
 	return exec.ret.grows(more)
 }
 
@@ -81,9 +90,21 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
+func (exec *singleWindowExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffers(
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, exec.groups)
+}
+
+func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkRetAndGroupsToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups)
+}
+
 func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(exec.groups) > 0 {
-		exec.groups = make([][]int64, len(groups))
+		exec.groups = make([]i64Slice, len(groups))
 		for i := range exec.groups {
 			if len(groups[i]) > 0 {
 				exec.groups[i] = types.DecodeSlice[int64](groups[i])

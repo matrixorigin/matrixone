@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,10 +54,10 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	ctr := &window.ctr
 
 	if len(ctr.aggVecs) == 0 {
-		ctr.aggVecs = make([]group.ExprEvalVector, len(window.Aggs))
+		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
 		for i, ag := range window.Aggs {
 			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
+			if ctr.aggVecs[i], err = colexec.MakeEvalVector(proc, expressions); err != nil {
 				return err
 			}
 		}
@@ -141,9 +141,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				// sort and partitions
 				if window.Fs = makeOrderBy(w); window.Fs != nil {
 					if len(ctr.orderVecs) == 0 {
-						ctr.orderVecs = make([]group.ExprEvalVector, len(window.Fs))
+						ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
 						for j := range ctr.orderVecs {
-							ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
+							ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
 							if err != nil {
 								return result, err
 							}
