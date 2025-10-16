@@ -126,12 +126,12 @@ func NewDataRetriever(
 }
 
 func (r *DataRetrieverImpl) Next() *ISCPData {
+	var data *ISCPData
 	select {
 	case <-r.ctx.Done():
 		return nil
-	default:
+	case data = <-r.insertDataCh:
 	}
-	data := <-r.insertDataCh
 	return data
 }
 
