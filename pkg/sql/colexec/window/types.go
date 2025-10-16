@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,12 +43,12 @@ type container struct {
 
 	desc      []bool
 	nullsLast []bool
-	orderVecs []group.ExprEvalVector
+	orderVecs []colexec.ExprEvalVector
 	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
-	aggVecs []group.ExprEvalVector
+	aggVecs []colexec.ExprEvalVector
 
 	vec  *vector.Vector
 	rBat *batch.Batch

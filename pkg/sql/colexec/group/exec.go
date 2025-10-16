@@ -21,20 +21,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var makeAggExec = aggexec.MakeAgg
-
 // intermediateResultSendActionTrigger is the row number to trigger an action
 // to send the intermediate result
 // if the result row is not less than this number.
 var intermediateResultSendActionTrigger = aggexec.BlockCapacityForStrType
 
-func (group *Group) String(buf *bytes.Buffer) {
+func (group *GroupOld) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName + ": group([")
 	for i, expr := range group.Exprs {
 		if i > 0 {
@@ -53,7 +52,7 @@ func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func (group *Group) Prepare(proc *process.Process) (err error) {
+func (group *GroupOld) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
 	group.ctr.dataSourceIsEmpty = true
 	group.prepareAnalyzer()
@@ -66,7 +65,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	return group.PrepareProjection(proc)
 }
 
-func (group *Group) prepareAnalyzer() {
+func (group *GroupOld) prepareAnalyzer() {
 	if group.OpAnalyzer != nil {
 		group.OpAnalyzer.Reset()
 		return
@@ -74,15 +73,15 @@ func (group *Group) prepareAnalyzer() {
 	group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
 }
 
-func (group *Group) prepareAgg(proc *process.Process) error {
+func (group *GroupOld) prepareAgg(proc *process.Process) error {
 	if len(group.ctr.aggregateEvaluate) == len(group.Aggs) {
 		return nil
 	}
 
 	group.ctr.freeAggEvaluate()
-	group.ctr.aggregateEvaluate = make([]ExprEvalVector, 0, len(group.Aggs))
+	group.ctr.aggregateEvaluate = make([]colexec.ExprEvalVector, 0, len(group.Aggs))
 	for _, ag := range group.Aggs {
-		e, err := MakeEvalVector(proc, ag.GetArgExpressions())
+		e, err := colexec.MakeEvalVector(proc, ag.GetArgExpressions())
 		if err != nil {
 			return err
 		}
@@ -91,7 +90,7 @@ func (group *Group) prepareAgg(proc *process.Process) error {
 	return nil
 }
 
-func (group *Group) prepareGroup(proc *process.Process) (err error) {
+func (group *GroupOld) prepareGroup(proc *process.Process) (err error) {
 	if len(group.ctr.groupByEvaluate.Executor) == len(group.Exprs) {
 		return nil
 	}
@@ -120,34 +119,11 @@ func (group *Group) prepareGroup(proc *process.Process) (err error) {
 			break
 		}
 	}
-	group.ctr.groupByEvaluate, err = MakeEvalVector(proc, group.Exprs)
+	group.ctr.groupByEvaluate, err = colexec.MakeEvalVector(proc, group.Exprs)
 	return err
 }
 
-func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
-	if id.FixedLength() < 0 {
-		width = 128
-		if width0 > 0 {
-			width = int(width0)
-		}
-
-		if id == types.T_array_float32 {
-			width *= 4
-		}
-		if id == types.T_array_float64 {
-			width *= 8
-		}
-	} else {
-		width = id.TypeLen()
-	}
-
-	if nullable {
-		width++
-	}
-	return width
-}
-
-func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
+func (group *GroupOld) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -168,7 +144,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	return res, nil
 }
 
-func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
+func (group *GroupOld) getInputBatch(proc *process.Process) (*batch.Batch, error) {
 	r, err := vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
 	return r.Batch, err
 }
@@ -180,7 +156,7 @@ func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
 //
 // To avoid a single batch being too large,
 // we split the result as many part of vector, and send them in order.
-func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, error) {
+func (group *GroupOld) callToGetFinalResult(proc *process.Process) (*batch.Batch, error) {
 	group.ctr.result1.CleanLastPopped(proc.Mp())
 	if group.ctr.state == vm.End {
 		return nil, nil
@@ -207,12 +183,6 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 					return nil, err
 				}
 				group.ctr.result1.ToPopped[0].SetRowCount(1)
-			} else {
-				// update stats
-				if group.OpAnalyzer != nil && group.ctr.hr.Hash != nil {
-					group.OpAnalyzer.Alloc(group.ctr.hr.Hash.Size())
-				}
-				// the others are in GroupResultBuffer -- later.
 			}
 			continue
 		}
@@ -227,7 +197,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 	}
 }
 
-func (group *Group) generateInitialResult1WithoutGroupBy(proc *process.Process) error {
+func (group *GroupOld) generateInitialResult1WithoutGroupBy(proc *process.Process) error {
 	aggs, err := group.generateAggExec(proc)
 	if err != nil {
 		return err
@@ -242,7 +212,7 @@ func (group *Group) generateInitialResult1WithoutGroupBy(proc *process.Process) 
 	return nil
 }
 
-func (group *Group) consumeBatchToGetFinalResult(
+func (group *GroupOld) consumeBatchToGetFinalResult(
 	proc *process.Process, bat *batch.Batch) error {
 
 	if err := group.evaluateGroupByAndAgg(proc, bat); err != nil {
@@ -324,7 +294,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 	return nil
 }
 
-func (group *Group) generateAggExec(proc *process.Process) ([]aggexec.AggFuncExec, error) {
+func (group *GroupOld) generateAggExec(proc *process.Process) ([]aggexec.AggFuncExec, error) {
 	var err error
 	execs := make([]aggexec.AggFuncExec, 0, len(group.Aggs))
 	defer func() {
@@ -366,7 +336,7 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 // sending out intermediate results once the group count exceeds intermediateResultSendActionTrigger.
 //
 // this function will be only called when there is one MergeGroup operator was behind.
-func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
+func (group *GroupOld) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
 	group.ctr.result2.resetLastPopped()
 	if group.ctr.state == vm.End {
 		return nil, nil
@@ -415,7 +385,7 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 	}
 }
 
-func (group *Group) initCtxToGetIntermediateResult(
+func (group *GroupOld) initCtxToGetIntermediateResult(
 	proc *process.Process) (*batch.Batch, error) {
 
 	r, err := group.ctr.result2.getResultBatch(
@@ -441,7 +411,7 @@ func (group *Group) initCtxToGetIntermediateResult(
 	return r, err
 }
 
-func (group *Group) consumeBatchToRes(
+func (group *GroupOld) consumeBatchToRes(
 	proc *process.Process, bat *batch.Batch, res *batch.Batch) (receiveNext bool, err error) {
 
 	if err = group.evaluateGroupByAndAgg(proc, bat); err != nil {

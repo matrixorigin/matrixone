@@ -52,10 +52,16 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 
-	Aggs []aggexec.AggFuncExec
+	// We really want to put all data through vectors, but, the
+	// Aggs is so f**king insane, so keep it, and add two extra
+	// buffers for sane persons to use.
+	//
+	// XXX MUST REMOVE THIS
+	Aggs      []aggexec.AggFuncExec
+	ExtraBuf1 []byte
+	ExtraBuf2 []byte
 
 	// row count of batch, to instead of old len(Zs).
 	rowCount int
-
-	offHeap bool
+	offHeap  bool
 }
