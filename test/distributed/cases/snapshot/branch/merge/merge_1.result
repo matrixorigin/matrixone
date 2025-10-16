@@ -1,0 +1,164 @@
+drop database if exists test;
+create database test;
+use test;
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1),(3,3),(5,5);
+create table t2 (a int, b int, primary key(a));
+insert into t2 values(1,1),(2,2),(4,4);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    +    2    2
+t2    +    4    4
+t2    -    3    3
+t2    -    5    5
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    1
+2    2
+3    3
+4    4
+5    5
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    -    5    5
+t2    -    3    3
+drop table t1;
+drop table t2;
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1),(3,3),(5,5);
+update t1 set b = b + 1 where a in (1, 5);
+create table t2 (a int, b int, primary key(a));
+insert into t2 values(1,1),(2,2),(4,4);
+update t2 set b = b + 1 where a in (1, 4);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    +    2    2
+t2    +    4    5
+t2    -    3    3
+t2    -    5    6
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    2
+2    2
+3    3
+4    5
+5    6
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    -    5    6
+t2    -    3    3
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2),(3,3);
+create table t1 clone t0;
+insert into t1 values(4,4);
+create table t2 clone t0;
+insert into t2 values(5,5);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    +    5    5
+t2    -    4    4
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    1
+2    2
+3    3
+4    4
+5    5
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    -    4    4
+drop table t0;
+drop table t1;
+drop table t2;
+create table t1(a int, b int, primary key(a));
+insert into t1 values(1,1),(2,2);
+create table t2 clone t1;
+insert into t2 values(3,3),(4,4);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    +    3    3
+t2    +    4    4
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    1
+2    2
+3    3
+4    4
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+drop table t1;
+drop table t2;
+create table t1(a int, b int, primary key(a));
+insert into t1 values(1,1),(2,2);
+create table t2 clone t1;
+insert into t2 values(3,3),(4,4);
+update t2 set b = b + 1 where a in (1,3);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    +    4    4
+t2    +    3    4
+t2    +    1    2
+t2    -    1    1
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    2
+2    2
+3    4
+4    4
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+drop table t1;
+drop table t2;
+create table t2 (a int, b int, primary key(a));
+insert into t2 values(1,1),(2,2);
+create table t1 clone t2;
+insert into t1 values(3,3),(4,4);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    -    3    3
+t2    -    4    4
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    1
+2    2
+3    3
+4    4
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    -    4    4
+t2    -    3    3
+drop table t1;
+drop table t2;
+create table t2 (a int, b int, primary key(a));
+insert into t2 values(1,1),(2,2);
+create table t1 clone t2;
+insert into t1 values(3,3),(4,4);
+insert into t2 values (5,5);
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    +    5    5
+t2    -    4    4
+t2    -    3    3
+snapshot merge t2 into t1;
+select * from t1 order by a asc;
+a    b
+1    1
+2    2
+3    3
+4    4
+5    5
+snapshot diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    -    3    3
+t2    -    4    4
+drop table t1;
+drop table t2;
+drop database test;
