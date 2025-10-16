@@ -92,6 +92,9 @@ func NewPartitionChangesHandle(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
+	if to.IsEmpty() || from.GT(&to) {
+		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
+	}
 	handle := &PartitionChangesHandle{
 		tbl:           tbl,
 		fromTs:        from,
@@ -106,7 +109,7 @@ func NewPartitionChangesHandle(
 		return nil, err
 	}
 	if end {
-		panic(fmt.Sprintf("logic error: from %s to %s", from.ToString(), to.ToString()))
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("logic error:from %s to %s", from.ToString(), to.ToString()))
 	}
 	return handle, err
 }
