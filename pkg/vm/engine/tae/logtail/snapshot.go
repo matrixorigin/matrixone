@@ -953,7 +953,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 						}
 						snapshotInfo.account[id] = append(snapshotInfo.account[id], snapTs)
 						// TODO: info to debug
-						logutil.Debug(
+						logutil.Info(
 							"GetSnapshot-P2",
 							zap.String("ts", snapTs.ToString()),
 							zap.Uint32("account", id),
@@ -968,7 +968,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 							snapshotInfo.database[id] = make([]types.TS, 0)
 						}
 						snapshotInfo.database[id] = append(snapshotInfo.database[id], snapTs)
-						logutil.Debug(
+						logutil.Info(
 							"GetSnapshot-P3-Database",
 							zap.String("ts", snapTs.ToString()),
 							zap.Uint64("database", id),
@@ -983,7 +983,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 							snapshotInfo.tables[id] = make([]types.TS, 0)
 						}
 						snapshotInfo.tables[id] = append(snapshotInfo.tables[id], snapTs)
-						logutil.Debug(
+						logutil.Info(
 							"GetSnapshot-P4-Table",
 							zap.String("ts", snapTs.ToString()),
 							zap.Uint64("table", id),
@@ -1704,18 +1704,36 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 			continue
 		}
 
-		// Check if there's a table-specific snapshot
+		// Collect all applicable snapshots for this table (table + database + account)
+		var allApplicableSnapshots []types.TS
+
+		// 1. Add table-specific snapshots
 		if tableTSList := snapshots.tables[tid]; len(tableTSList) > 0 {
-			tableSnapshots[tid] = tableTSList
-		} else if dbTSList := snapshots.database[info.dbID]; len(dbTSList) > 0 {
-			// Check if there's a database-specific snapshot
-			tableSnapshots[tid] = dbTSList
-		} else {
-			// Fall back to account snapshots
-			accountID := info.accountID
-			if accountTSList := snapshots.account[accountID]; len(accountTSList) > 0 {
-				tableSnapshots[tid] = accountTSList
-			}
+			allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
+		}
+
+		// 2. Add database-specific snapshots
+		if dbTSList := snapshots.database[info.dbID]; len(dbTSList) > 0 {
+			allApplicableSnapshots = append(allApplicableSnapshots, dbTSList...)
+		}
+
+		// 3. Add account-specific snapshots
+		accountID := info.accountID
+		if accountTSList := snapshots.account[accountID]; len(accountTSList) > 0 {
+			allApplicableSnapshots = append(allApplicableSnapshots, accountTSList...)
+		}
+
+		// Sort and deduplicate the combined snapshots
+		if len(allApplicableSnapshots) > 0 {
+			tableSnapshots[tid] = compute.SortAndDedup(
+				allApplicableSnapshots,
+				func(a, b *types.TS) bool {
+					return a.LT(b)
+				},
+				func(a, b *types.TS) bool {
+					return a.EQ(b)
+				},
+			)
 		}
 
 		// get the pitr for the table
@@ -1746,9 +1764,24 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		return nil
 	}
 	for accID, tables := range sm.tables {
-		accountSnapshots := snapshots.account[accID]
-		if len(accountSnapshots) == 0 && pitr.IsEmpty() {
-			for _, table := range tables {
+		for _, table := range tables {
+			// Get a list of snapshots available for the table
+			// (by priority: table level > database level > tenant level)
+			var applicableSnapshots []types.TS
+
+			// 1. First check the table-level snapshot
+			if tableSnapshots := snapshots.tables[table.tid]; len(tableSnapshots) > 0 {
+				applicableSnapshots = append(applicableSnapshots, tableSnapshots...)
+			} else if dbSnapshots := snapshots.database[table.dbID]; len(dbSnapshots) > 0 {
+				// 2. Next, check the database-level snapshot
+				applicableSnapshots = append(applicableSnapshots, dbSnapshots...)
+			} else {
+				// 3. Finally, use the tenant-level snapshot
+				applicableSnapshots = append(applicableSnapshots, snapshots.account[accID]...)
+			}
+
+			// If there is no snapshot and PITR is empty, delete the deleted table
+			if len(applicableSnapshots) == 0 && pitr.IsEmpty() {
 				if !table.deleteAt.IsEmpty() {
 					delete(sm.tables[accID], table.tid)
 					delete(sm.tableIDIndex, table.tid)
@@ -1756,13 +1789,13 @@ func (sm *SnapshotMeta) MergeTableInfo(
 						delete(sm.objects, table.tid)
 					}
 				}
+				continue
 			}
-			continue
-		}
-		for _, table := range tables {
+
+			// Check if the table is referenced by the snapshot
 			ts := sm.GetPitrByTable(pitr, table.dbID, table.tid)
 			if !table.deleteAt.IsEmpty() &&
-				!isSnapshotRefers(table, accountSnapshots, ts) {
+				!isSnapshotRefers(table, applicableSnapshots, ts) {
 				delete(sm.tables[accID], table.tid)
 				delete(sm.tableIDIndex, table.tid)
 				if sm.objects[table.tid] != nil {
@@ -1857,8 +1890,8 @@ func ObjectIsSnapshotRefers(
 
 	// if dropTS is empty, it means the object is not dropped
 	if dropTS.IsEmpty() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debug(
+		common.DoIfInfoEnabled(func() {
+			logutil.Info(
 				"GCJOB-DEBUG-1",
 				zap.String("obj", obj.ObjectName().String()),
 				zap.String("create-ts", createTS.ToString()),
@@ -1871,8 +1904,8 @@ func ObjectIsSnapshotRefers(
 	// if pitr is not empty, and pitr is greater than dropTS, it means the object is not dropped
 	if pitr != nil && !pitr.IsEmpty() {
 		if dropTS.GT(pitr) {
-			common.DoIfDebugEnabled(func() {
-				logutil.Debug(
+			common.DoIfInfoEnabled(func() {
+				logutil.Info(
 					"GCJOB-PITR-PIN",
 					zap.String("name", obj.ObjectName().String()),
 					zap.String("pitr", pitr.ToString()),
@@ -1889,8 +1922,8 @@ func ObjectIsSnapshotRefers(
 		mid := left + (right-left)/2
 		snapTS := snapshots[mid]
 		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
-			common.DoIfDebugEnabled(func() {
-				logutil.Debug(
+			common.DoIfInfoEnabled(func() {
+				logutil.Info(
 					"GCJOB-DEBUG-2",
 					zap.String("name", obj.ObjectName().String()),
 					zap.String("pitr", snapTS.ToString()),

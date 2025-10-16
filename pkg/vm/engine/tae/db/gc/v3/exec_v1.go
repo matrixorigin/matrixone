@@ -343,7 +343,7 @@ func MakeSnapshotAndPitrFineFilter(
 			createTS := createTSs[i]
 			deleteTS := deleteTSs[i]
 
-			snapshots := tableSnapshots[tableID]
+			sp := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
 			if transObjects[name] != nil {
@@ -357,7 +357,7 @@ func MakeSnapshotAndPitrFineFilter(
 					}
 
 					if !logtail.ObjectIsSnapshotRefers(
-						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
+						entry.stats, pitr, &entry.createTS, &entry.dropTS, sp,
 					) {
 						bm.Add(uint64(i))
 					}
@@ -374,7 +374,7 @@ func MakeSnapshotAndPitrFineFilter(
 				continue
 			}
 			if !logtail.ObjectIsSnapshotRefers(
-				&stats, pitr, &createTS, &deleteTS, snapshots,
+				&stats, pitr, &createTS, &deleteTS, sp,
 			) {
 				bm.Add(uint64(i))
 			}
