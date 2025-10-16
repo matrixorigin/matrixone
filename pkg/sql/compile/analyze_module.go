@@ -163,9 +163,34 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 		if op.IsLast {
 			node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
 			node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+			if node.AnalyzeInfo.OutrowsMin == 0 {
+				node.AnalyzeInfo.OutrowsMin = op.OpStats.OutputRows
+			}
+			node.AnalyzeInfo.OutrowsMin = min(node.AnalyzeInfo.OutrowsMin, op.OpStats.OutputRows)
+			node.AnalyzeInfo.OutrowsMax = max(node.AnalyzeInfo.OutrowsMax, op.OpStats.OutputRows)
 		}
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
+
 		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
+		node.AnalyzeInfo.MemoryMax = max(node.AnalyzeInfo.MemoryMax, op.OpStats.MemorySize)
+		node.AnalyzeInfo.SpillSize += op.OpStats.SpillSize
+		node.AnalyzeInfo.SpillMax = max(node.AnalyzeInfo.SpillMax, op.OpStats.SpillSize)
+
+		// handle mem min/max,
+		// This is FUBAR.   One node may have several ops (therefore the op.isLast, whatever it means).
+		// Min is NOT idempotent, a 0 will reset it.   So we only update when IsLast.
+		if op.IsLast {
+			if node.AnalyzeInfo.MemoryMin == 0 {
+				node.AnalyzeInfo.MemoryMin = op.OpStats.MemorySize
+			}
+			node.AnalyzeInfo.MemoryMin = min(node.AnalyzeInfo.MemoryMin, op.OpStats.MemorySize)
+
+			if node.AnalyzeInfo.SpillMin == 0 {
+				node.AnalyzeInfo.SpillMin = op.OpStats.SpillSize
+			}
+			node.AnalyzeInfo.SpillMin = min(node.AnalyzeInfo.SpillMin, op.OpStats.SpillSize)
+		}
+
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.WaitTimeConsumed
 		node.AnalyzeInfo.ScanBytes += op.OpStats.ScanBytes
 		node.AnalyzeInfo.NetworkIO += op.OpStats.NetworkIO
@@ -556,8 +581,9 @@ func explainResourceOverview(
 		gblStats := models.ExtractPhyPlanGlbStats(anal.phyPlan)
 		buffer.WriteString("Overview:\n")
 		fmt.Fprintf(buffer,
-			"\tMemoryUsage:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
+			"\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
 			gblStats.MemorySize,
+			gblStats.SpillSize,
 			gblStats.DiskIOSize,
 			gblStats.NetWorkSize,
 			queryResult.AffectRows,
@@ -661,8 +687,9 @@ func explainResourceOverview(
 					gblStats.S3DeleteMultiRequest,
 				)
 
-				fmt.Fprintf(buffer, "\t\t- MemoryUsage: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+				fmt.Fprintf(buffer, "\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
 					gblStats.MemorySize,
+					gblStats.SpillSize,
 					gblStats.DiskIOSize,
 					gblStats.NetWorkSize,
 				)

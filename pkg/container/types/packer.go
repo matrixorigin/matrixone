@@ -40,7 +40,11 @@ var packerAllocator = malloc.NewShardedAllocator(
 )
 
 func NewPacker() *Packer {
-	bs, dec, err := packerAllocator.Allocate(4096, malloc.NoClear)
+	return NewPackerWithSize(4096)
+}
+
+func NewPackerWithSize(size uint64) *Packer {
+	bs, dec, err := packerAllocator.Allocate(size, malloc.NoClear)
 	if err != nil {
 		panic(err)
 	}
@@ -51,9 +55,13 @@ func NewPacker() *Packer {
 }
 
 func NewPackerArray(length int) []*Packer {
+	return NewPackerArrayWithSize(length, 4096)
+}
+
+func NewPackerArrayWithSize(length int, size uint64) []*Packer {
 	ret := make([]*Packer, 0, length)
 	for i := 0; i < length; i++ {
-		ret = append(ret, NewPacker())
+		ret = append(ret, NewPackerWithSize(size))
 	}
 	return ret
 }

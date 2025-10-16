@@ -68,8 +68,9 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 	if option == VerboseOption || option == AnalyzeOption {
 		gblStats := ExtractPhyPlanGlbStats(phy)
 		buffer.WriteString("Overview:\n")
-		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB,  RetryTime: %v",
+		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB,  RetryTime: %v",
 			gblStats.MemorySize,
+			gblStats.SpillSize,
 			gblStats.DiskIOSize,
 			gblStats.NetWorkSize,
 			phy.RetryTime,
@@ -171,8 +172,9 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 					gblStats.S3DeleteMultiRequest,
 				))
 
-				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
 					gblStats.MemorySize,
+					gblStats.SpillSize,
 					gblStats.DiskIOSize,
 					gblStats.NetWorkSize,
 				))
@@ -342,6 +344,7 @@ type GblStats struct {
 	ScopePrepareTimeConsumed int64
 	OperatorTimeConsumed     int64
 	MemorySize               int64
+	SpillSize                int64
 	NetWorkSize              int64
 	DiskIOSize               int64
 	S3ListRequest            int64
@@ -379,6 +382,7 @@ func handlePhyOperator(op *PhyOperator, stats *GblStats) {
 	if op.OpStats != nil && op.NodeIdx >= 0 {
 		stats.OperatorTimeConsumed += op.OpStats.TimeConsumed
 		stats.MemorySize += op.OpStats.MemorySize
+		stats.SpillSize += op.OpStats.SpillSize
 		stats.NetWorkSize += op.OpStats.NetworkIO
 		stats.DiskIOSize += op.OpStats.DiskIO
 		stats.S3ListRequest += op.OpStats.S3List

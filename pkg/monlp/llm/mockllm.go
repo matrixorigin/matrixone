@@ -17,7 +17,7 @@ package llm
 import (
 	"context"
 
-	"github.com/cespare/xxhash"
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 

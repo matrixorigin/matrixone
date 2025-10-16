@@ -77,7 +77,7 @@ func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
 	defer tcc.mu.Unlock()
 	val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil || val == nil {
-		val = int64(1)
+		return 1
 	}
 	return val.(int64)
 }
