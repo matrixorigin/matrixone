@@ -25,6 +25,7 @@ type safety and extensive documentation.
    fulltext_guide
    orm_guide
    metadata_guide
+   index_verification_guide
 
 .. toctree::
    :maxdepth: 2
@@ -35,6 +36,7 @@ type safety and extensive documentation.
    account_guide
    pubsub_guide
    moctl_guide
+   mo_diag_guide
 
 .. toctree::
    :maxdepth: 2
@@ -69,6 +71,7 @@ Features
 * 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy integration with enhanced ORM features
 * 🔗 **Enhanced Query Building**: Advanced query building with SQLAlchemy expressions
 * 🎯 **Logical Operations**: Enhanced logical operations including logical_in functionality
+* 🛠️ **MO-DIAG Tool**: Interactive diagnostic tool for index inspection and health monitoring
 * 📖 **Comprehensive Documentation**: Detailed API documentation with examples
 
 Quick Start

@@ -19,10 +19,11 @@ This module provides metadata scanning capabilities for MatrixOne tables,
 allowing users to analyze table statistics, column information, and data distribution.
 """
 
-from typing import Optional, List, Dict, Any, Union
-from sqlalchemy.engine import Result
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional, Union
+
+from sqlalchemy.engine import Result
 
 
 class MetadataColumn(Enum):

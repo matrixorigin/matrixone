@@ -286,6 +286,20 @@ lint: ## Run code quality checks
 	flake8 matrixone --max-line-length=125 --ignore=E203,W503
 	@echo "$(GREEN)Code quality checks completed!$(NC)"
 
+.PHONY: lint-fix
+lint-fix: ## Auto-fix linting issues (trailing whitespace, imports, formatting)
+	@echo "$(BLUE)Auto-fixing linting issues...$(NC)"
+	@echo "$(YELLOW)Removing trailing whitespace...$(NC)"
+	find matrixone -name "*.py" -type f -exec sed -i '' 's/[[:space:]]*$$//' {} +
+	@echo "$(YELLOW)Removing unused imports with autoflake...$(NC)"
+	$(PYTHON) -m autoflake --remove-all-unused-imports --in-place --recursive matrixone || echo "$(YELLOW)⚠️  autoflake not available, skipping import cleanup$(NC)"
+	@echo "$(YELLOW)Sorting imports with isort...$(NC)"
+	$(PYTHON) -m isort matrixone || echo "$(YELLOW)⚠️  isort not available, skipping import sorting$(NC)"
+	@echo "$(YELLOW)Formatting code with black...$(NC)"
+	black matrixone --line-length=125
+	@echo "$(GREEN)Linting issues auto-fixed!$(NC)"
+	@echo "$(YELLOW)Run 'make lint' to verify fixes$(NC)"
+
 .PHONY: format
 format: ## Format code with black
 	@echo "$(BLUE)Formatting code...$(NC)"

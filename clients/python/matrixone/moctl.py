@@ -40,8 +40,6 @@ from .exceptions import MatrixOneError
 class MoCtlError(MatrixOneError):
     """Raised when mo_ctl operations fail"""
 
-    pass
-
 
 class MoCtlManager:
     """
