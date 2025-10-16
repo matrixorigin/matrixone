@@ -321,7 +321,7 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 			return
 		}
 	}
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) DeleteAsyncTask(ctx context.Context, condition ...Condition) (int, error) {
@@ -574,7 +574,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, err
 	}
 	n = int(affected2) + int(affected1)
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) taskExists(ctx context.Context, taskMetadataID string) (bool, error) {
@@ -779,7 +779,7 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 	if err != nil {
 		return
 	}
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, db SqlExecutor, condition ...Condition) (int, error) {
@@ -1024,7 +1024,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 			return
 		}
 	}
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (n int, err error) {
@@ -1160,7 +1160,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		affectedCdcRow += affectedTaskRow
 	}
 
-	return affectedCdcRow, nil
+	return affectedCdcRow, err
 }
 
 func buildDaemonTaskWhereClause(c *conditions) string {
