@@ -46,15 +46,38 @@ const (
 )
 
 const (
-	addedLine   = "+"
-	removedLine = "-"
+	diffAddedLine   = "+"
+	diffRemovedLine = "-"
+
+	diffInsert = iota
+	diffDelete
+	diffUpdate
 )
 
-type diffReceipt struct {
-	rows       [][]any
-	pkKind     int
-	pkColIdxes []int
-	pkTypes    []types.Type
+const (
+	lcaEmpty = iota
+	lcaOther
+	lcaLeft
+	lcaRight
+)
+
+type diffExtra struct {
+	inputArgs struct {
+		bh BackgroundExec
+
+		tarRel  engine.Relation
+		baseRel engine.Relation
+
+		tarSnapshot  *plan.Snapshot
+		baseSnapshot *plan.Snapshot
+	}
+
+	outputArgs struct {
+		rows       [][]any
+		pkKind     int
+		pkColIdxes []int
+		pkTypes    []types.Type
+	}
 }
 
 func handleDataBranch(
@@ -84,47 +107,44 @@ func handleSnapshotDiff(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.SnapshotDiff,
-	receipt *diffReceipt,
+	extra *diffExtra,
 ) (err error) {
 
 	var (
+		bh      BackgroundExec
 		tarRel  engine.Relation
 		baseRel engine.Relation
 
 		tarSnapshot  *plan.Snapshot
 		baseSnapshot *plan.Snapshot
 
-		bh       BackgroundExec
 		deferred func(error) error
 	)
 
-	// do not open another transaction,
-	// if the clone already executed within a transaction.
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
-		return
-	}
-
-	defer func() {
-		if deferred != nil {
-			//if r := recover(); r != nil {
-			//	err = moerr.ConvertPanicError(reqCtx, r)
-			//}
-			err = deferred(err)
+	if extra != nil {
+		bh = extra.inputArgs.bh
+		tarRel = extra.inputArgs.tarRel
+		baseRel = extra.inputArgs.baseRel
+		tarSnapshot = extra.inputArgs.tarSnapshot
+		baseSnapshot = extra.inputArgs.baseSnapshot
+	} else {
+		// do not open another transaction,
+		// if the clone already executed within a transaction.
+		if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+			return
 		}
-	}()
 
-	if tarSnapshot, err = resolveSnapshot(ses, stmt.TargetTable.AtTsExpr); err != nil {
-		return
-	}
+		defer func() {
+			if deferred != nil {
+				err = deferred(err)
+			}
+		}()
 
-	if baseSnapshot, err = resolveSnapshot(ses, stmt.BaseTable.AtTsExpr); err != nil {
-		return
-	}
-
-	if tarRel, baseRel, err = getRelations(
-		execCtx.reqCtx, ses, stmt.TargetTable, stmt.BaseTable, tarSnapshot, baseSnapshot,
-	); err != nil {
-		return
+		if tarRel, baseRel, tarSnapshot, baseSnapshot, err = getRelations(
+			execCtx.reqCtx, ses, bh, stmt.TargetTable, stmt.BaseTable,
+		); err != nil {
+			return
+		}
 	}
 
 	var (
@@ -155,18 +175,12 @@ func handleSnapshotDiff(
 	}
 
 	if err = diff(
-		execCtx.reqCtx,
-		ses,
-		tarTblDef,
-		baseTblDef,
-		tarHandle,
-		baseHandle,
+		execCtx.reqCtx, ses,
+		tarTblDef, baseTblDef,
+		tarHandle, baseHandle,
 		stmt.DiffAsOpts,
-		lcaTableID,
-		tarBranchTS,
-		baseBranchTS,
-		bh,
-		receipt,
+		lcaTableID, tarBranchTS, baseBranchTS,
+		bh, extra,
 	); err != nil {
 		return
 	}
@@ -181,73 +195,381 @@ func handleSnapshotMerge(
 ) (err error) {
 
 	var (
+		bh          BackgroundExec
+		deferred    func(error) error
 		conflictOpt int
-		diffStmt    = &tree.SnapshotDiff{
-			TargetTable: stmt.SrcTable,
-			BaseTable:   stmt.DstTable,
-		}
 
-		receipt diffReceipt
+		srcRel    engine.Relation
+		dstRel    engine.Relation
+		lcaRel    engine.Relation
+		lcaTblDef *plan.TableDef
+
+		lcaTableID  uint64
+		srcSnapshot *plan.Snapshot
+		dstSnapshot *plan.Snapshot
+		srcBranchTS timestamp.Timestamp
+		dstBranchTS timestamp.Timestamp
 	)
 
-	if stmt.ConflictOpt == nil {
-		conflictOpt = tree.CONFLICT_FAIL
-	} else {
-		conflictOpt = stmt.ConflictOpt.Opt
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return err
 	}
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
 
-	if err = handleSnapshotDiff(execCtx, ses, diffStmt, &receipt); err != nil {
+	if srcRel, dstRel, srcSnapshot, dstSnapshot, err = getRelations(
+		execCtx.reqCtx, ses, bh, stmt.SrcTable, stmt.DstTable,
+	); err != nil {
 		return
 	}
 
-	if len(receipt.rows) != 0 {
-		slices.SortFunc(receipt.rows, func(a, b []any) int {
-			//cmp := 0
-			for i := 2; i < len(a); i++ {
-				// this should be much faster
-				//switch receipt.pkTypes[i].Oid {
-				//case types.T_uint8:
-				//	cmp = int(a[i].(uint8) - b[i].(uint8))
-				//case types.T_int8:
-				//}
-				left := types.EncodeValue(a[i], receipt.pkTypes[i].Oid)
-				right := types.EncodeValue(b[i], receipt.pkTypes[i].Oid)
-				if cmp := bytes.Compare(left, right); cmp == 0 {
-					continue
-				} else {
-					return cmp
+	if lcaTableID, srcBranchTS, dstBranchTS, err = decideLCABranchTSFromBranchDAG(
+		execCtx.reqCtx, ses, srcRel, dstRel,
+	); err != nil {
+		return
+	}
+
+	conflictOpt = tree.CONFLICT_FAIL
+	if stmt.ConflictOpt != nil {
+		conflictOpt = stmt.ConflictOpt.Opt
+	}
+
+	if lcaTableID == 0 {
+		// has no lca
+		var (
+			extra diffExtra
+		)
+		extra.inputArgs.bh = bh
+		extra.inputArgs.tarRel = srcRel
+		extra.inputArgs.baseRel = dstRel
+		extra.inputArgs.tarSnapshot = srcSnapshot
+		extra.inputArgs.baseSnapshot = dstSnapshot
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra); err != nil {
+			return
+		}
+
+		extra.outputArgs.rows = sortDiffResultRows(extra)
+		return mergeDiff(
+			execCtx, bh, ses, dstRel,
+			extra.outputArgs.rows, nil,
+			lcaEmpty, conflictOpt,
+			extra.outputArgs.pkTypes,
+			extra.outputArgs.pkColIdxes,
+		)
+
+	} else if lcaTableID == srcRel.GetTableID(execCtx.reqCtx) {
+		//lcaTblDef = srcRel.GetTableDef(execCtx.reqCtx)
+		var (
+			extra diffExtra
+		)
+		extra.inputArgs.bh = bh
+		extra.inputArgs.tarRel = srcRel
+		extra.inputArgs.baseRel = dstRel
+		extra.inputArgs.tarSnapshot = srcSnapshot
+		extra.inputArgs.baseSnapshot = dstSnapshot
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra); err != nil {
+			return
+		}
+
+		extra.outputArgs.rows = sortDiffResultRows(extra)
+		return mergeDiff(
+			execCtx, bh, ses, dstRel,
+			extra.outputArgs.rows, nil,
+			lcaLeft, conflictOpt,
+			extra.outputArgs.pkTypes,
+			extra.outputArgs.pkColIdxes,
+		)
+
+	} else if lcaTableID == dstRel.GetTableID(execCtx.reqCtx) {
+		//lcaTblDef = dstRel.GetTableDef(execCtx.reqCtx)
+		var (
+			extra diffExtra
+		)
+		extra.inputArgs.bh = bh
+		extra.inputArgs.tarRel = srcRel
+		extra.inputArgs.baseRel = dstRel
+		extra.inputArgs.tarSnapshot = srcSnapshot
+		extra.inputArgs.baseSnapshot = dstSnapshot
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra); err != nil {
+			return
+		}
+
+		extra.outputArgs.rows = sortDiffResultRows(extra)
+		return mergeDiff(
+			execCtx, bh, ses, dstRel,
+			extra.outputArgs.rows, nil,
+			lcaRight, conflictOpt,
+			extra.outputArgs.pkTypes,
+			extra.outputArgs.pkColIdxes,
+		)
+	} else {
+		if _, lcaTblDef, err = ses.GetTxnCompileCtx().ResolveById(lcaTableID, &plan2.Snapshot{}); err != nil {
+			return
+		}
+		if _, lcaRel, err = ses.GetTxnCompileCtx().getRelation(
+			lcaTblDef.DbName, lcaTblDef.Name, nil,
+			&plan2.Snapshot{
+				Tenant: &plan.SnapshotTenant{
+					TenantID: ses.GetAccountId(),
+				},
+				TS: &srcBranchTS,
+			},
+		); err != nil {
+			return
+		}
+
+		var (
+			extra1 diffExtra
+			extra2 diffExtra
+		)
+
+		extra1.inputArgs.bh = bh
+		extra1.inputArgs.tarRel = srcRel
+		extra1.inputArgs.baseRel = lcaRel
+		extra1.inputArgs.tarSnapshot = srcSnapshot
+		extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra1); err != nil {
+			return
+		}
+
+		extra2.inputArgs.bh = bh
+		extra2.inputArgs.tarRel = dstRel
+		extra2.inputArgs.baseRel = lcaRel
+		extra2.inputArgs.tarSnapshot = dstSnapshot
+		extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra2); err != nil {
+			return
+		}
+
+		extra1.outputArgs.rows = sortDiffResultRows(extra1)
+		extra2.outputArgs.rows = sortDiffResultRows(extra2)
+		return mergeDiff(
+			execCtx, bh, ses, dstRel,
+			extra1.outputArgs.rows, extra2.outputArgs.rows,
+			lcaEmpty, conflictOpt,
+			extra1.outputArgs.pkTypes,
+			extra1.outputArgs.pkColIdxes,
+		)
+	}
+}
+
+func mergeDiff(
+	execCtx *ExecCtx,
+	bh BackgroundExec,
+	ses *Session,
+	dstRel engine.Relation,
+	rows1 [][]any,
+	rows2 [][]any,
+	lcaType int,
+	conflictOpt int,
+	pkTypes []types.Type,
+	pkColIdxes []int,
+) (err error) {
+
+	var (
+		cnt int
+		buf bytes.Buffer
+	)
+
+	initSqlBuf := func() {
+		cnt = 0
+		buf.Reset()
+		buf.WriteString(fmt.Sprintf("replace into %s.%s values ",
+			dstRel.GetTableDef(execCtx.reqCtx).DbName,
+			dstRel.GetTableDef(execCtx.reqCtx).Name),
+		)
+	}
+
+	writeOneRow := func(row []any) error {
+		if buf.Bytes()[buf.Len()-1] == ')' {
+			buf.WriteString(",")
+		}
+		cnt++
+		buf.WriteString("(")
+		for j := 2; j < len(row); j++ {
+			switch row[j].(type) {
+			case string, []byte:
+				buf.WriteString(fmt.Sprintf("'%v'", row[j]))
+			default:
+				buf.WriteString(fmt.Sprintf("%v", row[j]))
+			}
+			if j != len(row)-1 {
+				buf.WriteString(",")
+			}
+		}
+		buf.WriteString(")")
+
+		if cnt >= objectio.BlockMaxRows {
+			if err = bh.Exec(execCtx.reqCtx, buf.String()); err != nil {
+				return err
+			}
+
+			initSqlBuf()
+		}
+		return nil
+	}
+
+	initSqlBuf()
+
+	switch lcaType {
+	case lcaEmpty, lcaRight, lcaLeft:
+		for _, row := range rows1 {
+			if flag := row[1].(int); flag == diffInsert {
+				// apply into dstRel
+				err = writeOneRow(row)
+			} else if flag == diffUpdate {
+				// conflict: t1 insert/update, t2 insert/update
+				switch conflictOpt {
+				case tree.CONFLICT_FAIL:
+					return moerr.NewInternalErrorNoCtxf("merge diff conflict happend")
+				case tree.CONFLICT_SKIP:
+				// do nothing
+				case tree.CONFLICT_ACCEPT:
+					// apply into dstRel
+					err = writeOneRow(row)
+				}
+			} else {
+				// diff delete
+				// do nothing
+			}
+
+			if err != nil {
+				return err
+			}
+		}
+	case lcaOther:
+		i, j := 0, 0
+		for i < len(rows1) && j < len(rows2) {
+			// row1.(insert, delete, update) v.s. row2.(insert, delete, update)
+			if rows1[i][1].(int) == diffDelete {
+				i++
+				continue
+			}
+
+			cmp := compareRowsByPK(rows1[i], rows2[j], pkColIdxes, pkTypes)
+			if cmp == 0 { // conflict
+				switch conflictOpt {
+				case tree.CONFLICT_FAIL:
+					return moerr.NewInternalErrorNoCtxf("merge conflict happend")
+				case tree.CONFLICT_SKIP:
+					i++
+				case tree.CONFLICT_ACCEPT:
+					err = writeOneRow(rows1[i])
+					i++
+					j++
+				}
+			} else {
+				err = writeOneRow(rows1[i])
+				i++
+				if cmp > 0 {
+					j++
 				}
 			}
 
-			left := a[1].(string)
-			right := b[1].(string)
-			return strings.Compare(left, right)
-		})
+			if err != nil {
+				return err
+			}
+		}
+
+		for i < len(rows1) {
+			if rows1[i][1].(int) == diffDelete {
+				i++
+				continue
+			}
+
+			if err = writeOneRow(rows1[i]); err != nil {
+				return err
+			}
+		}
+	default:
 	}
 
-	for _, _ = range receipt.rows {
-		//flag := row[1].(string)
-		//switch conflictOpt {
-		//case tree.CONFLICT_FAIL:
-		//case tree.CONFLICT_SKIP:
-		//case tree.CONFLICT_ACCEPT:
-		//default:
-		//	return moerr.NewInternalErrorNoCtxf("got wrong conflict opt: %v", conflictOpt)
-		//}
-		switch conflictOpt {
+	if buf.Len() > 0 && cnt > 0 {
+		if err = bh.Exec(execCtx.reqCtx, buf.String()); err != nil {
+			return err
 		}
 	}
 
-	// diff t2 against t1
-	// t2 -:
-	//	i. 	t2 not change, t1 insert new
-	//	ii. t2 delete one, t1 not change
-	//
-	// t2 +:
-	//	i.	t2 not change, t1 delete one
-	//	ii.	t2 insert one, t1 not change
-
 	return nil
+}
+
+func compareRowsByPK(
+	row1 []any,
+	row2 []any,
+	pkColIdxes []int,
+	pkTypes []types.Type,
+) int {
+
+	for _, idx := range pkColIdxes {
+		if cmp := types.CompareValues(
+			row1[idx], row2[idx], pkTypes[idx].Oid,
+		); cmp == 0 {
+			continue
+		} else {
+			return cmp
+		}
+	}
+	// duplicate pks, the "-" will be the first
+	return strings.Compare(row1[1].(string), row2[1].(string))
+}
+
+func sortDiffResultRows(
+	extra diffExtra,
+) (newRows [][]any) {
+
+	var (
+		rows = extra.outputArgs.rows
+	)
+
+	twoRowsCompare := func(a, b []any) int {
+		return compareRowsByPK(a, b, extra.outputArgs.pkColIdxes, extra.outputArgs.pkTypes)
+	}
+
+	slices.SortFunc(rows, func(a, b []any) int {
+		return twoRowsCompare(a, b)
+	})
+
+	appendNewRow := func(row []any) {
+		newRows = append(newRows, row)
+		if row[1].(string) == diffAddedLine {
+			newRows[len(newRows)-1][1] = diffInsert
+		} else {
+			newRows[len(newRows)-1][1] = diffDelete
+		}
+	}
+
+	mergeTwoRows := func(row1, row2 []any) {
+		// merge two rows to a single row
+		// key the row with "+" flag, should be the second
+		newRows = append(newRows, row2)
+		newRows[len(newRows)-1][1] = diffUpdate
+	}
+
+	for i := 0; i < len(rows); {
+		if i+2 > len(rows) {
+			appendNewRow(rows[i])
+			break
+		}
+
+		// check if the row[i], r[i+1] has the same pk
+		if twoRowsCompare(rows[i], rows[i+1]) == 0 {
+			mergeTwoRows(rows[i], rows[i+1])
+			i += 2
+		} else {
+			appendNewRow(rows[i])
+			i++
+		}
+	}
+
+	return
 }
 
 func diff(
@@ -262,7 +584,7 @@ func diff(
 	tarBranchTS timestamp.Timestamp,
 	baseBranchTS timestamp.Timestamp,
 	bh BackgroundExec,
-	receipt *diffReceipt,
+	extra *diffExtra,
 ) (err error) {
 
 	var (
@@ -285,11 +607,11 @@ func diff(
 			baseTombstoneHashmap.Close()
 		}
 
-		if receipt != nil && err == nil {
-			receipt.rows = rows
-			receipt.pkKind = pkKind
-			receipt.pkTypes = pkTypes
-			receipt.pkColIdxes = pkColIdxes
+		if extra != nil && err == nil {
+			extra.outputArgs.rows = rows
+			extra.outputArgs.pkKind = pkKind
+			extra.outputArgs.pkTypes = pkTypes
+			extra.outputArgs.pkColIdxes = pkColIdxes
 		}
 	}()
 
@@ -388,7 +710,7 @@ func diff(
 			for i := range checkRet {
 				// not exists in the base table
 				if !checkRet[i].Exists {
-					row := append([]any{}, tarTblDef.Name, addedLine)
+					row := append([]any{}, tarTblDef.Name, diffAddedLine)
 					for _, idx := range neededColIdxes {
 						row = append(row, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
 					}
@@ -421,8 +743,8 @@ func diff(
 						}
 
 						if !allEqual { // the diff comes from the update operations
-							row1 := append([]any{}, tarTblDef.Name, removedLine)
-							row2 := append([]any{}, tarTblDef.Name, addedLine)
+							row1 := append([]any{}, tarTblDef.Name, diffRemovedLine)
+							row2 := append([]any{}, tarTblDef.Name, diffAddedLine)
 							for _, idx := range neededColIdxes {
 								row1 = append(row1, tuple[idx])
 								row2 = append(row2, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
@@ -474,7 +796,7 @@ func diff(
 
 	// iterate the left base table data
 	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
-		row := append([]interface{}{}, tarTblDef.Name, removedLine)
+		row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 		for _, r := range data {
 			if t, err := baseDataHashmap.DecodeRow(r); err != nil {
 				return err
@@ -595,7 +917,7 @@ func handleDelsOnLCA(
 	var (
 		sql       string
 		buf       bytes.Buffer
-		flag      = removedLine
+		flag      = diffRemovedLine
 		lcaTblDef *plan.TableDef
 		mots      = fmt.Sprintf(" {MO_TS=%d} ", snapshot.PhysicalTime)
 	)
@@ -620,7 +942,7 @@ func handleDelsOnLCA(
 	}
 
 	if !isTarDels {
-		flag = addedLine
+		flag = diffAddedLine
 	}
 
 	// composite pk
@@ -1001,72 +1323,81 @@ func buildHashmapForBaseTable(
 func getRelations(
 	ctx context.Context,
 	ses *Session,
-	tarTable tree.TableName,
-	baseTable tree.TableName,
-	tarSnapshot *plan.Snapshot,
-	baseSnapshot *plan.Snapshot,
+	bh BackgroundExec,
+	tableA tree.TableName,
+	tableB tree.TableName,
 ) (
-	tarRel engine.Relation,
-	baseRel engine.Relation,
+	relA engine.Relation,
+	relB engine.Relation,
+	snapshotA *plan.Snapshot,
+	snapshotB *plan.Snapshot,
 	err error,
 ) {
 
 	var (
-		tarDB  engine.Database
-		baseDB engine.Database
+		dbA engine.Database
+		dbB engine.Database
 
-		tarDbName   string
-		tarTblName  string
-		baseDbName  string
-		baseTblName string
+		dbNameA  string
+		dbNameB  string
+		tblNameA string
+		tblNameB string
 	)
 
-	tarTxnOp := ses.GetTxnHandler().GetTxn()
-	baseTxnOp := ses.GetTxnHandler().GetTxn()
-
-	if tarSnapshot != nil && tarSnapshot.TS != nil {
-		tarTxnOp = tarTxnOp.CloneSnapshotOp(*tarSnapshot.TS)
+	if snapshotA, err = resolveSnapshot(ses, tableA.AtTsExpr); err != nil {
+		return
 	}
 
-	if baseSnapshot != nil && baseSnapshot.TS != nil {
-		baseTxnOp = baseTxnOp.CloneSnapshotOp(*baseSnapshot.TS)
+	if snapshotB, err = resolveSnapshot(ses, tableB.AtTsExpr); err != nil {
+		return
 	}
 
-	baseDbName = baseTable.SchemaName.String()
-	baseTblName = baseTable.ObjectName.String()
-	if len(baseDbName) == 0 {
-		baseDbName = ses.GetTxnCompileCtx().DefaultDatabase()
+	txnOpA := bh.(*backExec).backSes.GetTxnHandler().txnOp
+	txnOpB := bh.(*backExec).backSes.GetTxnHandler().txnOp
+
+	if snapshotA != nil && snapshotA.TS != nil {
+		txnOpA = txnOpA.CloneSnapshotOp(*snapshotA.TS)
 	}
 
-	tarDbName = tarTable.SchemaName.String()
-	tarTblName = tarTable.ObjectName.String()
-	if len(tarDbName) == 0 {
-		tarDbName = ses.GetTxnCompileCtx().DefaultDatabase()
+	if snapshotB != nil && snapshotB.TS != nil {
+		txnOpB = txnOpB.CloneSnapshotOp(*snapshotB.TS)
 	}
 
-	if len(baseDbName) == 0 || len(tarDbName) == 0 {
+	dbNameA = tableA.SchemaName.String()
+	tblNameA = tableA.ObjectName.String()
+	if len(dbNameA) == 0 {
+		dbNameA = ses.GetTxnCompileCtx().DefaultDatabase()
+	}
+
+	dbNameB = tableB.SchemaName.String()
+	tblNameB = tableB.ObjectName.String()
+	if len(dbNameB) == 0 {
+		dbNameB = ses.GetTxnCompileCtx().DefaultDatabase()
+	}
+
+	if len(dbNameA) == 0 || len(dbNameB) == 0 {
 		err = moerr.NewInternalErrorNoCtxf("the base or target database cannot be empty.")
 		return
 	}
 
 	eng := ses.proc.GetSessionInfo().StorageEngine
-	if tarDB, err = eng.Database(ctx, tarDbName, tarTxnOp); err != nil {
+	if dbA, err = eng.Database(ctx, dbNameA, txnOpA); err != nil {
 		return
 	}
 
-	if tarRel, err = tarDB.Relation(ctx, tarTblName, nil); err != nil {
+	if relA, err = dbA.Relation(ctx, tblNameA, nil); err != nil {
 		return
 	}
 
-	if baseDB, err = eng.Database(ctx, baseDbName, baseTxnOp); err != nil {
+	if dbB, err = eng.Database(ctx, dbNameB, txnOpB); err != nil {
 		return
 	}
 
-	if baseRel, err = baseDB.Relation(ctx, baseTblName, nil); err != nil {
+	if relB, err = dbB.Relation(ctx, tblNameB, nil); err != nil {
 		return
 	}
 
-	if !isSchemaEquivalent(tarRel.GetTableDef(ctx), baseRel.GetTableDef(ctx)) {
+	if !isSchemaEquivalent(relA.GetTableDef(ctx), relB.GetTableDef(ctx)) {
 		err = moerr.NewInternalErrorNoCtx("the target table schema is not equivalent to the base table.")
 		return
 	}
