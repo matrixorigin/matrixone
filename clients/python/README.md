@@ -475,7 +475,23 @@ MO-DIAG[test]> show_indexes ivf_health_demo_docs
                    - Rows: 17
                    - Compressed Size: 3.09 KB
                    - Original Size: 6.83 KB
+
+*************************** 3. row ***************************
+      Index Name: idx_embedding_ivf_v2
+       Algorithm: ivfflat
+      Table Type: entries
+  Physical Table: __mo_index_secondary_0199e725-0a7c-77f4-8d0b-48fd8258098a
+         Columns: embedding
+      Statistics:
+                   - Objects: 1
+                   - Rows: 1,000
+                   - Compressed Size: 156.34 KB
+                   - Original Size: 176.07 KB
+
+Total: 3 index tables (1 ivfflat with 3 physical tables)
 ```
+
+**Note**: IVF indexes have 3 physical tables (metadata, centroids, entries)
 
 **`show_all_indexes [database]`**
 - Health report for all tables with secondary indexes in the database
@@ -486,13 +502,22 @@ MO-DIAG[test]> show_indexes ivf_health_demo_docs
 MO-DIAG[test]> show_all_indexes
 
 📊 Index Health Report for Database 'test':
-═══════════════════════════════════════════════════════════════════════════
+========================================================================================================================
 
-🟢 HEALTHY TABLES (1):
-─────────────────────────────────────────────────────────────────────────
+✓ HEALTHY (3 tables)
+------------------------------------------------------------------------------------------------------------------------
 Table Name                          | Indexes  | Row Count            | Notes
-──────────────────────────────────────────────────────────────────────────
-ivf_health_demo_docs                | 1        | ✓ 1000 rows          | IVF: 17 centroids, 1000 vectors
+------------------------------------------------------------------------------------------------------------------------
+cms_all_content_chunk_info          | 3        | ✓ 32,712 rows        | -
+demo_mixed_indexes                  | 4        | ✓ 20 rows            | -
+ivf_health_demo_docs                | 1        | 300 rows             | IVF: 17 centroids, 300 vectors
+
+========================================================================================================================
+Summary:
+  ✓ 3 healthy tables
+  Total: 3 tables with indexes
+
+💡 Tip: Use 'verify_counts <table>' or 'show_ivf_status' for detailed diagnostics
 ```
 
 **`verify_counts <table> [database]`**
@@ -540,23 +565,48 @@ ivf_health_demo_docs           | idx_embedding_ivf_v2      | embedding          
 ```
 MO-DIAG[test]> show_table_stats ivf_health_demo_docs -a -d
 
+📊 Detailed Table Statistics for 'test.ivf_health_demo_docs':
+======================================================================================================================================================
+
 Table: ivf_health_demo_docs
   Objects: 1 | Rows: 1,000 | Null: 0 | Original: 176.03 KB | Compressed: 156.24 KB
   
   Objects:
-  Object Name                                        | Rows | Null Cnt | Original Size | Compressed Size
-  ─────────────────────────────────────────────────────────────────────────────────────────────────────
-  0199e729-642e-71e0-b338-67c4980ee294_00000         | 1000 | 0        | 176.03 KB     | 156.24 KB
+  Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+  ----------------------------------------------------------------------------------------------------------------------------------------------------
+  0199e729-642e-71e0-b338-67c4980ee294_00000         | 1000         | 0          | 176.03 KB       | 156.24 KB
 
 Index: idx_embedding_ivf_v2
-  └─ Physical Table (metadata): __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581
+  └─ (metadata): __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581:272851
      Objects: 1 | Rows: 7 | Null: 0 | Original: 1.98 KB | Compressed: 940 B
      
      Objects:
-     Object Name                                        | Rows | Null Cnt | Original Size | Compressed Size
-     ─────────────────────────────────────────────────────────────────────────────────────────────────────
-     0199e729-642a-7d36-ac37-0ae17325f7ec_00000         | 7    | 0        | 1.98 KB       | 940 B
+     Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+     ----------------------------------------------------------------------------------------------------------------------------------------------------
+     0199e729-642a-7d36-ac37-0ae17325f7ec_00000         | 7            | 0          | 1.98 KB         | 940 B
+  
+  └─ (centroids): __mo_index_secondary_0199e725-0a7b-706e-8f0a-a50edc3621a1:272852
+     Objects: 1 | Rows: 17 | Null: 0 | Original: 6.83 KB | Compressed: 3.09 KB
+     
+     Objects:
+     Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+     ----------------------------------------------------------------------------------------------------------------------------------------------------
+     0199e729-6431-794d-9c13-d10f2e4a59e7_00000         | 17           | 0          | 6.83 KB         | 3.09 KB
+  
+  └─ (entries): __mo_index_secondary_0199e725-0a7c-77f4-8d0b-48fd8258098a:272853
+     Objects: 1 | Rows: 1,000 | Null: 0 | Original: 696.11 KB | Compressed: 626.37 KB
+     
+     Objects:
+     Object Name                                        | Rows         | Null Cnt   | Original Size   | Compressed Size
+     ----------------------------------------------------------------------------------------------------------------------------------------------------
+     0199e729-6438-7db1-bcb6-7b74c59b0aee_00000         | 1000         | 0          | 696.11 KB       | 626.37 KB
 ```
+
+**Note**: 
+- Hierarchical structure: Table → Index → Physical Tables → Objects
+- IVF index has 3 physical tables: metadata (7 rows), centroids (17 rows), entries (1,000 rows)
+- Physical table name format: `table_name:table_id`
+- Use `-t` flag to include tombstone statistics for deleted/updated data
 
 #### Database Operations
 
@@ -573,14 +623,20 @@ MO-DIAG[test]> flush_table ivf_health_demo_docs
 📋 Found 3 index physical tables
 
 Index: idx_embedding_ivf_v2
-  ✓ metadata: __mo_index_secondary_xxx
-  ✓ centroids: __mo_index_secondary_yyy
-  ✓ entries: __mo_index_secondary_zzz
+  ✓ metadata: __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581
+  ✓ centroids: __mo_index_secondary_0199e725-0a7b-706e-8f0a-a50edc3621a1
+  ✓ entries: __mo_index_secondary_0199e725-0a7c-77f4-8d0b-48fd8258098a
 
 📊 Summary:
   Main table: ✓ flushed
   Index tables: 3/3 flushed successfully
 ```
+
+**Note**: 
+- Automatically discovers and flushes all index physical tables
+- For IVF indexes: flushes metadata, centroids, and entries tables
+- Requires sys user privileges
+- Recommended before backups or after bulk operations
 
 **`tables [database]`**
 - List all tables in current or specified database
