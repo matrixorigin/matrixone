@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 
 	"sync"
 	"time"
@@ -51,6 +52,8 @@ const (
 	MOISCPLogTableName = catalog.MO_ISCP_LOG
 )
 
+var once sync.Once
+
 const (
 	DefaultGCInterval             = time.Hour
 	DefaultGCTTL                  = time.Hour
@@ -79,32 +82,38 @@ func ISCPTaskExecutorFactory(
 	cdUUID string,
 	mp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) (err error) {
+	logutil.Infof("debug_iscp_start stack is %v", string(debug.Stack()))
 	return func(ctx context.Context, task task.Task) (err error) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-		exec, err := NewISCPTaskExecutor(
-			ctx,
-			txnEngine,
-			cnTxnClient,
-			cdUUID,
-			nil,
-			mp,
-		)
-		if err != nil {
-			return err
-		}
-		attachToTask(ctx, task.GetID(), exec)
+		var exec *ISCPTaskExecutor
 
-		exec.runningMu.Lock()
-		defer exec.runningMu.Unlock()
-		if exec.running {
-			return nil
-		}
-		err = exec.initStateLocked()
-		if err != nil {
-			return err
-		}
-		exec.run(ctx)
-		return nil
+		once.Do(func() {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			exec, err = NewISCPTaskExecutor(
+				ctx,
+				txnEngine,
+				cnTxnClient,
+				cdUUID,
+				nil,
+				mp,
+			)
+			if err != nil {
+				return
+			}
+			attachToTask(ctx, task.GetID(), exec)
+
+			exec.runningMu.Lock()
+			defer exec.runningMu.Unlock()
+			if exec.running {
+				return
+			}
+			err = exec.initStateLocked()
+			if err != nil {
+				return
+			}
+			exec.run(ctx)
+			return
+		})
+		return err
 	}
 }
 
