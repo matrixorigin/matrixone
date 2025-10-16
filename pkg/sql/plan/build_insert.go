@@ -181,6 +181,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 				GroupBy:     aggGroupBy,
 				AggList:     aggList,
 				ProjectList: aggProject,
+				SpillMem:    builder.aggSpillMem,
 			}
 			lastNodeId = builder.appendNode(aggNode, bindCtx)
 		}

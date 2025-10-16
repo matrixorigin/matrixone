@@ -278,3 +278,60 @@ func TestLocalFSEmptyRootPath(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, fs)
 }
+
+func TestLocalFSOpenFile(t *testing.T) {
+	ctx := context.Background()
+	var counter perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counter)
+	const (
+		n       = 32
+		dataLen = 32
+	)
+
+	// new fs
+	fs, err := NewLocalFS(
+		ctx,
+		"foo",
+		t.TempDir(),
+		CacheConfig{
+			DiskPath:                  ptrTo(t.TempDir()),
+			DiskCapacity:              ptrTo[toml.ByteSize](dataLen * n / 32),
+			enableDiskCacheForLocalFS: true,
+		},
+		nil,
+	)
+	assert.Nil(t, err)
+
+	f, err := fs.CreateFile(ctx, "aaa.txt")
+	assert.Nil(t, err)
+
+	f.Write([]byte("0123456789"))
+	f.Close()
+
+	f, err = fs.OpenFile(ctx, "aaa.txt")
+	assert.Nil(t, err)
+
+	buf := make([]byte, 10)
+	f.Read(buf)
+	assert.Equal(t, []byte("0123456789"), buf)
+	f.Close()
+
+	err = fs.RemoveFile(ctx, "aaa.txt")
+	assert.Nil(t, err)
+
+	// removed, open should fail.
+	f, err = fs.OpenFile(ctx, "aaa.txt")
+	assert.NotNil(t, err)
+
+	f2, err := fs.CreateAndRemoveFile(ctx, "aaa2.txt")
+	assert.Nil(t, err)
+	f2.Write([]byte("0123456789"))
+	nn, err := f2.ReadAt(buf, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, 10, nn)
+	assert.Equal(t, []byte("0123456789"), buf)
+	f2.Close()
+
+	f2, err = fs.OpenFile(ctx, "aaa2.txt")
+	assert.NotNil(t, err)
+}

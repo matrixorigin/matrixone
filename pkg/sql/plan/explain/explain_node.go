@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1136,30 +1137,17 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		fmt.Fprintf(buf, " inputBlocks=%d", a.AnalyzeInfo.InputBlocks)
 	}
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
-	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	if a.AnalyzeInfo.InputSize < MB {
-		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	} else if a.AnalyzeInfo.InputSize < 10*GB {
-		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
-	}
+	fmt.Fprintf(buf, " outputRows=%d (min=%d, max=%d)",
+		a.AnalyzeInfo.OutputRows,
+		a.AnalyzeInfo.OutrowsMin,
+		a.AnalyzeInfo.OutrowsMax)
 
-	if a.AnalyzeInfo.OutputSize < MB {
-		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	} else if a.AnalyzeInfo.OutputSize < 10*GB {
-		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
-	}
-
-	if a.AnalyzeInfo.MemorySize < MB {
-		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
-	} else if a.AnalyzeInfo.MemorySize < 10*GB {
-		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
-	} else {
-		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
-	}
+	fmt.Fprintf(buf, " InputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.InputSize))
+	fmt.Fprintf(buf, " OutputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.OutputSize))
+	fmt.Fprintf(buf, " MemorySize=%s (min=%s, max=%s)",
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemorySize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMin),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMax))
 
 	return nil
 }

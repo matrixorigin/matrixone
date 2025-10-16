@@ -154,6 +154,13 @@ func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
 	opAlyzr.opStats.MemorySize += size
 }
 
+func (opAlyzr *operatorAnalyzer) Spill(size int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddSpillSize: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.SpillSize += size
+}
+
 func (opAlyzr *operatorAnalyzer) InputBlock() {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.InputBlock: operatorAnalyzer.opStats is nil")
@@ -309,6 +316,7 @@ type OperatorStats struct {
 	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
 	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
 	MemorySize       int64  `json:"MemorySize,omitempty"`
+	SpillSize        int64  `json:"SpillSize,omitempty"`
 	InputRows        int64  `json:"InputRows,omitempty"`
 	InputSize        int64  `json:"InputSize,omitempty"`
 	OutputRows       int64  `json:"OutputRows,omitempty"`
@@ -378,6 +386,7 @@ func (ps *OperatorStats) String() string {
 		"InBlock:%d "+
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
+		"SpillSize:%dbytes "+
 		"ScanBytes:%dbytes "+
 		"NetworkIO:%dbytes "+
 		"DiskIO:%dbytes ",
@@ -390,6 +399,7 @@ func (ps *OperatorStats) String() string {
 		ps.InputBlocks,
 		ps.OutputSize,
 		ps.MemorySize,
+		ps.SpillSize,
 		ps.ScanBytes,
 		ps.NetworkIO,
 		ps.DiskIO))

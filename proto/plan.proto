@@ -656,6 +656,17 @@ message AnalyzeInfo {
 	int64 written_rows = 31;
 	// deleted_rows used to estimate S3input
 	int64 deleted_rows = 32;
+
+    int64 memory_min = 33;
+    int64 memory_max = 34;
+
+    int64 spill_size = 35;
+    int64 spill_min = 36;
+    int64 spill_max = 37;
+
+    // useful for detecting skews. 
+    int64 outrows_min = 38;
+    int64 outrows_max = 39;
 }
 
 message OriginTableMessageForFuzzy {
@@ -874,6 +885,9 @@ message Node {
 	string dedup_col_name = 67;
 	repeated Type dedup_col_types = 68 [(gogoproto.nullable) = false];
 	bool rollup_filter = 69;
+
+    // compile time performance setting
+    int64 spill_mem = 70;
 }
 
 message SnapshotExtraInfo {

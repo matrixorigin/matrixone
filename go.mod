@@ -25,7 +25,6 @@ require (
 	github.com/buger/jsonparser v1.1.1
 	github.com/bytedance/sonic v1.14.1
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
-	github.com/cespare/xxhash v1.1.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/colinmarc/hdfs/v2 v2.4.0
@@ -132,6 +131,7 @@ require (
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
