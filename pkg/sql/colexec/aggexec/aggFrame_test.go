@@ -75,9 +75,10 @@ type avgDemoCtx struct {
 	count int64
 }
 
-func (d *avgDemoCtx) Marshal() []byte    { return types.EncodeInt64(&d.count) }
-func (d *avgDemoCtx) Unmarshal(b []byte) { d.count = types.DecodeInt64(b) }
-func (d *avgDemoCtx) Size() int64        { return 8 } // size of count
+func (d *avgDemoCtx) Marshal() []byte                { return types.EncodeInt64(&d.count) }
+func (d *avgDemoCtx) MarshalBinary() ([]byte, error) { return d.Marshal(), nil }
+func (d *avgDemoCtx) Unmarshal(b []byte)             { d.count = types.DecodeInt64(b) }
+func (d *avgDemoCtx) Size() int64                    { return 8 } // size of count
 var _ AggGroupExecContext = &avgDemoCtx{}
 
 func fromIdxListToNullList(start, end int, idxList []int) []bool {

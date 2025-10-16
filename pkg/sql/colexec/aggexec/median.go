@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -76,6 +78,18 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 		}
 	}
 	return encoded.Marshal()
+}
+
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffers(
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, exec.groups)
+}
+
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkRetAndGroupsToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups)
 }
 
 func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {

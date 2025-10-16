@@ -16,8 +16,9 @@ package batch
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,6 +54,10 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		rbat := new(Batch)
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
+
+		require.Equal(t, tc.bat.ExtraBuf1, rbat.ExtraBuf1)
+		require.Equal(t, tc.bat.ExtraBuf2, rbat.ExtraBuf2)
+
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
@@ -139,6 +144,9 @@ func newBatch(ts []types.Type, rows int) *Batch {
 			bat.Vecs[i] = vec
 		}
 	}
+
+	bat.ExtraBuf1 = []byte("extra buf 1")
+	bat.ExtraBuf2 = []byte("extra buf 2")
 
 	aggexec.RegisterGroupConcatAgg(0, ",")
 	agg0, _ := aggexec.MakeAgg(aggexec.NewSimpleAggMemoryManager(mp), 0, false, []types.Type{types.T_varchar.ToType()}...)

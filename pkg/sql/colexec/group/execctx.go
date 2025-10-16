@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -322,8 +323,8 @@ func (r *GroupResultNoneBlock) resetLastPopped() {
 
 func (r *GroupResultNoneBlock) getResultBatch(
 	proc *process.Process,
-	gEval *ExprEvalVector,
-	aEval []ExprEvalVector, aExpressions []aggexec.AggFuncExecExpression) (*batch.Batch, error) {
+	gEval *colexec.ExprEvalVector,
+	aEval []colexec.ExprEvalVector, aExpressions []aggexec.AggFuncExecExpression) (*batch.Batch, error) {
 	var err error
 
 	// prepare an OK result.
@@ -382,6 +383,11 @@ func getInitialBatchWithSameTypeVecs(src []*vector.Vector) *batch.Batch {
 	return b
 }
 
+// This is a screwed up implementation of the following:
+//
+// given a list of uint8 boolean flags, do a population count.
+// and for a max capacity of k, fin the index of kth, so that
+// upto the kth index, the popultion count is k.
 func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
 	count = 0
 	kth = -1

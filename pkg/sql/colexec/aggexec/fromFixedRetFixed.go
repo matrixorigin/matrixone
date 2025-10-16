@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -285,6 +286,18 @@ func (exec *aggregatorFromFixedToFixed[from, to]) marshal() ([]byte, error) {
 		Groups:  exec.execContext.getGroupContextEncodings(),
 	}
 	return encoded.Marshal()
+}
+
+func (exec *aggregatorFromFixedToFixed[from, to]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffers(
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
+}
+
+func (exec *aggregatorFromFixedToFixed[from, to]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkRetAndGroupsToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {

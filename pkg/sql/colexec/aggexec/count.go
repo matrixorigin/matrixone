@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -61,6 +63,20 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 		}
 	}
 	return encoded.Marshal()
+}
+
+func (exec *countColumnExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsAndDistinctHashToBuffers[dummyBinaryMarshaler](
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, nil,
+		exec.IsDistinct(), &exec.distinctHash)
+}
+
+func (exec *countColumnExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
+		chunk, buf,
+		&exec.ret.optSplitResult, nil,
+		exec.IsDistinct(), &exec.distinctHash)
 }
 
 func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
@@ -299,6 +315,17 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 		Groups:  nil,
 	}
 	return encoded.Marshal()
+}
+
+func (exec *countStarExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffers[dummyBinaryMarshaler](
+		bucketIdx, bucket, buf,
+		&exec.ret.optSplitResult, nil)
+}
+func (exec *countStarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkRetAndGroupsToBuffer[dummyBinaryMarshaler](
+		chunk, buf,
+		&exec.ret.optSplitResult, nil)
 }
 
 func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {

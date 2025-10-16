@@ -202,6 +202,30 @@ func (d *distinctHash) marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func (d *distinctHash) marshalToBuffers(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+	if len(d.maps) != len(bucketIdx) {
+		return moerr.NewInternalErrorNoCtx("distinct hash: the length of the bucket index is not equal to the length of the maps")
+	}
+
+	for i := range d.maps {
+		if bucketIdx[i] == bucket {
+			if _, err := d.maps[i].WriteTo(buf); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *distinctHash) marshalChunkToBuffer(start, cnt int, buf *bytes.Buffer) error {
+	for i := 0; i < cnt; i++ {
+		if _, err := d.maps[start+i].WriteTo(buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *distinctHash) unmarshal(data []byte) error {
 	if len(data) == 0 {
 		return nil

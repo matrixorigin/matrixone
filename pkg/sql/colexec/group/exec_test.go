@@ -15,6 +15,8 @@
 package group
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // hackAggExecToTest 是一个不带任何逻辑的AggExec,主要用于单测中检查各种接口的调用次数。
@@ -262,7 +263,7 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 		g, src := getGroupOperatorWithInputs(datas)
 		g.NeedEval = true
 		g.GroupingFlag = nil
-		g.PreAllocSize = 20
+		g.SpillMem = 20
 		g.Exprs = []*plan.Expr{newColumnExpression(0)}
 		g.Aggs = []aggexec.AggFuncExecExpression{
 			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
@@ -343,7 +344,6 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 
 func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	intermediateResultSendActionTrigger = 0
 
 	// datasource.
 	{
@@ -445,7 +445,6 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 
 func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	intermediateResultSendActionTrigger = 0
 
 	// datasource.
 	{
