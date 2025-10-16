@@ -23,9 +23,91 @@ import io
 import sys
 import random
 from contextlib import redirect_stdout
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Index, DECIMAL
 from matrixone import Client
+from matrixone.orm import declarative_base
+from matrixone.sqlalchemy_ext import create_vector_column, FulltextIndex
 from matrixone.cli_tools import MatrixOneCLI
 from .test_config import online_config
+
+Base = declarative_base()
+
+
+# Define ORM models for test tables
+class RegularIndexesTable(Base):
+    """Table with regular (secondary) indexes"""
+
+    __tablename__ = "cli_test_regular_indexes"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    category = Column(String(50))
+    status = Column(Integer)
+    price = Column(DECIMAL(10, 2))
+    __table_args__ = (Index("idx_name", "name"), Index("idx_category", "category"), Index("idx_status", "status"))
+
+
+class UniqueIndexesTable(Base):
+    """Table with UNIQUE indexes"""
+
+    __tablename__ = "cli_test_unique_indexes"
+    id = Column(Integer, primary_key=True)
+    email = Column(String(100), unique=True)
+    username = Column(String(50), unique=True)
+    phone = Column(String(20), unique=True)
+
+
+class MixedIndexesTable(Base):
+    """Table with both regular and UNIQUE indexes"""
+
+    __tablename__ = "cli_test_mixed_indexes"
+    id = Column(Integer, primary_key=True)
+    email = Column(String(100), unique=True)
+    username = Column(String(50), unique=True)
+    category = Column(String(50))
+    status = Column(Integer)
+    code = Column(String(20), unique=True)
+    __table_args__ = (Index("idx_category", "category"), Index("idx_status", "status"))
+
+
+class FulltextIndexTable(Base):
+    """Table with fulltext index"""
+
+    __tablename__ = "cli_test_fulltext_index"
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200))
+    content = Column(Text)
+    __table_args__ = (FulltextIndex("idx_content", ["content"]),)
+
+
+class IVFIndexTable(Base):
+    """Table with IVF vector index (index created separately)"""
+
+    __tablename__ = "cli_test_ivf_index"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    embedding = create_vector_column(128, precision="f32")
+    meta_info = Column(Text)
+
+
+class HNSWIndexTable(Base):
+    """Table with HNSW vector index (index created separately, requires BIGINT primary key)"""
+
+    __tablename__ = "cli_test_hnsw_index"
+    id = Column(BigInteger, primary_key=True)
+    name = Column(String(100))
+    embedding = create_vector_column(64, precision="f32")
+    description = Column(Text)
+
+
+class TombstoneTable(Base):
+    """Table for testing tombstone objects"""
+
+    __tablename__ = "cli_test_with_tombstone"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True)
+    value = Column(Integer)
+    category = Column(String(50))
+    __table_args__ = (Index("idx_value", "value"), Index("idx_category", "category"))
 
 
 @pytest.fixture(scope="module")
@@ -54,174 +136,151 @@ def cli_instance(client):
 @pytest.fixture(scope="module")
 def test_table_regular_indexes(client):
     """Create a test table with regular (secondary) indexes only"""
-    table_name = "cli_test_regular_indexes"
+    table_name = RegularIndexesTable.__tablename__
 
-    # Clean up if exists
     try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        # Clean up if exists
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
-    # Create table with regular indexes
-    sql = f"""
-        CREATE TABLE {table_name} (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            category VARCHAR(50),
-            status INT,
-            price DECIMAL(10, 2),
-            INDEX idx_name (name),
-            INDEX idx_category (category),
-            INDEX idx_status (status)
-        )
-    """
-    client.execute(sql)
+        # Create table using ORM model
+        client.create_table(RegularIndexesTable)
 
-    # Insert test data in a single batch to avoid table dropping issues
-    for i in range(100):
-        client.execute(
-            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)",
-            (i, f"item_{i}", f"cat{i % 10}", i % 5, round(random.uniform(10, 1000), 2)),
-        )
+        # Insert test data using SDK insert method
+        for i in range(100):
+            client.insert(
+                RegularIndexesTable,
+                {
+                    "id": i,
+                    "name": f"item_{i}",
+                    "category": f"cat{i % 10}",
+                    "status": i % 5,
+                    "price": round(random.uniform(10, 1000), 2),
+                },
+            )
 
-    # Flush table to ensure metadata is available
-    try:
-        client.moctl.flush_table(online_config.database, table_name)
-    except:
-        pass
+        # Flush table to ensure metadata is available
+        try:
+            client.moctl.flush_table(online_config.database, table_name)
+        except:
+            pass
 
-    yield table_name
-
-    # Cleanup
-    try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        yield table_name
+    finally:
+        # Cleanup
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 @pytest.fixture(scope="module")
 def test_table_unique_indexes(client):
     """Create a test table with UNIQUE indexes"""
-    table_name = "cli_test_unique_indexes"
+    table_name = UniqueIndexesTable.__tablename__
 
-    # Clean up if exists
     try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        # Clean up if exists
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
-    # Create table with UNIQUE indexes
-    sql = f"""
-        CREATE TABLE {table_name} (
-            id INT PRIMARY KEY,
-            email VARCHAR(100) UNIQUE,
-            username VARCHAR(50),
-            phone VARCHAR(20),
-            UNIQUE KEY uk_username (username),
-            UNIQUE KEY uk_phone (phone)
-        )
-    """
-    client.execute(sql)
+        # Create table using ORM model
+        client.create_table(UniqueIndexesTable)
 
-    # Insert test data
-    for i in range(80):
-        client.execute(
-            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?)", (i, f"user{i}@test.com", f"user_{i}", f"1234567{i:04d}")
-        )
+        # Insert test data using SDK
+        for i in range(80):
+            client.insert(
+                UniqueIndexesTable,
+                {"id": i, "email": f"user{i}@test.com", "username": f"user_{i}", "phone": f"1234567{i:04d}"},
+            )
 
-    # Flush table to ensure metadata is available
-    try:
-        client.moctl.flush_table(online_config.database, table_name)
-    except:
-        pass
+        # Flush table to ensure metadata is available
+        try:
+            client.moctl.flush_table(online_config.database, table_name)
+        except:
+            pass
 
-    yield table_name
-
-    # Cleanup
-    try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        yield table_name
+    finally:
+        # Cleanup
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 @pytest.fixture(scope="module")
 def test_table_mixed_indexes(client):
     """Create a test table with both regular and UNIQUE indexes"""
-    table_name = "cli_test_mixed_indexes"
+    table_name = MixedIndexesTable.__tablename__
 
-    # Clean up if exists
     try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        # Clean up if exists
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
-    # Create table with multiple index types
-    sql = f"""
-        CREATE TABLE {table_name} (
-            id INT PRIMARY KEY,
-            email VARCHAR(100) UNIQUE,
-            username VARCHAR(50),
-            category VARCHAR(50),
-            status INT,
-            code VARCHAR(20),
-            UNIQUE KEY uk_username (username),
-            UNIQUE KEY uk_code (code),
-            INDEX idx_category (category),
-            INDEX idx_status (status)
-        )
-    """
-    client.execute(sql)
+        # Create table using ORM model
+        client.create_table(MixedIndexesTable)
 
-    # Insert test data
-    for i in range(50):
-        client.execute(
-            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?, ?)",
-            (i, f"user{i}@test.com", f"user{i}", f"cat{i % 5}", i % 3, f"CODE{i:04d}"),
-        )
+        # Insert test data using SDK
+        for i in range(50):
+            client.insert(
+                MixedIndexesTable,
+                {
+                    "id": i,
+                    "email": f"user{i}@test.com",
+                    "username": f"user{i}",
+                    "category": f"cat{i % 5}",
+                    "status": i % 3,
+                    "code": f"CODE{i:04d}",
+                },
+            )
 
-    # Flush table to ensure metadata is available
-    try:
-        client.moctl.flush_table(online_config.database, table_name)
-    except:
-        pass
+        # Flush table to ensure metadata is available
+        try:
+            client.moctl.flush_table(online_config.database, table_name)
+        except:
+            pass
 
-    yield table_name
-
-    # Cleanup
-    try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        yield table_name
+    finally:
+        # Cleanup
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 @pytest.fixture(scope="module")
 def test_table_fulltext_index(client):
     """Create a test table with fulltext index"""
-    table_name = "cli_test_fulltext_index"
+    table_name = FulltextIndexTable.__tablename__
 
-    # Clean up if exists
     try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        # Clean up if exists
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
-    # Create table with fulltext index
-    sql = f"""
-        CREATE TABLE {table_name} (
-            id INT PRIMARY KEY,
-            title VARCHAR(200),
-            content TEXT,
-            FULLTEXT INDEX idx_content (content)
-        )
-    """
-    try:
-        client.execute(sql)
+        # Create table using ORM model (includes fulltext index)
+        client.create_table(FulltextIndexTable)
 
-        # Insert test data
+        # Insert test data using SDK
         for i in range(30):
-            client.execute(
-                f"INSERT INTO {table_name} VALUES (?, ?, ?)",
-                (i, f"Article {i}", f"This is test content for article {i}. It contains various keywords and phrases."),
+            client.insert(
+                FulltextIndexTable,
+                {
+                    "id": i,
+                    "title": f"Article {i}",
+                    "content": f"This is test content for article {i}. It contains various keywords and phrases.",
+                },
             )
 
         # Flush table to ensure metadata is available
@@ -235,47 +294,34 @@ def test_table_fulltext_index(client):
         # Fulltext might not be supported in all environments
         print(f"Fulltext index test skipped: {e}")
         yield None
-
-    # Cleanup
-    try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+    finally:
+        # Cleanup
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 @pytest.fixture(scope="module")
 def test_table_ivf_index(client):
     """Create a test table with IVF vector index"""
-    table_name = "cli_test_ivf_index"
-    table_created = False
+    table_name = IVFIndexTable.__tablename__
 
     try:
         # Clean up if exists
         try:
-            client.execute(f"DROP TABLE IF EXISTS {table_name}")
+            client.drop_table(table_name)
         except:
             pass
 
-        # Create table with vector column
-        sql = f"""
-            CREATE TABLE {table_name} (
-                id INT PRIMARY KEY,
-                name VARCHAR(100),
-                embedding VECF32(128),
-                metadata TEXT
-            )
-        """
-        client.execute(sql)
-        table_created = True
+        # Create table using ORM model (without index)
+        client.create_table(IVFIndexTable)
 
-        # Insert test data
+        # Insert test data using SDK vector_ops
         for i in range(100):
             embedding = [random.random() for _ in range(128)]
-            # Convert to proper vector format string
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-            client.execute(
-                f"INSERT INTO {table_name} (id, name, embedding, metadata) VALUES (?, ?, ?, ?)",
-                (i, f"item_{i}", embedding_str, f"metadata_{i}"),
+            client.vector_ops.insert(
+                IVFIndexTable, {"id": i, "name": f"item_{i}", "embedding": embedding, "meta_info": f"metadata_{i}"}
             )
 
         # Flush table to ensure metadata is available
@@ -284,60 +330,42 @@ def test_table_ivf_index(client):
         except:
             pass
 
-        # Create IVF index
-        try:
-            client.vector_ops.create_ivf(table_name, "idx_embedding_ivf", "embedding", lists=15)
-            yield table_name
-        except Exception as e:
-            # IVF might not be supported in all environments
-            print(f"IVF index creation failed: {e}")
-            yield None
+        # Create IVF index using SDK (after table creation)
+        client.vector_ops.create_ivf(table_name, name="idx_embedding_ivf", column="embedding", lists=15)
+
+        yield table_name
     except Exception as e:
-        # Table creation or data insertion failed
-        print(f"IVF test table setup failed: {e}")
+        # IVF might not be supported in all environments
+        print(f"IVF test setup failed: {e}")
         yield None
     finally:
         # Cleanup
-        if table_created:
-            try:
-                client.execute(f"DROP TABLE IF EXISTS {table_name}")
-            except:
-                pass
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 @pytest.fixture(scope="module")
 def test_table_hnsw_index(client):
     """Create a test table with HNSW vector index"""
-    table_name = "cli_test_hnsw_index"
-    table_created = False
+    table_name = HNSWIndexTable.__tablename__
 
     try:
         # Clean up if exists
         try:
-            client.execute(f"DROP TABLE IF EXISTS {table_name}")
+            client.drop_table(table_name)
         except:
             pass
 
-        # Create table with vector column (HNSW requires BIGINT primary key)
-        sql = f"""
-            CREATE TABLE {table_name} (
-                id BIGINT PRIMARY KEY,
-                name VARCHAR(100),
-                embedding VECF32(64),
-                description TEXT
-            )
-        """
-        client.execute(sql)
-        table_created = True
+        # Create table using ORM model (with BIGINT primary key)
+        client.create_table(HNSWIndexTable)
 
-        # Insert test data
+        # Insert test data using SDK vector_ops
         for i in range(50):
             embedding = [random.random() for _ in range(64)]
-            # Convert to proper vector format string
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-            client.execute(
-                f"INSERT INTO {table_name} (id, name, embedding, description) VALUES (?, ?, ?, ?)",
-                (i, f"item_{i}", embedding_str, f"description_{i}"),
+            client.vector_ops.insert(
+                HNSWIndexTable, {"id": i, "name": f"item_{i}", "embedding": embedding, "description": f"description_{i}"}
             )
 
         # Flush table to ensure metadata is available
@@ -346,85 +374,73 @@ def test_table_hnsw_index(client):
         except:
             pass
 
-        # Create HNSW index
-        try:
-            # Enable HNSW support first
-            client.vector_ops.enable_hnsw()
-            # Create HNSW index using SDK
-            client.vector_ops.create_hnsw(
-                table_name, "idx_embedding_hnsw", "embedding", m=16, ef_construction=64, ef_search=50
-            )
-            yield table_name
-        except Exception as e:
-            # HNSW might not be supported in all environments
-            print(f"HNSW index creation failed: {e}")
-            yield None
+        # Enable HNSW support and create index
+        client.vector_ops.enable_hnsw()
+        client.vector_ops.create_hnsw(
+            table_name, name="idx_embedding_hnsw", column="embedding", m=16, ef_construction=64, ef_search=50
+        )
+
+        yield table_name
     except Exception as e:
-        # Table creation or data insertion failed
-        print(f"HNSW test table setup failed: {e}")
+        # HNSW might not be supported in all environments
+        print(f"HNSW test setup failed: {e}")
         yield None
     finally:
         # Cleanup
-        if table_created:
-            try:
-                client.execute(f"DROP TABLE IF EXISTS {table_name}")
-            except:
-                pass
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 @pytest.fixture(scope="module")
 def test_table_with_tombstone(client):
     """Create a test table with some deleted rows (tombstone objects)"""
-    table_name = "cli_test_with_tombstone"
+    table_name = TombstoneTable.__tablename__
 
-    # Clean up if exists
     try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        # Clean up if exists
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
-    # Create table with UNIQUE index to ensure index table tombstone objects
-    sql = f"""
-        CREATE TABLE {table_name} (
-            id INT PRIMARY KEY,
-            name VARCHAR(100) UNIQUE,
-            value INT,
-            category VARCHAR(50),
-            INDEX idx_value (value),
-            INDEX idx_category (category)
-        )
-    """
-    client.execute(sql)
+        # Create table using ORM model (includes indexes)
+        client.create_table(TombstoneTable)
 
-    # Insert test data (100 rows)
-    for i in range(100):
-        client.execute(f"INSERT INTO {table_name} VALUES (?, ?, ?, ?)", (i, f"item_{i}", i * 10, f"cat{i % 10}"))
+        # Insert test data (100 rows) using SDK
+        for i in range(100):
+            client.insert(TombstoneTable, {"id": i, "name": f"item_{i}", "value": i * 10, "category": f"cat{i % 10}"})
 
-    # Flush table to ensure all data is written
-    try:
-        client.moctl.flush_table(online_config.database, table_name)
-    except:
-        pass
+        # Flush table to ensure all data is written
+        try:
+            client.moctl.flush_table(online_config.database, table_name)
+        except:
+            pass
 
-    # Delete some rows to create tombstone objects (delete first 20 rows)
-    client.execute(f"DELETE FROM {table_name} WHERE id < 20")
+        # Delete some rows to create tombstone objects (delete first 20 rows)
+        client.query(TombstoneTable).filter(TombstoneTable.id < 20).delete()
 
-    # Update some rows to create more tombstone objects
-    client.execute(f"UPDATE {table_name} SET value = value + 1000 WHERE id >= 20 AND id < 40")
+        # Update some rows to create more tombstone objects (rows 20-39, total 20 rows)
+        from sqlalchemy import and_
 
-    # Flush again to create tombstone objects for both main table and index tables
-    try:
-        client.moctl.flush_table(online_config.database, table_name)
-    except:
-        pass
+        client.query(TombstoneTable).filter(and_(TombstoneTable.id >= 20, TombstoneTable.id < 40)).update(
+            value=TombstoneTable.value + 1000
+        ).execute()
 
-    yield table_name
+        # Flush again to create tombstone objects for both main table and index tables
+        try:
+            client.moctl.flush_table(online_config.database, table_name)
+        except:
+            pass
 
-    # Cleanup
-    try:
-        client.execute(f"DROP TABLE IF EXISTS {table_name}")
-    except:
-        pass
+        yield table_name
+    finally:
+        # Cleanup
+        try:
+            client.drop_table(table_name)
+        except:
+            pass
 
 
 class TestCLIBasicCommands:
@@ -575,8 +591,10 @@ class TestCLIMixedIndexes:
 
         output = f.getvalue()
         assert "Secondary Indexes" in output
-        # Should show both types
-        assert ("uk_username" in output or "uk_code" in output) and ("idx_category" in output or "idx_status" in output)
+        # Should show both UNIQUE and regular indexes (by column names)
+        assert ("username" in output or "email" in output or "code" in output) and (
+            "category" in output or "status" in output
+        )
 
     def test_verify_counts_mixed(self, cli_instance, test_table_mixed_indexes):
         """Test verify_counts on table with mixed index types"""
