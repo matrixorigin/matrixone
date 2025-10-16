@@ -115,7 +115,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 
 	heap := vectorindex.NewSearchResultSafeHeap(int(probe))
 	var wg sync.WaitGroup
-	for n := 0; n < nworker; n++ {
+	for i := 0; i < nworker; i++ {
 		wg.Add(1)
 		go func(tid int) {
 			defer wg.Done()
@@ -130,7 +130,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				}
 				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
 			}
-		}(n)
+		}(i)
 	}
 
 	wg.Wait()
@@ -141,7 +141,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 
 	res := make([]int64, 0, probe)
 	n := heap.Len()
-	for i := 0; i < n; i++ {
+	for range n {
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {

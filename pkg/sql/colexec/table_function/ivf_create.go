@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/rand"
 )
 
 const (
@@ -283,7 +283,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			}
 		}
 
-		u.rand = rand.New(rand.NewSource(uint64(time.Now().UnixMicro())))
+		u.rand = rand.New(rand.NewSource(int64(time.Now().UnixMicro())))
 		u.batch = tf.createResultBatch()
 		u.inited = true
 		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.tblcfg.KmeansMaxIteration))

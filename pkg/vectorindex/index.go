@@ -104,7 +104,7 @@ type SearchResultSafeHeap struct {
 
 func NewSearchResultSafeHeap(size int) *SearchResultSafeHeap {
 	h := &SearchResultSafeHeap{
-		resheap: make(SearchResultHeap, 0, size+1),
+		resheap: make(SearchResultHeap, 0, size),
 		size:    size,
 	}
 

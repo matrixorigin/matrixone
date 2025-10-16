@@ -88,7 +88,7 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendAny(u.batch.Vecs[0], keys[i], false, proc.Mp())
-		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		vector.AppendFixed(u.batch.Vecs[1], u.distances[i], false, proc.Mp())
 		n++
 	}
 

@@ -49,7 +49,7 @@ func mock_runSql_streaming_parser_error(
 	ch chan executor.Result,
 	err_chan chan error,
 ) (executor.Result, error) {
-	defer close(ch)
+	//defer close(ch)
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
 }
 
@@ -112,8 +112,7 @@ func TestIvfSearchParserError(t *testing.T) {
 	idx := &IvfflatSearchIndex[float32]{}
 
 	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
-	t.Logf("error: %v", err)
-	require.Error(t, err)
+	require.NotNil(t, err)
 }
 
 func TestIvfSearchCancel(t *testing.T) {

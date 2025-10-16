@@ -26,9 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/rand"
-
 	usearch "github.com/unum-cloud/usearch/golang"
+	"golang.org/x/exp/rand"
 )
 
 const MaxIndexCapacity = 100000
