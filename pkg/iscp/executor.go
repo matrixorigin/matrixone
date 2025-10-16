@@ -111,7 +111,6 @@ func ISCPTaskExecutorFactory(
 				return
 			}
 			exec.run(ctx)
-			return
 		})
 		return err
 	}
