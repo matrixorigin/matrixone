@@ -42,6 +42,13 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
 - 🔧 **Version Management**: Automatic backend version detection and compatibility
 - 🛡️ **Type Safety**: Full type hints support with comprehensive documentation
 - 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy ORM integration with enhanced features
+- 🛠️ **mo-diag CLI Tool**: Interactive diagnostic tool for MatrixOne database maintenance
+  - Index health monitoring and verification
+  - IVF/HNSW vector index status inspection
+  - Table statistics and metadata analysis
+  - Interactive shell with Tab completion and command history
+  - Non-interactive mode for scripting and automation
+  - Batch operations on tables and indexes
 
 ## 🚀 Installation
 
@@ -214,12 +221,336 @@ else:
     print(f"Running release version: {client.get_backend_version()}")
 ```
 
-## Advanced Features
+## 🛠️ mo-diag - Interactive Diagnostic Tool
 
-### PITR (Point-in-Time Recovery)
+The `mo-diag` command-line tool provides an interactive shell for diagnosing and maintaining MatrixOne databases, with a special focus on vector indexes, secondary indexes, and table statistics.
 
-```python
-# Create PITR for cluster
+### Installation
+
+After installing the SDK, `mo-diag` is automatically available as a command:
+
+```bash
+pip install matrixone-python-sdk
+mo-diag --help
+```
+
+### Quick Start
+
+#### Interactive Mode
+
+Launch the interactive shell to execute multiple diagnostic commands:
+
+```bash
+# Connect to default localhost
+mo-diag --database test
+
+# Connect to remote database
+mo-diag --host 192.168.1.100 --port 6001 --user admin --password secret --database production
+```
+
+**Interactive Features**:
+- 🔍 **Tab Completion**: Press `Tab` to auto-complete commands, table names, and database names
+- ⬆️⬇️ **Command History**: Use arrow keys to browse command history
+- 🔎 **History Search**: Press `Ctrl+R` to search command history
+- 🎨 **Colored Output**: Clear visual feedback with syntax highlighting
+- 💾 **Persistent History**: Command history saved to `~/.mo_diag_history`
+
+#### Non-Interactive Mode
+
+Execute single commands directly for scripting and automation:
+
+```bash
+# Check IVF index status
+mo-diag -d test -c "show_ivf_status"
+
+# Get detailed table statistics
+mo-diag -d test -c "show_table_stats my_table -a -d"
+
+# Execute SQL query
+mo-diag -d test -c "sql SELECT COUNT(*) FROM my_table"
+
+# Flush table and all indexes
+mo-diag -d test -c "flush_table my_table"
+```
+
+### Available Commands
+
+#### Index Management
+
+**`show_indexes <table> [database]`**
+- Display all indexes for a table including IVF, HNSW, Fulltext, and regular indexes
+- Shows physical table names, index types, and statistics
+- Includes object counts, row counts, and sizes for vector/fulltext indexes
+
+```
+MO-DIAG[test]> show_indexes ivf_health_demo_docs
+
+📊 Secondary Indexes for 'test.ivf_health_demo_docs'
+
+*************************** 1. row ***************************
+      Index Name: idx_embedding_ivf_v2
+       Algorithm: ivfflat
+      Table Type: metadata
+  Physical Table: __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581
+         Columns: embedding
+      Statistics:
+                   - Objects: 1
+                   - Rows: 7
+                   - Compressed Size: 940 B
+                   - Original Size: 1.98 KB
+
+*************************** 2. row ***************************
+      Index Name: idx_embedding_ivf_v2
+       Algorithm: ivfflat
+      Table Type: centroids
+  Physical Table: __mo_index_secondary_0199e725-0a7b-706e-8f0a-a50edc3621a1
+         Columns: embedding
+      Statistics:
+                   - Objects: 1
+                   - Rows: 17
+                   - Compressed Size: 3.09 KB
+                   - Original Size: 6.83 KB
+```
+
+**`show_all_indexes [database]`**
+- Health report for all tables with secondary indexes in the database
+- Row count consistency checks
+- IVF/HNSW/Fulltext index status
+
+```
+MO-DIAG[test]> show_all_indexes
+
+📊 Index Health Report for Database 'test':
+═══════════════════════════════════════════════════════════════════════════
+
+🟢 HEALTHY TABLES (1):
+─────────────────────────────────────────────────────────────────────────
+Table Name                          | Indexes  | Row Count            | Notes
+──────────────────────────────────────────────────────────────────────────
+ivf_health_demo_docs                | 1        | ✓ 1000 rows          | IVF: 17 centroids, 1000 vectors
+```
+
+**`verify_counts <table> [database]`**
+- Verify row count consistency between main table and all its secondary indexes
+- Highlights any mismatches
+
+```
+MO-DIAG[test]> verify_counts my_table
+
+📊 Row Count Verification for 'test.my_table'
+════════════════════════════════════════════════════════════════════════════
+Main table: 10,000 rows
+────────────────────────────────────────────────────────────────────────────
+✓ __mo_index_secondary_xxx: 10,000 rows
+✓ __mo_index_unique_yyy: 10,000 rows
+════════════════════════════════════════════════════════════════════════════
+✅ PASSED: All index tables match (10,000 rows)
+```
+
+#### Vector Index Monitoring
+
+**`show_ivf_status [database] [-v] [-t table]`**
+- Display IVF index building status and centroid distribution
+- `-v`: Verbose mode with detailed centroid information
+- `-t <table>`: Filter by specific table
+
+```
+MO-DIAG[test]> show_ivf_status
+
+📊 IVF Index Status in 'test':
+════════════════════════════════════════════════════════════════════════════
+Table                          | Index                     | Column               | Centroids  | Vectors      | Balance    | Status
+────────────────────────────────────────────────────────────────────────────
+ivf_health_demo_docs           | idx_embedding_ivf_v2      | embedding            | 17         | 1,000        | 2.35       | ✓ active
+```
+
+#### Table Statistics
+
+**`show_table_stats <table> [database] [-t] [-a] [-d]`**
+- Display table metadata and statistics
+- `-t`: Include tombstone statistics
+- `-a`: Include all indexes (hierarchical view with -d)
+- `-d`: Show detailed object lists
+
+```
+MO-DIAG[test]> show_table_stats ivf_health_demo_docs -a -d
+
+Table: ivf_health_demo_docs
+  Objects: 1 | Rows: 1,000 | Null: 0 | Original: 176.03 KB | Compressed: 156.24 KB
+  
+  Objects:
+  Object Name                                        | Rows | Null Cnt | Original Size | Compressed Size
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  0199e729-642e-71e0-b338-67c4980ee294_00000         | 1000 | 0        | 176.03 KB     | 156.24 KB
+
+Index: idx_embedding_ivf_v2
+  └─ Physical Table (metadata): __mo_index_secondary_0199e725-0a7a-77b8-b689-ccdd0a33f581
+     Objects: 1 | Rows: 7 | Null: 0 | Original: 1.98 KB | Compressed: 940 B
+     
+     Objects:
+     Object Name                                        | Rows | Null Cnt | Original Size | Compressed Size
+     ─────────────────────────────────────────────────────────────────────────────────────────────────────
+     0199e729-642a-7d36-ac37-0ae17325f7ec_00000         | 7    | 0        | 1.98 KB       | 940 B
+```
+
+#### Database Operations
+
+**`flush_table <table> [database]`**
+- Flush main table and all its secondary index physical tables
+- Includes IVF metadata/centroids/entries, HNSW, Fulltext, and regular indexes
+- Requires sys user privileges
+
+```
+MO-DIAG[test]> flush_table ivf_health_demo_docs
+
+🔄 Flushing table: test.ivf_health_demo_docs
+✓ Main table flushed: ivf_health_demo_docs
+📋 Found 3 index physical tables
+
+Index: idx_embedding_ivf_v2
+  ✓ metadata: __mo_index_secondary_xxx
+  ✓ centroids: __mo_index_secondary_yyy
+  ✓ entries: __mo_index_secondary_zzz
+
+📊 Summary:
+  Main table: ✓ flushed
+  Index tables: 3/3 flushed successfully
+```
+
+**`tables [database]`**
+- List all tables in current or specified database
+
+**`databases`**
+- List all databases (highlights current database)
+
+**`use <database>`**
+- Switch to a different database
+
+**`sql <SQL statement>`**
+- Execute arbitrary SQL query
+
+```
+MO-DIAG[test]> sql SELECT COUNT(*) FROM my_table
+
+col0
+----
+10000
+
+1 row(s) returned
+```
+
+#### Utility Commands
+
+**`history [n | -c]`**
+- Show last n commands (default: 20)
+- `-c`: Clear command history
+
+**`help [command]`**
+- Show help for all commands or specific command
+
+**`exit` / `quit`**
+- Exit the interactive shell
+
+### Command-Line Options
+
+```
+usage: mo-diag [-h] [--host HOST] [--port PORT] [--user USER]
+               [--password PASSWORD] [--database DATABASE]
+               [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+               [--command COMMAND]
+
+options:
+  --host HOST           Database host (default: localhost)
+  --port PORT           Database port (default: 6001)
+  --user USER           Database user (default: root)
+  --password PASSWORD   Database password (default: 111)
+  --database DATABASE   Database name (optional)
+  -d DATABASE           Short form of --database
+  --log-level LEVEL     Logging level (default: ERROR)
+  --command COMMAND     Execute single command and exit
+  -c COMMAND            Short form of --command
+```
+
+### Use Cases
+
+#### 1. Monitor IVF Index Health in Production
+
+```bash
+# Quick check on index status
+mo-diag -d production -c "show_ivf_status -v"
+
+# Detailed index inspection with physical table stats
+mo-diag -d production -c "show_indexes my_vector_table"
+
+# Verify centroid distribution balance
+mo-diag -d production -c "show_ivf_status -t my_vector_table -v"
+```
+
+#### 2. Debug Index Count Mismatches
+
+```bash
+# Check row consistency
+mo-diag -d test -c "verify_counts my_table"
+
+# Get health report for all indexes
+mo-diag -d test -c "show_all_indexes"
+
+# Flush to sync if needed
+mo-diag -d test -c "flush_table my_table"
+```
+
+#### 3. Analyze Table Storage
+
+```bash
+# Get table statistics with all indexes
+mo-diag -d test -c "show_table_stats my_table -a"
+
+# Detailed object-level analysis
+mo-diag -d test -c "show_table_stats my_table -a -d"
+
+# Include tombstone statistics
+mo-diag -d test -c "show_table_stats my_table -a -t -d"
+```
+
+#### 4. Automated Maintenance Scripts
+
+```bash
+#!/bin/bash
+# daily_index_check.sh
+
+DATABASES=("prod_db1" "prod_db2" "prod_db3")
+
+for db in "${DATABASES[@]}"; do
+    echo "Checking $db..."
+    mo-diag -d "$db" -c "show_all_indexes" >> /var/log/mo_diag_daily.log
+    mo-diag -d "$db" -c "show_ivf_status" >> /var/log/mo_diag_daily.log
+done
+```
+
+### Tips and Best Practices
+
+1. **Regular Health Checks**: Run `show_all_indexes` daily to catch index issues early
+2. **Monitor IVF Balance**: Use `show_ivf_status -v` to ensure even centroid distribution
+3. **Before Major Operations**: Always `verify_counts` before bulk updates or migrations
+4. **Production Debugging**: Use non-interactive mode for logging and monitoring
+5. **Tab Completion**: Leverage Tab completion to avoid typos in table/database names
+6. **Command History**: Use `Ctrl+R` to quickly find and re-execute previous diagnostic commands
+7. **Flush Regularly**: If you notice index count mismatches, `flush_table` can help sync
+
+### Troubleshooting
+
+**Issue**: Tab completion not working
+- **Solution**: Ensure `prompt_toolkit>=3.0.0` is installed: `pip install prompt_toolkit`
+
+**Issue**: "Unknown database" error
+- **Solution**: Create the database first: `mo-diag -d test -c "sql CREATE DATABASE IF NOT EXISTS test"`
+
+**Issue**: Permission denied for flush operations
+- **Solution**: Connect as sys user or a user with sufficient privileges
+
+**Issue**: IVF index shows 0 centroids
+- **Solution**: The index might be empty or still building. Check with `show_table_stats <table> -a`
+
 pitr = client.pitr.create_cluster_pitr(
     'cluster_pitr',
     range_value=7,
@@ -534,6 +865,15 @@ try:
 except Exception as e:
     print(f"Cleanup: {e}")
 ```
+
+
+## Advanced Features
+
+### PITR (Point-in-Time Recovery)
+
+```python
+# Create PITR for cluster
+
 
 ## Configuration
 

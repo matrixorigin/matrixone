@@ -2613,40 +2613,50 @@ class Client(BaseMatrixOneClient):
 
         return self
 
-    def get_secondary_index_tables(self, table_name: str) -> List[str]:
+    def get_secondary_index_tables(self, table_name: str, database_name: str = None) -> List[str]:
         """
-        Get all secondary index table names for a given table in the current database.
+        Get all secondary index table names for a given table.
+
+        This includes both regular secondary indexes (MULTIPLE type) and UNIQUE indexes.
 
         Args:
             table_name: Name of the table to get secondary indexes for
+            database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
-            List of secondary index table names
+            List of secondary index table names (includes both __mo_index_secondary_... and __mo_index_unique_... tables)
 
         Examples::
 
             >>> client = Client()
             >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> # Use current database
             >>> index_tables = client.get_secondary_index_tables('cms_all_content_chunk_info')
+            >>> # Or specify database explicitly
+            >>> index_tables = client.get_secondary_index_tables('cms_all_content_chunk_info', 'test')
             >>> print(index_tables)
-            ['__mo_index_secondary_..._cms_id', '__mo_index_secondary_..._idx_all_content_length']
+            ['__mo_index_secondary_..._cms_id', '__mo_index_unique_..._email']
         """
         from .index_utils import build_get_index_tables_sql
 
-        # Get current database from connection params
-        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
 
-        sql, params = build_get_index_tables_sql(table_name, database)
+        sql, params = build_get_index_tables_sql(table_name, database_name)
         result = self.execute(sql, params)
         return [row[0] for row in result.fetchall()]
 
-    def get_secondary_index_table_by_name(self, table_name: str, index_name: str) -> Optional[str]:
+    def get_secondary_index_table_by_name(
+        self, table_name: str, index_name: str, database_name: str = None
+    ) -> Optional[str]:
         """
-        Get the physical table name of a secondary index by its index name in the current database.
+        Get the physical table name of a secondary index by its index name.
 
         Args:
             table_name: Name of the table
             index_name: Name of the secondary index
+            database_name: Name of the database (optional). If None, uses the current database.
 
         Returns:
             Physical table name of the secondary index, or None if not found
@@ -2655,19 +2665,123 @@ class Client(BaseMatrixOneClient):
 
             >>> client = Client()
             >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> # Use current database
             >>> index_table = client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id')
+            >>> # Or specify database explicitly
+            >>> index_table = client.get_secondary_index_table_by_name('cms_all_content_chunk_info', 'cms_id', 'test')
             >>> print(index_table)
             '__mo_index_secondary_018cfbda-bde1-7c3e-805c-3f8e71769f75_cms_id'
         """
         from .index_utils import build_get_index_table_by_name_sql
 
-        # Get current database from connection params
-        database = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
 
-        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database)
+        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database_name)
         result = self.execute(sql, params)
         row = result.fetchone()
         return row[0] if row else None
+
+    def get_table_indexes_detail(self, table_name: str, database_name: str = None) -> List[dict]:
+        """
+        Get detailed information about all indexes for a table, including IVF, HNSW, Fulltext, and regular indexes.
+
+        This method returns comprehensive information about each index physical table, including:
+        - Index name
+        - Index type (MULTIPLE, PRIMARY, UNIQUE, etc.)
+        - Algorithm type (ivfflat, hnsw, fulltext, etc.)
+        - Algorithm table type (metadata, centroids, entries, etc.)
+        - Physical table name
+        - Column names
+        - Algorithm parameters
+
+        Args:
+            table_name: Name of the table to get indexes for
+            database_name: Name of the database (optional). If None, uses the current database.
+
+        Returns:
+            List of dictionaries, each containing:
+                - index_name: Name of the index
+                - index_type: Type of index (MULTIPLE, PRIMARY, UNIQUE, etc.)
+                - algo: Algorithm type (ivfflat, hnsw, fulltext, or None for regular indexes)
+                - algo_table_type: Algorithm table type (metadata, centroids, entries, etc., or None)
+                - physical_table_name: Physical table name
+                - columns: List of column names
+                - algo_params: Algorithm parameters (or None)
+
+        Examples::
+
+            >>> client = Client()
+            >>> client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            >>> # Get all index details for a table
+            >>> indexes = client.get_table_indexes_detail('ivf_health_demo_docs')
+            >>> for idx in indexes:
+            ...     print(f"{idx['index_name']} ({idx['algo']}) - {idx['algo_table_type']}: {idx['physical_table_name']}")
+            idx_embedding_ivf (ivfflat) - metadata: __mo_index_secondary_...
+            idx_embedding_ivf (ivfflat) - centroids: __mo_index_secondary_...
+            idx_embedding_ivf (ivfflat) - entries: __mo_index_secondary_...
+        """
+        # Use provided database_name or get current database from connection params
+        if database_name is None:
+            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
+
+        if not database_name:
+            raise ValueError("Database name must be provided or set in connection parameters")
+
+        # Query to get all index information
+        sql = """
+            SELECT
+                mo_indexes.name AS index_name,
+                mo_indexes.type AS index_type,
+                mo_indexes.algo AS algo,
+                mo_indexes.algo_table_type AS algo_table_type,
+                mo_indexes.index_table_name AS physical_table_name,
+                GROUP_CONCAT(mo_indexes.column_name ORDER BY mo_indexes.ordinal_position SEPARATOR ', ') AS columns,
+                mo_indexes.algo_params AS algo_params,
+                CASE mo_indexes.algo_table_type
+                    WHEN 'metadata' THEN 1
+                    WHEN 'centroids' THEN 2
+                    WHEN 'entries' THEN 3
+                    ELSE 4
+                END AS sort_order
+            FROM mo_catalog.mo_indexes
+            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
+            WHERE mo_tables.relname = ?
+              AND mo_tables.reldatabase = ?
+              AND mo_indexes.type != 'PRIMARY'
+              AND mo_indexes.index_table_name IS NOT NULL
+            GROUP BY
+                mo_indexes.name,
+                mo_indexes.type,
+                mo_indexes.algo,
+                mo_indexes.algo_table_type,
+                mo_indexes.index_table_name,
+                mo_indexes.algo_params
+            ORDER BY
+                mo_indexes.name,
+                sort_order
+        """
+
+        result = self.execute(sql, (table_name, database_name))
+        rows = result.fetchall()
+
+        # Convert to list of dictionaries
+        indexes = []
+        for row in rows:
+            indexes.append(
+                {
+                    'index_name': row[0],
+                    'index_type': row[1],
+                    'algo': row[2] if row[2] else None,
+                    'algo_table_type': row[3] if row[3] else None,
+                    'physical_table_name': row[4],
+                    'columns': row[5].split(', ') if row[5] else [],
+                    'algo_params': row[6] if row[6] else None,
+                }
+            )
+
+        return indexes
 
     def verify_table_index_counts(self, table_name: str) -> int:
         """

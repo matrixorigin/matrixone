@@ -19,7 +19,7 @@ Connection hooks for MatrixOne clients
 from enum import Enum
 from typing import Callable, List, Optional, Union
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -119,12 +119,61 @@ class ConnectionHook:
             # For immediate execution, we need to get a connection from the client
             # This is a fallback for when we don't have a specific connection
             if hasattr(client, '_engine') and client._engine:
-                async with client._engine.begin() as conn:
-                    # For async connections, use get_raw_connection() method
-                    raw_conn = await conn.get_raw_connection()
-                    await self.execute_async_with_connection(client, raw_conn)
+                async with client._engine.connect() as conn:
+                    # Execute actions directly on async connection
+                    await self.execute_async_on_connection(client, conn)
             else:
                 client.logger.warning("No engine available for connection hook execution")
+
+        except Exception as e:
+            client.logger.warning(f"Connection hook execution failed: {e}")
+
+    async def execute_async_on_connection(self, client, async_connection) -> None:
+        """Execute hook actions on an AsyncConnection (SQLAlchemy async connection)"""
+        try:
+            # Execute predefined actions
+            for action in self.actions:
+                if isinstance(action, str):
+                    action = ConnectionAction(action)
+
+                # Execute SQL directly on async connection
+                if action == ConnectionAction.ENABLE_IVF:
+                    await async_connection.execute(text("SET experimental_ivf_index = 1"))
+                    client.logger.debug("✓ Enabled IVF vector operations")
+                elif action == ConnectionAction.ENABLE_HNSW:
+                    await async_connection.execute(text("SET experimental_hnsw_index = 1"))
+                    client.logger.debug("✓ Enabled HNSW vector operations")
+                elif action == ConnectionAction.ENABLE_FULLTEXT:
+                    await async_connection.execute(text("SET experimental_fulltext_index = 1"))
+                    client.logger.debug("✓ Enabled fulltext search operations")
+                elif action == ConnectionAction.ENABLE_VECTOR:
+                    await async_connection.execute(text("SET experimental_ivf_index = 1"))
+                    await async_connection.execute(text("SET experimental_hnsw_index = 1"))
+                    client.logger.debug("✓ Enabled vector operations")
+                elif action == ConnectionAction.ENABLE_ALL:
+                    await async_connection.execute(text("SET experimental_ivf_index = 1"))
+                    await async_connection.execute(text("SET experimental_hnsw_index = 1"))
+                    await async_connection.execute(text("SET experimental_fulltext_index = 1"))
+                    client.logger.debug("✓ Enabled all operations")
+                else:
+                    client.logger.warning(f"Unknown connection action: {action}")
+
+            # Execute custom hook if provided
+            if self.custom_hook:
+                if hasattr(self.custom_hook, '__call__'):
+                    # Check if it's an async function
+                    if hasattr(self.custom_hook, '__code__') and self.custom_hook.__code__.co_flags & 0x80:
+                        await self.custom_hook(client)
+                    else:
+                        # Try to call it as sync
+                        try:
+                            result = self.custom_hook(client)
+                            # If it returns a coroutine, await it
+                            if hasattr(result, '__await__'):
+                                await result
+                        except TypeError as e:
+                            if "object NoneType can't be used in 'await' expression" in str(e):
+                                client.logger.warning("Custom hook appears to be async but was called synchronously")
 
         except Exception as e:
             client.logger.warning(f"Connection hook execution failed: {e}")
