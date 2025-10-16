@@ -16,11 +16,10 @@ package vector
 
 import (
 	"fmt"
+	"math/rand"
 	"slices"
 	"strings"
 	"testing"
-
-	"golang.org/x/exp/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,7 +43,7 @@ func TestLength(t *testing.T) {
 		//Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 3, 0))
-		err := AppendArrayList[float32](vec, [][]float32{{1, 2, 3}, {4, 5, 6}}, nil, mp)
+		err := AppendArrayList(vec, [][]float32{{1, 2, 3}, {4, 5, 6}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, 2, vec.Length())
 		vec.Free(mp)
@@ -54,7 +53,7 @@ func TestLength(t *testing.T) {
 		//Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 3, 0))
-		err := AppendArrayList[float64](vec, [][]float64{{1, 2, 3}, {4, 5, 6}}, nil, mp)
+		err := AppendArrayList(vec, [][]float64{{1, 2, 3}, {4, 5, 6}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, 2, vec.Length())
 		vec.Free(mp)
@@ -325,13 +324,13 @@ func TestAppend(t *testing.T) {
 		// Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 4, 0))
-		err := AppendArray[float32](vec, []float32{1, 2, 3, 0}, false, mp)
+		err := AppendArray(vec, []float32{1, 2, 3, 0}, false, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, vec.Length())
-		err = AppendArray[float32](vec, []float32{2, 4, 5, 6}, true, mp)
+		err = AppendArray(vec, []float32{2, 4, 5, 6}, true, mp)
 		require.NoError(t, err)
 		require.Equal(t, 2, vec.Length())
-		err = AppendArrayList[float32](vec, [][]float32{{4, 4, 4, 6}, {2, 5, 5, 3}}, nil, mp)
+		err = AppendArrayList(vec, [][]float32{{4, 4, 4, 6}, {2, 5, 5, 3}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, 4, vec.Length())
 		vec.Free(mp)
@@ -341,13 +340,13 @@ func TestAppend(t *testing.T) {
 		// Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 4, 0))
-		err := AppendArray[float64](vec, []float64{1, 2, 3, 0}, false, mp)
+		err := AppendArray(vec, []float64{1, 2, 3, 0}, false, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, vec.Length())
-		err = AppendArray[float64](vec, []float64{2, 4, 5, 6}, true, mp)
+		err = AppendArray(vec, []float64{2, 4, 5, 6}, true, mp)
 		require.NoError(t, err)
 		require.Equal(t, 2, vec.Length())
-		err = AppendArrayList[float64](vec, [][]float64{{4, 4, 4, 6}, {2, 5, 5, 3}}, nil, mp)
+		err = AppendArrayList(vec, [][]float64{{4, 4, 4, 6}, {2, 5, 5, 3}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, 4, vec.Length())
 		vec.Free(mp)
@@ -377,11 +376,11 @@ func TestAppendArray(t *testing.T) {
 		// Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.T_array_float32.ToType())
-		err := AppendArray[float32](vec, []float32{1, 1, 1}, false, mp)
+		err := AppendArray(vec, []float32{1, 1, 1}, false, mp)
 		require.NoError(t, err)
 		err = AppendArray[float32](vec, nil, true, mp)
 		require.NoError(t, err)
-		err = AppendArrayList[float32](vec, [][]float32{{2, 2, 2}, {3, 3, 3}}, nil, mp)
+		err = AppendArrayList(vec, [][]float32{{2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		vs, data := MustVarlenaRawData(vec)
 		for _, v := range vs {
@@ -394,11 +393,11 @@ func TestAppendArray(t *testing.T) {
 		// Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.T_array_float64.ToType())
-		err := AppendArray[float64](vec, []float64{1, 1, 1}, false, mp)
+		err := AppendArray(vec, []float64{1, 1, 1}, false, mp)
 		require.NoError(t, err)
 		err = AppendArray[float64](vec, nil, true, mp)
 		require.NoError(t, err)
-		err = AppendArrayList[float64](vec, [][]float64{{2, 2, 2}, {3, 3, 3}}, nil, mp)
+		err = AppendArrayList(vec, [][]float64{{2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		vs, data := MustVarlenaRawData(vec)
 		for _, v := range vs {
@@ -428,7 +427,7 @@ func TestShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // Array Float32
 		v := NewVec(types.T_array_float32.ToType())
-		err := AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2}, false)
 		require.Equal(t, [][]float32{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float32](v))
@@ -437,7 +436,7 @@ func TestShrink(t *testing.T) {
 	}
 	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
-		err := AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2}, false)
 		require.Equal(t, [][]float64{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float64](v))
@@ -687,7 +686,7 @@ func TestShrinkByMask(t *testing.T) {
 
 	//{ // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())
-	//	err := AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+	//	err := AppendArrayList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 	//	require.NoError(t, err)
 	//	v.ShrinkByMask(&bmask, false, 1)
 	//	require.Equal(t, [][]float32{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float32](v))
@@ -695,7 +694,7 @@ func TestShrinkByMask(t *testing.T) {
 	//	require.Equal(t, int64(0), mp.CurrNB())
 	//
 	//	v = NewVec(types.T_array_float32.ToType())
-	//	err = AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+	//	err = AppendArrayList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 	//	require.NoError(t, err)
 	//	v.ShrinkByMask(&bmask, true, 1)
 	//	require.Equal(t, [][]float32{{1, 1, 1}}, MustArrayCol[float32](v))
@@ -704,7 +703,7 @@ func TestShrinkByMask(t *testing.T) {
 	//}
 	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
-		err := AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.ShrinkByMask(&bmask, false, 1)
 		require.Equal(t, [][]float64{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float64](v))
@@ -712,7 +711,7 @@ func TestShrinkByMask(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 
 		v = NewVec(types.T_array_float64.ToType())
-		err = AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
+		err = AppendArrayList(v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.ShrinkByMask(&bmask, true, 1)
 		require.Equal(t, [][]float64{{1, 1, 1}}, MustArrayCol[float64](v))
@@ -1165,7 +1164,7 @@ func TestShuffle(t *testing.T) {
 
 	{ // Array Float32
 		v := NewVec(types.T_array_float32.ToType())
-		err := AppendArrayList[float32](v, [][]float32{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float32{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, [][]float32{{2, 2}, {3, 3}}, MustArrayCol[float32](v))
@@ -1175,7 +1174,7 @@ func TestShuffle(t *testing.T) {
 	}
 	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
-		err := AppendArrayList[float64](v, [][]float64{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
+		err := AppendArrayList(v, [][]float64{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, [][]float64{{2, 2}, {3, 3}}, MustArrayCol[float64](v))
@@ -1470,9 +1469,9 @@ func TestCopy(t *testing.T) {
 	}
 	{ // Array Float32
 		v := NewVec(types.New(types.T_array_float32, 10, 0))
-		AppendArrayList[float32](v, [][]float32{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
+		AppendArrayList(v, [][]float32{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
 		w := NewVec(types.New(types.T_array_float32, 10, 0))
-		AppendArrayList[float32](w, [][]float32{{0, 0}, {0, 0}, {0, 0}, {0, 0}}, nil, mp)
+		AppendArrayList(w, [][]float32{{0, 0}, {0, 0}, {0, 0}, {0, 0}}, nil, mp)
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, MustArrayCol[float32](v), MustArrayCol[float32](w))
@@ -1482,9 +1481,9 @@ func TestCopy(t *testing.T) {
 	}
 	{ // Array Float64
 		v := NewVec(types.New(types.T_array_float64, 10, 0))
-		AppendArrayList[float64](v, [][]float64{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
+		AppendArrayList(v, [][]float64{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
 		w := NewVec(types.New(types.T_array_float64, 10, 0))
-		AppendArrayList[float64](w, [][]float64{{0, 0}, {0, 0}, {0, 0}, {0, 0}}, nil, mp)
+		AppendArrayList(w, [][]float64{{0, 0}, {0, 0}, {0, 0}, {0, 0}}, nil, mp)
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, MustArrayCol[float32](v), MustArrayCol[float32](w))
@@ -1573,9 +1572,9 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	{ //Array Float32
 		mp := mpool.MustNewZero()
 		vec5 := NewVec(types.New(types.T_array_float32, 2, 0))
-		AppendArray[float32](vec5, []float32{1, 1}, false, mp)
-		AppendArray[float32](vec5, []float32{2, 2}, true, mp)
-		AppendArray[float32](vec5, []float32{3, 3}, false, mp)
+		AppendArray(vec5, []float32{1, 1}, false, mp)
+		AppendArray(vec5, []float32{2, 2}, true, mp)
+		AppendArray(vec5, []float32{3, 3}, false, mp)
 		require.False(t, vec5.NeedDup())
 
 		vec6, err := vec5.CloneWindow(0, vec5.Length(), nil)
@@ -2146,7 +2145,7 @@ func TestSetFunction2(t *testing.T) {
 
 		w := NewConstNull(types.T_array_float32.ToType(), 0, mp)
 		v := NewVec(types.T_array_float32.ToType())
-		err := AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}, {4, 4, 4}}, []bool{false, false, true, true}, mp)
+		err := AppendArrayList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}, {4, 4, 4}}, []bool{false, false, true, true}, mp)
 		require.NoError(t, err)
 
 		sf := GetConstSetFunction(types.T_array_float32.ToType(), mp)
@@ -2265,138 +2264,138 @@ func TestMisc(t *testing.T) {
 		switch fType.Oid {
 		case types.T_int8:
 			vals := make([]int8, 2)
-			err = AppendFixedList[int8](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]int8, 3)
-			err = AppendFixedList[int8](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_int16:
 			vals := make([]int16, 2)
-			err = AppendFixedList[int16](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]int16, 3)
-			err = AppendFixedList[int16](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_int32:
 			vals := make([]int32, 2)
-			err = AppendFixedList[int32](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]int32, 3)
-			err = AppendFixedList[int32](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_int64:
 			vals := make([]int64, 2)
-			err = AppendFixedList[int64](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]int64, 3)
-			err = AppendFixedList[int64](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_uint8:
 			vals := make([]uint8, 2)
-			err = AppendFixedList[uint8](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]uint8, 3)
-			err = AppendFixedList[uint8](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_uint16:
 			vals := make([]uint16, 2)
-			err = AppendFixedList[uint16](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]uint16, 3)
-			err = AppendFixedList[uint16](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_uint32:
 			vals := make([]uint32, 2)
-			err = AppendFixedList[uint32](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]uint32, 3)
-			err = AppendFixedList[uint32](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_uint64:
 			vals := make([]uint64, 2)
-			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]uint64, 3)
-			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_float32:
 			vals := make([]float32, 2)
-			err = AppendFixedList[float32](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]float32, 3)
-			err = AppendFixedList[float32](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_float64:
 			vals := make([]float64, 2)
-			err = AppendFixedList[float64](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]float64, 3)
-			err = AppendFixedList[float64](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_bool:
 			vals := make([]bool, 2)
-			err = AppendFixedList[bool](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]bool, 3)
-			err = AppendFixedList[bool](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_bit:
 			vals := make([]uint64, 2)
-			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]uint64, 3)
-			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_Rowid:
 			vals := make([]types.Rowid, 2)
-			err = AppendFixedList[types.Rowid](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]types.Rowid, 3)
-			err = AppendFixedList[types.Rowid](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_TS:
 			vals := make([]types.TS, 2)
-			err = AppendFixedList[types.TS](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]types.TS, 3)
-			err = AppendFixedList[types.TS](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_uuid:
 			vals := make([]types.Uuid, 2)
-			err = AppendFixedList[types.Uuid](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]types.Uuid, 3)
-			err = AppendFixedList[types.Uuid](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_datetime:
 			vals := make([]types.Datetime, 2)
-			err = AppendFixedList[types.Datetime](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]types.Datetime, 3)
-			err = AppendFixedList[types.Datetime](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		case types.T_timestamp:
 			vals := make([]types.Timestamp, 2)
-			err = AppendFixedList[types.Timestamp](v1, vals, []bool{true, true}, mp)
+			err = AppendFixedList(v1, vals, []bool{true, true}, mp)
 			require.NoError(t, err)
 			vals = make([]types.Timestamp, 3)
-			err = AppendFixedList[types.Timestamp](v2, vals, []bool{true, true, true}, mp)
+			err = AppendFixedList(v2, vals, []bool{true, true, true}, mp)
 			require.NoError(t, err)
 			v2.SetGrouping(&gsp)
 		}
@@ -2675,7 +2674,7 @@ func BenchmarkToFixedCol(b *testing.B) {
 	b.ResetTimer()
 	var slice []int8
 	for i := 0; i < b.N; i++ {
-		ToFixedCol[int8](vec, &slice)
+		ToFixedCol(vec, &slice)
 	}
 }
 

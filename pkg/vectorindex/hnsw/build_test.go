@@ -16,6 +16,7 @@ package hnsw
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
-	"golang.org/x/exp/rand"
 )
 
 const MaxIndexCapacity = 100000
