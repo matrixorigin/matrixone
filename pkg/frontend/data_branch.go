@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -264,49 +265,74 @@ func handleSnapshotMerge(
 	} else if lcaTableID == srcRel.GetTableID(execCtx.reqCtx) {
 		//lcaTblDef = srcRel.GetTableDef(execCtx.reqCtx)
 		var (
-			extra diffExtra
+			extra1 diffExtra
+			extra2 diffExtra
 		)
-		extra.inputArgs.bh = bh
-		extra.inputArgs.tarRel = srcRel
-		extra.inputArgs.baseRel = dstRel
-		extra.inputArgs.tarSnapshot = srcSnapshot
-		extra.inputArgs.baseSnapshot = dstSnapshot
+		extra1.inputArgs.bh = bh
+		extra1.inputArgs.tarRel = srcRel
+		extra1.inputArgs.baseRel = srcRel
+		extra1.inputArgs.tarSnapshot = srcSnapshot
+		extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
 
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra); err != nil {
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra1); err != nil {
 			return
 		}
 
-		extra.outputArgs.rows = sortDiffResultRows(extra)
+		extra2.inputArgs.bh = bh
+		extra2.inputArgs.tarRel = dstRel
+		extra2.inputArgs.baseRel = srcRel
+		extra2.inputArgs.tarSnapshot = dstSnapshot
+		extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra2); err != nil {
+			return
+		}
+
+		extra1.outputArgs.rows = sortDiffResultRows(extra1)
+		extra2.outputArgs.rows = sortDiffResultRows(extra2)
 		return mergeDiff(
 			execCtx, bh, ses, dstRel,
-			extra.outputArgs.rows, nil,
+			extra1.outputArgs.rows, extra2.outputArgs.rows,
 			lcaLeft, conflictOpt,
-			extra.outputArgs.pkTypes,
-			extra.outputArgs.pkColIdxes,
+			extra1.outputArgs.pkTypes,
+			extra1.outputArgs.pkColIdxes,
 		)
 
 	} else if lcaTableID == dstRel.GetTableID(execCtx.reqCtx) {
 		//lcaTblDef = dstRel.GetTableDef(execCtx.reqCtx)
 		var (
-			extra diffExtra
+			extra1 diffExtra
+			extra2 diffExtra
 		)
-		extra.inputArgs.bh = bh
-		extra.inputArgs.tarRel = srcRel
-		extra.inputArgs.baseRel = dstRel
-		extra.inputArgs.tarSnapshot = srcSnapshot
-		extra.inputArgs.baseSnapshot = dstSnapshot
+		extra1.inputArgs.bh = bh
+		extra1.inputArgs.tarRel = srcRel
+		extra1.inputArgs.baseRel = dstRel
+		extra1.inputArgs.tarSnapshot = srcSnapshot
+		extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
 
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra); err != nil {
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra1); err != nil {
 			return
 		}
 
-		extra.outputArgs.rows = sortDiffResultRows(extra)
+		extra2.inputArgs.bh = bh
+		extra2.inputArgs.tarRel = dstRel
+		extra2.inputArgs.baseRel = dstRel
+		extra2.inputArgs.tarSnapshot = dstSnapshot
+		extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
+
+		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra2); err != nil {
+			return
+		}
+
+		extra1.outputArgs.rows = sortDiffResultRows(extra1)
+		extra2.outputArgs.rows = sortDiffResultRows(extra2)
+
 		return mergeDiff(
 			execCtx, bh, ses, dstRel,
-			extra.outputArgs.rows, nil,
+			extra1.outputArgs.rows, extra2.outputArgs.rows,
 			lcaRight, conflictOpt,
-			extra.outputArgs.pkTypes,
-			extra.outputArgs.pkColIdxes,
+			extra1.outputArgs.pkTypes,
+			extra1.outputArgs.pkColIdxes,
 		)
 	} else {
 		if _, lcaTblDef, err = ses.GetTxnCompileCtx().ResolveById(lcaTableID, &plan2.Snapshot{}); err != nil {
@@ -354,7 +380,7 @@ func handleSnapshotMerge(
 		return mergeDiff(
 			execCtx, bh, ses, dstRel,
 			extra1.outputArgs.rows, extra2.outputArgs.rows,
-			lcaEmpty, conflictOpt,
+			lcaOther, conflictOpt,
 			extra1.outputArgs.pkTypes,
 			extra1.outputArgs.pkColIdxes,
 		)
@@ -454,7 +480,7 @@ func mergeDiff(
 				continue
 			}
 
-			cmp := compareRowsByPK(rows1[i], rows2[j], pkColIdxes, pkTypes)
+			cmp := compareRows(rows1[i], rows2[j], pkColIdxes, pkTypes, true)
 			if cmp == 0 { // conflict
 				switch conflictOpt {
 				case tree.CONFLICT_FAIL:
@@ -501,11 +527,12 @@ func mergeDiff(
 	return nil
 }
 
-func compareRowsByPK(
+func compareRows(
 	row1 []any,
 	row2 []any,
 	pkColIdxes []int,
 	pkTypes []types.Type,
+	onlyByPK bool,
 ) int {
 
 	for _, idx := range pkColIdxes {
@@ -517,9 +544,14 @@ func compareRowsByPK(
 			return cmp
 		}
 	}
+
+	if onlyByPK {
+		return 0
+	}
+
 	// "+" < "-"
 	// duplicate pks, the "-" will be the first
-	return strings.Compare(row1[1].(string), row2[1].(string))
+	return strings.Compare(row2[1].(string), row1[1].(string))
 }
 
 func sortDiffResultRows(
@@ -530,12 +562,12 @@ func sortDiffResultRows(
 		rows = extra.outputArgs.rows
 	)
 
-	twoRowsCompare := func(a, b []any) int {
-		return compareRowsByPK(a, b, extra.outputArgs.pkColIdxes, extra.outputArgs.pkTypes)
+	twoRowsCompare := func(a, b []any, onlyByPK bool) int {
+		return compareRows(a, b, extra.outputArgs.pkColIdxes, extra.outputArgs.pkTypes, onlyByPK)
 	}
 
 	slices.SortFunc(rows, func(a, b []any) int {
-		return twoRowsCompare(a, b)
+		return twoRowsCompare(a, b, false)
 	})
 
 	appendNewRow := func(row []any) {
@@ -561,7 +593,7 @@ func sortDiffResultRows(
 		}
 
 		// check if the row[i], r[i+1] has the same pk
-		if twoRowsCompare(rows[i], rows[i+1]) == 0 {
+		if twoRowsCompare(rows[i], rows[i+1], true) == 0 {
 			mergeTwoRows(rows[i], rows[i+1])
 			i += 2
 		} else {
@@ -1665,6 +1697,13 @@ func getTableCreationCommitTS(
 		ctx, txnOp, catalog.MO_TABLES_ID,
 	); err != nil {
 		return
+	}
+
+	zeroTS := types.MinTs()
+	if branchTS.EQ(&zeroTS) {
+		layout := "2006-01-02 15:04:05"
+		golangZero, _ := time.Parse(layout, layout)
+		branchTS = types.BuildTS(golangZero.UnixNano(), 0)
 	}
 
 	if moTableHandle, err = moTableRel.CollectChanges(
