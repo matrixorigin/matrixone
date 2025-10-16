@@ -462,8 +462,8 @@ class MatrixOneCLI(cmd.Cmd):
                 # For vector/fulltext indexes, show table statistics using metadata.scan interface
                 if algo in ['ivfflat', 'hnsw', 'fulltext']:
                     try:
-                        # Use SDK's metadata.scan interface with columns="*" to get structured results
-                        stats = self.client.metadata.scan(database, physical_table, columns="*")
+                        # Use SDK's metadata.scan interface with columns="*" to get structured results (non-tombstone only)
+                        stats = self.client.metadata.scan(database, physical_table, is_tombstone=False, columns="*")
 
                         if stats:
                             # Aggregate statistics from all objects
@@ -483,7 +483,7 @@ class MatrixOneCLI(cmd.Cmd):
                                     object_count += 1
 
                                     # Sum up statistics using attributes
-                                    row_cnt = getattr(obj, 'row_cnt', None) or getattr(obj, 'rows_cnt', 0) or 0
+                                    row_cnt = getattr(obj, 'rows_cnt', 0) or 0
                                     total_rows += int(row_cnt) if row_cnt else 0
 
                                     compress_size = getattr(obj, 'compress_size', 0) or 0
@@ -614,9 +614,19 @@ class MatrixOneCLI(cmd.Cmd):
                         except Exception:
                             consistency_status = "Unknown"
 
-                    # Check IVF/HNSW/Fulltext status
-                    special_index_status = None
+                    # Check IVF/HNSW/Fulltext status - group by index name to avoid duplicates
+                    special_index_statuses = []
+                    vector_index_issues = []
+
+                    # Group indexes by name to avoid processing same index multiple times (e.g., IVF has multiple physical tables)
+                    seen_indexes = {}
                     for idx in indexes:
+                        idx_name = idx['index_name']
+                        if idx_name not in seen_indexes:
+                            seen_indexes[idx_name] = idx
+
+                    # Process each unique index
+                    for idx in seen_indexes.values():
                         if idx['algo'] == 'ivfflat':
                             try:
                                 stats = self.client.vector_ops.get_ivf_stats(table_name, idx['columns'][0])
@@ -627,15 +637,17 @@ class MatrixOneCLI(cmd.Cmd):
                                     total_vectors = sum(centroid_counts) if centroid_counts else 0
 
                                     if centroid_count > 0 and total_vectors > 0:
-                                        special_index_status = f"IVF: {centroid_count} centroids, {total_vectors} vectors"
+                                        special_index_statuses.append(
+                                            f"IVF: {centroid_count} centroids, {total_vectors} vectors"
+                                        )
                                     elif centroid_count > 0:
-                                        special_index_status = f"IVF: {centroid_count} centroids"
+                                        special_index_statuses.append(f"IVF: {centroid_count} centroids")
                                     else:
-                                        special_index_status = "IVF: building"
+                                        special_index_statuses.append("IVF: building")
                                         has_issue = True
-                                        issue_detail = "IVF index not built yet"
+                                        vector_index_issues.append("IVF index not built yet")
                                 else:
-                                    special_index_status = "IVF: no stats available"
+                                    special_index_statuses.append("IVF: no stats available")
                             except Exception as e:
                                 error_msg = str(e)
                                 # Truncate long error messages for display
@@ -643,14 +655,18 @@ class MatrixOneCLI(cmd.Cmd):
                                     error_short = error_msg[:27] + "..."
                                 else:
                                     error_short = error_msg
-                                special_index_status = f"IVF: error ({error_short})"
+                                special_index_statuses.append(f"IVF: error ({error_short})")
                                 has_issue = True
-                                if not issue_detail:
-                                    issue_detail = f"Failed to get IVF stats: {error_msg}"
+                                vector_index_issues.append(f"Failed to get IVF stats: {error_msg}")
                         elif idx['algo'] == 'hnsw':
-                            special_index_status = "HNSW index"
+                            special_index_statuses.append("HNSW index")
                         elif idx['algo'] == 'fulltext':
-                            special_index_status = "Fulltext index"
+                            special_index_statuses.append("Fulltext index")
+
+                    # Combine status messages
+                    special_index_status = ", ".join(special_index_statuses) if special_index_statuses else None
+                    if not issue_detail and vector_index_issues:
+                        issue_detail = "; ".join(vector_index_issues)
 
                     # Categorize table
                     table_info = {
@@ -1075,14 +1091,14 @@ class MatrixOneCLI(cmd.Cmd):
             # If -a flag is set, get all secondary indexes for the table
             if include_all:
                 include_tombstone = True
-                # Get all secondary indexes for the table (exclude PRIMARY and UNIQUE)
+                # Get all secondary indexes for the table (include UNIQUE, exclude PRIMARY)
                 try:
                     index_list = self.client.get_secondary_index_tables(table_name, database)
                     if index_list:
                         # Extract index names from physical table names
                         # Physical table names are like: __mo_index_secondary_xxxxx
                         # We need to get the actual index names from mo_indexes
-                        # Filter out PRIMARY, UNIQUE and other system indexes
+                        # Filter out PRIMARY KEY and system indexes, but include UNIQUE, MULTIPLE, vector, fulltext indexes
                         sql = """
                             SELECT DISTINCT mo_indexes.name
                             FROM mo_catalog.mo_indexes
@@ -1091,7 +1107,6 @@ class MatrixOneCLI(cmd.Cmd):
                               AND mo_tables.reldatabase = ?
                               AND mo_indexes.name NOT IN ('PRIMARY', '__mo_rowid_idx')
                               AND mo_indexes.type != 'PRIMARY KEY'
-                              AND mo_indexes.type != 'UNIQUE'
                         """
                         result = self.client.execute(sql, (table_name, database))
                         include_indexes = [row[0] for row in result.fetchall()]
@@ -1135,39 +1150,90 @@ class MatrixOneCLI(cmd.Cmd):
                                 unique_objects.append(obj)
                         return unique_objects
 
-                    # 1. Show main table with aggregated stats
+                    # Get table_id for main table
                     try:
-                        main_table_objects = self.client.metadata.scan(database, table_name, columns="*")
+                        table_id_result = self.client.execute(
+                            "SELECT rel_id FROM mo_catalog.mo_tables WHERE relname = ? AND reldatabase = ?",
+                            (table_name, database),
+                        )
+                        table_id_row = table_id_result.fetchone()
+                        table_id = table_id_row[0] if table_id_row else "N/A"
+                    except Exception:
+                        table_id = "N/A"
+
+                    # 1. Show main table
+                    print(f"\n{bold('Table:')} {Colors.CYAN}{table_name}:{table_id}{Colors.RESET}")
+
+                    # 1a. Show Data (non-tombstone objects)
+                    try:
+                        main_table_objects = self.client.metadata.scan(database, table_name, is_tombstone=False, columns="*")
                         if main_table_objects:
                             unique_objs = deduplicate_objects(list(main_table_objects))
-                            total_rows = sum(getattr(obj, 'row_cnt', 0) or 0 for obj in unique_objs)
+                            total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_objs)
                             total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
                             total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
                             total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs)
 
-                            print(f"\n{bold('Table:')} {Colors.CYAN}{table_name}{Colors.RESET}")
+                            print(f"  └─ {bold('Data')}")
                             print(
-                                f"  Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                f"     Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
                             )
 
                             # Show object details
                             if unique_objs:
-                                print(f"\n  {bold('Objects:')}")
+                                print(f"\n     {bold('Objects:')}")
                                 print(
-                                    f"  {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                    f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
                                 )
-                                print("  " + "-" * 148)
+                                print("     " + "-" * 148)
                                 for obj in unique_objs:
                                     obj_name = getattr(obj, 'object_name', 'N/A')
-                                    rows = getattr(obj, 'row_cnt', 0) or 0
+                                    rows = getattr(obj, 'rows_cnt', 0) or 0
                                     nulls = getattr(obj, 'null_cnt', 0) or 0
                                     orig_size = getattr(obj, 'origin_size', 0) or 0
                                     comp_size = getattr(obj, 'compress_size', 0) or 0
                                     print(
-                                        f"  {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                        f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
                                     )
                     except Exception:
                         pass
+
+                    # 1b. Show Tombstone if requested
+                    if include_tombstone:
+                        try:
+                            tombstone_objects = self.client.metadata.scan(
+                                database, table_name, is_tombstone=True, columns="*"
+                            )
+                            if tombstone_objects:
+                                unique_tomb_objs = deduplicate_objects(list(tombstone_objects))
+                                if unique_tomb_objs:
+                                    total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_tomb_objs)
+                                    total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_tomb_objs)
+                                    total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_tomb_objs)
+                                    total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs)
+
+                                    print(f"\n  └─ {bold('Tombstone')}")
+                                    print(
+                                        f"     Objects: {len(unique_tomb_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                    )
+
+                                    # Show tombstone object details
+                                    print(f"\n     {bold('Objects:')}")
+                                    print(
+                                        f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                    )
+                                    print("     " + "-" * 148)
+                                    for obj in unique_tomb_objs:
+                                        obj_name = getattr(obj, 'object_name', 'N/A')
+                                        rows = getattr(obj, 'rows_cnt', 0) or 0
+                                        nulls = getattr(obj, 'null_cnt', 0) or 0
+                                        orig_size = getattr(obj, 'origin_size', 0) or 0
+                                        comp_size = getattr(obj, 'compress_size', 0) or 0
+                                        print(
+                                            f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                        )
+                        except Exception:
+                            pass
 
                     # 2. Get all indexes and their physical tables
                     try:
@@ -1186,57 +1252,127 @@ class MatrixOneCLI(cmd.Cmd):
                             for idx_name, idx_tables in indexes_by_name.items():
                                 print(f"\n{bold('Index:')} {Colors.CYAN}{idx_name}{Colors.RESET}")
 
+                                # Check if this is a multi-table index (IVF/HNSW with multiple physical tables)
+                                has_multiple_tables = len(idx_tables) > 1
+
                                 # Show each physical table for this index
                                 for idx_table in idx_tables:
                                     physical_table = idx_table['physical_table_name']
                                     table_type = idx_table['algo_table_type'] if idx_table['algo_table_type'] else 'index'
 
-                                    # Get objects for this physical table
+                                    # Get physical table's table_id
                                     try:
-                                        phys_objects = self.client.metadata.scan(database, physical_table, columns="*")
+                                        phys_table_id_result = self.client.execute(
+                                            "SELECT rel_id FROM mo_catalog.mo_tables WHERE relname = ? AND reldatabase = ?",
+                                            (physical_table, database),
+                                        )
+                                        phys_table_id_row = phys_table_id_result.fetchone()
+                                        phys_table_id = phys_table_id_row[0] if phys_table_id_row else "N/A"
+                                    except Exception:
+                                        phys_table_id = "N/A"
+
+                                    # Color code by table type
+                                    if table_type == 'metadata':
+                                        type_display = f"{Colors.YELLOW}{table_type}{Colors.RESET}"
+                                    elif table_type == 'centroids':
+                                        type_display = f"{Colors.GREEN}{table_type}{Colors.RESET}"
+                                    elif table_type == 'entries':
+                                        type_display = f"{Colors.CYAN}{table_type}{Colors.RESET}"
+                                    else:
+                                        type_display = table_type
+
+                                    # Always show the physical table name with table_id
+                                    if has_multiple_tables:
+                                        # For multi-table indexes, show type in parentheses
+                                        print(f"  └─ ({type_display}): {physical_table}:{phys_table_id}")
+                                    else:
+                                        # For single-table indexes, just show the physical table
+                                        print(f"  └─ {physical_table}:{phys_table_id}")
+
+                                    data_indent = "     "
+                                    obj_indent = "        "
+
+                                    # Get Data (non-tombstone objects)
+                                    try:
+                                        phys_objects = self.client.metadata.scan(
+                                            database, physical_table, is_tombstone=False, columns="*"
+                                        )
                                         if phys_objects:
                                             unique_objs = deduplicate_objects(list(phys_objects))
-                                            total_rows = sum(getattr(obj, 'row_cnt', 0) or 0 for obj in unique_objs)
+                                            total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_objs)
                                             total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
                                             total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
                                             total_compress = sum(
                                                 getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs
                                             )
 
-                                            # Color code by table type
-                                            if table_type == 'metadata':
-                                                type_display = f"{Colors.YELLOW}{table_type}{Colors.RESET}"
-                                            elif table_type == 'centroids':
-                                                type_display = f"{Colors.GREEN}{table_type}{Colors.RESET}"
-                                            elif table_type == 'entries':
-                                                type_display = f"{Colors.CYAN}{table_type}{Colors.RESET}"
-                                            else:
-                                                type_display = table_type
-
-                                            print(f"  └─ Physical Table ({type_display}): {physical_table}")
+                                            print(f"{data_indent}└─ {bold('Data')}")
                                             print(
-                                                f"     Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                                f"{obj_indent}Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
                                             )
 
                                             # Show object details
                                             if unique_objs:
-                                                print(f"\n     {bold('Objects:')}")
+                                                print(f"\n{obj_indent}{bold('Objects:')}")
                                                 print(
-                                                    f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                                    f"{obj_indent}{'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
                                                 )
-                                                print("     " + "-" * 148)
+                                                print(obj_indent + "-" * 148)
                                                 for obj in unique_objs:
                                                     obj_name = getattr(obj, 'object_name', 'N/A')
-                                                    rows = getattr(obj, 'row_cnt', 0) or 0
+                                                    rows = getattr(obj, 'rows_cnt', 0) or 0
                                                     nulls = getattr(obj, 'null_cnt', 0) or 0
                                                     orig_size = getattr(obj, 'origin_size', 0) or 0
                                                     comp_size = getattr(obj, 'compress_size', 0) or 0
                                                     print(
-                                                        f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                                        f"{obj_indent}{obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
                                                     )
                                     except Exception:
-                                        # If can't get stats for this physical table, skip
                                         pass
+
+                                    # Show tombstone objects for this index physical table if requested
+                                    if include_tombstone:
+                                        try:
+                                            tomb_objects = self.client.metadata.scan(
+                                                database, physical_table, is_tombstone=True, columns="*"
+                                            )
+                                            if tomb_objects:
+                                                unique_tomb_objs = deduplicate_objects(list(tomb_objects))
+                                                if unique_tomb_objs:
+                                                    total_rows = sum(
+                                                        getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_tomb_objs
+                                                    )
+                                                    total_null = sum(
+                                                        getattr(obj, 'null_cnt', 0) or 0 for obj in unique_tomb_objs
+                                                    )
+                                                    total_origin = sum(
+                                                        getattr(obj, 'origin_size', 0) or 0 for obj in unique_tomb_objs
+                                                    )
+                                                    total_compress = sum(
+                                                        getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs
+                                                    )
+
+                                                    print(f"\n{data_indent}└─ {bold('Tombstone')}")
+                                                    print(
+                                                        f"{obj_indent}Objects: {len(unique_tomb_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                                    )
+
+                                                    print(f"\n{obj_indent}{bold('Objects:')}")
+                                                    print(
+                                                        f"{obj_indent}{'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                                    )
+                                                    print(obj_indent + "-" * 148)
+                                                    for obj in unique_tomb_objs:
+                                                        obj_name = getattr(obj, 'object_name', 'N/A')
+                                                        rows = getattr(obj, 'rows_cnt', 0) or 0
+                                                        nulls = getattr(obj, 'null_cnt', 0) or 0
+                                                        orig_size = getattr(obj, 'origin_size', 0) or 0
+                                                        comp_size = getattr(obj, 'compress_size', 0) or 0
+                                                        print(
+                                                            f"{obj_indent}{obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                                        )
+                                        except Exception:
+                                            pass
                     except Exception:
                         pass
 
@@ -1391,13 +1527,103 @@ class MatrixOneCLI(cmd.Cmd):
                         f"{'  └─ tombstone':<30} | {tomb_stats['total_objects']:<10} | {tomb_stats['row_cnt']:<15,} | {tomb_stats['null_cnt']:<12,} | {tomb_stats['original_size']:<15} | {tomb_stats['compress_size']:<15}"  # type: ignore[call-overload]
                     )
 
-                # Show index stats
-                for key, value in stats.items():
-                    if key not in [table_name, 'tombstone']:
-                        index_name = key.replace(f'{table_name}_', '')  # Clean up index name if prefixed
-                        print(
-                            f"{'  └─ index: ' + index_name:<30} | {value['total_objects']:<10} | {value['row_cnt']:<15,} | {value['null_cnt']:<12,} | {value['original_size']:<15} | {value['compress_size']:<15}"  # type: ignore[call-overload]
-                        )
+                # Show index stats - use get_table_indexes_detail to get all physical tables
+                if include_indexes:
+                    try:
+                        index_details = self.client.get_table_indexes_detail(table_name, database)
+
+                        # Group by index name
+                        indexes_by_name = {}
+                        for idx in index_details:
+                            idx_name = idx['index_name']
+                            if idx_name not in indexes_by_name:
+                                indexes_by_name[idx_name] = []
+                            indexes_by_name[idx_name].append(idx)
+
+                        # Helper function for size formatting
+                        def format_size(size_bytes):
+                            if isinstance(size_bytes, str):
+                                return size_bytes
+                            if size_bytes >= 1024 * 1024:
+                                return f"{size_bytes / (1024 * 1024):.2f} MB"
+                            elif size_bytes >= 1024:
+                                return f"{size_bytes / 1024:.2f} KB"
+                            else:
+                                return f"{size_bytes} B"
+
+                        # Helper function to deduplicate objects
+                        def deduplicate_objects(objects):
+                            seen_objects = set()
+                            unique_objs = []
+                            for obj in objects:
+                                obj_name = getattr(obj, 'object_name', None)
+                                if obj_name and obj_name not in seen_objects:
+                                    seen_objects.add(obj_name)
+                                    unique_objs.append(obj)
+                            return unique_objs
+
+                        # Display each index
+                        for idx_name, idx_tables in indexes_by_name.items():
+                            has_multiple_tables = len(idx_tables) > 1
+
+                            for idx_table in idx_tables:
+                                physical_table = idx_table['physical_table_name']
+                                table_type = idx_table['algo_table_type'] if idx_table['algo_table_type'] else 'index'
+
+                                # Get data statistics for this physical table
+                                try:
+                                    phys_objects = self.client.metadata.scan(
+                                        database, physical_table, is_tombstone=False, columns="*"
+                                    )
+                                    if phys_objects:
+                                        unique_objs = deduplicate_objects(list(phys_objects))
+                                        total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_objs)
+                                        total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
+                                        total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
+                                        total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs)
+
+                                        # Format display label
+                                        if has_multiple_tables:
+                                            label = f"  └─ index: {idx_name} ({table_type})"
+                                        else:
+                                            label = f"  └─ index: {idx_name}"
+
+                                        print(
+                                            f"{label:<30} | {len(unique_objs):<10} | {total_rows:<15,} | {total_null:<12,} | {format_size(total_origin):<15} | {format_size(total_compress):<15}"
+                                        )
+
+                                        # Show tombstone if requested
+                                        if include_tombstone:
+                                            try:
+                                                tomb_objects = self.client.metadata.scan(
+                                                    database, physical_table, is_tombstone=True, columns="*"
+                                                )
+                                                if tomb_objects:
+                                                    unique_tomb_objs = deduplicate_objects(list(tomb_objects))
+                                                    if unique_tomb_objs:
+                                                        total_rows = sum(
+                                                            getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_tomb_objs
+                                                        )
+                                                        total_null = sum(
+                                                            getattr(obj, 'null_cnt', 0) or 0 for obj in unique_tomb_objs
+                                                        )
+                                                        total_origin = sum(
+                                                            getattr(obj, 'origin_size', 0) or 0 for obj in unique_tomb_objs
+                                                        )
+                                                        total_compress = sum(
+                                                            getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs
+                                                        )
+
+                                                        tomb_label = "      └─ tombstone"
+                                                        print(
+                                                            f"{tomb_label:<30} | {len(unique_tomb_objs):<10} | {total_rows:<15,} | {total_null:<12,} | {format_size(total_origin):<15} | {format_size(total_compress):<15}"
+                                                        )
+                                            except Exception:
+                                                pass
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
 
                 print("=" * 120)
                 print(
