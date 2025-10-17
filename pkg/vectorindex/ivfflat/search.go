@@ -15,7 +15,6 @@
 package ivfflat
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"sync"
@@ -25,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -34,7 +32,6 @@ import (
 )
 
 var runSql = sqlexec.RunSql
-var runSql_streaming = sqlexec.RunStreamingSql
 
 type Centroid[T types.RealNumbers] struct {
 	Id  int64
@@ -164,17 +161,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	nthread int64,
 ) (keys any, distances []float64, err error) {
 
-	stream_chan := make(chan executor.Result, nthread)
-	error_chan := make(chan error, nthread)
-
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
-		return nil, nil, err
+		return
 	}
 
 	centroids_ids, err := idx.findCentroids(proc, query, distfn, idxcfg, rt.Probe, nthread)
 	if err != nil {
-		return nil, nil, err
+		return
 	}
 
 	var instr string
@@ -202,61 +196,32 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)
 
-	var (
-		wg          sync.WaitGroup
-		ctx, cancel = context.WithCancelCause(proc.GetTopContext())
-	)
-	defer cancel(nil)
+	res, err := runSql(proc, sql)
+	if err != nil {
+		return
+	}
+	if len(res.Batches) == 0 {
+		return nil, nil, moerr.NewEmptyVector(proc.Ctx)
+	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		res, err2 := runSql_streaming(ctx, proc, sql, stream_chan, error_chan)
-		if err2 != nil {
-			// consumer notify the producer to stop the sql streaming
-			cancel(err2)
-			return
-		}
-
-		if len(rt.BackgroundQueries) > 0 {
-			rt.BackgroundQueries[0] = res.LogicalPlan
-		}
-	}()
+	if len(rt.BackgroundQueries) > 0 {
+		rt.BackgroundQueries[0] = res.LogicalPlan
+	}
 
 	distances = make([]float64, 0, rt.Limit)
 	resid := make([]any, 0, rt.Limit)
+	bat := res.Batches[0]
 
-loop:
-	for {
-		select {
-		case res, ok := <-stream_chan:
-			if !ok {
-				break loop
-			}
+	for i := 0; i < bat.RowCount(); i++ {
+		pk := vector.GetAny(bat.Vecs[0], i, true)
+		resid = append(resid, pk)
 
-			bat := res.Batches[0]
-			defer res.Close()
-
-			for i := 0; i < bat.RowCount(); i++ {
-				pk := vector.GetAny(bat.Vecs[0], i, true)
-				resid = append(resid, pk)
-
-				dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
-				dist = metric.DistanceTransformIvfflat(dist, idxcfg.OpType, metric.MetricType(idxcfg.Ivfflat.Metric))
-				distances = append(distances, dist)
-			}
-
-		case err = <-error_chan:
-			return nil, nil, err
-		case <-proc.Ctx.Done():
-			return nil, nil, proc.Ctx.Err()
-		case <-ctx.Done():
-			// local context cancelled. something went wrong with other threads
-			return nil, nil, context.Cause(ctx)
-		}
+		dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
+		dist = metric.DistanceTransformIvfflat(dist, idxcfg.OpType, metric.MetricType(idxcfg.Ivfflat.Metric))
+		distances = append(distances, dist)
 	}
 
-	wg.Wait()
+	res.Close()
 
 	return resid, distances, nil
 }
