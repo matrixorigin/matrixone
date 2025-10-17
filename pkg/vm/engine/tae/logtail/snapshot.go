@@ -184,6 +184,15 @@ type SnapshotInfo struct {
 // PitrInfo is an alias for backward compatibility
 type PitrInfo = SnapshotInfo
 
+func NewPitrInfo() *PitrInfo {
+	return &PitrInfo{
+		cluster:  make([]types.TS, 1),
+		account:  make(map[uint32][]types.TS),
+		database: make(map[uint64][]types.TS),
+		tables:   make(map[uint64][]types.TS),
+	}
+}
+
 func NewSnapshotInfo() *SnapshotInfo {
 	return &SnapshotInfo{
 		cluster:  make([]types.TS, 0),
@@ -1687,12 +1696,13 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 	dbTableSnapshots := make(map[uint64][]types.TS) // dbID -> []types.TS
 	for tableID, tableTSList := range snapshots.tables {
 		if len(tableTSList) > 0 {
-			if tableInfo := sm.tableIDIndex[tableID]; tableInfo != nil {
-				dbID := tableInfo.dbID
+			if info := sm.tableIDIndex[tableID]; info != nil {
+				dbID := info.dbID
 				if dbTableSnapshots[dbID] == nil {
 					dbTableSnapshots[dbID] = make([]types.TS, 0)
 				}
 				dbTableSnapshots[dbID] = append(dbTableSnapshots[dbID], tableTSList...)
+				delete(snapshots.tables, tableID)
 			}
 		}
 	}
@@ -1720,6 +1730,11 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 
 		// 1. Add table-specific snapshots
 		if tableTSList := snapshots.tables[tid]; len(tableTSList) > 0 {
+			logutil.Warn("GC-PANIC-DUP-TABLE-SNAP",
+				zap.String("level", "table"),
+				zap.Uint64("id", tid),
+				zap.Int("count", len(tableTSList)),
+			)
 			allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
 		}
 
@@ -1789,12 +1804,13 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	dbTableSnapshots := make(map[uint64][]types.TS) // dbID -> []types.TS
 	for tableID, tableTSList := range snapshots.tables {
 		if len(tableTSList) > 0 {
-			if tableInfo := sm.tableIDIndex[tableID]; tableInfo != nil {
-				dbID := tableInfo.dbID
+			if info := sm.tableIDIndex[tableID]; info != nil {
+				dbID := info.dbID
 				if dbTableSnapshots[dbID] == nil {
 					dbTableSnapshots[dbID] = make([]types.TS, 0)
 				}
 				dbTableSnapshots[dbID] = append(dbTableSnapshots[dbID], tableTSList...)
+				delete(snapshots.tables, tableID)
 			}
 		}
 	}
@@ -1842,7 +1858,6 @@ func (sm *SnapshotMeta) MergeTableInfo(
 			if clusterSnapshots := snapshots.cluster; len(clusterSnapshots) > 0 {
 				applicableSnapshots = append(applicableSnapshots, clusterSnapshots...)
 			}
-
 			// Sort and deduplicate the combined snapshots
 			if len(applicableSnapshots) > 0 {
 				applicableSnapshots = compute.SortAndDedup(
