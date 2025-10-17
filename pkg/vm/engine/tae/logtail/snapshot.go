@@ -391,17 +391,6 @@ func copyObjectsLocked(
 	return newMap
 }
 
-func (sm *SnapshotMeta) copyTablesLocked() map[uint32]map[uint64]*tableInfo {
-	tables := make(map[uint32]map[uint64]*tableInfo)
-	for k, v := range sm.tables {
-		tables[k] = make(map[uint64]*tableInfo)
-		for kk, vv := range v {
-			tables[k][kk] = vv
-		}
-	}
-	return tables
-}
-
 func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
