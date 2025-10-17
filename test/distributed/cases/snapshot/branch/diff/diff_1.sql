@@ -11,8 +11,8 @@ create table t2 like t1;
 insert into t2 values(1, "1"), (2, "2"), (4, "4");
 create snapshot sp2 for table test t2;
 
-snapshot diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
-snapshot diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
+data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;
@@ -33,8 +33,8 @@ create table t2 clone t0{snapshot="sp0"};
 insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 
-snapshot diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
-snapshot diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
+data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;
@@ -58,8 +58,8 @@ create table t2 clone t0{snapshot="sp01"};
 insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 
-snapshot diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
-snapshot diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
+data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;
@@ -80,8 +80,8 @@ create table t2 clone t1;
 insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 
-snapshot diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
-snapshot diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
+data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;
@@ -98,8 +98,8 @@ create table t2 clone t1{snapshot="sp1"};
 insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 
-snapshot diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
-snapshot diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
+data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;
@@ -117,8 +117,8 @@ create snapshot sp2 for table test t2;
 create snapshot sp1 for table test t1;
 insert into t1 values(3,3);
 
-snapshot diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
-snapshot diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
+data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;

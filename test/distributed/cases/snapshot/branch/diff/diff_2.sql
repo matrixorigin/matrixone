@@ -11,10 +11,10 @@ delete from t1 where a in (9, 99, 999);
 create table t2(a int, b int, primary key(a));
 insert into t2 select *,* from generate_series(1, 8192)g;
 
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 delete from t2 where a in (9, 99, 999);
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 drop table t1;
 drop table t2;
@@ -27,10 +27,10 @@ update t1 set b = b+1 where a in (9, 99, 999);
 create table t2(a int, b int, primary key(a));
 insert into t2 select *,* from generate_series(1, 8192)g;
 
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 update t2 set b = b+1 where a in (9, 99, 999);
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 drop table t1;
 drop table t2;
@@ -46,10 +46,10 @@ delete from t1 where a = 3;
 
 create table t2 clone t0;
 insert into t2 values(5, 5);
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 delete from t2 where a = 3;
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 drop table t0;
 drop table t1;
@@ -65,10 +65,10 @@ update t1 set b = b + 1 where a = 3;
 
 create table t2 clone t0;
 insert into t2 values(5,5);
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 update t2 set b = b + 1 where a = 3;
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 drop table t0;
 drop table t1;
@@ -83,7 +83,7 @@ create table t2 clone t1;
 insert into t2 select *,* from generate_series(101,200)g;
 delete from t2 where a >= 100;
 
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 drop table t1;
 drop table t2;
@@ -100,6 +100,6 @@ create table t2 clone t0;
 update t2 set c = c + 1 where a in (2, 200, 1000);
 insert into t2 values(9001, 9001, 9001);
 
-snapshot diff t2 against t1;
+data branch diff t2 against t1;
 
 drop database test;

@@ -537,8 +537,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			return
 		}
 
-	case *tree.SnapshotDiff,
-		*tree.SnapshotMerge,
+	case *tree.DataBranchDiff,
+		*tree.DataBranchMerge,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase,

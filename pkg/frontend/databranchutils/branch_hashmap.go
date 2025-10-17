@@ -36,7 +36,7 @@ type BranchHashmap interface {
 	ForEach(fn func(key []byte, rows [][]byte) error) error
 	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
 	// tuple of column values in the same order that was originally supplied.
-	DecodeRow(data []byte) (types.Tuple, error)
+	DecodeRow(data []byte) (types.Tuple, []types.Type, error)
 	Close() error
 }
 
@@ -513,8 +513,9 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, remove bool) 
 	return results, nil
 }
 
-func (bh *branchHashmap) DecodeRow(data []byte) (types.Tuple, error) {
-	return types.Unpack(data)
+func (bh *branchHashmap) DecodeRow(data []byte) (types.Tuple, []types.Type, error) {
+	t, err := types.Unpack(data)
+	return t, bh.valueTypes, err
 }
 
 func (bh *branchHashmap) Close() error {
