@@ -1683,12 +1683,39 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 	tablePitrs[catalog2.MO_TABLES_ID] = &sysPitr
 	tablePitrs[catalog2.MO_COLUMNS_ID] = &sysPitr
 
+	// First, collect all table snapshots that should be applied to all tables in the same database
+	dbTableSnapshots := make(map[uint64][]types.TS) // dbID -> []types.TS
+	for tableID, tableTSList := range snapshots.tables {
+		if len(tableTSList) > 0 {
+			if tableInfo := sm.tableIDIndex[tableID]; tableInfo != nil {
+				dbID := tableInfo.dbID
+				if dbTableSnapshots[dbID] == nil {
+					dbTableSnapshots[dbID] = make([]types.TS, 0)
+				}
+				dbTableSnapshots[dbID] = append(dbTableSnapshots[dbID], tableTSList...)
+			}
+		}
+	}
+
+	// Sort and deduplicate database-level table snapshots
+	for dbID, tsList := range dbTableSnapshots {
+		dbTableSnapshots[dbID] = compute.SortAndDedup(
+			tsList,
+			func(a, b *types.TS) bool {
+				return a.LT(b)
+			},
+			func(a, b *types.TS) bool {
+				return a.EQ(b)
+			},
+		)
+	}
+
 	for tid, info := range sm.tableIDIndex {
 		if catalog2.IsSystemTable(tid) {
 			continue
 		}
 
-		// Collect all applicable snapshots for this table (table + database + account)
+		// Collect all applicable snapshots for this table (table + database + account + cluster)
 		var allApplicableSnapshots []types.TS
 
 		// 1. Add table-specific snapshots
@@ -1696,20 +1723,25 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 			allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
 		}
 
-		// 2. Add database-specific snapshots
+		// 2. Add snapshots from other tables in the same database (if any table in this DB has snapshots)
+		if dbTableTSList := dbTableSnapshots[info.dbID]; len(dbTableTSList) > 0 {
+			allApplicableSnapshots = append(allApplicableSnapshots, dbTableTSList...)
+		}
+
+		// 3. Add database-specific snapshots
 		if dbTSList := snapshots.database[info.dbID]; len(dbTSList) > 0 {
 			allApplicableSnapshots = append(allApplicableSnapshots, dbTSList...)
 		}
 
-		// 3. Add account-specific snapshots
+		// 4. Add account-specific snapshots
 		accountID := info.accountID
 		if accountTSList := snapshots.account[accountID]; len(accountTSList) > 0 {
 			allApplicableSnapshots = append(allApplicableSnapshots, accountTSList...)
 		}
 
-		// 4. Add cluster snapshots
-		if tableTSList := snapshots.cluster; len(tableTSList) > 0 {
-			allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
+		// 5. Add cluster snapshots
+		if clusterTSList := snapshots.cluster; len(clusterTSList) > 0 {
+			allApplicableSnapshots = append(allApplicableSnapshots, clusterTSList...)
 		}
 
 		// Sort and deduplicate the combined snapshots
@@ -1752,21 +1784,76 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	if len(sm.tables) == 0 {
 		return nil
 	}
+
+	// First, collect all table snapshots that should be applied to all tables in the same database
+	dbTableSnapshots := make(map[uint64][]types.TS) // dbID -> []types.TS
+	for tableID, tableTSList := range snapshots.tables {
+		if len(tableTSList) > 0 {
+			if tableInfo := sm.tableIDIndex[tableID]; tableInfo != nil {
+				dbID := tableInfo.dbID
+				if dbTableSnapshots[dbID] == nil {
+					dbTableSnapshots[dbID] = make([]types.TS, 0)
+				}
+				dbTableSnapshots[dbID] = append(dbTableSnapshots[dbID], tableTSList...)
+			}
+		}
+	}
+
+	// Sort and deduplicate database-level table snapshots
+	for dbID, tsList := range dbTableSnapshots {
+		dbTableSnapshots[dbID] = compute.SortAndDedup(
+			tsList,
+			func(a, b *types.TS) bool {
+				return a.LT(b)
+			},
+			func(a, b *types.TS) bool {
+				return a.EQ(b)
+			},
+		)
+	}
+
 	for accID, tables := range sm.tables {
 		for _, table := range tables {
 			// Get a list of snapshots available for the table
-			// (by priority: table level > database level > tenant level)
+			// (including snapshots from other tables in the same database)
 			var applicableSnapshots []types.TS
 
-			// 1. First check the table-level snapshot
+			// 1. Add table-specific snapshots
 			if tableSnapshots := snapshots.tables[table.tid]; len(tableSnapshots) > 0 {
 				applicableSnapshots = append(applicableSnapshots, tableSnapshots...)
-			} else if dbSnapshots := snapshots.database[table.dbID]; len(dbSnapshots) > 0 {
-				// 2. Next, check the database-level snapshot
+			}
+
+			// 2. Add snapshots from other tables in the same database (if any table in this DB has snapshots)
+			if dbTableTSList := dbTableSnapshots[table.dbID]; len(dbTableTSList) > 0 {
+				applicableSnapshots = append(applicableSnapshots, dbTableTSList...)
+			}
+
+			// 3. Add database-specific snapshots
+			if dbSnapshots := snapshots.database[table.dbID]; len(dbSnapshots) > 0 {
 				applicableSnapshots = append(applicableSnapshots, dbSnapshots...)
-			} else {
-				// 3. Finally, use the tenant-level snapshot
-				applicableSnapshots = append(applicableSnapshots, snapshots.account[accID]...)
+			}
+
+			// 4. Add account-specific snapshots
+			if accountSnapshots := snapshots.account[accID]; len(accountSnapshots) > 0 {
+				applicableSnapshots = append(applicableSnapshots, accountSnapshots...)
+			}
+
+			// 5. Add cluster snapshots
+			if clusterSnapshots := snapshots.cluster; len(clusterSnapshots) > 0 {
+				applicableSnapshots = append(applicableSnapshots, clusterSnapshots...)
+			}
+
+			// Sort and deduplicate the combined snapshots
+			if len(applicableSnapshots) > 0 {
+				applicableSnapshots = compute.SortAndDedup(
+					applicableSnapshots,
+					func(a, b *types.TS) bool {
+						return a.LT(b)
+					},
+					func(a, b *types.TS) bool {
+						return a.EQ(b)
+					},
+				)
 			}
 
 			// If there is no snapshot and PITR is empty, delete the deleted table
