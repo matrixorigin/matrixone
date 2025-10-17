@@ -871,7 +871,6 @@ func (sm *SnapshotMeta) GetSnapshot(
 	sm.RLock()
 	objects := copyObjectsLocked(sm.objects)
 	tombstones := copyObjectsLocked(sm.tombstones)
-	tables := sm.copyTablesLocked()
 	sm.RUnlock()
 	snapshotInfo := NewSnapshotInfo()
 	idxes := []uint16{ColTS, ColLevel, ColObjId}
@@ -928,20 +927,10 @@ func (sm *SnapshotMeta) GetSnapshot(
 					if snapshotType == SnapshotTypeCluster {
 						// Cluster snapshot
 						snapshotInfo.cluster = append(snapshotInfo.cluster, snapTs)
-
-						// Also add to all existing accounts for backward compatibility
-						for account := range tables {
-							if snapshotInfo.account[account] == nil {
-								snapshotInfo.account[account] = make([]types.TS, 0)
-							}
-							snapshotInfo.account[account] = append(snapshotInfo.account[account], snapTs)
-							// TODO: info to debug
-							logutil.Info(
-								"GetSnapshot-P1",
-								zap.String("ts", snapTs.ToString()),
-								zap.Uint32("account", account),
-							)
-						}
+						logutil.Debug(
+							"GetSnapshot-P1",
+							zap.String("ts", snapTs.ToString()),
+						)
 						continue
 					}
 
@@ -953,7 +942,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 						}
 						snapshotInfo.account[id] = append(snapshotInfo.account[id], snapTs)
 						// TODO: info to debug
-						logutil.Info(
+						logutil.Debug(
 							"GetSnapshot-P2",
 							zap.String("ts", snapTs.ToString()),
 							zap.Uint32("account", id),
@@ -968,7 +957,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 							snapshotInfo.database[id] = make([]types.TS, 0)
 						}
 						snapshotInfo.database[id] = append(snapshotInfo.database[id], snapTs)
-						logutil.Info(
+						logutil.Debug(
 							"GetSnapshot-P3-Database",
 							zap.String("ts", snapTs.ToString()),
 							zap.Uint64("database", id),
@@ -983,7 +972,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 							snapshotInfo.tables[id] = make([]types.TS, 0)
 						}
 						snapshotInfo.tables[id] = append(snapshotInfo.tables[id], snapTs)
-						logutil.Info(
+						logutil.Debug(
 							"GetSnapshot-P4-Table",
 							zap.String("ts", snapTs.ToString()),
 							zap.Uint64("table", id),
@@ -1723,6 +1712,11 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 			allApplicableSnapshots = append(allApplicableSnapshots, accountTSList...)
 		}
 
+		// 4. Add cluster snapshots
+		if tableTSList := snapshots.cluster; len(tableTSList) > 0 {
+			allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
+		}
+
 		// Sort and deduplicate the combined snapshots
 		if len(allApplicableSnapshots) > 0 {
 			tableSnapshots[tid] = compute.SortAndDedup(
@@ -1890,8 +1884,8 @@ func ObjectIsSnapshotRefers(
 
 	// if dropTS is empty, it means the object is not dropped
 	if dropTS.IsEmpty() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Info(
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
 				"GCJOB-DEBUG-1",
 				zap.String("obj", obj.ObjectName().String()),
 				zap.String("create-ts", createTS.ToString()),
@@ -1904,8 +1898,8 @@ func ObjectIsSnapshotRefers(
 	// if pitr is not empty, and pitr is greater than dropTS, it means the object is not dropped
 	if pitr != nil && !pitr.IsEmpty() {
 		if dropTS.GT(pitr) {
-			common.DoIfInfoEnabled(func() {
-				logutil.Info(
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
 					"GCJOB-PITR-PIN",
 					zap.String("name", obj.ObjectName().String()),
 					zap.String("pitr", pitr.ToString()),
@@ -1922,8 +1916,8 @@ func ObjectIsSnapshotRefers(
 		mid := left + (right-left)/2
 		snapTS := snapshots[mid]
 		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
-			common.DoIfInfoEnabled(func() {
-				logutil.Info(
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
 					"GCJOB-DEBUG-2",
 					zap.String("name", obj.ObjectName().String()),
 					zap.String("pitr", snapTS.ToString()),
@@ -1939,12 +1933,4 @@ func ObjectIsSnapshotRefers(
 		}
 	}
 	return false
-}
-
-// CloseSnapshotList is no longer needed as SnapshotInfo uses []types.TS instead of containers.Vector
-// Keeping for backward compatibility but it's a no-op now
-func CloseSnapshotList(snapshots map[uint32]containers.Vector) {
-	for _, snapshot := range snapshots {
-		snapshot.Close()
-	}
 }
