@@ -1163,6 +1163,12 @@ func (sm *SnapshotMeta) GetPITR(
 					}
 					pitrInfo.tables[id][0] = pitrTS
 				}
+				logutil.Info(
+					"GC-GetPITR",
+					zap.String("level", level),
+					zap.Uint64("id", account),
+					zap.String("ts", pitrTS.ToString()),
+				)
 			}
 		}
 	}

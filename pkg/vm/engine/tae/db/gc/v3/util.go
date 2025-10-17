@@ -19,8 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -70,18 +68,6 @@ func MakeLoadFunc(
 		}
 		return true, nil
 	}, releaseFn
-}
-
-// TransformToTSList is no longer needed as SnapshotInfo directly contains []types.TS
-// Keeping for backward compatibility but it's deprecated
-func TransformToTSList(
-	fromKV map[uint32]containers.Vector,
-) map[uint32][]types.TS {
-	newKV := make(map[uint32][]types.TS, len(fromKV))
-	for k, v := range fromKV {
-		newKV[k] = vector.MustFixedColWithTypeCheck[types.TS](v.GetDownstreamVector())
-	}
-	return newKV
 }
 
 func MakeGCWindowBuffer(size int) *containers.OneSchemaBatchBuffer {
