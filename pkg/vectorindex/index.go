@@ -124,8 +124,8 @@ func (h *SearchResultSafeHeap) Push(srif SearchResultIf) {
 
 	if h.resheap.Len() == h.size {
 		if srif.GetDistance() < h.resheap[0].GetDistance() {
-			heap.Pop(&h.resheap)
-			heap.Push(&h.resheap, srif)
+			h.resheap[0] = srif
+			heap.Fix(&h.resheap, 0)
 		}
 	} else {
 		heap.Push(&h.resheap, srif)

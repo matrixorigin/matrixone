@@ -441,18 +441,18 @@ func BlockDataReadInner(
 					}
 					dist64 := float64(dist)
 
-					if len(hp) >= int(orderByLimit.Limit) {
-						if dist64 >= hp[0].GetDistance() {
-							continue
-						} else {
-							heap.Pop(&hp)
-						}
-					}
-
-					heap.Push(&hp, &vectorindex.SearchResult{
+					heapItem := &vectorindex.SearchResult{
 						Id:       row,
 						Distance: dist64,
-					})
+					}
+					if len(hp) >= int(orderByLimit.Limit) {
+						if dist64 < hp[0].GetDistance() {
+							hp[0] = heapItem
+							heap.Fix(&hp, 0)
+						}
+					} else {
+						heap.Push(&hp, heapItem)
+					}
 				}
 
 			case types.T_array_float64:
@@ -469,18 +469,18 @@ func BlockDataReadInner(
 						return err
 					}
 
-					if len(hp) >= int(orderByLimit.Limit) {
-						if dist64 >= hp[0].GetDistance() {
-							continue
-						} else {
-							heap.Pop(&hp)
-						}
-					}
-
-					heap.Push(&hp, &vectorindex.SearchResult{
+					heapItem := &vectorindex.SearchResult{
 						Id:       row,
 						Distance: dist64,
-					})
+					}
+					if len(hp) >= int(orderByLimit.Limit) {
+						if dist64 < hp[0].GetDistance() {
+							hp[0] = heapItem
+							heap.Fix(&hp, 0)
+						}
+					} else {
+						heap.Push(&hp, heapItem)
+					}
 				}
 
 			default:
