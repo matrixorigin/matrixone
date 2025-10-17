@@ -93,9 +93,9 @@ func handleDataBranch(
 	case *tree.DataBranchCreateDatabase:
 	case *tree.DataBranchDeleteTable:
 	case *tree.DataBranchDeleteDatabase:
-	case *tree.SnapshotDiff:
+	case *tree.DataBranchDiff:
 		return handleSnapshotDiff(execCtx, ses, st, nil)
-	case *tree.SnapshotMerge:
+	case *tree.DataBranchMerge:
 		return handleSnapshotMerge(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
@@ -107,7 +107,7 @@ func handleDataBranch(
 func handleSnapshotDiff(
 	execCtx *ExecCtx,
 	ses *Session,
-	stmt *tree.SnapshotDiff,
+	stmt *tree.DataBranchDiff,
 	extra *diffExtra,
 ) (err error) {
 
@@ -192,7 +192,7 @@ func handleSnapshotDiff(
 func handleSnapshotMerge(
 	execCtx *ExecCtx,
 	ses *Session,
-	stmt *tree.SnapshotMerge,
+	stmt *tree.DataBranchMerge,
 ) (err error) {
 
 	var (
@@ -200,10 +200,8 @@ func handleSnapshotMerge(
 		deferred    func(error) error
 		conflictOpt int
 
-		srcRel    engine.Relation
-		dstRel    engine.Relation
-		lcaRel    engine.Relation
-		lcaTblDef *plan.TableDef
+		srcRel engine.Relation
+		dstRel engine.Relation
 
 		lcaTableID  uint64
 		srcSnapshot *plan.Snapshot
@@ -249,7 +247,7 @@ func handleSnapshotMerge(
 		extra.inputArgs.tarSnapshot = srcSnapshot
 		extra.inputArgs.baseSnapshot = dstSnapshot
 
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra); err != nil {
+		if err = handleSnapshotDiff(execCtx, ses, &tree.DataBranchDiff{}, &extra); err != nil {
 			return
 		}
 
@@ -262,129 +260,71 @@ func handleSnapshotMerge(
 			extra.outputArgs.pkColIdxes,
 		)
 
-	} else if lcaTableID == srcRel.GetTableID(execCtx.reqCtx) {
-		//lcaTblDef = srcRel.GetTableDef(execCtx.reqCtx)
-		var (
-			extra1 diffExtra
-			extra2 diffExtra
-		)
-		extra1.inputArgs.bh = bh
-		extra1.inputArgs.tarRel = srcRel
-		extra1.inputArgs.baseRel = srcRel
-		extra1.inputArgs.tarSnapshot = srcSnapshot
-		extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
+	}
 
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra1); err != nil {
-			return
-		}
+	// merge left into right
+	var (
+		lcaType   int
+		lcaRel    engine.Relation
+		lcaTblDef *plan.TableDef
+	)
 
-		extra2.inputArgs.bh = bh
-		extra2.inputArgs.tarRel = dstRel
-		extra2.inputArgs.baseRel = srcRel
-		extra2.inputArgs.tarSnapshot = dstSnapshot
-		extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
-
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra2); err != nil {
-			return
-		}
-
-		extra1.outputArgs.rows = sortDiffResultRows(extra1)
-		extra2.outputArgs.rows = sortDiffResultRows(extra2)
-		return mergeDiff(
-			execCtx, bh, ses, dstRel,
-			extra1.outputArgs.rows, extra2.outputArgs.rows,
-			lcaLeft, conflictOpt,
-			extra1.outputArgs.pkTypes,
-			extra1.outputArgs.pkColIdxes,
-		)
-
+	if lcaTableID == srcRel.GetTableID(execCtx.reqCtx) {
+		// left is the LCA
+		lcaType = lcaLeft
+		lcaRel = srcRel
 	} else if lcaTableID == dstRel.GetTableID(execCtx.reqCtx) {
-		//lcaTblDef = dstRel.GetTableDef(execCtx.reqCtx)
-		var (
-			extra1 diffExtra
-			extra2 diffExtra
-		)
-		extra1.inputArgs.bh = bh
-		extra1.inputArgs.tarRel = srcRel
-		extra1.inputArgs.baseRel = dstRel
-		extra1.inputArgs.tarSnapshot = srcSnapshot
-		extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
-
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra1); err != nil {
-			return
-		}
-
-		extra2.inputArgs.bh = bh
-		extra2.inputArgs.tarRel = dstRel
-		extra2.inputArgs.baseRel = dstRel
-		extra2.inputArgs.tarSnapshot = dstSnapshot
-		extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
-
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra2); err != nil {
-			return
-		}
-
-		extra1.outputArgs.rows = sortDiffResultRows(extra1)
-		extra2.outputArgs.rows = sortDiffResultRows(extra2)
-
-		return mergeDiff(
-			execCtx, bh, ses, dstRel,
-			extra1.outputArgs.rows, extra2.outputArgs.rows,
-			lcaRight, conflictOpt,
-			extra1.outputArgs.pkTypes,
-			extra1.outputArgs.pkColIdxes,
-		)
+		// right is the LCA
+		lcaType = lcaRight
+		lcaRel = dstRel
 	} else {
+		// LCA is other table
+		lcaType = lcaOther
 		if _, lcaTblDef, err = ses.GetTxnCompileCtx().ResolveById(lcaTableID, &plan2.Snapshot{}); err != nil {
 			return
 		}
 		if _, lcaRel, err = ses.GetTxnCompileCtx().getRelation(
 			lcaTblDef.DbName, lcaTblDef.Name, nil,
-			&plan2.Snapshot{
-				Tenant: &plan.SnapshotTenant{
-					TenantID: ses.GetAccountId(),
-				},
-				TS: &srcBranchTS,
-			},
+			&plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS},
 		); err != nil {
 			return
 		}
-
-		var (
-			extra1 diffExtra
-			extra2 diffExtra
-		)
-
-		extra1.inputArgs.bh = bh
-		extra1.inputArgs.tarRel = srcRel
-		extra1.inputArgs.baseRel = lcaRel
-		extra1.inputArgs.tarSnapshot = srcSnapshot
-		extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
-
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra1); err != nil {
-			return
-		}
-
-		extra2.inputArgs.bh = bh
-		extra2.inputArgs.tarRel = dstRel
-		extra2.inputArgs.baseRel = lcaRel
-		extra2.inputArgs.tarSnapshot = dstSnapshot
-		extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
-
-		if err = handleSnapshotDiff(execCtx, ses, &tree.SnapshotDiff{}, &extra2); err != nil {
-			return
-		}
-
-		extra1.outputArgs.rows = sortDiffResultRows(extra1)
-		extra2.outputArgs.rows = sortDiffResultRows(extra2)
-		return mergeDiff(
-			execCtx, bh, ses, dstRel,
-			extra1.outputArgs.rows, extra2.outputArgs.rows,
-			lcaOther, conflictOpt,
-			extra1.outputArgs.pkTypes,
-			extra1.outputArgs.pkColIdxes,
-		)
 	}
+
+	var (
+		extra1 diffExtra
+		extra2 diffExtra
+	)
+
+	extra1.inputArgs.bh = bh
+	extra1.inputArgs.tarRel = srcRel
+	extra1.inputArgs.baseRel = lcaRel
+	extra1.inputArgs.tarSnapshot = srcSnapshot
+	extra1.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &srcBranchTS}
+
+	if err = handleSnapshotDiff(execCtx, ses, &tree.DataBranchDiff{}, &extra1); err != nil {
+		return
+	}
+
+	extra2.inputArgs.bh = bh
+	extra2.inputArgs.tarRel = dstRel
+	extra2.inputArgs.baseRel = lcaRel
+	extra2.inputArgs.tarSnapshot = dstSnapshot
+	extra2.inputArgs.baseSnapshot = &plan2.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()}, TS: &dstBranchTS}
+
+	if err = handleSnapshotDiff(execCtx, ses, &tree.DataBranchDiff{}, &extra2); err != nil {
+		return
+	}
+
+	extra1.outputArgs.rows = sortDiffResultRows(extra1)
+	extra2.outputArgs.rows = sortDiffResultRows(extra2)
+	return mergeDiff(
+		execCtx, bh, ses, dstRel,
+		extra1.outputArgs.rows, extra2.outputArgs.rows,
+		lcaType, conflictOpt,
+		extra1.outputArgs.pkTypes,
+		extra1.outputArgs.pkColIdxes,
+	)
 }
 
 func mergeDiff(
@@ -434,6 +374,7 @@ func mergeDiff(
 		buf.WriteString(")")
 
 		if cnt >= objectio.BlockMaxRows {
+			bh.ClearExecResultSet()
 			if err = bh.Exec(execCtx.reqCtx, buf.String()); err != nil {
 				return err
 			}
@@ -446,7 +387,7 @@ func mergeDiff(
 	initSqlBuf()
 
 	switch lcaType {
-	case lcaEmpty, lcaRight, lcaLeft:
+	case lcaEmpty:
 		for _, row := range rows1 {
 			if flag := row[1].(int); flag == diffInsert {
 				// apply into dstRel
@@ -471,7 +412,7 @@ func mergeDiff(
 				return err
 			}
 		}
-	case lcaOther:
+	case lcaOther, lcaLeft, lcaRight:
 		i, j := 0, 0
 		for i < len(rows1) && j < len(rows2) {
 			// row1.(insert, delete, update) v.s. row2.(insert, delete, update)
@@ -484,7 +425,7 @@ func mergeDiff(
 			if cmp == 0 { // conflict
 				switch conflictOpt {
 				case tree.CONFLICT_FAIL:
-					return moerr.NewInternalErrorNoCtxf("merge conflict happend")
+					return moerr.NewInternalErrorNoCtxf("merge diff conflict happend")
 				case tree.CONFLICT_SKIP:
 					i++
 				case tree.CONFLICT_ACCEPT:
@@ -505,9 +446,8 @@ func mergeDiff(
 			}
 		}
 
-		for i < len(rows1) {
+		for ; i < len(rows1); i++ {
 			if rows1[i][1].(int) == diffDelete {
-				i++
 				continue
 			}
 
@@ -519,6 +459,7 @@ func mergeDiff(
 	}
 
 	if buf.Len() > 0 && cnt > 0 {
+		bh.ClearExecResultSet()
 		if err = bh.Exec(execCtx.reqCtx, buf.String()); err != nil {
 			return err
 		}
@@ -712,7 +653,9 @@ func diff(
 		}
 	}()
 
-	mrs, neededColIdxes = buildShowDiffSchema(ses, tarTblDef, baseTblDef)
+	if mrs, neededColIdxes, err = buildShowDiffSchema(ctx, ses, tarTblDef, baseTblDef); err != nil {
+		return
+	}
 
 	// check existence
 	for {
@@ -743,9 +686,16 @@ func diff(
 			for i := range checkRet {
 				// not exists in the base table
 				if !checkRet[i].Exists {
-					row := append([]any{}, tarTblDef.Name, diffAddedLine)
+					row := make([]any, len(neededColIdxes)+2)
+					row[0] = tarTblDef.Name
+					row[1] = diffAddedLine
+
 					for _, idx := range neededColIdxes {
-						row = append(row, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
+						if err = extractRowFromVector(
+							ctx, ses, dataBat.Vecs[idx], idx+2, row, i, true,
+						); err != nil {
+							return
+						}
 					}
 					rows = append(rows, row)
 				} else {
@@ -756,9 +706,10 @@ func diff(
 						var (
 							allEqual = true
 							tuple    types.Tuple
+							valTypes []types.Type
 						)
 
-						if tuple, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
+						if tuple, valTypes, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
 							return
 						}
 
@@ -776,11 +727,23 @@ func diff(
 						}
 
 						if !allEqual { // the diff comes from the update operations
-							row1 := append([]any{}, tarTblDef.Name, diffRemovedLine)
-							row2 := append([]any{}, tarTblDef.Name, diffAddedLine)
+							row1 := make([]any, len(neededColIdxes)+2)
+							row2 := make([]any, len(neededColIdxes)+2)
+							row1[0], row1[1] = tarTblDef.Name, diffRemovedLine
+							row2[0], row2[1] = tarTblDef.Name, diffAddedLine
 							for _, idx := range neededColIdxes {
-								row1 = append(row1, tuple[idx])
-								row2 = append(row2, types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), dataBat.Vecs[idx].GetType().Oid))
+								switch val := tuple[idx].(type) {
+								case types.Timestamp:
+									row1[idx+2] = val.String2(ses.timeZone, valTypes[idx].Scale)
+								default:
+									row1[idx+2] = val
+								}
+
+								if err = extractRowFromVector(
+									ctx, ses, dataBat.Vecs[idx], idx+2, row2, i, true,
+								); err != nil {
+									return
+								}
 							}
 							rows = append(rows, row1, row2)
 						}
@@ -831,11 +794,16 @@ func diff(
 	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
 		row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 		for _, r := range data {
-			if t, err := baseDataHashmap.DecodeRow(r); err != nil {
+			if tuple, valTypes, err := baseDataHashmap.DecodeRow(r); err != nil {
 				return err
 			} else {
-				for i := range t {
-					row = append(row, t[i])
+				for i := range tuple {
+					switch val := tuple[i].(type) {
+					case types.Timestamp:
+						row = append(row, val.String2(ses.timeZone, valTypes[i].Scale))
+					default:
+						row = append(row, tuple[i])
+					}
 				}
 			}
 		}
@@ -847,16 +815,14 @@ func diff(
 
 	// iterate the left base table tombstones on the LCA
 	if err = baseTombstoneHashmap.ForEach(func(key []byte, _ [][]byte) error {
-		if t, err := baseTombstoneHashmap.DecodeRow(key); err != nil {
+		if tuple, valTypes, err := baseTombstoneHashmap.DecodeRow(key); err != nil {
 			return err
 		} else {
 			if baseDelsOnLCA == nil {
-				pkCol := baseTblDef.Cols[baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]]
-				pkTyp := types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale)
-				baseDelsOnLCA = vector.NewVec(pkTyp)
+				baseDelsOnLCA = vector.NewVec(valTypes[0])
 			}
 
-			if err = vector.AppendAny(baseDelsOnLCA, t[0], false, mp); err != nil {
+			if err = vector.AppendAny(baseDelsOnLCA, tuple[0], false, mp); err != nil {
 				return err
 			}
 
@@ -896,6 +862,8 @@ func diff(
 	for _, row := range rows {
 		mrs.AddRow(row)
 	}
+
+	fmt.Println("diff", rows)
 
 	return trySaveQueryResult(ctx, ses, mrs)
 }
@@ -981,55 +949,77 @@ func handleDelsOnLCA(
 	// composite pk
 	if baseTblDef.Pkey.CompPkeyCol != nil {
 		var (
-			pks     types.Tuple
+			tuple   types.Tuple
 			pkNames = lcaTblDef.Pkey.Names
 		)
 
 		cols, area := vector.MustVarlenaRawData(dels)
 		for i := range cols {
 			b := cols[i].GetByteSlice(area)
-			if pks, err = types.Unpack(b); err != nil {
+			if tuple, err = types.Unpack(b); err != nil {
 				return nil, err
 			}
 
 			buf.WriteString("(")
 
-			for j, pk := range pks {
+			for j, _ := range tuple {
 				buf.WriteString(pkNames[j])
 				buf.WriteString(" = ")
 
-				switch pk.(type) {
+				switch pk := tuple[j].(type) {
 				case string:
 					buf.WriteString("'")
-					buf.WriteString(pk.(string))
+					buf.WriteString(pk)
 					buf.WriteString("'")
 				case float32:
-					buf.WriteString(strconv.FormatFloat(pk.(float64), 'f', -1, 32))
+					buf.WriteString(strconv.FormatFloat(float64(pk), 'f', -1, 32))
 				case float64:
-					buf.WriteString(strconv.FormatFloat(pk.(float64), 'f', -1, 64))
+					buf.WriteString(strconv.FormatFloat(pk, 'f', -1, 64))
 				case bool:
-					buf.WriteString(strconv.FormatBool(pk.(bool)))
+					buf.WriteString(strconv.FormatBool(pk))
 				case uint8:
-					buf.WriteString(strconv.FormatUint(uint64(pk.(uint8)), 10))
+					buf.WriteString(strconv.FormatUint(uint64(pk), 10))
 				case int8:
-					buf.WriteString(strconv.FormatInt(int64(pk.(int8)), 10))
+					buf.WriteString(strconv.FormatInt(int64(pk), 10))
 				case uint16:
-					buf.WriteString(strconv.FormatUint(uint64(pk.(uint16)), 10))
+					buf.WriteString(strconv.FormatUint(uint64(pk), 10))
 				case int16:
-					buf.WriteString(strconv.FormatInt(int64(pk.(int16)), 10))
+					buf.WriteString(strconv.FormatInt(int64(pk), 10))
 				case uint32:
-					buf.WriteString(strconv.FormatUint(uint64(pk.(uint32)), 10))
+					buf.WriteString(strconv.FormatUint(uint64(pk), 10))
 				case int32:
-					buf.WriteString(strconv.FormatInt(int64(pk.(int32)), 10))
+					buf.WriteString(strconv.FormatInt(int64(pk), 10))
 				case uint64:
-					buf.WriteString(strconv.FormatUint(pk.(uint64), 10))
+					buf.WriteString(strconv.FormatUint(pk, 10))
 				case int64:
-					buf.WriteString(strconv.FormatInt(pk.(int64), 10))
+					buf.WriteString(strconv.FormatInt(pk, 10))
+				case []uint8:
+					buf.WriteString("'")
+					buf.WriteString(string(pk))
+					buf.WriteString("'")
+				case types.Timestamp:
+					buf.WriteString("'")
+					buf.WriteString(pk.String2(time.Local, dels.GetType().Scale))
+					buf.WriteString("'")
+				case types.Datetime:
+					buf.WriteString("'")
+					buf.WriteString(pk.String2(dels.GetType().Scale))
+					buf.WriteString("'")
+				case types.Date:
+					buf.WriteString("'")
+					buf.WriteString(pk.String())
+					buf.WriteString("'")
+				case types.Decimal64:
+					buf.WriteString(pk.Format(dels.GetType().Scale))
+				case types.Decimal128:
+					buf.WriteString(pk.Format(dels.GetType().Scale))
+				case types.Decimal256:
+					buf.WriteString(pk.Format(dels.GetType().Scale))
 				default:
 					return nil, fmt.Errorf("unknown pk type: %T", pk)
 				}
 
-				if j != len(pks)-1 {
+				if j != len(tuple)-1 {
 					buf.WriteString(" AND ")
 				}
 			}
@@ -1063,107 +1053,6 @@ func handleDelsOnLCA(
 
 		// real pk
 	} else {
-		//switch dels.GetType().Oid {
-		//case types.T_bool:
-		//	pks := vector.MustFixedColNoTypeCheck[bool](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatBool(pk))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_uint8:
-		//	pks := vector.MustFixedColNoTypeCheck[uint8](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_int8:
-		//	pks := vector.MustFixedColNoTypeCheck[int8](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_uint16:
-		//	pks := vector.MustFixedColNoTypeCheck[uint16](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_int16:
-		//	pks := vector.MustFixedColNoTypeCheck[int16](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_uint32:
-		//	pks := vector.MustFixedColNoTypeCheck[uint32](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_int32:
-		//	pks := vector.MustFixedColNoTypeCheck[int32](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_uint64:
-		//	pks := vector.MustFixedColNoTypeCheck[uint64](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(pk, 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_int64:
-		//	pks := vector.MustFixedColNoTypeCheck[int64](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatUint(uint64(pk), 10))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_float32:
-		//	pks := vector.MustFixedColNoTypeCheck[float32](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatFloat(float64(pk), 'f', -1, 32))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_float64:
-		//	pks := vector.MustFixedColNoTypeCheck[float64](dels)
-		//	for i, pk := range pks {
-		//		buf.WriteString(strconv.FormatFloat(pk, 'f', -1, 64))
-		//		if i != len(pks)-1 {
-		//			buf.WriteString(",")
-		//		}
-		//	}
-		//case types.T_char, types.T_varchar, types.T_json, types.T_text:
-		//	var (
-		//		val string
-		//	)
-		//
-		//	cols, area := vector.MustVarlenaRawData(dels)
-		//	for i := range cols {
-		//		b := cols[i].GetByteSlice(area)
-		//		types.DecodeValue(b, dels.GetType().Oid)
-		//	}
-		//}
-
 		for i := range dels.Length() {
 			b := dels.GetRawBytesAt(i)
 			val := types.DecodeValue(b, dels.GetType().Oid)
@@ -1187,6 +1076,7 @@ func handleDelsOnLCA(
 		)
 	}
 
+	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
@@ -1219,10 +1109,11 @@ func handleDelsOnLCA(
 }
 
 func buildShowDiffSchema(
+	ctx context.Context,
 	ses *Session,
 	tarTblDef *plan.TableDef,
 	baseTblDef *plan.TableDef,
-) (mrs *MysqlResultSet, neededColIdxes []int) {
+) (mrs *MysqlResultSet, neededColIdxes []int, err error) {
 
 	var (
 		showCols []*MysqlColumn
@@ -1248,25 +1139,8 @@ func buildShowDiffSchema(
 
 		nCol := new(MysqlColumn)
 
-		switch t.Oid {
-		case types.T_bool:
-			nCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
-		case types.T_char, types.T_varchar:
-			nCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-		case types.T_datetime, types.T_date:
-			nCol.SetColumnType(defines.MYSQL_TYPE_DATE)
-		case types.T_int8, types.T_uint8:
-			nCol.SetColumnType(defines.MYSQL_TYPE_TINY)
-		case types.T_int16, types.T_uint16:
-			nCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
-		case types.T_int32, types.T_uint32:
-			nCol.SetColumnType(defines.MYSQL_TYPE_LONG)
-		case types.T_int64, types.T_uint64:
-			nCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-		case types.T_json:
-			nCol.SetColumnType(defines.MYSQL_TYPE_JSON)
-		case types.T_blob:
-			nCol.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		if err = convertEngineTypeToMysqlType(ctx, t.Oid, nCol); err != nil {
+			return
 		}
 
 		nCol.SetName(col.Name)
@@ -1279,7 +1153,7 @@ func buildShowDiffSchema(
 		mrs.AddColumn(col)
 	}
 
-	return mrs, neededColIdxes
+	return mrs, neededColIdxes, nil
 }
 
 func buildHashmapForBaseTable(
@@ -1787,7 +1661,7 @@ func decideLCABranchTSFromBranchDAG(
 			baseBranchTS = ts
 		} else if lcaTableID == tarRel.GetTableID(ctx) {
 			ts := timestamp.Timestamp{PhysicalTime: baseTS}
-			baseBranchTS = ts
+			tarBranchTS = ts
 			baseBranchTS = ts
 		} else {
 			tarBranchTS = timestamp.Timestamp{PhysicalTime: tarTS}

@@ -51,24 +51,24 @@ func init() {
 		reuse.DefaultOptions[DataBranchDeleteDatabase](), //.
 	) //WithEnableChecker()
 
-	reuse.CreatePool[SnapshotDiff](
-		func() *SnapshotDiff {
-			return &SnapshotDiff{}
+	reuse.CreatePool[DataBranchDiff](
+		func() *DataBranchDiff {
+			return &DataBranchDiff{}
 		},
-		func(c *SnapshotDiff) {
+		func(c *DataBranchDiff) {
 			c.reset()
 		},
-		reuse.DefaultOptions[SnapshotDiff](),
+		reuse.DefaultOptions[DataBranchDiff](),
 	)
 
-	reuse.CreatePool[SnapshotMerge](
-		func() *SnapshotMerge {
-			return &SnapshotMerge{}
+	reuse.CreatePool[DataBranchMerge](
+		func() *DataBranchMerge {
+			return &DataBranchMerge{}
 		},
-		func(c *SnapshotMerge) {
+		func(c *DataBranchMerge) {
 			c.reset()
 		},
-		reuse.DefaultOptions[SnapshotMerge](),
+		reuse.DefaultOptions[DataBranchMerge](),
 	)
 
 }
@@ -296,7 +296,7 @@ type DiffAsOpt struct {
 	As TableName
 }
 
-type SnapshotDiff struct {
+type DataBranchDiff struct {
 	statementImpl
 
 	TargetTable TableName
@@ -304,89 +304,89 @@ type SnapshotDiff struct {
 	DiffAsOpts  *DiffAsOpt
 }
 
-func (s *SnapshotDiff) TypeName() string {
+func (s *DataBranchDiff) TypeName() string {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *SnapshotDiff) reset() {
-	*s = SnapshotDiff{}
+func (s *DataBranchDiff) reset() {
+	*s = DataBranchDiff{}
 }
 
-func NewSnapshotDiff() *SnapshotDiff {
-	return reuse.Alloc[SnapshotDiff](nil)
+func NewDataBranchDiff() *DataBranchDiff {
+	return reuse.Alloc[DataBranchDiff](nil)
 }
 
-func (s *SnapshotDiff) StmtKind() StmtKind {
+func (s *DataBranchDiff) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
-func (s *SnapshotDiff) Format(ctx *FmtCtx) {
+func (s *DataBranchDiff) Format(ctx *FmtCtx) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *SnapshotDiff) String() string {
+func (s *DataBranchDiff) String() string {
 	return s.GetStatementType()
 }
 
-func (s *SnapshotDiff) GetStatementType() string {
-	return "snapshot diff"
+func (s *DataBranchDiff) GetStatementType() string {
+	return "branch diff"
 }
 
-func (s *SnapshotDiff) GetQueryType() string {
+func (s *DataBranchDiff) GetQueryType() string {
 	return QueryTypeOth
 }
 
-func (s *SnapshotDiff) Free() {
-	reuse.Free[SnapshotDiff](s, nil)
+func (s *DataBranchDiff) Free() {
+	reuse.Free[DataBranchDiff](s, nil)
 }
 
 type ConflictOpt struct {
 	Opt int
 }
 
-type SnapshotMerge struct {
+type DataBranchMerge struct {
 	statementImpl
 	SrcTable    TableName
 	DstTable    TableName
 	ConflictOpt *ConflictOpt
 }
 
-func (s *SnapshotMerge) TypeName() string {
+func (s *DataBranchMerge) TypeName() string {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *SnapshotMerge) reset() {
-	*s = SnapshotMerge{}
+func (s *DataBranchMerge) reset() {
+	*s = DataBranchMerge{}
 }
 
-func NewSnapshotMerge() *SnapshotMerge {
-	return reuse.Alloc[SnapshotMerge](nil)
+func NewDataBranchMerge() *DataBranchMerge {
+	return reuse.Alloc[DataBranchMerge](nil)
 }
 
-func (s *SnapshotMerge) StmtKind() StmtKind {
+func (s *DataBranchMerge) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
-func (s *SnapshotMerge) Format(ctx *FmtCtx) {
+func (s *DataBranchMerge) Format(ctx *FmtCtx) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *SnapshotMerge) String() string {
+func (s *DataBranchMerge) String() string {
 	return s.GetStatementType()
 }
 
-func (s *SnapshotMerge) GetStatementType() string {
-	return "snapshot diff"
+func (s *DataBranchMerge) GetStatementType() string {
+	return "branch merge"
 }
 
-func (s *SnapshotMerge) GetQueryType() string {
+func (s *DataBranchMerge) GetQueryType() string {
 	return QueryTypeOth
 }
 
-func (s *SnapshotMerge) Free() {
-	reuse.Free[SnapshotMerge](s, nil)
+func (s *DataBranchMerge) Free() {
+	reuse.Free[DataBranchMerge](s, nil)
 }

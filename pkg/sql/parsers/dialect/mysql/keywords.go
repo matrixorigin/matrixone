@@ -657,7 +657,6 @@ func init() {
 		"savepoint":                  SAVEPOINT,
 		"recovery_window":            RECOVERY_WINDOW,
 		"clone":                      CLONE,
-		"mo":                         MO,
 		"branch":                     BRANCH,
 		"fail":                       CONFLICT_FAIL,
 		"skip":                       CONFLICT_SKIP,

@@ -5747,8 +5747,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CloneTable,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
-		*tree.SnapshotMerge,
-		*tree.SnapshotDiff:
+		*tree.DataBranchMerge,
+		*tree.DataBranchDiff:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
