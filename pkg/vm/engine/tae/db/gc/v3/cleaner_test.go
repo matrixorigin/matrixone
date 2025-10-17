@@ -16,13 +16,13 @@ package gc
 
 import (
 	"context"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 )
 
 func TestDiskCleaner_ReplayToWrite(t *testing.T) {

@@ -171,8 +171,8 @@ func makeMetaBatch(proc *process.Process) *batch.Batch {
 	}
 
 	vector.AppendBytes(bat.Vecs[1], []byte(chksum), false, proc.Mp())
-	vector.AppendFixed(bat.Vecs[2], int64(0), false, proc.Mp())
-	vector.AppendFixed(bat.Vecs[3], finfo.Size(), false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[2], int64(0), false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[3], finfo.Size(), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
@@ -187,7 +187,7 @@ func makeIndexBatch(proc *process.Process) *batch.Batch {
 	if err != nil {
 		panic("read file error")
 	}
-	vector.AppendFixed(bat.Vecs[0], int64(0), false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
@@ -250,8 +250,8 @@ func makeMetaBatch2Files(proc *process.Process) *batch.Batch {
 		}
 
 		vector.AppendBytes(bat.Vecs[1], []byte(chksum), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[2], int64(0), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[3], finfo.Size(), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[2], int64(0), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[3], finfo.Size(), false, proc.Mp())
 
 	}
 
@@ -271,7 +271,7 @@ func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
 	if err != nil {
 		panic("read file error")
 	}
-	vector.AppendFixed(bat.Vecs[0], int64(0), false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat

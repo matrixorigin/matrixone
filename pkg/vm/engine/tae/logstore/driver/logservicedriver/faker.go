@@ -16,7 +16,6 @@ package logservicedriver
 
 import (
 	"context"
-	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -27,6 +26,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"golang.org/x/exp/rand"
 )
 
 var _ BackendClient = (*mockBackendClient)(nil)

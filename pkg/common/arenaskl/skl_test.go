@@ -22,7 +22,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -30,6 +29,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 )
 
 const arenaSize = 1 << 20
@@ -682,7 +682,7 @@ func BenchmarkReadWrite(b *testing.B) {
 			var count int
 			b.RunParallel(func(pb *testing.PB) {
 				it := l.NewIter(nil, nil)
-				rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+				rng := rand.New(rand.NewSource(uint64(time.Now().UnixNano())))
 				buf := make([]byte, 8)
 
 				for pb.Next() {
@@ -720,7 +720,7 @@ func BenchmarkOrderedWrite(b *testing.B) {
 
 func BenchmarkIterNext(b *testing.B) {
 	l := NewSkiplist(newArena(64<<10), bytes.Compare)
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng := rand.New(rand.NewSource(uint64(time.Now().UnixNano())))
 	buf := make([]byte, 8)
 	for {
 		if err := l.Add(randomKey(rng, buf), nil); err == ErrArenaFull {
@@ -741,7 +741,7 @@ func BenchmarkIterNext(b *testing.B) {
 
 func BenchmarkIterPrev(b *testing.B) {
 	l := NewSkiplist(newArena(64<<10), bytes.Compare)
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng := rand.New(rand.NewSource(uint64(time.Now().UnixNano())))
 	buf := make([]byte, 8)
 	for {
 		if err := l.Add(randomKey(rng, buf), nil); err == ErrArenaFull {

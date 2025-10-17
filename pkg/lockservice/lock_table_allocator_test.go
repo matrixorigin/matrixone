@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"fmt"
-	"math/rand"
 	"os"
 	"testing"
 	"time"
@@ -33,6 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"golang.org/x/exp/rand"
 )
 
 func TestGetBindInRestartService(t *testing.T) {
@@ -417,7 +417,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 
 		b.RunParallel(func(p *testing.PB) {
 			values := []pb.LockTable{{}}
-			rand := rand.New(rand.NewSource(time.Now().UnixNano()))
+			rand := rand.New(rand.NewSource(uint64(time.Now().UnixNano())))
 			for p.Next() {
 				v := rand.Intn(tables)
 				values[0] = binds[v]

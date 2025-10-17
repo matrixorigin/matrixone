@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -116,7 +117,7 @@ func (m *MockSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
 
-func newMockAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) cache.VectorIndexSearchIf {
+func newMockAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
 	return &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 }
 
@@ -290,7 +291,7 @@ func makeBatchHnswSearch(proc *process.Process) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 
 	v := []float32{0, 1, 2}
-	vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
+	vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
@@ -329,7 +330,7 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
+		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -361,10 +362,10 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))         // index table config
 		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-		vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[0], int64(1), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
+		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -408,7 +409,7 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))     // pkid int64
 
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -442,10 +443,10 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))         // index table config
 		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-		vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[0], int64(1), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
+		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
