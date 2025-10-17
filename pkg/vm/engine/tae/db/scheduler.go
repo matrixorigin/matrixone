@@ -160,7 +160,6 @@ func (s *taskScheduler) ScheduleScopedFn(ctx *tasks.Context, taskType tasks.Task
 
 func (s *taskScheduler) Schedule(task tasks.Task) (err error) {
 	taskType := task.Type()
-	// if taskType == tasks.DataCompactionTask || taskType == tasks.GCTask {
 	if taskType == tasks.DataCompactionTask || taskType == tasks.FlushTableTailTask {
 		dispatcher := s.Dispatchers[tasks.DataCompactionTask].(*asyncJobDispatcher)
 		return dispatcher.TryDispatch(task)
