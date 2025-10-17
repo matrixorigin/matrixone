@@ -15,9 +15,9 @@
 package ivfflat
 
 import (
+	"container/heap"
 	"fmt"
 	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -96,50 +96,35 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], _ vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
 	if len(idx.Centroids) == 0 {
 		// empty index has id = 1
 		return []int64{1}, nil
 	}
 
-	nworker := int(nthread)
-	ncentroids := int(len(idx.Centroids))
-	if ncentroids < nworker {
-		nworker = ncentroids
-	}
-	errs := make(chan error, nworker)
+	hp := make(vectorindex.SearchResultMaxHeap, 0, int(probe))
+	for _, c := range idx.Centroids {
+		dist, err := distfn(query, c.Vec)
+		if err != nil {
+			return nil, err
+		}
+		dist64 := float64(dist)
 
-	heap := vectorindex.NewSearchResultSafeHeap(int(probe))
-	var wg sync.WaitGroup
-	for i := 0; i < nworker; i++ {
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for i, c := range idx.Centroids {
-				if i%nworker != tid {
-					continue
-				}
-				dist, err := distfn(query, c.Vec)
-				if err != nil {
-					errs <- err
-					return
-				}
-				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
+		if len(hp) >= int(probe) {
+			if hp[0].GetDistance() > dist64 {
+				hp[0] = &vectorindex.SearchResult{Id: c.Id, Distance: dist64}
+				heap.Fix(&hp, 0)
 			}
-		}(i)
+		} else {
+			hp.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist64})
+		}
 	}
 
-	wg.Wait()
-
-	if len(errs) > 0 {
-		return nil, <-errs
-	}
-
-	res := make([]int64, 0, probe)
-	n := heap.Len()
+	n := hp.Len()
+	res := make([]int64, 0, n)
 	for range n {
-		srif := heap.Pop()
+		srif := hp.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
 			return nil, moerr.NewInternalError(proc.Ctx, "findCentroids: heap return key is not int64")

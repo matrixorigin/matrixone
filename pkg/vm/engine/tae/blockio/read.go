@@ -422,7 +422,7 @@ func BlockDataReadInner(
 	if len(selectRows) > 0 {
 		if orderByLimit != nil && int(orderByLimit.Limit) < len(selectRows) {
 			// apply topn if needed
-			hp := make(vectorindex.SearchResultHeap, 0, orderByLimit.Limit+1)
+			hp := make(vectorindex.SearchResultMaxHeap, 0, orderByLimit.Limit)
 			lhs := cacheVectors[orderByLimit.ColPos]
 
 			switch orderByLimit.Typ {

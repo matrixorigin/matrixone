@@ -17,7 +17,6 @@ package hnsw
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -87,7 +86,8 @@ func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorind
 	defer s.unlock()
 
 	// search
-	heap := vectorindex.NewSearchResultSafeHeap(int(limit))
+	size := len(s.Indexes) * int(limit)
+	heap := vectorindex.NewSearchResultSafeHeap(size)
 	var wg sync.WaitGroup
 
 	var errs error
@@ -123,12 +123,11 @@ func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorind
 		return nil, nil, errs
 	}
 
+	reskeys := make([]int64, 0, limit)
+	resdistances := make([]float64, 0, limit)
+
 	n := heap.Len()
-
-	reskeys := make([]int64, 0, n)
-	resdistances := make([]float64, 0, n)
-
-	for range n {
+	for i := 0; i < int(limit) && i < n; i++ {
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
@@ -138,9 +137,6 @@ func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorind
 		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, s.Idxcfg.OpType, s.Idxcfg.Usearch.Metric)
 		resdistances = append(resdistances, sr.Distance)
 	}
-
-	slices.Reverse(reskeys)
-	slices.Reverse(resdistances)
 
 	return reskeys, resdistances, nil
 }

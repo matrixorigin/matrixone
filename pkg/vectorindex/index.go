@@ -74,7 +74,7 @@ type SearchResultHeap []SearchResultIf
 func (h SearchResultHeap) Len() int { return len(h) }
 
 func (h SearchResultHeap) Less(i, j int) bool {
-	return h[i].GetDistance() > h[j].GetDistance()
+	return h[i].GetDistance() < h[j].GetDistance()
 }
 
 func (h SearchResultHeap) Swap(i, j int) {
@@ -95,19 +95,41 @@ func (h *SearchResultHeap) Pop() any {
 	return item
 }
 
+type SearchResultMaxHeap []SearchResultIf
+
+func (h SearchResultMaxHeap) Len() int { return len(h) }
+
+func (h SearchResultMaxHeap) Less(i, j int) bool {
+	return h[i].GetDistance() > h[j].GetDistance()
+}
+
+func (h SearchResultMaxHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *SearchResultMaxHeap) Push(x any) {
+	item := x.(SearchResultIf)
+	*h = append(*h, item)
+}
+
+func (h *SearchResultMaxHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	*h = old[0 : n-1]
+	return item
+}
+
 // Thread-safe Heap struct
 type SearchResultSafeHeap struct {
 	mutex   sync.Mutex
 	resheap SearchResultHeap
-	size    int
 }
 
 func NewSearchResultSafeHeap(size int) *SearchResultSafeHeap {
-	h := &SearchResultSafeHeap{
-		resheap: make(SearchResultHeap, 0, size),
-		size:    size,
-	}
-
+	h := &SearchResultSafeHeap{}
+	h.resheap = make(SearchResultHeap, 0, size)
 	heap.Init(&h.resheap)
 	return h
 }
@@ -122,14 +144,7 @@ func (h *SearchResultSafeHeap) Push(srif SearchResultIf) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	if h.resheap.Len() == h.size {
-		if srif.GetDistance() < h.resheap[0].GetDistance() {
-			h.resheap[0] = srif
-			heap.Fix(&h.resheap, 0)
-		}
-	} else {
-		heap.Push(&h.resheap, srif)
-	}
+	heap.Push(&h.resheap, srif)
 }
 
 func (h *SearchResultSafeHeap) Pop() SearchResultIf {
