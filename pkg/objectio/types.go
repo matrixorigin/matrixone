@@ -19,8 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -59,6 +61,14 @@ func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFunc
 	}
 
 	return nil
+}
+
+type BlockReadTopOp struct {
+	Typ    types.T
+	Metric metric.MetricType
+	ColPos int32
+	NumVec []byte
+	Limit  uint64
 }
 
 type WriteOptions struct {

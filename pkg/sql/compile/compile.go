@@ -960,7 +960,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	}
 }
 
-func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
+func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
@@ -976,216 +976,216 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			ReleaseScopes(right)
 		}
 	}()
-	n := ns[curNodeIdx]
+	node := nodes[curNodeIdx]
 
-	if n.Limit != nil {
-		if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+	if node.Limit != nil {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				if cval.U64Val == 0 {
 					// optimize for limit 0
 					rs := c.newEmptyMergeScope()
 					rs.Proc = c.proc.NewNoContextChildProc(0)
-					return c.compileLimit(n, []*Scope{rs}), nil
+					return c.compileLimit(node, []*Scope{rs}), nil
 				}
 			}
 		}
 	}
 
-	switch n.NodeType {
+	switch node.NodeType {
 	case plan.Node_VALUE_SCAN:
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileValueScan(n)
+		ss, err = c.compileValueScan(node)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileSort(n, c.compileProjection(n, ss))
+		ss = c.compileSort(node, c.compileProjection(node, ss))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
-		if n.ObjRef != nil {
-			c.appendMetaTables(n.ObjRef)
+		if node.ObjRef != nil {
+			c.appendMetaTables(node.ObjRef)
 		}
-		node := plan2.DeepCopyNode(n)
+		nodeCopy := plan2.DeepCopyNode(node)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileExternScan(node)
+		ss, err = c.compileExternScan(nodeCopy)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(nodeCopy, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
-		c.appendMetaTables(n.ObjRef)
+		c.appendMetaTables(node.ObjRef)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileTableScan(n)
+		ss, err = c.compileTableScan(node)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileProjection(n, c.compileRestrict(n, ss))
-		if n.Offset != nil {
-			ss = c.compileOffset(n, ss)
+		ss = c.compileProjection(node, c.compileRestrict(node, ss))
+		if node.Offset != nil {
+			ss = c.compileOffset(node, ss)
 		}
-		if n.Limit != nil {
-			ss = c.compileLimit(n, ss)
+		if node.Limit != nil {
+			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileSourceScan(n)
+		ss, err = c.compileSourceScan(node)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_AGG:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
-		groupInfo := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
+		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileShuffleGroup(n, ss, ns))))
+		if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		} else if c.IsSingleScope(ss) {
-			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
 			return ss, nil
 		} else {
-			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileMergeGroup(n, ss, ns, anyDistinctAgg))))
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
 			return ss, nil
 		}
 	case plan.Node_SAMPLE:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileSample(n, ss))))
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileWin(n, ss))))
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileProjection(n, c.compileRestrict(n, c.compileTimeWin(n, c.compileSort(n, ss))))
+		ss = c.compileProjection(node, c.compileRestrict(node, c.compileTimeWin(node, c.compileSort(node, ss))))
 		return ss, nil
 	case plan.Node_FILL:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileProjection(n, c.compileRestrict(n, c.compileFill(n, ss)))
+		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
-		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, node.Children[1], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], left, right))
+		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss)))
+		ss = c.compileProjection(node, c.compileRestrict(node, c.compileSort(node, ss)))
 		return ss, nil
 	case plan.Node_PARTITION:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss)))
+		ss = c.compileProjection(node, c.compileRestrict(node, c.compilePartition(node, ss)))
 		return ss, nil
 	case plan.Node_UNION:
-		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, node.Children[1], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileUnion(n, left, right))
+		ss = c.compileSort(node, c.compileUnion(node, left, right))
 		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, node.Children[1], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType))
+		ss = c.compileSort(node, c.compileMinusAndIntersect(node, left, right, node.NodeType))
 		return ss, nil
 	case plan.Node_UNION_ALL:
-		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, node.Children[1], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileUnionAll(n, left, right))
+		ss = c.compileSort(node, c.compileUnionAll(node, left, right))
 		return ss, nil
 	case plan.Node_DELETE:
-		if n.DeleteCtx.CanTruncate {
+		if node.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
 			s.Plan = &plan.Plan{
 				Plan: &plan.Plan_Ddl{
 					Ddl: &plan.DataDefinition{
 						DdlType: plan.DataDefinition_TRUNCATE_TABLE,
 						Definition: &plan.DataDefinition_TruncateTable{
-							TruncateTable: n.DeleteCtx.TruncateTable,
+							TruncateTable: node.DeleteCtx.TruncateTable,
 						},
 					},
 				},
@@ -1193,163 +1193,163 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			ss = []*Scope{s}
 			return ss, nil
 		}
-		c.appendMetaTables(n.DeleteCtx.Ref)
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		c.appendMetaTables(node.DeleteCtx.Ref)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
-		n.NotCacheable = true
+		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compileDelete(n, ss)
+		return c.compileDelete(node, ss)
 	case plan.Node_ON_DUPLICATE_KEY:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileOnduplicateKey(n, ss)
+		ss, err = c.compileOnduplicateKey(node, ss)
 		if err != nil {
 			return nil, err
 		}
 		return ss, nil
 	case plan.Node_FUZZY_FILTER:
-		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, node.Children[1], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		return c.compileFuzzyFilter(n, ns, left, right)
+		return c.compileFuzzyFilter(node, nodes, left, right)
 	case plan.Node_PRE_INSERT_UK:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compilePreInsertUk(n, ss)
+		ss = c.compilePreInsertUk(node, ss)
 		return ss, nil
 	case plan.Node_PRE_INSERT_SK:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compilePreInsertSK(n, ss)
+		ss = c.compilePreInsertSK(node, ss)
 		return ss, nil
 	case plan.Node_PRE_INSERT:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compilePreInsert(ns, n, ss)
+		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
-		c.appendMetaTables(n.ObjRef)
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		c.appendMetaTables(node.ObjRef)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
-		n.NotCacheable = true
+		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compileInsert(ns, n, ss)
+		return c.compileInsert(nodes, node, ss)
 	case plan.Node_MULTI_UPDATE:
-		for _, updateCtx := range n.UpdateCtxList {
+		for _, updateCtx := range node.UpdateCtxList {
 			c.appendMetaTables(updateCtx.ObjRef)
 		}
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
-		n.NotCacheable = true
+		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compileMultiUpdate(ns, n, ss)
+		return c.compileMultiUpdate(nodes, node, ss)
 	case plan.Node_LOCK_OP:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileLock(n, ss)
+		ss, err = c.compileLock(node, ss)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileProjection(n, ss)
+		ss = c.compileProjection(node, ss)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
-		if len(n.Children) != 0 {
-			ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if len(node.Children) != 0 {
+			ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileTableFunction(n, ss)
+		ss, err = c.compileTableFunction(node, ss)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileSinkScanNode(n, curNodeIdx)
+		ss, err = c.compileSinkScanNode(node, curNodeIdx)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileProjection(n, ss)
+		ss = c.compileProjection(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compileRecursiveScan(n, curNodeIdx)
+		return c.compileRecursiveScan(node, curNodeIdx)
 	case plan.Node_RECURSIVE_CTE:
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileRecursiveCte(n, curNodeIdx)
+		ss, err = c.compileRecursiveCte(node, curNodeIdx)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileSort(n, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_SINK:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compileSinkNode(n, ss, step)
+		return c.compileSinkNode(node, ss, step)
 	case plan.Node_APPLY:
-		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
+		ss = c.compileSort(node, c.compileApply(node, nodes[node.Children[1]], left))
 		return ss, nil
 	case plan.Node_POSTDML:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compilePostDml(n, ss)
+		ss = c.compilePostDml(node, ss)
 		return ss, nil
 
 	default:
-		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
+		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", node))
 	}
 }
 
@@ -2163,6 +2163,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
 	s.DataSource.OrderBy = node.OrderBy
+	s.DataSource.BlockOrderBy = node.BlockOrderBy
+	s.DataSource.BlockLimit = node.BlockLimit.GetLit().GetU64Val()
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil

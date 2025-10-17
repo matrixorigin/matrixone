@@ -924,7 +924,6 @@ type DataSource interface {
 	) (deletedRows objectio.Bitmap, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)
-
 	GetOrderBy() []*plan.OrderBySpec
 
 	SetFilterZM(zm objectio.ZoneMap)
@@ -1095,6 +1094,7 @@ type Reader interface {
 	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
+	SetBlockTop([]*plan.OrderBySpec, uint64)
 	SetFilterZM(objectio.ZoneMap)
 	//SetScanType()
 }

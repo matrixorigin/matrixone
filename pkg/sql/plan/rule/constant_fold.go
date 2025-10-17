@@ -51,6 +51,9 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	if n.Limit != nil {
 		n.Limit = r.constantFold(n.Limit, proc)
 	}
+	if n.BlockLimit != nil {
+		n.BlockLimit = r.constantFold(n.BlockLimit, proc)
+	}
 	if n.Offset != nil {
 		n.Offset = r.constantFold(n.Offset, proc)
 	}
@@ -94,6 +97,10 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	}
 
 	for _, orderBy := range n.OrderBy {
+		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	}
+
+	for _, orderBy := range n.BlockOrderBy {
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
 	}
 
@@ -535,9 +542,18 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 				return false, err
 			}
 		case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary, types.T_text,
-			types.T_blob, types.T_datalink, types.T_json, types.T_array_float32, types.T_array_float64:
+			types.T_blob, types.T_datalink, types.T_json:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Sval); ok {
 				val := val.Sval
+				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
+				return true, err
+			} else {
+				err = vector.AppendBytes(vec, nil, false, proc.Mp())
+				return false, err
+			}
+		case types.T_array_float32, types.T_array_float64:
+			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
+				val := val.VecVal
 				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
 				return true, err
 			} else {

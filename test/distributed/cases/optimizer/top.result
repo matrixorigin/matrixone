@@ -24,7 +24,7 @@ Project
         Limit: 100, Offset: 200
         Send Message: [tag 1 , type MsgTopValue]
         ->  Table Scan on d1.t1
-              Sort Key: c1 INTERNAL
+              Sort Key: t1.c1 INTERNAL
               Recv Message: [tag 1 , type MsgTopValue]
 select * from t1 order by c1 limit 10 ;
 c1    c2    c3
@@ -157,7 +157,7 @@ Project
               Join Type: INNER   hashOnPK
               Join Cond: (t1.c1 = t2.c1)
               ->  Table Scan on d1.t1
-                    Sort Key: c1 DESC
+                    Sort Key: t1.c1 DESC
                     Recv Message: [tag 2 , type MsgTopValue]
               ->  Table Scan on d1.t2
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2  order by t1.c1 desc limit 10 offset 10;
@@ -180,7 +180,7 @@ Project
         Limit: 10, Offset: 20
         Send Message: [tag 1 , type MsgTopValue]
         ->  Table Scan on d1.t1
-              Sort Key: c2 INTERNAL
+              Sort Key: t1.c2 INTERNAL
               Recv Message: [tag 1 , type MsgTopValue]
 select * from t1 order by c2 limit 10 offset 20;
 c1    c2    c3

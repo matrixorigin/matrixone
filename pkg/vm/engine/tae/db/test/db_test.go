@@ -4487,7 +4487,7 @@ func TestBlockRead(t *testing.T) {
 			cacheVectors := containers.NewVectors(len(colIdxs) + 1)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
+				beforeDel, nil, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4498,7 +4498,7 @@ func TestBlockRead(t *testing.T) {
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
+				afterFirstDel, nil, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
@@ -4508,7 +4508,7 @@ func TestBlockRead(t *testing.T) {
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
+				afterSecondDel, nil, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4521,7 +4521,7 @@ func TestBlockRead(t *testing.T) {
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				0,
-				afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
+				afterSecondDel, nil, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4535,7 +4535,7 @@ func TestBlockRead(t *testing.T) {
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				0,
-				afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
+				afterSecondDel, nil, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))
@@ -4636,7 +4636,7 @@ func TestBlockRead2(t *testing.T) {
 				ds.SetTS(beforeDel)
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-					beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
+					beforeDel, nil, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4648,7 +4648,7 @@ func TestBlockRead2(t *testing.T) {
 				logutil.Infof("meta location: %v", info.MetaLocation().String())
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-					afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
+					afterFirstDel, nil, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, 7, b2.Vecs[0].Length())
@@ -4658,7 +4658,7 @@ func TestBlockRead2(t *testing.T) {
 				b3 := buildBatch(colTyps)
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-					afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
+					afterSecondDel, nil, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4671,7 +4671,7 @@ func TestBlockRead2(t *testing.T) {
 					[]uint16{2},
 					[]types.Type{types.T_Rowid.ToType()},
 					0,
-					afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
+					afterSecondDel, nil, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, 1, len(b4.Vecs))
@@ -4685,7 +4685,7 @@ func TestBlockRead2(t *testing.T) {
 					ds, []uint16{2},
 					[]types.Type{types.T_Rowid.ToType()},
 					0,
-					afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
+					afterSecondDel, nil, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, 1, len(b5.Vecs))

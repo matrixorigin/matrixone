@@ -304,6 +304,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, orderByInfo)
 	}
 
+	// Get Sort list info
+	if len(ndesc.Node.BlockOrderBy) > 0 {
+		orderByInfo, err := ndesc.GetBlockOrderByInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, orderByInfo)
+	}
+
 	// Get Join type info
 	if ndesc.Node.NodeType == plan.Node_JOIN {
 		joinTypeInfo, err := ndesc.GetJoinTypeInfo(ctx, options)
@@ -420,6 +429,16 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			if err != nil {
 				return nil, err
 			}
+		}
+		lines = append(lines, buf.String())
+	}
+
+	if ndesc.Node.BlockLimit != nil {
+		buf := bytes.NewBuffer(make([]byte, 0, 160))
+		buf.WriteString("Block Limit: ")
+		err := describeExpr(ctx, ndesc.Node.BlockLimit, options, buf)
+		if err != nil {
+			return nil, err
 		}
 		lines = append(lines, buf.String())
 	}
@@ -979,7 +998,24 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		buf.WriteString("Sort Key: ")
-		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
+		blockOrderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
+		err := blockOrderByDescImpl.GetDescription(ctx, options, buf)
+		if err != nil {
+			return "", err
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetBlockOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		buf.WriteString("Block Sort Key: ")
+		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.BlockOrderBy)
 		err := orderByDescImpl.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
