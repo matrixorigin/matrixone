@@ -218,7 +218,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			return
 		}
 
-		rt.BackgroundQueries[0] = res.LogicalPlan
+		if len(rt.BackgroundQueries) > 0 {
+			rt.BackgroundQueries[0] = res.LogicalPlan
+		}
 	}()
 
 	distances = make([]float64, 0, rt.Limit)
