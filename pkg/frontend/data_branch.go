@@ -863,8 +863,6 @@ func diff(
 		mrs.AddRow(row)
 	}
 
-	fmt.Println("diff", rows)
-
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
@@ -1208,8 +1206,6 @@ func buildHashmapForBaseTable(
 		}
 
 		if dataBat != nil {
-			//fmt.Println("base", "\n", common.MoBatchToString(dataBat, dataBat.RowCount()))
-			//fmt.Println()
 			if err = dataHashmap.PutByVectors(dataBat.Vecs, pkIdxes); err != nil {
 				return
 			}
@@ -1469,7 +1465,7 @@ func decideCollectRange(
 		baseEndTS = baseSp.Prev()
 	}
 
-	givenCommonBaseIsLCA := func() error {
+	givenUpCommonBaseIsLCA := func() error {
 		tarCTS, err = getTarCommitTS()
 
 		tarFromTS = tarCTS.Next()
@@ -1479,7 +1475,7 @@ func decideCollectRange(
 		return err
 	}
 
-	givenCommonTarIsLCA := func() error {
+	givenUpCommonTarIsLCA := func() error {
 		baseCTS, err = getBaseCommitTS()
 		tarFromTS = baseCTS.Next()
 		tarEndTS = tarSp
@@ -1502,7 +1498,7 @@ func decideCollectRange(
 			baseCollectNothing()
 		} else {
 			// baseSp.GT(&tarBranchTS)
-			err = givenCommonBaseIsLCA()
+			err = givenUpCommonBaseIsLCA()
 		}
 
 	} else if lcaTableID == tarTableID { // tar is the LCA
@@ -1516,7 +1512,7 @@ func decideCollectRange(
 			baseEndTS = baseSp
 		} else {
 			// tarSp.GT(&baseBranchTS)
-			err = givenCommonTarIsLCA()
+			err = givenUpCommonTarIsLCA()
 		}
 
 	} else {
@@ -1536,6 +1532,25 @@ func decideCollectRange(
 		} else {
 			worstRange()
 		}
+	}
+
+	if tarTableID == baseTableID {
+		// same table ==> same branch TS ==> same from ts
+		// data branch diff t1{sp1} against t1{sp2}
+		// t1: -----from ts-------sp1-----------sp2----->
+		//
+		//diff t1.[fromTS, sp1] against t1.[fromTS, sp2]
+		//
+		// minEnd = mix(sp1,sp2)
+		// ==> t1.[minEnd, sp1] against t1.[minEnd, sp2]
+		minEnd := tarEndTS
+		if minEnd.LT(&baseEndTS) {
+			minEnd = baseEndTS
+		}
+		minEnd = minEnd.Next()
+
+		tarFromTS = minEnd
+		baseFromTS = minEnd
 	}
 
 	return
