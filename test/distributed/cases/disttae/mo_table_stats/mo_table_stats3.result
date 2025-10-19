@@ -5,6 +5,7 @@ mo_database    Tae    Dynamic    8    0    2158    0    0    NULL    0    2025-0
 mo_tables    Tae    Dynamic    129    0    52461    0    0    NULL    0    2025-09-01 10:22:32    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_columns    Tae    Dynamic    1384    0    71602    0    0    NULL    0    2025-09-01 10:22:32    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_account    Tae    Dynamic    1    0    1399    0    0    NULL    0    2025-09-01 10:22:32    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_branch_metadata    Tae    Dynamic    266    0    6557    0    0    NULL    0    2025-10-18 16:55:23    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cache    null    null    null    null    null    null    null    null    null    2025-09-01 10:22:32    null    null    null    null    null    VIEW    0    moadmin
 mo_cdc_task    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-09-01 10:22:32    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cdc_watermark    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-09-01 10:22:32    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
