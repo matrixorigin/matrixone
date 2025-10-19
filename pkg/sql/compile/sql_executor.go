@@ -34,6 +34,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -353,11 +354,32 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
-	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
+	var pn *plan.Plan
+
+	switch stmt := stmts[0].(type) {
+	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+		//*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+
+		opt := plan.NewBaseOptimizer(compileContext)
+		optimized, err := opt.Optimize(stmt, prepared)
+		if err == nil {
+			pn = &plan.Plan{
+				Plan: &plan.Plan_Query{
+					Query: optimized,
+				},
+			}
+		}
+	default:
+		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+	}
 
 	if err != nil {
 		return executor.Result{}, err
 	}
+
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
 		if err != nil {

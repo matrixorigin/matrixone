@@ -206,6 +206,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		GroupingFlag:    slices.Clone(node.GroupingFlag),
 		AggList:         DeepCopyExprList(node.AggList),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
+		BlockOrderBy:    make([]*plan.OrderBySpec, len(node.BlockOrderBy)),
+		BlockLimit:      DeepCopyExpr(node.BlockLimit),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
 		TblFuncExprList: DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
@@ -235,6 +237,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	for idx, orderBy := range node.OrderBy {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
+	}
+
+	for idx, blockOrderBy := range node.BlockOrderBy {
+		newNode.BlockOrderBy[idx] = DeepCopyOrderBy(blockOrderBy)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
