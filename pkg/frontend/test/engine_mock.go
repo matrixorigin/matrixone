@@ -1611,6 +1611,18 @@ func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{})
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
+// SetBlockTop mocks base method.
+func (m *MockReader) SetBlockTop(arg0 []*plan.OrderBySpec, arg1 uint64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetBlockTop", arg0, arg1)
+}
+
+// SetBlockTop indicates an expected call of SetBlockTop.
+func (mr *MockReaderMockRecorder) SetBlockTop(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlockTop", reflect.TypeOf((*MockReader)(nil).SetBlockTop), arg0, arg1)
+}
+
 // SetFilterZM mocks base method.
 func (m *MockReader) SetFilterZM(arg0 objectio.ZoneMap) {
 	m.ctrl.T.Helper()

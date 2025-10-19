@@ -1165,7 +1165,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 
 	// if there is a limit, outcnt is limit number
-	if node.Limit != nil {
+	if node.Limit != nil && node.NodeType != plan.Node_TABLE_SCAN {
 		limitExpr := DeepCopyExpr(node.Limit)
 		if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
 			if !hasParam(limitExpr) {
