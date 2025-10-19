@@ -44,7 +44,7 @@ func TestBranchHashmapBasic(t *testing.T) {
 	require.True(t, results[0].Exists)
 	require.Len(t, results[0].Rows, 1)
 
-	tuple, err := bh.DecodeRow(results[0].Rows[0])
+	tuple, _, err := bh.DecodeRow(results[0].Rows[0])
 	require.NoError(t, err)
 	require.Len(t, tuple, 2)
 	require.Equal(t, int64(2), tuple[0])
@@ -74,7 +74,7 @@ func TestBranchHashmapPopByVectors(t *testing.T) {
 	probe := buildInt64Vector(t, mp, []int64{2, 4})
 	defer probe.Free(mp)
 
-	results, err := bh.PopByVectors([]*vector.Vector{probe})
+	results, err := bh.PopByVectors([]*vector.Vector{probe}, true)
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	require.True(t, results[0].Exists)
@@ -86,6 +86,74 @@ func TestBranchHashmapPopByVectors(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, after[0].Exists)
 	require.Empty(t, after[0].Rows)
+}
+
+func TestBranchHashmapPopByVectorsPartial(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1})
+	valVec := buildStringVector(t, mp, []string{"one", "uno"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+
+	results, err := bh.PopByVectors([]*vector.Vector{probe}, false)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+
+	removedRow, _, err := bh.DecodeRow(results[0].Rows[0])
+	require.NoError(t, err)
+	require.Len(t, removedRow, 2)
+	require.Equal(t, int64(1), removedRow[0])
+	removedValueBytes, ok := removedRow[1].([]byte)
+	require.True(t, ok)
+	removedValue := string(removedValueBytes)
+	require.True(t, removedValue == "one" || removedValue == "uno")
+
+	after, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.True(t, after[0].Exists)
+	require.Len(t, after[0].Rows, 1)
+	remainingRow, _, err := bh.DecodeRow(after[0].Rows[0])
+	require.NoError(t, err)
+	require.Len(t, remainingRow, 2)
+	require.Equal(t, int64(1), remainingRow[0])
+	remainingValueBytes, ok := remainingRow[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, removedValue, string(remainingValueBytes))
+
+	second, err := bh.PopByVectors([]*vector.Vector{probe}, false)
+	require.NoError(t, err)
+	require.Len(t, second, 1)
+	require.True(t, second[0].Exists)
+	require.Len(t, second[0].Rows, 1)
+	secondRow, _, err := bh.DecodeRow(second[0].Rows[0])
+	require.NoError(t, err)
+	require.Len(t, secondRow, 2)
+	require.Equal(t, int64(1), secondRow[0])
+	secondValueBytes, ok := secondRow[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, removedValue, string(secondValueBytes))
+
+	final, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Len(t, final, 1)
+	require.False(t, final[0].Exists)
+	require.Empty(t, final[0].Rows)
 }
 
 func TestBranchHashmapCompositeKey(t *testing.T) {
@@ -119,9 +187,9 @@ func TestBranchHashmapCompositeKey(t *testing.T) {
 	require.True(t, results[0].Exists)
 	require.Len(t, results[0].Rows, 2)
 
-	firstRow, err := bh.DecodeRow(results[0].Rows[0])
+	firstRow, _, err := bh.DecodeRow(results[0].Rows[0])
 	require.NoError(t, err)
-	secondRow, err := bh.DecodeRow(results[0].Rows[1])
+	secondRow, _, err := bh.DecodeRow(results[0].Rows[1])
 	require.NoError(t, err)
 
 	values := [][]any{
@@ -136,7 +204,7 @@ func TestBranchHashmapCompositeKey(t *testing.T) {
 
 	require.True(t, results[1].Exists)
 	require.Len(t, results[1].Rows, 1)
-	row, err := bh.DecodeRow(results[1].Rows[0])
+	row, _, err := bh.DecodeRow(results[1].Rows[0])
 	require.NoError(t, err)
 	require.Equal(t, int64(2), row[0])
 	require.Equal(t, []byte("b"), row[1])
@@ -183,7 +251,7 @@ func TestBranchHashmapSpillAndRetrieve(t *testing.T) {
 	} {
 		require.Truef(t, results[i].Exists, "expected key %d to exist", expected.key)
 		require.Len(t, results[i].Rows, 1)
-		row, err := bhIface.DecodeRow(results[i].Rows[0])
+		row, _, err := bhIface.DecodeRow(results[i].Rows[0])
 		require.NoError(t, err)
 		require.Equal(t, expected.key, row[0])
 		require.Equal(t, []byte(expected.value), row[1])
@@ -214,7 +282,7 @@ func TestBranchHashmapPopByVectorsSpilled(t *testing.T) {
 	probe := buildInt64Vector(t, mp, []int64{9, 10})
 	defer probe.Free(mp)
 
-	results, err := bhIface.PopByVectors([]*vector.Vector{probe})
+	results, err := bhIface.PopByVectors([]*vector.Vector{probe}, true)
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	for i, expected := range []struct {
@@ -226,7 +294,7 @@ func TestBranchHashmapPopByVectorsSpilled(t *testing.T) {
 	} {
 		require.Truef(t, results[i].Exists, "expected key %d to exist", expected.key)
 		require.Len(t, results[i].Rows, 1)
-		row, err := bhIface.DecodeRow(results[i].Rows[0])
+		row, _, err := bhIface.DecodeRow(results[i].Rows[0])
 		require.NoError(t, err)
 		require.Equal(t, expected.key, row[0])
 		require.Equal(t, []byte(expected.value), row[1])
@@ -236,6 +304,61 @@ func TestBranchHashmapPopByVectorsSpilled(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, after[0].Exists)
 	require.False(t, after[1].Exists)
+}
+
+func TestBranchHashmapPopByVectorsPartialSpilled(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newLimitedAllocator(80)
+	bhIface, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(t.TempDir()),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bhIface.Close())
+	}()
+
+	keys := make([]int64, 10)
+	for i := range keys {
+		keys[i] = 1
+	}
+	values := []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
+
+	keyVec := buildInt64Vector(t, mp, keys)
+	valVec := buildStringVector(t, mp, values)
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	require.NoError(t, bhIface.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	impl := bhIface.(*branchHashmap)
+	require.NotEmpty(t, impl.spills, "expected data to spill on limited allocator")
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+
+	results, err := bhIface.PopByVectors([]*vector.Vector{probe}, false)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+
+	after, err := bhIface.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.True(t, after[0].Exists)
+	require.Len(t, after[0].Rows, 9)
+
+	_, err = bhIface.PopByVectors([]*vector.Vector{probe}, true)
+	require.NoError(t, err)
+
+	final, err := bhIface.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Len(t, final, 1)
+	require.False(t, final[0].Exists)
+	require.Empty(t, final[0].Rows)
 }
 
 func TestBranchHashmapForEach(t *testing.T) {
@@ -264,14 +387,14 @@ func TestBranchHashmapForEach(t *testing.T) {
 
 	collected := make(map[int64][]string)
 	err = bhIface.ForEach(func(key []byte, rows [][]byte) error {
-		tuple, err := bhIface.DecodeRow(key)
+		tuple, _, err := bhIface.DecodeRow(key)
 		require.NoError(t, err)
 		require.Len(t, tuple, 1)
 		keyVal, ok := tuple[0].(int64)
 		require.True(t, ok)
 
 		for _, rowBytes := range rows {
-			rowTuple, err := bhIface.DecodeRow(rowBytes)
+			rowTuple, _, err := bhIface.DecodeRow(rowBytes)
 			require.NoError(t, err)
 			require.Len(t, rowTuple, 2)
 			valueBytes, ok := rowTuple[1].([]byte)
