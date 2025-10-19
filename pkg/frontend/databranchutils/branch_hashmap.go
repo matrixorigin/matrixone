@@ -27,10 +27,12 @@ type BranchHashmap interface {
 	// GetByVectors probes the map using the supplied key vectors and returns one
 	// GetResult per probed row, preserving the order of the original vectors.
 	GetByVectors(keyVecs []*vector.Vector) ([]GetResult, error)
-	// PopByVectors behaves like GetByVectors but removes every matching key from
-	// the hashmap. The returned rows hold encoded payloads that can be decoded via
-	// DecodeRow to recover the original column values.
-	PopByVectors(keyVecs []*vector.Vector) ([]GetResult, error)
+	// PopByVectors behaves like GetByVectors but removes matching rows from the
+	// hashmap. When removeAll is true, all rows associated with a key are removed.
+	// When removeAll is false, only a single row is removed. The returned rows hold
+	// encoded payloads that can be decoded via DecodeRow to recover the original
+	// column values.
+	PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error)
 	// ForEach iterates through all in-memory and spilled entries, invoking fn with
 	// the encoded key and all rows associated with that key.
 	ForEach(fn func(key []byte, rows [][]byte) error) error
@@ -360,14 +362,14 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 }
 
 func (bh *branchHashmap) GetByVectors(keyVecs []*vector.Vector) ([]GetResult, error) {
-	return bh.lookupByVectors(keyVecs, false)
+	return bh.lookupByVectors(keyVecs, nil)
 }
 
-func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector) ([]GetResult, error) {
-	return bh.lookupByVectors(keyVecs, true)
+func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error) {
+	return bh.lookupByVectors(keyVecs, &removeAll)
 }
 
-func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, remove bool) ([]GetResult, error) {
+func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bool) ([]GetResult, error) {
 	if len(keyVecs) == 0 {
 		return nil, nil
 	}
@@ -492,11 +494,18 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, remove bool) 
 			hash := bh.hashKey(prepared.key)
 			res := &results[prepared.idx]
 			res.Rows = res.Rows[:0]
-			res.Rows = bh.collectFromMemory(hash, prepared.key, res.Rows, remove)
+			var plan *removalPlan
+			if removeAll != nil {
+				plan = newRemovalPlan(*removeAll)
+			}
+			res.Rows = bh.collectFromMemory(hash, prepared.key, res.Rows, plan)
 
 			if len(bh.spills) > 0 {
 				for _, part := range bh.spills {
-					if err := part.collect(hash, prepared.key, &res.Rows, &spillBuf, remove); err != nil {
+					if plan != nil && !plan.hasRemaining() {
+						break
+					}
+					if err := part.collect(hash, prepared.key, &res.Rows, &spillBuf, plan); err != nil {
 						errCopy := err
 						encodeErr.CompareAndSwap(nil, &errCopy)
 						break
@@ -750,15 +759,54 @@ func (bh *branchHashmap) insertEntry(entry *hashEntry) {
 	}
 }
 
-func (bh *branchHashmap) collectFromMemory(hash uint64, key []byte, dst [][]byte, remove bool) [][]byte {
+type removalPlan struct {
+	remaining int
+}
+
+func newRemovalPlan(removeAll bool) *removalPlan {
+	if removeAll {
+		return &removalPlan{remaining: -1}
+	}
+	return &removalPlan{remaining: 1}
+}
+
+func (rp *removalPlan) take() bool {
+	if rp == nil {
+		return false
+	}
+	if rp.remaining < 0 {
+		return true
+	}
+	if rp.remaining == 0 {
+		return false
+	}
+	rp.remaining--
+	return true
+}
+
+func (rp *removalPlan) hasRemaining() bool {
+	if rp == nil {
+		return false
+	}
+	if rp.remaining < 0 {
+		return true
+	}
+	return rp.remaining > 0
+}
+
+func (bh *branchHashmap) collectFromMemory(hash uint64, key []byte, dst [][]byte, plan *removalPlan) [][]byte {
 	bucket, ok := bh.inMemory[hash]
 	if !ok {
 		return dst
 	}
-	if remove {
+	if plan != nil {
 		newEntries := bucket.entries[:0]
 		for _, entry := range bucket.entries {
-			if int(entry.keyLen) == len(key) && bytes.Equal(entry.keyBytes(), key) {
+			if !plan.hasRemaining() {
+				newEntries = append(newEntries, entry)
+				continue
+			}
+			if int(entry.keyLen) == len(key) && bytes.Equal(entry.keyBytes(), key) && plan.take() {
 				value := entry.valueBytes()
 				copied := make([]byte, len(value))
 				copy(copied, value)
@@ -1067,13 +1115,17 @@ func (sp *spillPartition) append(entry *hashEntry) error {
 	return nil
 }
 
-func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratch *[]byte, remove bool) error {
+func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratch *[]byte, plan *removalPlan) error {
 	pointers := sp.index[hash]
 	if len(pointers) == 0 {
 		return nil
 	}
 	kept := pointers[:0]
 	for _, ptr := range pointers {
+		if plan != nil && !plan.hasRemaining() {
+			kept = append(kept, ptr)
+			continue
+		}
 		need := int(ptr.keyLen + ptr.valueLen)
 		if cap(*scratch) < need {
 			*scratch = make([]byte, need)
@@ -1086,23 +1138,31 @@ func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratc
 		if n != len(buf) {
 			return io.ErrUnexpectedEOF
 		}
-		if bytes.Equal(buf[:ptr.keyLen], key) {
+		matched := bytes.Equal(buf[:ptr.keyLen], key)
+		switch {
+		case plan == nil:
+			if matched {
+				payload := make([]byte, ptr.valueLen)
+				copy(payload, buf[ptr.keyLen:])
+				*dst = append(*dst, payload)
+			}
+			kept = append(kept, ptr)
+		case matched && plan.take():
 			payload := make([]byte, ptr.valueLen)
 			copy(payload, buf[ptr.keyLen:])
 			*dst = append(*dst, payload)
-			if !remove {
-				kept = append(kept, ptr)
-			}
-		} else {
+		default:
 			kept = append(kept, ptr)
 		}
 	}
-	if remove {
+	if plan != nil {
 		if len(kept) == 0 {
 			delete(sp.index, hash)
 		} else {
 			sp.index[hash] = append(sp.index[hash][:0], kept...)
 		}
+	} else if len(kept) != len(pointers) {
+		sp.index[hash] = append(sp.index[hash][:0], kept...)
 	}
 	return nil
 }

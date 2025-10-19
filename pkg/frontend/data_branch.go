@@ -570,7 +570,10 @@ func sortDiffResultRows(
 		}
 
 		// check if the row[i], r[i+1] has the same pk
-		if twoRowsCompare(rows[i], rows[i+1], true) == 0 {
+		// if pk equal and flag not equal, means this is an update,
+		// or duplicate insert with no pk table.
+		if twoRowsCompare(rows[i], rows[i+1], true) == 0 &&
+			rows[i][1] != rows[i+1][1] {
 			mergeTwoRows(rows[i], rows[i+1])
 			i += 2
 		} else {
@@ -714,7 +717,7 @@ func diff(
 				for _, idx := range pkColIdxes {
 					pkVecs = append(pkVecs, dataBat.Vecs[idx])
 				}
-				if checkRet, err = baseDataHashmap.PopByVectors(pkVecs); err != nil {
+				if checkRet, err = baseDataHashmap.PopByVectors(pkVecs, false); err != nil {
 					return
 				}
 
@@ -737,6 +740,7 @@ func diff(
 						// exists in the base table, we should compare the left columns
 						if pkKind == fakeKind {
 							// already compared, do nothing here
+							fmt.Println("find", len(checkRet[i].Rows))
 						} else {
 							var (
 								allEqual = true
@@ -792,7 +796,7 @@ func diff(
 			if tombstoneBat != nil {
 				pkVecs = pkVecs[:0]
 				pkVecs = append(pkVecs, tombstoneBat.Vecs[0])
-				if checkRet, err = baseTombstoneHashmap.PopByVectors(pkVecs); err != nil {
+				if checkRet, err = baseTombstoneHashmap.PopByVectors(pkVecs, true); err != nil {
 					return
 				}
 
@@ -830,8 +834,9 @@ func diff(
 
 	// iterate the left base table data
 	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
-		row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
+		//row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 		for _, r := range data {
+			row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 			if tuple, valTypes, err := baseDataHashmap.DecodeRow(r); err != nil {
 				return err
 			} else {
@@ -844,8 +849,8 @@ func diff(
 					}
 				}
 			}
+			rows = append(rows, row)
 		}
-		rows = append(rows, row)
 		return nil
 	}); err != nil {
 		return
