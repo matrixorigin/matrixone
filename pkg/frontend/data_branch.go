@@ -1063,7 +1063,7 @@ func handleDelsOnLCA(
 				case types.Decimal256:
 					buf.WriteString(pk.Format(dels.GetType().Scale))
 				default:
-					return nil, fmt.Errorf("unknown pk type: %T", pk)
+					return nil, moerr.NewInternalErrorNoCtxf("unknown pk type: %T", pk)
 				}
 
 				if j != len(tuple)-1 {
