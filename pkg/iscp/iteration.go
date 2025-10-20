@@ -96,6 +96,10 @@ func ExecuteIteration(
 	if err != nil {
 		return
 	}
+	preLSN := make([]uint64, len(iterCtx.jobNames))
+	for i := range iterCtx.jobNames {
+		preLSN[i] = iterCtx.lsn[i] - 1
+	}
 
 	var needInit bool
 	for i := range prevStatus {
@@ -115,6 +119,7 @@ func ExecuteIteration(
 					statuses,
 					iterCtx.fromTS,
 					errMsg,
+					preLSN,
 				)
 			}
 			needInit = true
@@ -145,6 +150,7 @@ func ExecuteIteration(
 					statuses,
 					iterCtx.fromTS,
 					ISCPJobState_Completed,
+					preLSN,
 				)
 			},
 			SubmitRetryTimes,
@@ -272,6 +278,7 @@ func ExecuteIteration(
 		statuses,
 		iterCtx.fromTS,
 		ISCPJobState_Running,
+		preLSN,
 	)
 	if err != nil {
 		return
@@ -414,6 +421,7 @@ func ExecuteIteration(
 						[]*JobStatus{status},
 						watermark,
 						state,
+						iterCtx.lsn,
 					)
 				},
 				SubmitRetryTimes,
@@ -445,6 +453,7 @@ var FlushJobStatusOnIterationState = func(
 	jobStatuses []*JobStatus,
 	watermark types.TS,
 	state int8,
+	prevLSN []uint64,
 ) (err error) {
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -484,6 +493,7 @@ var FlushJobStatusOnIterationState = func(
 			jobStatuses[i],
 			watermark,
 			state,
+			prevLSN[i],
 		)
 		if err != nil {
 			return
@@ -503,6 +513,7 @@ func FlushStatus(
 	jobStatus *JobStatus,
 	watermark types.TS,
 	state int8,
+	prevLSN uint64,
 ) (err error) {
 	statusJson, err := MarshalJobStatus(jobStatus)
 	if err != nil {
@@ -516,6 +527,7 @@ func FlushStatus(
 		watermark,
 		statusJson,
 		state,
+		prevLSN,
 	)
 	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -553,6 +565,10 @@ var GetJobSpecs = func(
 	if err != nil {
 		return
 	}
+	prevLSNs := make([]uint64, len(jobName))
+	for i := range jobName {
+		prevLSNs[i] = lsns[i] - 1
+	}
 	defer execResult.Close()
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
@@ -572,6 +588,7 @@ var GetJobSpecs = func(
 				jobStatuses,
 				watermark,
 				errMsg,
+				prevLSNs,
 			)
 		}
 		for i := 0; i < rows; i++ {
@@ -602,6 +619,7 @@ func FlushPermanentErrorMessage(
 	jobStatuses []*JobStatus,
 	watermark types.TS,
 	errMsg string,
+	prevLSN []uint64,
 ) (err error) {
 	logutil.Error(
 		"ISCP-Task Flush Permanent Error Message",
@@ -626,6 +644,7 @@ func FlushPermanentErrorMessage(
 		jobStatuses,
 		watermark,
 		ISCPJobState_Error,
+		prevLSN,
 	)
 }
 
