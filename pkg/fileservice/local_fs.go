@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
 	"iter"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"go.uber.org/zap"
 
@@ -1217,4 +1218,71 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 		return entryIsDir(path, name, stat)
 	}
 	return false, nil
+}
+
+// open for read and write
+func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+}
+
+// create or truncate.
+func (l *LocalFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Create(nativePath)
+}
+
+// remove file
+func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
+	err := ctx.Err()
+	if err != nil {
+		return err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Remove(nativePath)
+}
+
+// open/create then immediately remove.   the opend file is good for read/write.
+func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	f, err := os.Create(nativePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// do not check error for this one
+	os.Remove(nativePath)
+	return f, nil
 }

@@ -116,6 +116,7 @@ message Group {
   bytes PartialResults = 8;
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
+  int64 spill_mem = 11;
 }
 
 message Insert{

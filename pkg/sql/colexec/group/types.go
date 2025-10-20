@@ -87,6 +87,7 @@ type Group struct {
 	ctr          container
 	NeedEval     bool
 	PreAllocSize uint64
+	SpillMem     int64
 
 	// group-by column.
 	Exprs        []*plan.Expr
@@ -216,7 +217,7 @@ func (group *Group) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[Group](
+	reuse.CreatePool(
 		func() *Group {
 			return &Group{}
 		},
@@ -234,6 +235,6 @@ func NewArgument() *Group {
 
 func (group *Group) Release() {
 	if group != nil {
-		reuse.Free[Group](group, nil)
+		reuse.Free(group, nil)
 	}
 }

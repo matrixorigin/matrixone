@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -126,7 +125,7 @@ func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error
 	return nil
 }
 
-func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
 	return &MockIvfSearch[float32]{Idxcfg: idxcfg, Tblcfg: tblcfg}, nil
 }
 
@@ -303,7 +302,7 @@ func makeBatchIvfSearch(proc *process.Process) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 
 	v := []float32{0, 1, 2}
-	vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
+	vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
@@ -342,7 +341,7 @@ func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
+		vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -374,10 +373,10 @@ func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))         // index table config
 		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-		vector.AppendFixed[int64](bat.Vecs[0], int64(1), false, proc.Mp())
+		vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
+		vector.AppendArray(bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -421,7 +420,7 @@ func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))     // pkid int64
 
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
+		vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
 
 		bat.SetRowCount(1)
 

@@ -206,6 +206,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		GroupingFlag:    slices.Clone(node.GroupingFlag),
 		AggList:         DeepCopyExprList(node.AggList),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
+		BlockOrderBy:    make([]*plan.OrderBySpec, len(node.BlockOrderBy)),
+		BlockLimit:      DeepCopyExpr(node.BlockLimit),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
 		TblFuncExprList: DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
@@ -235,6 +237,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	for idx, orderBy := range node.OrderBy {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
+	}
+
+	for idx, blockOrderBy := range node.BlockOrderBy {
+		newNode.BlockOrderBy[idx] = DeepCopyOrderBy(blockOrderBy)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
@@ -1012,38 +1018,13 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		return nil
 	}
 
-	return &plan.AnalyzeInfo{
-		InputBlocks:            analyzeinfo.GetInputBlocks(),
-		InputRows:              analyzeinfo.GetInputRows(),
-		OutputRows:             analyzeinfo.GetOutputRows(),
-		InputSize:              analyzeinfo.GetInputSize(),
-		OutputSize:             analyzeinfo.GetOutputSize(),
-		TimeConsumed:           analyzeinfo.GetTimeConsumed(),
-		TimeConsumedArrayMajor: slices.Clone(analyzeinfo.GetTimeConsumedArrayMajor()),
-		TimeConsumedArrayMinor: slices.Clone(analyzeinfo.GetTimeConsumedArrayMinor()),
-		MemorySize:             analyzeinfo.GetMemorySize(),
-		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
-		DiskIO:                 analyzeinfo.GetDiskIO(),
-		WrittenRows:            analyzeinfo.GetWrittenRows(),
-		DeletedRows:            analyzeinfo.GetDeletedRows(),
-		ScanBytes:              analyzeinfo.GetScanBytes(),
-		S3List:                 analyzeinfo.GetS3List(),
-		S3Put:                  analyzeinfo.GetS3Put(),
-		S3Get:                  analyzeinfo.GetS3Get(),
-		S3Head:                 analyzeinfo.GetS3Head(),
-		S3Delete:               analyzeinfo.GetS3Delete(),
-		S3DeleteMul:            analyzeinfo.GetS3DeleteMul(),
-		CacheRead:              analyzeinfo.GetCacheRead(),
-		CacheHit:               analyzeinfo.GetCacheHit(),
-		CacheMemoryRead:        analyzeinfo.GetCacheMemoryRead(),
-		CacheMemoryHit:         analyzeinfo.GetCacheMemoryHit(),
-		CacheDiskRead:          analyzeinfo.GetCacheDiskRead(),
-		CacheDiskHit:           analyzeinfo.GetCacheDiskHit(),
-		CacheRemoteRead:        analyzeinfo.GetCacheRemoteRead(),
-		CacheRemoteHit:         analyzeinfo.GetCacheRemoteHit(),
-		NetworkIO:              analyzeinfo.GetNetworkIO(),
-		ScanTime:               analyzeinfo.GetScanTime(),
-		InsertTime:             analyzeinfo.GetInsertTime(),
-		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
-	}
+	var copyAnalyzeInfo = *analyzeinfo
+	copyAnalyzeInfo.TimeConsumedArrayMajor = slices.Clone(analyzeinfo.GetTimeConsumedArrayMajor())
+	copyAnalyzeInfo.TimeConsumedArrayMinor = slices.Clone(analyzeinfo.GetTimeConsumedArrayMinor())
+
+	// clear the unrecognized fields, do not mess with the proto stuff.
+	copyAnalyzeInfo.XXX_unrecognized = nil
+	copyAnalyzeInfo.XXX_sizecache = 0
+
+	return &copyAnalyzeInfo
 }

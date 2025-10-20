@@ -39,6 +39,24 @@ import (
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
+	//
+	// There is a class of variables that controls SQL behavior.  To add such a variable, first
+	// add it to the frontend/variables.go file.  Like the following sql_mode and agg_spill_mem.
+	//
+	// Once added, user can issue
+	//     SET @@sql_mode = '';
+	// then it will be effedctive within this session.   Note that if, sql result or plan is cached,
+	// query does not go through this query builder and this won't be applied.
+	//
+	// sql_mode is easy -- it only needs to apply at plan time.
+	//
+	// agg_spill_mem is more complicated.  It needs to apply at run time, well, we call it "compile time",
+	// and exec time, but anyway, we need to send agg_spill_mem to multi CNs.
+	// See plan.proto and pipeline.proto.   Of course, you still need to change code to copy this value.
+	//
+	// Our terminology is a total mess.  Session, Process, Plan time, Compile time, Scope, Dispatch,
+	// FUBAR.
+
 	var mysqlCompatible bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -47,6 +65,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			if !strings.Contains(modeStr, "ONLY_FULL_GROUP_BY") {
 				mysqlCompatible = true
 			}
+		}
+	}
+
+	var aggSpillMem int64
+	aggSpillMemInt, err := ctx.ResolveVariable("agg_spill_mem", true, false)
+	if err == nil {
+		if aggSpillMemVal, ok := aggSpillMemInt.(int64); ok {
+			aggSpillMem = aggSpillMemVal
 		}
 	}
 
@@ -59,6 +85,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nameByColRef:       make(map[[2]int32]string),
 		nextTag:            0,
 		mysqlCompatible:    mysqlCompatible,
+		aggSpillMem:        aggSpillMem,
 		tag2Table:          make(map[int32]*TableDef),
 		tag2NodeID:         make(map[int32]int32),
 		isPrepareStatement: isPrepareStatement,
@@ -297,6 +324,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		for _, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+		}
+
+		for _, blockOrderBy := range node.BlockOrderBy {
+			increaseRefCnt(blockOrderBy.Expr, 1, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 			localToGlobal: make([][2]int32, 0),
@@ -364,6 +399,26 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if len(col.Name) == 0 {
 					col.Name = node.TableDef.Cols[col.ColPos].Name
 				}
+			}
+		}
+
+		remapInfo.tip = "OrderBy"
+		for idx, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(orderBy.Expr, colMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		remapInfo.tip = "BlockOrderBy"
+		for idx, blockOrderBy := range node.BlockOrderBy {
+			increaseRefCnt(blockOrderBy.Expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(blockOrderBy.Expr, colMap, &remapInfo)
+			if err != nil {
+				return nil, err
 			}
 		}
 
@@ -1329,6 +1384,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		preNode := builder.qry.Nodes[node.Children[0]]
 		node.GroupBy = make([]*Expr, len(preNode.ProjectList))
 		node.ProjectList = make([]*Expr, len(preNode.ProjectList))
+		node.SpillMem = builder.aggSpillMem
 
 		for i, prjExpr := range preNode.ProjectList {
 			node.GroupBy[i] = &plan.Expr{
@@ -1906,6 +1962,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
+		builder.pushdownVectorIndexTopToTableScan(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -3614,6 +3671,7 @@ func (builder *QueryBuilder) appendAggNode(
 			GroupingFlag: ctx.groupingFlag,
 			AggList:      ctx.aggregates,
 			BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
+			SpillMem:     builder.aggSpillMem,
 		}, ctx)
 	}
 

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3800,6 +3801,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("mo_table_stats.reset_update_time"),
 		Default:           "",
+	},
+	"agg_spill_mem": {
+		Name:              "agg_spill_mem",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
+		Default:           int64(common.GiB),
 	},
 }
 

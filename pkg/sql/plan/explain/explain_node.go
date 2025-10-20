@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -303,6 +304,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, orderByInfo)
 	}
 
+	// Get Sort list info
+	if len(ndesc.Node.BlockOrderBy) > 0 {
+		orderByInfo, err := ndesc.GetBlockOrderByInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, orderByInfo)
+	}
+
 	// Get Join type info
 	if ndesc.Node.NodeType == plan.Node_JOIN {
 		joinTypeInfo, err := ndesc.GetJoinTypeInfo(ctx, options)
@@ -419,6 +429,16 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			if err != nil {
 				return nil, err
 			}
+		}
+		lines = append(lines, buf.String())
+	}
+
+	if ndesc.Node.BlockLimit != nil {
+		buf := bytes.NewBuffer(make([]byte, 0, 160))
+		buf.WriteString("Block Limit: ")
+		err := describeExpr(ctx, ndesc.Node.BlockLimit, options, buf)
+		if err != nil {
+			return nil, err
 		}
 		lines = append(lines, buf.String())
 	}
@@ -978,7 +998,24 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		buf.WriteString("Sort Key: ")
-		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
+		blockOrderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
+		err := blockOrderByDescImpl.GetDescription(ctx, options, buf)
+		if err != nil {
+			return "", err
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetBlockOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		buf.WriteString("Block Sort Key: ")
+		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.BlockOrderBy)
 		err := orderByDescImpl.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
@@ -1100,30 +1137,17 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		fmt.Fprintf(buf, " inputBlocks=%d", a.AnalyzeInfo.InputBlocks)
 	}
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
-	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	if a.AnalyzeInfo.InputSize < MB {
-		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	} else if a.AnalyzeInfo.InputSize < 10*GB {
-		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
-	}
+	fmt.Fprintf(buf, " outputRows=%d (min=%d, max=%d)",
+		a.AnalyzeInfo.OutputRows,
+		a.AnalyzeInfo.OutrowsMin,
+		a.AnalyzeInfo.OutrowsMax)
 
-	if a.AnalyzeInfo.OutputSize < MB {
-		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	} else if a.AnalyzeInfo.OutputSize < 10*GB {
-		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
-	}
-
-	if a.AnalyzeInfo.MemorySize < MB {
-		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
-	} else if a.AnalyzeInfo.MemorySize < 10*GB {
-		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
-	} else {
-		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
-	}
+	fmt.Fprintf(buf, " InputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.InputSize))
+	fmt.Fprintf(buf, " OutputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.OutputSize))
+	fmt.Fprintf(buf, " MemorySize=%s (min=%s, max=%s)",
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemorySize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMin),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMax))
 
 	return nil
 }

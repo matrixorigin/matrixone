@@ -104,10 +104,13 @@ setup(
             "Faker>=10.0.0",
         ],
     },
-    keywords="matrixone, database, sql, python, sdk, sqlalchemy, async, fulltext, search, vector, similarity, ai, ml, embedding, hnsw, ivf",
+    keywords="matrixone, database, sql, python, sdk, sqlalchemy, async, fulltext, search, vector, similarity, ai, ml, embedding, hnsw, ivf, diagnostic, cli, monitoring",
     include_package_data=True,
     zip_safe=False,
     entry_points={
+        "console_scripts": [
+            "mo-diag=matrixone.cli_tools:main_cli",
+        ],
         "sqlalchemy.dialects": [
             "matrixone = matrixone.sqlalchemy_ext.dialect:MatrixOneDialect",
         ],
