@@ -798,13 +798,13 @@ func collectObjects(
 	data *CKPReader,
 	objType int8,
 	collector func(
-		*map[uint64]map[objectio.Segmentid]*objectInfo,
-		*map[objectio.Segmentid]*objectInfo,
-		*map[objectio.Segmentid]*objectInfo,
-		uint64,
-		objectio.ObjectStats,
-		types.TS, types.TS,
-	),
+	*map[uint64]map[objectio.Segmentid]*objectInfo,
+	*map[objectio.Segmentid]*objectInfo,
+	*map[objectio.Segmentid]*objectInfo,
+	uint64,
+	objectio.ObjectStats,
+	types.TS, types.TS,
+),
 ) {
 	data.ForEachRow(
 		ctx,
@@ -1634,7 +1634,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			logutil.Warn("RebuildAObjectDel-exists", zap.Any("commitTs", commitTs))
+			logutil.Warn("RebuildAObjectDel-Exists", zap.Any("commitTs", commitTs))
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}

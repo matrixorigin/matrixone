@@ -208,7 +208,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		return err
 	}
 
-	// 2. check snapshot Exists or not
+	// 2. check snapshot exists or not
 	snapshotName = string(stmt.Name)
 	snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, snapshotName)
 	if err != nil {
@@ -216,7 +216,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	}
 	if snapshotExist {
 		if !stmt.IfNotExists {
-			return moerr.NewInternalErrorf(ctx, "snapshot %s already Exists", snapshotName)
+			return moerr.NewInternalErrorf(ctx, "snapshot %s already exists", snapshotName)
 		} else {
 			return nil
 		}
@@ -262,7 +262,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		if len(snapshotForAccount) == 0 {
 			snapshotForAccount = currentAccount
 		}
-		// check account Exists or not and get accountId
+		// check account exists or not and get accountId
 		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
@@ -492,7 +492,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 		return err
 	}
 
-	// check snapshot Exists or not
+	// check snapshot exists or not
 	snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, string(stmt.Name))
 	if err != nil {
 		return err
@@ -787,7 +787,7 @@ func getFromAccountIdAndToAccountId(ctx context.Context, ses *Session, bh Backgr
 				}
 				return
 			} else {
-				// need detect whether the account Exists
+				// need detect whether the account exists
 				if snapshot.level == tree.RESTORELEVELACCOUNT.String() {
 					// restore account by account snapshot
 					fromAccountId = uint32(snapshot.objId)
@@ -869,7 +869,7 @@ func deleteCurFkTables(
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if Exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -912,7 +912,7 @@ func restoreToAccount(
 			continue
 		}
 
-		getLogger(sid).Info(fmt.Sprintf("[%s]drop current Exists db: %v", snapshotName, dbName))
+		getLogger(sid).Info(fmt.Sprintf("[%s]drop current exists db: %v", snapshotName, dbName))
 		if err = dropDb(toCtx, bh, dbName); err != nil {
 			return
 		}
@@ -1088,8 +1088,8 @@ func restoreToDatabaseOrTable(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
 	if isSubDb {
 
-		// check if the publication Exists
-		// if the publication Exists, create the db with the publication
+		// check if the publication exists
+		// if the publication exists, create the db with the publication
 		// else skip restore the db
 
 		var isPubExist bool
@@ -1128,7 +1128,7 @@ func restoreToDatabaseOrTable(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalErrorf(ctx, "table %s not Exists at snapshot %s", tblName, snapshotName)
+			return moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
 		} else if len(tableInfos) != 1 {
 			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
 		}
@@ -1244,7 +1244,7 @@ func dropClusterTable(
 	snapshotName string,
 	toAccountId uint32,
 ) (err error) {
-	getLogger(sid).Info("start to drop Exists cluster table")
+	getLogger(sid).Info("start to drop exists cluster table")
 
 	// get all tables in mo_catalog
 	tableInfos, err := getTableInfos(ctx, sid, bh, nil, moCatalog, "")
@@ -1255,7 +1255,7 @@ func dropClusterTable(
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
 			getLogger(sid).Info(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if Exists `%s`.`%s`", moCatalog, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", moCatalog, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1314,7 +1314,7 @@ func restoreViews(
 				return err
 			}
 
-			if err = bh.Exec(toCtx, "drop view if Exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
 				return err
 			}
 
@@ -1438,7 +1438,7 @@ func recreateTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: %v,", snapshotName, tblInfo.tblName))
-	sql := fmt.Sprintf("drop table if Exists `%s`", tblInfo.tblName)
+	sql := fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
@@ -1448,7 +1448,7 @@ func recreateTable(
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
 			if strings.Contains(err.Error(), "no such table") {
-				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not Exists, skip restore", snapshotName, tblInfo.tblName))
+				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
 				err = nil
 			}
 			return
@@ -2107,9 +2107,9 @@ func restoreToCluster(ctx context.Context,
 		postMap[account.accountName] = true
 	}
 
-	// droped account is past Exists account but not in current Exists account
-	// to drop account is current Exists account but not in past Exists account
-	// to restore account is current Exists account and in past Exists account
+	// droped account is past exists account but not in current exists account
+	// to drop account is current exists account but not in past exists account
+	// to restore account is current exists account and in past exists account
 	var dropedAccounts []accountRecord
 	var toDropAccount []accountRecord
 	var toRestoreAccount []accountRecord
@@ -2136,7 +2136,7 @@ func restoreToCluster(ctx context.Context,
 		}
 	}
 
-	// get restore accounts Exists in snapshot
+	// get restore accounts exists in snapshot
 	// restore to each account
 	for _, account := range toRestoreAccount {
 		isRestoreToCluster = true
@@ -2292,7 +2292,7 @@ func dropExistsAccount(
 	snapshotName string,
 	account accountRecord,
 ) (err error) {
-	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to drop Exists account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to drop exists account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	dropAccountSql := makeDropAccountSqlByAccountRecord(account)
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to drop account: %v, drop account sql: %s", snapshotName, account.accountName, dropAccountSql))
@@ -2483,11 +2483,11 @@ func getPastExistsAccounts(
 	snapshotName string,
 	snapshotTs int64,
 ) (accounts []accountRecord, err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to get past Exists accounts", snapshotName))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to get past exists accounts", snapshotName))
 	var erArray []ExecResult
 
 	sql := fmt.Sprintf(getPastAccountsFmt, snapshotTs)
-	getLogger(sid).Info(fmt.Sprintf("[%s] get restore past Exists accounts sql: %s", snapshotName, sql))
+	getLogger(sid).Info(fmt.Sprintf("[%s] get restore past exists accounts sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -2563,7 +2563,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 	}
 
 	// drop db
-	return bh.Exec(ctx, fmt.Sprintf("drop database if Exists `%s`", dbName))
+	return bh.Exec(ctx, fmt.Sprintf("drop database if exists `%s`", dbName))
 }
 
 // checkTableIsMaster check if the table is master table

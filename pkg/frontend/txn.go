@@ -166,7 +166,7 @@ type TxnHandler struct {
 
 	//connCtx is the ancestor of the txnCtx.
 	//it is initialized at the TxnHandler object created and
-	//Exists always.
+	//exists always.
 	//it starts from the routineCtx.
 	connCtx context.Context
 

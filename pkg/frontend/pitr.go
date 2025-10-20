@@ -336,7 +336,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		return moerr.NewInternalErrorf(ctx, "invalid pitr unit %s", pitrUnit)
 	}
 
-	// 6.check pitr Exists or not
+	// 6.check pitr exists or not
 	pitrName = string(stmt.Name)
 	if pitrName == SYSMOCATALOGPITR {
 		return moerr.NewInternalError(ctx, "pitr name is reserved")
@@ -348,7 +348,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	}
 	if pitrExist {
 		if !stmt.IfNotExists {
-			return moerr.NewInternalErrorf(ctx, "pitr %s already Exists", pitrName)
+			return moerr.NewInternalErrorf(ctx, "pitr %s already exists", pitrName)
 		} else {
 			return nil
 		}
@@ -394,7 +394,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		// sys create pitr for other account
 		if len(stmt.AccountName) > 0 {
 			pitrForAccount = string(stmt.AccountName)
-			// check account Exists or not and get accountId
+			// check account exists or not and get accountId
 			getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
 				var erArray []ExecResult
 				sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
@@ -783,7 +783,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		return err
 	}
 
-	// check pitr Exists or not
+	// check pitr exists or not
 	tenantInfo := ses.GetTenantInfo()
 	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
 	if err != nil {
@@ -873,7 +873,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		return err
 	}
 
-	// check pitr Exists or not
+	// check pitr exists or not
 	tenantInfo := ses.GetTenantInfo()
 	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
 	if err != nil {
@@ -950,7 +950,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// check if the pitr Exists
+	// check if the pitr exists
 	tenantInfo := ses.GetTenantInfo()
 	pitrExist, err = checkPitrExistOrNot(ctx, bh, pitrName, uint64(tenantInfo.GetTenantID()))
 	if err != nil {
@@ -1048,7 +1048,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 			}
 
-			// check account Exists or not
+			// check account exists or not
 			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 			rtnErr = restoreAccountUsingClusterSnapshotToNew(
 				ctx,
@@ -1082,13 +1082,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	restoreLevel = stmt.Level
 
 	// restore self account
-	// check account Exists or not
+	// check account exists or not
 	var accountExist bool
 	if accountExist, err = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
 		return stats, err
 	}
 	if !accountExist {
-		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not Exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 
 	//drop foreign key related tables first
@@ -1198,7 +1198,7 @@ func restoreToAccountWithPitr(
 			continue
 		}
 
-		getLogger(sid).Info(fmt.Sprintf("[%s]drop current Exists db: %v", pitrName, dbName))
+		getLogger(sid).Info(fmt.Sprintf("[%s]drop current exists db: %v", pitrName, dbName))
 		if err = dropDb(ctx, bh, dbName); err != nil {
 			return
 		}
@@ -1260,7 +1260,7 @@ func restoreToDatabaseWithPitr(
 		return err
 	}
 	if !databaseExist {
-		return moerr.NewInternalErrorf(ctx, "database '%s' does not Exists at timestamp: %v", dbName, nanoTimeFormat(ts))
+		return moerr.NewInternalErrorf(ctx, "database '%s' does not exists at timestamp: %v", dbName, nanoTimeFormat(ts))
 	}
 
 	return restoreToDatabaseOrTableWithPitr(
@@ -1295,7 +1295,7 @@ func restoreToTableWithPitr(
 		return err
 	}
 	if !TableExist {
-		return moerr.NewInternalErrorf(ctx, "database '%s' table '%s' does not Exists at timestamp: %v", dbName, tblName, nanoTimeFormat(ts))
+		return moerr.NewInternalErrorf(ctx, "database '%s' table '%s' does not exists at timestamp: %v", dbName, tblName, nanoTimeFormat(ts))
 	}
 	return restoreToDatabaseOrTableWithPitr(
 		ctx,
@@ -1370,8 +1370,8 @@ func restoreToDatabaseOrTableWithPitr(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: '%v'", pitrName, dbName))
 	if isSubDb {
 
-		// check if the publication Exists
-		// if the publication Exists, create the db with the publication
+		// check if the publication exists
+		// if the publication exists, create the db with the publication
 		// else skip restore the db
 
 		var isPubExist bool
@@ -1405,7 +1405,7 @@ func restoreToDatabaseOrTableWithPitr(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalErrorf(ctx, "table '%s' not Exists at pitr '%s'", tblName, pitrName)
+			return moerr.NewInternalErrorf(ctx, "table '%s' not exists at pitr '%s'", tblName, pitrName)
 		} else if len(tableInfos) != 1 {
 			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name '%s' at pitr '%s', expect only 1", len(tableInfos), tblName, pitrName)
 		}
@@ -1472,7 +1472,7 @@ func reCreateTableWithPitr(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if Exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -1481,7 +1481,7 @@ func reCreateTableWithPitr(
 		getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: '%v', create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
 		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
 			if strings.Contains(err.Error(), "no such table") {
-				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not Exists, skip restore", pitrName, tblInfo.tblName))
+				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", pitrName, tblInfo.tblName))
 				err = nil
 			}
 			return
@@ -1646,7 +1646,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if Exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1778,7 +1778,7 @@ func restoreViewsWithPitr(
 				return err
 			}
 
-			if err = bh.Exec(ctx, "drop view if Exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(ctx, "drop view if exists "+tblInfo.tblName); err != nil {
 				return err
 			}
 
@@ -2226,7 +2226,7 @@ func doCheckDatabaseExistsInPitrRestore(
 	pitrName string,
 	ts int64,
 	dbName string) (bool, error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if db '%v' Exists at timestamp %d", pitrName, dbName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if db '%v' exists at timestamp %d", pitrName, dbName, ts))
 
 	sql, err := getSqlForCheckDatabaseWithPitr(ctx, ts, dbName)
 	if err != nil {
@@ -2257,7 +2257,7 @@ func doCheckTableExistsInPitrRestore(
 	ts int64,
 	dbName string,
 	tblName string) (bool, error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if table '%v.%v' Exists at timestamp %d", pitrName, dbName, tblName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if table '%v.%v' exists at timestamp %d", pitrName, dbName, tblName, ts))
 
 	sql, err := getSqlForCheckTableWithPitr(ctx, ts, dbName, tblName)
 	if err != nil {
@@ -2288,7 +2288,7 @@ func doCheckAccountExistsInPitrRestore(
 	ts int64,
 	accountName string,
 	accountId uint32) (bool, error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if account '%v' Exists at timestamp %d", pitrName, accountName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if account '%v' exists at timestamp %d", pitrName, accountName, ts))
 
 	newCtx := ctx
 	if accountId != sysAccountID {
