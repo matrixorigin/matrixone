@@ -457,8 +457,6 @@ func CompareValues(left, right any, t T) int {
 		return lVal.Compare(&rVal)
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
 		T_array_float32, T_array_float64, T_datalink:
-		// Mainly used by Zonemap, which receives val input from DN batch/vector.
-		// This val is mostly []bytes and not []float32 or []float64
 		return bytes.Compare(left.([]byte), right.([]byte))
 	case T_enum:
 		lVal := left.(Enum)

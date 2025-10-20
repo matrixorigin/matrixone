@@ -1026,29 +1026,29 @@ var (
 
 	//drop tables for the tenant
 	dropSqls = []string{
-		`drop table if Exists mo_catalog.mo_user;`,
-		`drop table if Exists mo_catalog.mo_role;`,
-		`drop table if Exists mo_catalog.mo_user_grant;`,
-		`drop table if Exists mo_catalog.mo_role_grant;`,
-		`drop table if Exists mo_catalog.mo_role_privs;`,
-		`drop table if Exists mo_catalog.mo_user_defined_function;`,
-		`drop table if Exists mo_catalog.mo_stored_procedure;`,
-		`drop table if Exists mo_catalog.mo_stages;`,
-		`drop view if Exists mo_catalog.mo_sessions;`,
-		`drop view if Exists mo_catalog.mo_configurations;`,
-		`drop view if Exists mo_catalog.mo_locks;`,
-		`drop view if Exists mo_catalog.mo_variables;`,
-		`drop view if Exists mo_catalog.mo_transactions;`,
-		`drop view if Exists mo_catalog.mo_cache;`,
-		`drop table if Exists mo_catalog.mo_snapshots;`,
+		`drop table if exists mo_catalog.mo_user;`,
+		`drop table if exists mo_catalog.mo_role;`,
+		`drop table if exists mo_catalog.mo_user_grant;`,
+		`drop table if exists mo_catalog.mo_role_grant;`,
+		`drop table if exists mo_catalog.mo_role_privs;`,
+		`drop table if exists mo_catalog.mo_user_defined_function;`,
+		`drop table if exists mo_catalog.mo_stored_procedure;`,
+		`drop table if exists mo_catalog.mo_stages;`,
+		`drop view if exists mo_catalog.mo_sessions;`,
+		`drop view if exists mo_catalog.mo_configurations;`,
+		`drop view if exists mo_catalog.mo_locks;`,
+		`drop view if exists mo_catalog.mo_variables;`,
+		`drop view if exists mo_catalog.mo_transactions;`,
+		`drop view if exists mo_catalog.mo_cache;`,
+		`drop table if exists mo_catalog.mo_snapshots;`,
 	}
-	dropMoMysqlCompatibilityModeSql = `drop table if Exists mo_catalog.mo_mysql_compatibility_mode;`
-	dropAutoIcrColSql               = fmt.Sprintf("drop table if Exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes                   = fmt.Sprintf("drop table if Exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
-	dropMoTablePartitions           = fmt.Sprintf("drop table if Exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
-	dropMoForeignKeys               = `drop table if Exists mo_catalog.mo_foreign_keys;`
-	dropPartitionMetadata           = fmt.Sprintf("drop table if Exists mo_catalog.`%s`;", catalog.MOPartitionMetadata)
-	dropPartitionTables             = fmt.Sprintf("drop table if Exists mo_catalog.`%s`;", catalog.MOPartitionTables)
+	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
+	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
+	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
+	dropPartitionMetadata           = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionMetadata)
+	dropPartitionTables             = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionTables)
 
 	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -2832,7 +2832,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	}
 	hostName := user.Hostname
 
-	//check the user Exists or not
+	//check the user exists or not
 	sql, err = getSqlForPasswordOfUser(ctx, userName)
 	if err != nil {
 		return err
@@ -3062,7 +3062,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			return rtnErr
 		}
 
-		//step 1: check account Exists or not
+		//step 1: check account exists or not
 		//get accountID
 		sql, rtnErr = getSqlForCheckTenant(ctx, aa.Name)
 		if rtnErr != nil {
@@ -3112,7 +3112,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 				//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
 				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
 
-				//1, check the admin Exists or not
+				//1, check the admin exists or not
 				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AdminName)
 				if rtnErr != nil {
 					return rtnErr
@@ -3343,7 +3343,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 			return err
 		}
 
-		//step1 : check the role Exists or not;
+		//step1 : check the role exists or not;
 
 		switchRoleFunc := func() (rtnErr error) {
 			bh := ses.GetBackgroundExec(ctx)
@@ -3486,7 +3486,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalErrorf(ctx, "the stage %s Exists", cs.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3597,7 +3597,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalErrorf(ctx, "the stage %s not Exists", as.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3673,7 +3673,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalErrorf(ctx, "the stage %s not Exists", ds.Name)
+			return moerr.NewInternalErrorf(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err
@@ -3773,7 +3773,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		if accountId, version, hasAccount, rtnErr = checkAccount(da.Name); rtnErr != nil {
 			return
 		}
-		// check the account Exists or not
+		// check the account exists or not
 		if !hasAccount {
 			// when the "IF EXISTS" is set, just skip it.
 			if !da.IfExists {
@@ -3839,7 +3839,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			databases[db] = 0
 		}
 
-		prefix = "drop database if Exists "
+		prefix = "drop database if exists "
 
 		for db = range databases {
 			if db == "mo_catalog" {
@@ -4135,7 +4135,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		return err
 	}
 
-	//step1: check users Exists or not.
+	//step1: check users exists or not.
 	//handle "IF EXISTS"
 	for _, user := range du.Users {
 		sql, err = getSqlForPasswordOfUser(ctx, user.Username)
@@ -4219,7 +4219,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		return err
 	}
 
-	//step1: check roles Exists or not.
+	//step1: check roles exists or not.
 	//handle "IF EXISTS"
 	for _, role := range dr.Roles {
 		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
@@ -4297,7 +4297,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		return err
 	}
 
-	// authticate db Exists
+	// authticate db exists
 	dbExists, err = checkDatabaseExistsOrNot(ctx, bh, dbName)
 	if err != nil {
 		return err
@@ -4329,7 +4329,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 			receivedArgsType[i] = typ
 		}
 
-		// function with provided name and db Exists, now check arguments
+		// function with provided name and db exists, now check arguments
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			argstr, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
@@ -4528,7 +4528,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 	}
 
 	if execResultArrayHasData(erArray) {
-		// function with provided name and db Exists, for now we don't support overloading for stored procedure, so go to handle deletion.
+		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
 		procId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return err
@@ -4571,7 +4571,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
 
 	//handle "IF EXISTS"
-	//step 1: check roles. Exists or not.
+	//step 1: check roles. exists or not.
 	for i, user := range rp.Roles {
 		//check Revoke privilege on xxx yyy from moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(user.UserName) {
@@ -4674,7 +4674,7 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	if isDb {
 		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
 	} else {
-		//TODO: check the database Exists or not first
+		//TODO: check the database exists or not first
 		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 	}
 }
@@ -4902,13 +4902,13 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	}
 
 	//step 4: get privilege_id
-	//step 5: check Exists
+	//step 5: check exists
 	//step 6: update or insert
 
 	for _, privType = range checkedPrivilegeTypes {
 		for _, role := range verifiedRoles {
 			sql = getSqlForCheckRoleHasPrivilege(role.id, objType, objId, int64(privType))
-			//check Exists
+			//check exists
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -4972,7 +4972,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	//step1 : check Roles Exists or not
+	//step1 : check Roles exists or not
 	var vr *verifiedRole
 
 	verifiedFromRoles := make([]*verifiedRole, len(rr.Roles))
@@ -4988,7 +4988,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	}
 
 	//handle "IF EXISTS"
-	//step1 : check Users are real Users or Roles,  Exists or not
+	//step1 : check Users are real Users or Roles,  exists or not
 	for i, user := range rr.Users {
 		sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
 		if err != nil {
@@ -5132,7 +5132,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	//step1 : check Roles Exists or not
+	//step1 : check Roles exists or not
 	var vr *verifiedRole
 	var needLoadMoRoleGrant bool
 	var grantedId, granteeId int64
@@ -5168,7 +5168,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 		verifiedFromRoles[i] = vr
 	}
 
-	//step2 : check Users are real Users or Roles,  Exists or not
+	//step2 : check Users are real Users or Roles,  exists or not
 	for i, user := range gr.Users {
 		sql, err = getSqlForRoleIdOfRole(ctx, user.Username)
 		if err != nil {
@@ -5181,7 +5181,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 		if vr != nil {
 			verifiedToRoles[i] = vr
 		} else {
-			//check user Exists or not
+			//check user exists or not
 			sql, err = getSqlForPasswordOfUser(ctx, user.Username)
 			if err != nil {
 				return err
@@ -5290,17 +5290,17 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 			}
 
 			//For Grant role to role
-			//choice 1: (granted_id,grantee_id) Exists and with_grant_option is same.
+			//choice 1: (granted_id,grantee_id) exists and with_grant_option is same.
 			//	Do nothing.
-			//choice 2: (granted_id,grantee_id) Exists and with_grant_option is different.
+			//choice 2: (granted_id,grantee_id) exists and with_grant_option is different.
 			//	Update.
 			//choice 3: (granted_id,grantee_id) does not exist.
 			// Insert.
 
 			//For Grant role to user
-			//choice 1: (roleId,userId) Exists and with_grant_option is same.
+			//choice 1: (roleId,userId) exists and with_grant_option is same.
 			//	Do nothing.
-			//choice 2: (roleId,userId) Exists and with_grant_option is different.
+			//choice 2: (roleId,userId) exists and with_grant_option is different.
 			//	Update.
 			//choice 3: (roleId,userId) does not exist.
 			// Insert.
@@ -6103,7 +6103,7 @@ func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry 
 }
 
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
-// with multi-privilege levels Exists or not
+// with multi-privilege levels exists or not
 func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -7580,7 +7580,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 
-		// check account Exists or not
+		// check account exists or not
 		exists, rtnErr = checkTenantExistsOrNot(ctx, bh, ca.Name)
 		if rtnErr != nil {
 			return rtnErr
@@ -8176,7 +8176,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 				continue
 			}
 			if exists == 1 {
-				err = moerr.NewInternalErrorf(ctx, "the user %s Exists", user.Username)
+				err = moerr.NewInternalErrorf(ctx, "the user %s exists", user.Username)
 			} else if exists == 2 {
 				err = moerr.NewInternalError(ctx, "there is a role with the same name as the user")
 			}
@@ -8363,7 +8363,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 				continue
 			}
 			if exists == 1 {
-				err = moerr.NewInternalErrorf(ctx, "the role %s Exists", r.UserName)
+				err = moerr.NewInternalErrorf(ctx, "the role %s exists", r.UserName)
 			} else if exists == 2 {
 				err = moerr.NewInternalErrorf(ctx, "there is a user with the same name as the role %s", r.UserName)
 			} else if exists == 3 {
@@ -8455,7 +8455,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
-	// authticate db Exists
+	// authticate db exists
 	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
@@ -8719,7 +8719,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 			return rtnErr
 		}
 
-		// step1:check database Exists or not and get database owner
+		// step1:check database exists or not and get database owner
 		sql, rtnErr = getSqlForCheckDatabaseWithOwner(ctx, dbName, int64(ses.GetTenantInfo().GetTenantID()))
 		if rtnErr != nil {
 			return rtnErr
@@ -8801,7 +8801,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 			return rtnErr
 		}
 
-		// step 1: check account Exists or not
+		// step 1: check account exists or not
 		newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
 		isExist, rtnErr = checkTenantExistsOrNot(newCtx, bh, accountName)
 		if rtnErr != nil {
@@ -9020,7 +9020,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	}
 
 	if execResultArrayHasData(erArray) {
-		// function with provided name and db Exists, for now we don't support overloading for stored procedure, so go to handle deletion.
+		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
 		spLang, err = erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
 			return nil, err
@@ -9225,7 +9225,7 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// check if var Exists
+	// check if var exists
 	sql := getSqlForGetSysVarWithAccount(accountId, varName)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
