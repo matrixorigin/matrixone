@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -404,11 +405,21 @@ func mergeDiff(
 		cnt++
 		buf.WriteString("(")
 		for j := 2; j < len(row); j++ {
-			switch row[j].(type) {
-			case string, []byte:
-				buf.WriteString(fmt.Sprintf("'%v'", row[j]))
+			switch r := row[j].(type) {
+			case string:
+				buf.WriteString("'")
+				buf.WriteString(r)
+				buf.WriteString("'")
+			case []byte:
+				buf.WriteString("'")
+				buf.WriteString(string(r))
+				buf.WriteString("'")
+			case types.Date:
+				buf.WriteString("'")
+				buf.WriteString(r.String())
+				buf.WriteString("'")
 			default:
-				buf.WriteString(fmt.Sprintf("%v", row[j]))
+				buf.WriteString(fmt.Sprintf("%v", r))
 			}
 			if j != len(row)-1 {
 				buf.WriteString(",")
@@ -503,8 +514,7 @@ func mergeDiff(
 	}
 
 	if buf.Len() > 0 && cnt > 0 {
-		bh.ClearExecResultSet()
-		if err = bh.Exec(execCtx.reqCtx, buf.String()); err != nil {
+		if _, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
 			return err
 		}
 	}
@@ -520,9 +530,9 @@ func compareRows(
 	onlyByPK bool,
 ) int {
 
-	for _, idx := range pkColIdxes {
+	for i, idx := range pkColIdxes {
 		if cmp := types.CompareValues(
-			row1[idx+2], row2[idx+2], pkTypes[idx].Oid,
+			row1[idx+2], row2[idx+2], pkTypes[i].Oid,
 		); cmp == 0 {
 			continue
 		} else {
@@ -748,7 +758,6 @@ func diff(
 						// exists in the base table, we should compare the left columns
 						if pkKind == fakeKind {
 							// already compared, do nothing here
-							fmt.Println("find", len(checkRet[i].Rows))
 						} else {
 							var (
 								allEqual = true
