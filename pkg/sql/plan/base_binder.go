@@ -289,6 +289,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	col := astExpr.ColName()
 	table := astExpr.TblName()
+	db := astExpr.DbName()
 	name := tree.String(astExpr, dialect.MYSQL)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
@@ -327,19 +328,31 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		}
 	} else {
-		if binding, ok := b.ctx.bindingByTable[table]; ok {
-			colPos = binding.FindColumn(col)
-			if colPos == AmbiguousName {
-				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
-			}
-			if colPos != NotFound {
-				typ = DeepCopyType(binding.types[colPos])
-				relPos = binding.tag
+		var binding *Binding
+		var ok bool
+		if binding, ok = b.ctx.bindingByTable[table]; !ok {
+			if b.ctx.remapOption != nil {
+				if len(db) == 0 {
+					db = b.builder.compCtx.DefaultDatabase()
+				}
+				if binding, ok = b.ctx.bindingByTable[db+"."+table]; !ok {
+					err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
+					return
+				}
 			} else {
-				err = moerr.NewInvalidInputf(localErrCtx, "column '%s' does not exist", name)
+				err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
+				return
 			}
+		}
+		colPos = binding.FindColumn(col)
+		if colPos == AmbiguousName {
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
+		}
+		if colPos != NotFound {
+			typ = DeepCopyType(binding.types[colPos])
+			relPos = binding.tag
 		} else {
-			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
+			err = moerr.NewInvalidInputf(localErrCtx, "column '%s' does not exist", name)
 		}
 	}
 
