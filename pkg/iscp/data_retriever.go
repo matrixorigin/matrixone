@@ -162,6 +162,7 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		r.status.To,
 		statusJson,
 		ISCPJobState_Completed,
+		r.status.LSN,
 	)
 	res, err := ExecWithResult(ctxWithSysAccount, updateWatermarkSQL, cnUUID, txn)
 	if err != nil {

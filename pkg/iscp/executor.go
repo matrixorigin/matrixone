@@ -345,6 +345,12 @@ func (exec *ISCPTaskExecutor) initState() (err error) {
 	return nil
 }
 
+func (exec *ISCPTaskExecutor) IsRunning() bool {
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	return exec.running
+}
+
 func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	logutil.Info(
 		"ISCP-Task Run",
@@ -429,8 +435,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 						job.currentLSN++
 						job.state = ISCPJobState_Pending
 					}
-					err := exec.worker.Submit(iter)
-					if err != nil {
+					onErrorFn := func(err error) {
 						for i, jobName := range iter.jobNames {
 							job := table.jobs[JobKey{
 								JobName: jobName,
@@ -443,6 +448,20 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 							"ISCP-Task submit iteration failed",
 							zap.Error(err),
 						)
+					}
+					ok, err := CheckLeaseWithRetry(exec.ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
+					if err != nil {
+						onErrorFn(err)
+						continue
+					}
+					if !ok {
+						go exec.Stop()
+						break
+					}
+					err = exec.worker.Submit(iter)
+					if err != nil {
+						onErrorFn(err)
+						continue
 					}
 				} else {
 					if !ok2 {

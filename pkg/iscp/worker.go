@@ -127,6 +127,10 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 				ErrorMsg: err.Error(),
 			}
 		}
+		preLSN := make([]uint64, len(iterCtx.lsn))
+		for i := range iterCtx.lsn {
+			preLSN[i] = iterCtx.lsn[i] - 1
+		}
 		err = retry(
 			w.ctx,
 			func() error {
@@ -143,6 +147,7 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 					statuses,
 					iterCtx.fromTS,
 					ISCPJobState_Completed,
+					preLSN,
 				)
 			},
 			SubmitRetryTimes,
