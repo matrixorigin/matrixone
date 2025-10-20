@@ -114,8 +114,16 @@ func handleDataBranch(
 	case *tree.DataBranchDeleteTable:
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
+		t := time.Now()
+		defer func() {
+			fmt.Println("handle snapshot diff takes", time.Since(t))
+		}()
 		return handleSnapshotDiff(execCtx, ses, st, nil)
 	case *tree.DataBranchMerge:
+		t := time.Now()
+		defer func() {
+			fmt.Println("handle snapshot merge takes", time.Since(t))
+		}()
 		return handleSnapshotMerge(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
