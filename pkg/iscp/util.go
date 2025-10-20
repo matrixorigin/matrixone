@@ -407,7 +407,7 @@ var CheckLeaseWithRetry = func(
 	defer func() {
 		if err != nil || !ok {
 			logutil.Errorf(
-				"ISCP-Task check lease failed",
+				"ISCP-Task check lease failed, err=%v, ok=%v, cnUUID=%v",
 				zap.Error(err),
 				zap.Bool("ok", ok),
 				zap.String("cnUUID", cnUUID),

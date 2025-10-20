@@ -4845,7 +4845,6 @@ func TestInitSql(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
 
-
 func TestCheckLeaseFailed(t *testing.T) {
 
 	catalog.SetupDefines("")
