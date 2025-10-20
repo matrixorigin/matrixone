@@ -25,14 +25,14 @@ Benchmark_L2Distance/Normalize_L2-10        	                    1277733	      1
 Benchmark_L2Distance/L2_Distance(v1,_NormalizeL2)-10         	     589376	      1883 ns/op
 */
 func Benchmark_L2Distance(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("L2 Distance", func(b *testing.B) {
 		v1, v2 := randomVectors(b.N, dim), randomVectors(b.N, dim)
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
-			_, _ = L2Distance[float64](v1[i], v2[i])
+		for i := range b.N {
+			_, _ = L2Distance(v1[i], v2[i])
 		}
 	})
 
@@ -40,9 +40,9 @@ func Benchmark_L2Distance(b *testing.B) {
 		v1 := randomVectors(b.N, dim)
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
-			res := make([]float64, dim)
-			_ = NormalizeL2[float64](v1[i], res)
+		for i := range b.N {
+			res := make([]float32, dim)
+			_ = NormalizeL2(v1[i], res)
 		}
 	})
 
@@ -50,20 +50,20 @@ func Benchmark_L2Distance(b *testing.B) {
 		v1, v2 := randomVectors(b.N, dim), randomVectors(b.N, dim)
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
-			res := make([]float64, dim)
-			_ = NormalizeL2[float64](v2[i], res)
-			_, _ = L2Distance[float64](v1[i], res)
+		for i := range b.N {
+			res := make([]float32, dim)
+			_ = NormalizeL2(v2[i], res)
+			_, _ = L2Distance(v1[i], res)
 		}
 	})
 
 }
 
-func randomVectors(size, dim int) [][]float64 {
-	vectors := make([][]float64, size)
+func randomVectors(size, dim int) [][]float32 {
+	vectors := make([][]float32, size)
 	for i := range vectors {
-		for j := 0; j < dim; j++ {
-			vectors[i] = append(vectors[i], rand.Float64())
+		for range dim {
+			vectors[i] = append(vectors[i], rand.Float32())
 		}
 	}
 	return vectors

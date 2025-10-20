@@ -15,11 +15,11 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-USEARCH_DIR=USearch-2.21.1
-USEARCH_TAR=usearch-2.21.1.tar.gz
-STRINGZILLA_DIR=StringZilla-4.2.1
+USEARCH_DIR=USearch-2.21.4
+USEARCH_TAR=usearch-2.21.4.tar.gz
+STRINGZILLA_DIR=StringZilla-4.4.2
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
-SIMSIMD_DIR=SimSIMD-6.5.3
+SIMSIMD_DIR=SimSIMD-6.5.5
 SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
 FP16_DIR=fp16
 FP16_TAR=$(FP16_DIR).tar.gz

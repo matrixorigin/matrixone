@@ -19,6 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/viterin/vek"
+	"github.com/viterin/vek/vek32"
 	"gonum.org/v1/gonum/blas/blas32"
 	"gonum.org/v1/gonum/blas/blas64"
 )
@@ -29,45 +31,38 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 		_v1 := any(v1).([]float32)
 		_v2 := any(v2).([]float32)
 
-		diff := blas32.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float32, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas32.Nrm2(diff)), nil
+		return T(vek32.Distance(_v1, _v2)), nil
 
 	case []float64:
 		_v1 := any(v1).([]float64)
 		_v2 := any(v2).([]float64)
 
-		diff := blas64.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float64, len(_v1)),
-		}
+		return T(vek.Distance(_v1, _v2)), nil
 
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas64.Nrm2(diff)), nil
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("L2Distance type not supported")
 	}
-
 }
 
 func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
-	var sumOfSquares T
-	for i := range v1 {
-		diff := v1[i] - v2[i]
-		sumOfSquares += diff * diff
-	}
-	return sumOfSquares, nil
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := any(v1).([]float32)
+		_v2 := any(v2).([]float32)
+		dist := vek32.Distance(_v1, _v2)
 
+		return T(dist * dist), nil
+
+	case []float64:
+		_v1 := any(v1).([]float64)
+		_v2 := any(v2).([]float64)
+		dist := vek.Distance(_v1, _v2)
+
+		return T(dist * dist), nil
+
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("L2DistanceSq type not supported")
+	}
 }
 
 func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -76,32 +71,14 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 		_v1 := any(v1).([]float32)
 		_v2 := any(v2).([]float32)
 
-		diff := blas32.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float32, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-
-		return T(blas32.Asum(diff)), nil
+		return T(vek32.ManhattanDistance(_v1, _v2)), nil
 
 	case []float64:
 		_v1 := any(v1).([]float64)
 		_v2 := any(v2).([]float64)
 
-		diff := blas64.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float64, len(_v1)),
-		}
+		return T(vek.ManhattanDistance(_v1, _v2)), nil
 
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas64.Asum(diff)), nil
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("L1Distance type not supported")
 	}
@@ -110,15 +87,17 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch any(v1).(type) {
 	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+		_v1 := any(v1).([]float32)
+		_v2 := any(v2).([]float32)
 
-		return T(-blas32.Dot(_v1, _v2)), nil
+		return T(vek32.Dot(_v1, _v2)), nil
 
 	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		return T(-blas64.Dot(_v1, _v2)), nil
+		_v1 := any(v1).([]float64)
+		_v2 := any(v2).([]float64)
+
+		return T(vek.Dot(_v1, _v2)), nil
+
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("InnerProduct type not supported")
 	}
@@ -127,27 +106,17 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch any(v1).(type) {
 	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+		_v1 := any(v1).([]float32)
+		_v2 := any(v2).([]float32)
 
-		mag1 := blas32.Nrm2(_v1)
-		mag2 := blas32.Nrm2(_v2)
-		if mag1 == 0 || mag2 == 0 {
-			return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
-		}
-		score := blas32.Dot(_v1, _v2) / (mag1 * mag2)
-		return T(1 - score), nil
+		return T(1 - vek32.CosineSimilarity(_v1, _v2)), nil
 
 	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		mag1 := blas64.Nrm2(_v1)
-		mag2 := blas64.Nrm2(_v2)
-		if mag1 == 0 || mag2 == 0 {
-			return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
-		}
-		score := blas64.Dot(_v1, _v2) / (mag1 * mag2)
-		return T(1 - score), nil
+		_v1 := any(v1).([]float64)
+		_v2 := any(v2).([]float64)
+
+		return T(1 - vek.CosineSimilarity(_v1, _v2)), nil
+
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("CosineDistance type not supported")
 	}
@@ -193,25 +162,23 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := any(v1).([]float32)
+		_normalized := any(normalized).([]float32)
 
-	if len(v1) == 0 {
-		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
-	}
+		copy(_normalized, _v1)
+		vek32.DivNumber_Inplace(_normalized, vek32.Norm(_v1))
 
-	// Compute the norm of the vector
-	var sumSquares float64
-	for _, val := range v1 {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		copy(normalized, v1)
-		return nil
-	}
+	case []float64:
+		_v1 := any(v1).([]float64)
+		_normalized := any(normalized).([]float64)
 
-	// Divide each element by the norm
-	for i, val := range v1 {
-		normalized[i] = T(float64(val) / norm)
+		copy(_normalized, _v1)
+		vek.DivNumber_Inplace(_normalized, vek.Norm(_v1))
+
+	default:
+		return moerr.NewInternalErrorNoCtx("NormalizeL2 type not supported")
 	}
 
 	return nil
@@ -292,7 +259,7 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 	var distanceFunction DistanceFunction[T]
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceSq[T]
+		distanceFunction = L2Distance[T]
 	case Metric_L2sqDistance:
 		distanceFunction = L2DistanceSq[T]
 	case Metric_InnerProduct:
