@@ -7239,12 +7239,6 @@ func TestSnapshotMeta(t *testing.T) {
 	}
 	//db.DiskCleaner.GetCleaner().DisableGC()
 
-	snapshots := make([]int64, 0)
-	for i := 0; i < 10; i++ {
-		time.Sleep(20 * time.Millisecond)
-		snapshot := time.Now().UTC().Unix()
-		snapshots = append(snapshots, snapshot)
-	}
 	testutils.WaitExpect(10000, func() bool {
 		return testutil.AllCheckpointsFinished(db)
 	})
@@ -7254,6 +7248,12 @@ func TestSnapshotMeta(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
+	snapshots := make([]int64, 0)
+	for i := 0; i < 10; i++ {
+		time.Sleep(20 * time.Millisecond)
+		snapshot := time.Now().UTC().UnixNano()
+		snapshots = append(snapshots, snapshot)
+	}
 	for i, snapshot := range snapshots {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
 		vecTypes := []types.Type{types.T_uint64.ToType(),
@@ -7336,11 +7336,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	snaps, err := db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
-	defer logtail.CloseSnapshotList(snaps)
-	assert.Equal(t, 1, len(snaps))
-	for _, snap := range snaps {
-		assert.Equal(t, len(snapshots), snap.Length())
-	}
+	assert.Equal(t, len(snapshots), len(snaps.ToTsList()))
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
@@ -7361,11 +7357,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
-	defer logtail.CloseSnapshotList(snaps)
-	assert.Equal(t, 1, len(snaps))
-	for _, snap := range snaps {
-		assert.Equal(t, len(snapshots), snap.Length())
-	}
+	assert.Equal(t, len(snapshots), len(snaps.ToTsList()))
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 }

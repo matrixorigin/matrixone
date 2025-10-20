@@ -120,7 +120,7 @@ func (w *GCWindow) MakeFilesReader(
 func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	ctx context.Context,
 	gCkp *checkpoint.CheckpointEntry,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	iscpTables map[uint64]types.TS,
@@ -142,7 +142,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		gCkp.GetVersion(),
 		sourcer,
 		pitrs,
-		accountSnapshots,
+		snapshots,
 		iscpTables,
 		snapshotMeta,
 		checkpointCli,
