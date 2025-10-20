@@ -2871,7 +2871,7 @@ func TestCheckDbIsSubDb(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "SubscriptionOption Exists",
+			name:        "SubscriptionOption exists",
 			createDbsql: "create database sub01 from acc01 publication pub01;",
 			want:        true,
 			wantErr:     false,

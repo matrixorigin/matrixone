@@ -331,7 +331,7 @@ const (
 const (
 	SERVER_STATUS_IN_TRANS             uint16 = 0x0001 // A transaction is currently active
 	SERVER_STATUS_AUTOCOMMIT           uint16 = 0x0002 // Autocommit mode is set
-	SERVER_MORE_RESULTS_EXISTS         uint16 = 0x0008 // More results Exists (more packet follow)
+	SERVER_MORE_RESULTS_EXISTS         uint16 = 0x0008 // More results exists (more packet follow)
 	SERVER_STATUS_NO_GOOD_INDEX_USED   uint16 = 0x0010
 	SERVER_STATUS_NO_INDEX_USED        uint16 = 0x0020
 	SERVER_STATUS_CURSOR_EXISTS        uint16 = 0x0040 // When using COM_STMT_FETCH, indicate that current cursor still has result
