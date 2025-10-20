@@ -16,10 +16,10 @@ package gc
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,13 +63,14 @@ type CheckpointBasedGCJob struct {
 		coarseProbility    float64
 		canGCCacheSize     int
 	}
-	sourcer      engine.BaseReader
-	snapshotMeta *logtail.SnapshotMeta
-	snapshots    *logtail.SnapshotInfo
-	pitr         *logtail.PitrInfo
-	ts           *types.TS
-	globalCkpLoc objectio.Location
-	globalCkpVer uint32
+	sourcer       engine.BaseReader
+	snapshotMeta  *logtail.SnapshotMeta
+	snapshots     *logtail.SnapshotInfo
+	pitr          *logtail.PitrInfo
+	ts            *types.TS
+	globalCkpLoc  objectio.Location
+	globalCkpVer  uint32
+	checkpointCli checkpoint.Runner // Added to access catalog
 
 	result struct {
 		vecToGC    *vector.Vector
@@ -85,6 +86,7 @@ func NewCheckpointBasedGCJob(
 	pitr *logtail.PitrInfo,
 	snapshots *logtail.SnapshotInfo,
 	snapshotMeta *logtail.SnapshotMeta,
+	checkpointCli checkpoint.Runner,
 	buffer *containers.OneSchemaBatchBuffer,
 	isOwner bool,
 	mp *mpool.MPool,
@@ -93,13 +95,14 @@ func NewCheckpointBasedGCJob(
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
-		sourcer:      sourcer,
-		snapshotMeta: snapshotMeta,
-		snapshots:    snapshots,
-		pitr:         pitr,
-		ts:           ts,
-		globalCkpLoc: globalCkpLoc,
-		globalCkpVer: gckpVersion,
+		sourcer:       sourcer,
+		snapshotMeta:  snapshotMeta,
+		snapshots:     snapshots,
+		pitr:          pitr,
+		ts:            ts,
+		globalCkpLoc:  globalCkpLoc,
+		globalCkpVer:  gckpVersion,
+		checkpointCli: checkpointCli,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -169,6 +172,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.pitr,
 		e.snapshotMeta,
 		transObjects,
+		e.checkpointCli,
 	)
 	if err != nil {
 		return err
@@ -312,16 +316,57 @@ func MakeBloomfilterCoarseFilter(
 	}, nil
 }
 
+// buildTableExistenceMap creates a combined map of table IDs from both snapshotMeta and catalog
+// This avoids the need for locking on every table existence check
+func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli checkpoint.Runner) (map[uint64]bool, error) {
+	// First, copy all table IDs from snapshotMeta
+	tableExistenceMap := snapshotMeta.GetAllTableIDs()
+	catalog := checkpointCli.GetCatalog()
+	count := len(tableExistenceMap)
+	defer func() {
+		logutil.Info("GC-TRACE-TABLE-LIST",
+			zap.Int("gc-table-count", count),
+			zap.Int("all-table-count", len(tableExistenceMap)))
+	}()
+	if catalog == nil {
+		return tableExistenceMap, nil
+	}
+	it := catalog.MakeDBIt(true)
+	for ; it.Valid(); it.Next() {
+		db := it.Get().GetPayload()
+
+		itTable := db.MakeTableIt(true)
+		for itTable.Valid() {
+			table := itTable.Get().GetPayload()
+			drop := table.GetDeleteAtLocked()
+			if drop.IsEmpty() {
+				tableID := table.GetID()
+				tableExistenceMap[tableID] = true
+			}
+			itTable.Next()
+		}
+	}
+
+	return tableExistenceMap, nil
+}
+
 func MakeSnapshotAndPitrFineFilter(
 	ts *types.TS,
 	snapshots *logtail.SnapshotInfo,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
+	checkpointCli checkpoint.Runner,
 ) (
 	filter FilterFn,
 	err error,
 ) {
+	// Build combined table existence map from both snapshotMeta and catalog
+	tableExistenceMap, err := buildTableExistenceMap(snapshotMeta, checkpointCli)
+	if err != nil {
+		return nil, err
+	}
+
 	tableSnapshots, tablePitrs := snapshotMeta.AccountToTableSnapshots(
 		snapshots,
 		pitrs,
@@ -349,8 +394,8 @@ func MakeSnapshotAndPitrFineFilter(
 			if transObjects[name] != nil {
 				tables := transObjects[name]
 				if entry := tables[tableID]; entry != nil {
-					// Check if the table still exists
-					_, ok := snapshotMeta.GetAccountId(tableID)
+					// Check if the table still exists using the combined map
+					ok := tableExistenceMap[tableID]
 					// The table has not been dropped, and the dropTS is empty, so it cannot be deleted.
 					if entry.dropTS.IsEmpty() && ok {
 						continue
