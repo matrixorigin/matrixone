@@ -330,29 +330,29 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	} else {
 		var binding *Binding
 		var ok bool
+		// try resolve table in current context
 		if binding, ok = b.ctx.bindingByTable[table]; !ok {
+			// if remap option exists, try with db-qualified name
 			if b.ctx.remapOption != nil {
 				if len(db) == 0 {
 					db = b.builder.compCtx.DefaultDatabase()
 				}
-				if binding, ok = b.ctx.bindingByTable[db+"."+table]; !ok {
-					err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
-					return
-				}
-			} else {
-				err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
-				return
+				binding, ok = b.ctx.bindingByTable[db+"."+table]
 			}
 		}
-		colPos = binding.FindColumn(col)
-		if colPos == AmbiguousName {
-			return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
-		}
-		if colPos != NotFound {
-			typ = DeepCopyType(binding.types[colPos])
-			relPos = binding.tag
+		if ok {
+			colPos = binding.FindColumn(col)
+			if colPos == AmbiguousName {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
+			}
+			if colPos != NotFound {
+				typ = DeepCopyType(binding.types[colPos])
+				relPos = binding.tag
+			} else {
+				err = moerr.NewInvalidInputf(localErrCtx, "column '%s' does not exist", name)
+			}
 		} else {
-			err = moerr.NewInvalidInputf(localErrCtx, "column '%s' does not exist", name)
+			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
 	}
 
