@@ -371,7 +371,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			return err
 		}
 		if isDup {
-			return moerr.NewInternalError(ctx, "cluster level pitr already Exists")
+			return moerr.NewInternalError(ctx, "cluster level pitr already exists")
 		}
 		sql, err = getSqlForCreatePitr(
 			ctx,

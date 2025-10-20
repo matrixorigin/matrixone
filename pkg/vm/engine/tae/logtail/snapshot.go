@@ -798,13 +798,13 @@ func collectObjects(
 	data *CKPReader,
 	objType int8,
 	collector func(
-	*map[uint64]map[objectio.Segmentid]*objectInfo,
-	*map[objectio.Segmentid]*objectInfo,
-	*map[objectio.Segmentid]*objectInfo,
-	uint64,
-	objectio.ObjectStats,
-	types.TS, types.TS,
-),
+		*map[uint64]map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
+		uint64,
+		objectio.ObjectStats,
+		types.TS, types.TS,
+	),
 ) {
 	data.ForEachRow(
 		ctx,
