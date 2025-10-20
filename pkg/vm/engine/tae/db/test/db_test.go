@@ -589,6 +589,9 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	_, err = db.DropRelationByName(schema.Name)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+
+	_, err = tae.GetTxnByID([]byte("not exist"))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNotFound))
 }
 
 func TestCRUD(t *testing.T) {
