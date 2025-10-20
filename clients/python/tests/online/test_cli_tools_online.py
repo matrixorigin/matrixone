@@ -456,8 +456,8 @@ class TestCLIBasicCommands:
         # Should show index health report or no-indexes message
         # Accept various forms of the "no indexes" message
         assert (
-            "Index Health Report" in output 
-            or "No tables with indexes" in output 
+            "Index Health Report" in output
+            or "No tables with indexes" in output
             or "No tables with secondary indexes" in output
             or "⚠️" in output  # Warning emoji indicates no indexes found
         )
