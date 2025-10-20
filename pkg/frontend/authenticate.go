@@ -7588,7 +7588,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return moerr.NewInternalErrorf(ctx, "the tenant %s Exists", ca.Name)
+				return moerr.NewInternalErrorf(ctx, "the tenant %s exists", ca.Name)
 			}
 			return rtnErr
 		} else {
