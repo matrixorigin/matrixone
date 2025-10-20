@@ -31,16 +31,20 @@ const (
 	OpType_L1Distance     = "vector_l1_ops"
 
 	DistFn_L2Distance     = "l2_distance"
+	DistFn_L2sqDistance   = "l2_distance_sq"
 	DistFn_InnerProduct   = "inner_product"
 	DistFn_CosineDistance = "cosine_distance"
+	DistFn_L1Distance     = "l1_distance"
 
 	DistIntFn_L2Distance     = "l2_distance_sq"
 	DistIntFn_InnerProduct   = "inner_product"
 	DistIntFn_CosineDistance = "cosine_distance"
+	DistIntFn_L1Distance     = "l1_distance"
 )
 
 const (
 	Metric_L2Distance MetricType = iota
+	Metric_L2sqDistance
 	Metric_InnerProduct
 	Metric_CosineDistance
 	Metric_L1Distance
@@ -78,6 +82,22 @@ var (
 			"vector_tanimoto_ops":   usearch.Tanimoto,
 			"vector_sorensen_ops":   usearch.Sorensen,
 		*/
+	}
+
+	MetricTypeToDistFuncName = map[MetricType]string{
+		Metric_L2Distance:     DistFn_L2Distance,
+		Metric_L2sqDistance:   DistFn_L2sqDistance,
+		Metric_InnerProduct:   DistFn_InnerProduct,
+		Metric_CosineDistance: DistFn_CosineDistance,
+		Metric_L1Distance:     DistFn_L1Distance,
+	}
+
+	DistFuncNameToMetricType = map[string]MetricType{
+		DistFn_L2Distance:     Metric_L2Distance,
+		DistFn_L2sqDistance:   Metric_L2sqDistance,
+		DistFn_InnerProduct:   Metric_InnerProduct,
+		DistFn_CosineDistance: Metric_CosineDistance,
+		DistFn_L1Distance:     Metric_L1Distance,
 	}
 )
 

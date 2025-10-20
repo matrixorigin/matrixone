@@ -106,6 +106,32 @@ func (h *SearchResultHeap) Pop() any {
 	return item
 }
 
+type SearchResultMaxHeap []SearchResultIf
+
+func (h SearchResultMaxHeap) Len() int { return len(h) }
+
+func (h SearchResultMaxHeap) Less(i, j int) bool {
+	return h[i].GetDistance() > h[j].GetDistance()
+}
+
+func (h SearchResultMaxHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *SearchResultMaxHeap) Push(x any) {
+	item := x.(SearchResultIf)
+	*h = append(*h, item)
+}
+
+func (h *SearchResultMaxHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	*h = old[0 : n-1]
+	return item
+}
+
 // Thread-safe Heap struct
 type SearchResultSafeHeap struct {
 	mutex   sync.Mutex

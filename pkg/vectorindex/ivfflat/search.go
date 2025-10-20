@@ -15,17 +15,15 @@
 package ivfflat
 
 import (
-	"context"
+	"container/heap"
 	"fmt"
-	"math"
 	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -34,7 +32,6 @@ import (
 )
 
 var runSql = sqlexec.RunSql
-var runSql_streaming = sqlexec.RunStreamingSql
 
 type Centroid[T types.RealNumbers] struct {
 	Id  int64
@@ -58,12 +55,14 @@ type IvfflatSearch[T types.RealNumbers] struct {
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
+	sql := fmt.Sprintf(
+		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		tblcfg.DbName, tblcfg.IndexTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		idxcfg.Ivfflat.Version)
+		idxcfg.Ivfflat.Version,
+	)
 
 	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
 	res, err := runSql(proc, sql)
@@ -80,13 +79,15 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		faVec := bat.Vecs[1]
-		for r := range bat.RowCount() {
-			id := vector.GetFixedAtWithTypeCheck[int64](idVec, r)
-			if faVec.IsNull(uint64(r)) {
+		ids := vector.MustFixedColNoTypeCheck[int64](idVec)
+		hasNull := faVec.HasNull()
+		for i, id := range ids {
+			if hasNull && faVec.IsNull(uint64(i)) {
 				//os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
-			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
+			val := faVec.GetStringAt(i)
+			vec := types.BytesToArray[T](util.UnsafeStringToBytes(val))
 			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: vec})
 		}
 	}
@@ -95,91 +96,35 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	return nil
 }
 
-// load chunk from database
-func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *process.Process,
-	query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
-	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
-
-	var res executor.Result
-	var ok bool
-
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-proc.Ctx.Done():
-		return false, proc.Ctx.Err()
-	case <-lctx.Done():
-		// local context cancelled. something went wrong with other threads
-		return false, context.Cause(lctx)
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	for i := 0; i < bat.RowCount(); i++ {
-		pk := vector.GetAny(bat.Vecs[0], i)
-		if bat.Vecs[1].IsNull(uint64(i)) {
-			continue
-		}
-		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
-		dist, err := distfn(query, vec)
-		if err != nil {
-			return false, err
-		}
-
-		heap.Push(&vectorindex.SearchResultAnyKey{Id: pk, Distance: float64(dist)})
-	}
-	return false, nil
-}
-
-func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], _ vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
 	if len(idx.Centroids) == 0 {
 		// empty index has id = 1
 		return []int64{1}, nil
 	}
 
-	nworker := int(nthread)
-	ncentroids := int(len(idx.Centroids))
-	if ncentroids < nworker {
-		nworker = ncentroids
-	}
-	errs := make(chan error, nworker)
+	hp := make(vectorindex.SearchResultMaxHeap, 0, int(probe))
+	for _, c := range idx.Centroids {
+		dist, err := distfn(query, c.Vec)
+		if err != nil {
+			return nil, err
+		}
+		dist64 := float64(dist)
 
-	heap := vectorindex.NewSearchResultSafeHeap(ncentroids)
-	var wg sync.WaitGroup
-	for n := 0; n < nworker; n++ {
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for i, c := range idx.Centroids {
-				if i%nworker != tid {
-					continue
-				}
-				dist, err := distfn(query, c.Vec)
-				if err != nil {
-					errs <- err
-					return
-				}
-				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
+		if len(hp) >= int(probe) {
+			if hp[0].GetDistance() > dist64 {
+				hp[0] = &vectorindex.SearchResult{Id: c.Id, Distance: dist64}
+				heap.Fix(&hp, 0)
 			}
-		}(n)
+		} else {
+			hp.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist64})
+		}
 	}
 
-	wg.Wait()
-
-	if len(errs) > 0 {
-		return nil, <-errs
-	}
-
-	res := make([]int64, 0, probe)
-	n := heap.Len()
-	for i := 0; i < int(probe) && i < n; i++ {
-		srif := heap.Pop()
+	n := hp.Len()
+	res := make([]int64, 0, n)
+	for range n {
+		srif := hp.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
 			return nil, moerr.NewInternalError(proc.Ctx, "findCentroids: heap return key is not int64")
@@ -192,22 +137,23 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 }
 
 // Call usearch.Search
-func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, rt vectorindex.RuntimeConfig, nthread int64) (keys any, distances []float64, err error) {
-
-	stream_chan := make(chan executor.Result, nthread)
-	error_chan := make(chan error, nthread)
-	lctx := context.Background()
-	lctx, cancel := context.WithCancelCause(lctx)
-	defer cancel(nil)
+func (idx *IvfflatSearchIndex[T]) Search(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	query []T,
+	rt vectorindex.RuntimeConfig,
+	nthread int64,
+) (keys any, distances []float64, err error) {
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
-		return nil, nil, err
+		return
 	}
 
 	centroids_ids, err := idx.findCentroids(proc, query, distfn, idxcfg, rt.Probe, nthread)
 	if err != nil {
-		return nil, nil, err
+		return
 	}
 
 	var instr string
@@ -218,95 +164,69 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		instr += strconv.FormatInt(c, 10)
 	}
 
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+	sql := fmt.Sprintf(
+		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+		types.ArrayToString(query),
 		tblcfg.DbName, tblcfg.EntriesTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		idx.Version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		instr,
+		rt.Limit,
 	)
+
+	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			// send multiple errors to stop the nworker threads
-			cancel(err)
-			return
-		}
-	}()
-
-	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
-
-	for n := int64(0); n < nthread; n++ {
-
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			// brute force search with selected centroids
-			sql_closed := false
-			var err2 error
-			for !sql_closed {
-				sql_closed, err2 = idx.searchEntries(lctx, proc, query, distfn, heap, stream_chan, error_chan)
-				if err2 != nil {
-					cancel(err2)
-					return
-				}
-			}
-		}()
+	res, err := runSql(proc, sql)
+	if err != nil {
+		return
+	}
+	if len(res.Batches) == 0 {
+		return nil, nil, moerr.NewEmptyVector(proc.Ctx)
 	}
 
-	wg.Wait()
-
-	// check local context cancelled
-	select {
-	case <-proc.Ctx.Done():
-		return nil, nil, proc.Ctx.Err()
-	case <-lctx.Done():
-		err := context.Cause(lctx)
-		return nil, nil, err
-	default:
+	if len(rt.BackgroundQueries) > 0 {
+		rt.BackgroundQueries[0] = res.LogicalPlan
 	}
 
+	distances = make([]float64, 0, rt.Limit)
 	resid := make([]any, 0, rt.Limit)
-	resdist := make([]float64, 0, rt.Limit)
-	n := heap.Len()
-	for i := 0; i < int(rt.Limit) && i < n; i++ {
-		srif := heap.Pop()
-		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
-		if !ok {
-			return nil, nil, moerr.NewInternalError(proc.Ctx, "ivf search: heap return key is not any")
-		}
-		resid = append(resid, sr.Id)
-		if metric.MetricType(idxcfg.Ivfflat.Metric) == metric.Metric_L2Distance {
-			// distance functino of L2Distance is l2sq so sqrt at the end
-			sr.Distance = math.Sqrt(sr.Distance)
-		}
-		resdist = append(resdist, sr.Distance)
+	bat := res.Batches[0]
+
+	for i := 0; i < bat.RowCount(); i++ {
+		pk := vector.GetAny(bat.Vecs[0], i, true)
+		resid = append(resid, pk)
+
+		dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
+		//dist = metric.DistanceTransformIvfflat(dist, idxcfg.OpType, metric.MetricType(idxcfg.Ivfflat.Metric))
+		distances = append(distances, dist)
 	}
 
-	return resid, resdist, nil
+	res.Close()
+
+	return resid, distances, nil
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {
 	idx.Centroids = nil
 }
 
-func NewIvfflatSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *IvfflatSearch[T] {
+func NewIvfflatSearch[T types.RealNumbers](
+	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig,
+) *IvfflatSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &IvfflatSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	return s
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *IvfflatSearch[T]) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *IvfflatSearch[T]) Search(
+	proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig,
+) (keys any, distances []float64, err error) {
 	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")

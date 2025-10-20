@@ -15,13 +15,11 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-# Usearch source code is from https://github.com/cpegeric/usearch/tree/bug564
-# There is a fix for concurrent search issue.
-USEARCH_DIR=usearch-2.18.0
-USEARCH_TAR=$(USEARCH_DIR).tar.gz
-STRINGZILLA_DIR=StringZilla-3.12.5
+USEARCH_DIR=USearch-2.21.1
+USEARCH_TAR=usearch-2.21.1.tar.gz
+STRINGZILLA_DIR=StringZilla-4.2.1
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
-SIMSIMD_DIR=SimSIMD-6.5.0
+SIMSIMD_DIR=SimSIMD-6.5.3
 SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
 FP16_DIR=fp16
 FP16_TAR=$(FP16_DIR).tar.gz
