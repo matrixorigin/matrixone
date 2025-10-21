@@ -52,7 +52,9 @@ const (
 	MOISCPLogTableName = catalog.MO_ISCP_LOG
 )
 
-var once sync.Once
+var running bool
+
+var runningMu sync.Mutex
 
 const (
 	DefaultGCInterval             = time.Hour
@@ -86,33 +88,38 @@ func ISCPTaskExecutorFactory(
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
 
-		once.Do(func() {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-			exec, err = NewISCPTaskExecutor(
-				ctx,
-				txnEngine,
-				cnTxnClient,
-				cdUUID,
-				nil,
-				mp,
-			)
-			if err != nil {
-				return
-			}
-			attachToTask(ctx, task.GetID(), exec)
+		runningMu.Lock()
+		defer runningMu.Unlock()
+		if running {
+			return
+		}
+		running = true
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		exec, err = NewISCPTaskExecutor(
+			ctx,
+			txnEngine,
+			cnTxnClient,
+			cdUUID,
+			nil,
+			mp,
+		)
+		if err != nil {
+			return
+		}
+		attachToTask(ctx, task.GetID(), exec)
 
-			exec.runningMu.Lock()
-			defer exec.runningMu.Unlock()
-			if exec.running {
-				return
-			}
-			err = exec.initStateLocked()
-			if err != nil {
-				return
-			}
-			exec.run(ctx)
-		})
-		return err
+		exec.runningMu.Lock()
+		defer exec.runningMu.Unlock()
+		if exec.running {
+			return
+		}
+		err = exec.initStateLocked()
+		if err != nil {
+			return
+		}
+		exec.run(ctx)
+		<-ctx.Done()
+		return
 	}
 }
 
