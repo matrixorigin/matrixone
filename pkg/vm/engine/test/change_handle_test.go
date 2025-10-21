@@ -3644,6 +3644,18 @@ func TestInvalidTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	// init cdc executor
+	checkLeaseStub := gostub.Stub(
+		&iscp.CheckLeaseWithRetry,
+		func(
+			context.Context,
+			string,
+			engine.Engine,
+			client.TxnClient,
+		) (bool, error) {
+			return true, nil
+		},
+	)
+	defer checkLeaseStub.Reset()
 	cdcExecutor, err := iscp.NewISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
