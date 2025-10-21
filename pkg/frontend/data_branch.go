@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -385,8 +386,9 @@ func mergeDiff(
 ) (err error) {
 
 	var (
-		cnt int
-		buf bytes.Buffer
+		cnt    int
+		buf    bytes.Buffer
+		sqlRet executor.Result
 	)
 
 	initSqlBuf := func() {
@@ -428,11 +430,10 @@ func mergeDiff(
 		buf.WriteString(")")
 
 		if cnt >= objectio.BlockMaxRows {
-			bh.ClearExecResultSet()
-			if err = bh.Exec(execCtx.reqCtx, buf.String()); err != nil {
+			if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
 				return err
 			}
-
+			sqlRet.Close()
 			initSqlBuf()
 		}
 		return nil
@@ -514,9 +515,10 @@ func mergeDiff(
 	}
 
 	if buf.Len() > 0 && cnt > 0 {
-		if _, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+		if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
 			return err
 		}
+		sqlRet.Close()
 	}
 
 	return nil
@@ -830,7 +832,7 @@ func diff(
 
 						if tarDelsOnLCA.Length() >= objectio.BlockMaxRows {
 							if tmpRows, err = handleDelsOnLCA(
-								ctx, ses, bh, tarDelsOnLCA, true,
+								ctx, ses, tarDelsOnLCA, true,
 								tarTblDef, baseTblDef,
 								dagInfo.tarBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 							); err != nil {
@@ -888,7 +890,7 @@ func diff(
 
 			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows {
 				if tmpRows, err = handleDelsOnLCA(
-					ctx, ses, bh, baseDelsOnLCA, false,
+					ctx, ses, baseDelsOnLCA, false,
 					tarTblDef, baseTblDef,
 					dagInfo.baseBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 				); err != nil {
@@ -905,7 +907,7 @@ func diff(
 
 	if tarDelsOnLCA != nil && tarDelsOnLCA.Length() > 0 {
 		if tmpRows, err = handleDelsOnLCA(
-			ctx, ses, bh, tarDelsOnLCA, true,
+			ctx, ses, tarDelsOnLCA, true,
 			tarTblDef, baseTblDef,
 			dagInfo.tarBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 		); err != nil {
@@ -916,7 +918,7 @@ func diff(
 
 	if baseDelsOnLCA != nil && baseDelsOnLCA.Length() > 0 {
 		if tmpRows, err = handleDelsOnLCA(
-			ctx, ses, bh, baseDelsOnLCA, false,
+			ctx, ses, baseDelsOnLCA, false,
 			tarTblDef, baseTblDef,
 			dagInfo.baseBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 		); err != nil {
@@ -970,7 +972,6 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 func handleDelsOnLCA(
 	ctx context.Context,
 	ses *Session,
-	bh BackgroundExec,
 	dels *vector.Vector,
 	isTarDels bool,
 	tarTblDef *plan.TableDef,
@@ -1140,34 +1141,28 @@ func handleDelsOnLCA(
 		)
 	}
 
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
-
 	var (
-		val    interface{}
-		tmpV   []ExecResult
-		sqlRet *MysqlResultSet
+		sqlRet executor.Result
 	)
 
-	if tmpV, err = getResultSet(ctx, bh); err != nil {
-		return
+	if sqlRet, err = sqlexec.RunSql(ses.proc, sql); err != nil {
+		return nil, err
 	}
 
-	if execResultArrayHasData(tmpV) {
-		sqlRet = tmpV[0].(*MysqlResultSet)
-		for i := range sqlRet.GetRowCount() {
-			row := append([]any{}, tarTblDef.Name, flag)
-			for j := range sqlRet.GetColumnCount() {
-				if val, err = sqlRet.GetValue(ctx, i, j); err != nil {
-					return
+	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+		for i := range rowCnt {
+			row := make([]any, len(cols)+2)
+			row[0] = tarTblDef.Name
+			row[1] = flag
+			for j := range cols {
+				if err = extractRowFromVector(ctx, ses, cols[j], j+2, row, i, true); err != nil {
+					return false
 				}
-				row = append(row, val)
 			}
 			rows = append(rows, row)
 		}
-	}
+		return true
+	})
 
 	return
 }
@@ -1677,111 +1672,6 @@ func decideCollectRange(
 		}
 	}
 
-	//worstRange := func() {
-	//	tarEndTS = tarSp
-	//	baseEndTS = baseSp
-	//	tarFromTS = types.MinTs()
-	//	baseFromTS = types.MinTs()
-	//}
-	//
-	//tarCollectNothing := func() {
-	//	tarFromTS = tarSp
-	//	tarEndTS = tarSp.Prev()
-	//}
-	//
-	//baseCollectNothing := func() {
-	//	baseFromTS = baseSp
-	//	baseEndTS = baseSp.Prev()
-	//}
-	//
-	//givenUpCommonBaseIsLCA := func() error {
-	//	tarCTS, err = getTarCommitTS()
-	//
-	//	tarFromTS = tarCTS.Next()
-	//	tarEndTS = tarSp
-	//	baseFromTS = tarCTS.Next()
-	//	baseEndTS = baseSp
-	//	return err
-	//}
-	//
-	//givenUpCommonTarIsLCA := func() error {
-	//	baseCTS, err = getBaseCommitTS()
-	//	tarFromTS = baseCTS.Next()
-	//	tarEndTS = tarSp
-	//	baseFromTS = baseCTS.Next()
-	//	baseEndTS = baseSp
-	//	return err
-	//}
-	//
-	//if lcaTableID == 0 {
-	//	// no LCA
-	//	worstRange()
-	//} else if lcaTableID == baseTableID { // base is the LCA
-	//	if baseSp.LT(&tarBranchTS) {
-	//		worstRange()
-	//	} else if baseSp.EQ(&tarBranchTS) {
-	//		// base collect nothing, tar collect [branchTS+1, sp]
-	//		tarCTS, err = getTarCommitTS()
-	//		tarFromTS = tarCTS.Next()
-	//		tarEndTS = tarSp
-	//		baseCollectNothing()
-	//	} else {
-	//		// baseSp.GT(&tarBranchTS)
-	//		err = givenUpCommonBaseIsLCA()
-	//	}
-	//
-	//} else if lcaTableID == tarTableID { // tar is the LCA
-	//	if tarSp.LT(&baseBranchTS) {
-	//		worstRange()
-	//	} else if tarSp.EQ(&baseBranchTS) {
-	//		// tar collect nothing, base collect [branchTS+1, sp]
-	//		tarCollectNothing()
-	//		baseCTS, err = getBaseCommitTS()
-	//		baseFromTS = baseCTS.Next()
-	//		baseEndTS = baseSp
-	//	} else {
-	//		// tarSp.GT(&baseBranchTS)
-	//		err = givenUpCommonTarIsLCA()
-	//	}
-	//
-	//} else {
-	//	// LCA not tar or base
-	//	if tarBranchTS.EQ(&baseBranchTS) {
-	//		tarCTS, err = getTarCommitTS()
-	//		tarFromTS = tarCTS.Next()
-	//		tarEndTS = tarSp
-	//
-	//		if err != nil {
-	//			return
-	//		}
-	//
-	//		baseCTS, err = getBaseCommitTS()
-	//		baseEndTS = baseSp
-	//		baseFromTS = baseCTS.Next()
-	//	} else {
-	//		worstRange()
-	//	}
-	//}
-	//
-	//if tarTableID == baseTableID {
-	//	// same table ==> same branch TS ==> same from ts
-	//	// data branch diff t1{sp1} against t1{sp2}
-	//	// t1: -----from ts-------sp1-----------sp2----->
-	//	//
-	//	//diff t1.[fromTS, sp1] against t1.[fromTS, sp2]
-	//	//
-	//	// minEnd = mix(sp1,sp2)
-	//	// ==> t1.[minEnd, sp1] against t1.[minEnd, sp2]
-	//	minEnd := tarEndTS
-	//	if minEnd.LT(&baseEndTS) {
-	//		minEnd = baseEndTS
-	//	}
-	//	minEnd = minEnd.Next()
-	//
-	//	tarFromTS = minEnd
-	//	baseFromTS = minEnd
-	//}
-
 	return
 }
 
@@ -1931,55 +1821,42 @@ func constructBranchDAG(
 ) (dag *databranchutils.DataBranchDAG, err error) {
 
 	var (
-		data    databranchutils.DataBranchMetadata
 		rowData []databranchutils.DataBranchMetadata
-		sqlRet  []ExecResult
 
-		bh = ses.GetBackgroundExec(ctx)
+		sqlRet executor.Result
+		oldCtx context.Context
+		sysCtx context.Context
 	)
 
-	bh.ClearExecResultSet()
+	oldCtx = ses.proc.Ctx
+	sysCtx = defines.AttachAccountId(ctx, catalog.System_Account)
+	ses.proc.Ctx = sysCtx
 	defer func() {
-		bh.Close()
+		ses.proc.Ctx = oldCtx
+		sqlRet.Close()
 	}()
 
-	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	if err = bh.Exec(
-		sysCtx,
+	if sqlRet, err = sqlexec.RunSql(
+		ses.proc,
 		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
 	); err != nil {
 		return
 	}
 
-	if sqlRet, err = getResultSet(sysCtx, bh); err != nil {
-		return
-	}
-
-	if execResultArrayHasData(sqlRet) {
-		rowData = make([]databranchutils.DataBranchMetadata, 0, sqlRet[0].GetRowCount())
-		for i := uint64(0); i < sqlRet[0].GetRowCount(); i++ {
-			if data.TableID, err = sqlRet[0].GetUint64(sysCtx, i, 0); err != nil {
-				return
-			}
-			if data.CloneTS, err = sqlRet[0].GetInt64(sysCtx, i, 1); err != nil {
-				return
-			}
-			if data.PTableID, err = sqlRet[0].GetUint64(sysCtx, i, 2); err != nil {
-				return
-			}
-
-			v := int64(0)
-			if v, err = sqlRet[0].GetInt64(sysCtx, i, 5); err != nil {
-				return
-			}
-
-			if v == 1 {
-				data.TableDeleted = true
-			}
-
-			rowData = append(rowData, data)
+	rowData = make([]databranchutils.DataBranchMetadata, 0, sqlRet.AffectedRows)
+	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		tblIds := vector.MustFixedColNoTypeCheck[uint64](cols[0])
+		cloneTS := vector.MustFixedColNoTypeCheck[int64](cols[1])
+		pTblIds := vector.MustFixedColNoTypeCheck[uint64](cols[2])
+		for i := range tblIds {
+			rowData = append(rowData, databranchutils.DataBranchMetadata{
+				TableID:  tblIds[i],
+				CloneTS:  cloneTS[i],
+				PTableID: pTblIds[i],
+			})
 		}
-	}
+		return true
+	})
 
 	return databranchutils.NewDAG(rowData), nil
 }
