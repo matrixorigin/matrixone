@@ -45,7 +45,7 @@ type singleWindowExec struct {
 func makeRankDenseRankRowNumber(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	return &singleWindowExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, info.emptyNull, 0),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, info.emptyNull, 0, false),
 	}
 }
 
@@ -70,9 +70,12 @@ func (exec *singleWindowExec) GetOptResult() SplitResult {
 
 func (exec *singleWindowExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 
 	encoded := EncodedAgg{
@@ -91,13 +94,13 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 }
 
 func (exec *singleWindowExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffers(
+	return marshalRetAndGroupsToBuffer(
 		bucketIdx, bucket, buf,
 		&exec.ret.optSplitResult, exec.groups)
 }
 
 func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkRetAndGroupsToBuffer(
+	return marshalChunkToBuffer(
 		chunk, buf,
 		&exec.ret.optSplitResult, exec.groups)
 }
@@ -111,7 +114,8 @@ func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups
 			}
 		}
 	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// group used by above,
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *singleWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
