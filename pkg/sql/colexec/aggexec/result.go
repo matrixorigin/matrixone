@@ -72,10 +72,10 @@ type SplitResult interface {
 func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 	mg AggMemoryManager,
 	resultType types.Type,
-	needEmptySituationList bool, initialValue T) aggResultWithFixedType[T] {
+	needEmptySituationList bool, initialValue T, hasDistinct bool) aggResultWithFixedType[T] {
 
 	res := aggResultWithFixedType[T]{}
-	res.init(mg, resultType, needEmptySituationList)
+	res.init(mg, resultType, needEmptySituationList, hasDistinct)
 	res.InitialValue = initialValue
 	res.values = make([][]T, 1)
 
@@ -85,10 +85,10 @@ func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 func initAggResultWithBytesTypeResult(
 	mg AggMemoryManager,
 	resultType types.Type,
-	setEmptyGroupToNull bool, initialValue string) aggResultWithBytesType {
+	setEmptyGroupToNull bool, initialValue string, hasDistinct bool) aggResultWithBytesType {
 
 	res := aggResultWithBytesType{}
-	res.init(mg, resultType, setEmptyGroupToNull)
+	res.init(mg, resultType, setEmptyGroupToNull, hasDistinct)
 	res.InitialValue = []byte(initialValue)
 
 	return res
@@ -111,8 +111,8 @@ func (r *aggResultWithFixedType[T]) Size() int64 {
 	return size
 }
 
-func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) error {
-	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData); err != nil {
+func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData, emptyData, distData [][]byte) error {
+	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData, distData); err != nil {
 		return err
 	}
 	r.values = make([][]T, len(resultData))
@@ -231,6 +231,7 @@ type optSplitResult struct {
 		// nsp opt.
 		doesThisNeedEmptyList     bool
 		shouldSetNullToEmptyGroup bool
+		hasDistinct               bool
 
 		// split opt.
 		chunkSize int
@@ -243,48 +244,56 @@ type optSplitResult struct {
 	// the list of each group's result and empty situation.
 	resultList []*vector.Vector
 	emptyList  []*vector.Vector
-	nowIdx1    int
+
+	// This nowIdx1 is f**king insane
+	nowIdx1 int
 
 	// for easy get from / set to emptyList.
 	bsFromEmptyList [][]bool
 
 	// for easy get / set result and empty from outer.
 	accessIdx1, accessIdx2 int
+
+	distinct []distinctHash
 }
 
-func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, error) {
+// this API is broken.  It should not need to return those [][]byte
+func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, [][]byte, error) {
 	var err error
 
+	// WTF?   min(r.nowIdx1+1, len...)
 	resultData := make([][]byte, min(r.nowIdx1+1, len(r.resultList)))
 	emptyData := make([][]byte, min(r.nowIdx1+1, len(r.emptyList)))
 
 	for i := range resultData {
 		if resultData[i], err = r.resultList[i].MarshalBinary(); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	for i := range emptyData {
 		if emptyData[i], err = r.emptyList[i].MarshalBinary(); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return resultData, emptyData, nil
+
+	var distinctData [][]byte
+	if len(r.distinct) > 0 {
+		distinctData = make([][]byte, min(r.nowIdx1+1, len(r.distinct)))
+		for i := range r.distinct {
+			if distinctData[i], err = r.distinct[i].marshal(); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+	}
+
+	return resultData, emptyData, distinctData, nil
 }
 
-func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) (err error) {
+func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData [][]byte) (err error) {
 	r.free()
 	defer func() {
 		if err != nil {
-			for i := range r.resultList {
-				if r.resultList[i] != nil {
-					r.resultList[i].Free(r.mp)
-				}
-			}
-			for i := range r.emptyList {
-				if r.emptyList[i] != nil {
-					r.emptyList[i].Free(r.mp)
-				}
-			}
+			r.free()
 		}
 	}()
 
@@ -305,6 +314,15 @@ func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]b
 		}
 		r.bsFromEmptyList[i] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[i])
 	}
+
+	if len(distinctData) != 0 {
+		r.distinct = make([]distinctHash, len(distinctData))
+		for i := range distinctData {
+			if err = r.distinct[i].unmarshal(distinctData[i]); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -323,6 +341,20 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
 		return err
 	}
+
+	var cnt int64
+	if len(r.distinct) == 0 {
+		buf.Write(types.EncodeInt64(&cnt))
+	} else {
+		cnt = int64(rvec.Length())
+		buf.Write(types.EncodeInt64(&cnt))
+		for i := range r.distinct {
+			if err := r.distinct[i].marshalToBuffers(flags[i], buf); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -334,11 +366,22 @@ func (r *optSplitResult) marshalChunkToBuffer(chunk int, buf *bytes.Buffer) erro
 	if err := r.emptyList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
 		return err
 	}
+
+	var cnt int64
+	if len(r.distinct) == 0 {
+		buf.Write(types.EncodeInt64(&cnt))
+	} else {
+		cnt = int64(len(r.distinct[chunk].maps))
+		buf.Write(types.EncodeInt64(&cnt))
+		if err := r.distinct[chunk].marshalToBuffers(nil, buf); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (r *optSplitResult) init(
-	mg AggMemoryManager, typ types.Type, needEmptyList bool) {
+	mg AggMemoryManager, typ types.Type, needEmptyList, hasDistinct bool) {
 	if mg != nil {
 		r.mp = mg.Mp()
 	}
@@ -347,11 +390,16 @@ func (r *optSplitResult) init(
 	r.optInformation.doesThisNeedEmptyList = needEmptyList
 	r.optInformation.shouldSetNullToEmptyGroup = needEmptyList
 	r.optInformation.chunkSize = GetChunkSizeFromType(typ)
+	r.optInformation.hasDistinct = hasDistinct
 
 	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(typ))
 	if needEmptyList {
 		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 		r.bsFromEmptyList = append(r.bsFromEmptyList, nil)
+	}
+
+	if hasDistinct {
+		r.distinct = append(r.distinct, newDistinctHash())
 	}
 	r.nowIdx1 = 0
 }
@@ -513,7 +561,14 @@ func (r *optSplitResult) extendMoreToKthGroup(k int, more int) error {
 		return err
 	}
 	if r.optInformation.doesThisNeedEmptyList {
-		return r.emptyList[k].PreExtend(more, r.mp)
+		if err := r.emptyList[k].PreExtend(more, r.mp); err != nil {
+			return err
+		}
+	}
+	if r.optInformation.hasDistinct {
+		if err := r.distinct[k].grows(more); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -529,6 +584,9 @@ func (r *optSplitResult) appendPartK() int {
 	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(r.resultType))
 	if r.optInformation.doesThisNeedEmptyList {
 		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+	}
+	if r.optInformation.hasDistinct {
+		r.distinct = append(r.distinct, newDistinctHash())
 	}
 	return len(r.resultList) - 1
 }
@@ -603,6 +661,11 @@ func (r *optSplitResult) free() {
 	r.resultList = nil
 	r.emptyList = nil
 	r.bsFromEmptyList = nil
+
+	for _, d := range r.distinct {
+		d.free()
+	}
+	r.distinct = nil
 }
 
 func (r *optSplitResult) Size() int64 {
@@ -623,6 +686,12 @@ func (r *optSplitResult) Size() int64 {
 	size += int64(cap(r.emptyList)) * 8
 	// 24 is the size of a slice header.
 	size += int64(cap(r.bsFromEmptyList)) * 24
+
+	if r.optInformation.hasDistinct {
+		for _, d := range r.distinct {
+			size += d.Size()
+		}
+	}
 	return size
 }
 
@@ -649,4 +718,24 @@ func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
 	for i := 0; i < y2; i++ {
 		src[x2][i] = value
 	}
+}
+
+// fill in distict.   return true if need to update agg state, false if not distinct.
+func (r *optSplitResult) distinctFill(x, y int, vecs []*vector.Vector, row int) (bool, error) {
+	if !r.optInformation.hasDistinct {
+		// if has no distinct, always need to update agg
+		return true, nil
+	}
+
+	need, err := r.distinct[x].fill(y, vecs, row)
+	return need, err
+}
+
+func (r *optSplitResult) distinctMerge(x1 int, other *optSplitResult, x2 int) error {
+	if !r.optInformation.hasDistinct {
+		// this is fine.
+		return nil
+	}
+	// thank god, the following will bomb out if they collide.
+	return r.distinct[x1].merge(&other.distinct[x2])
 }

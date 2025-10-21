@@ -664,3 +664,14 @@ func Uint32ToInt32(ux uint32) int32 {
 	}
 	return x
 }
+
+func WriteSizeBytes(bs []byte, w io.Writer) error {
+	sz := int32(len(bs))
+	if _, err := w.Write(EncodeInt32(&sz)); err != nil {
+		return err
+	}
+	if _, err := w.Write(bs); err != nil {
+		return err
+	}
+	return nil
+}
