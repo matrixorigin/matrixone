@@ -830,9 +830,9 @@ func diff(
 							return
 						}
 
-						if tarDelsOnLCA.Length() >= objectio.BlockMaxRows {
+						if tarDelsOnLCA.Length() >= objectio.BlockMaxRows*10 || tarDelsOnLCA.Size() >= mpool.GB {
 							if tmpRows, err = handleDelsOnLCA(
-								ctx, ses, tarDelsOnLCA, true,
+								ctx, ses, bh, tarDelsOnLCA, true,
 								tarTblDef, baseTblDef,
 								dagInfo.tarBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 							); err != nil {
@@ -888,9 +888,9 @@ func diff(
 				return err
 			}
 
-			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows {
+			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows*10 || tarDelsOnLCA.Size() >= mpool.GB {
 				if tmpRows, err = handleDelsOnLCA(
-					ctx, ses, baseDelsOnLCA, false,
+					ctx, ses, bh, baseDelsOnLCA, false,
 					tarTblDef, baseTblDef,
 					dagInfo.baseBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 				); err != nil {
@@ -907,7 +907,7 @@ func diff(
 
 	if tarDelsOnLCA != nil && tarDelsOnLCA.Length() > 0 {
 		if tmpRows, err = handleDelsOnLCA(
-			ctx, ses, tarDelsOnLCA, true,
+			ctx, ses, bh, tarDelsOnLCA, true,
 			tarTblDef, baseTblDef,
 			dagInfo.tarBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 		); err != nil {
@@ -918,7 +918,7 @@ func diff(
 
 	if baseDelsOnLCA != nil && baseDelsOnLCA.Length() > 0 {
 		if tmpRows, err = handleDelsOnLCA(
-			ctx, ses, baseDelsOnLCA, false,
+			ctx, ses, bh, baseDelsOnLCA, false,
 			tarTblDef, baseTblDef,
 			dagInfo.baseBranchTS.ToTimestamp(), dagInfo.lcaTableId,
 		); err != nil {
@@ -972,6 +972,7 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 func handleDelsOnLCA(
 	ctx context.Context,
 	ses *Session,
+	bh BackgroundExec,
 	dels *vector.Vector,
 	isTarDels bool,
 	tarTblDef *plan.TableDef,
@@ -985,7 +986,7 @@ func handleDelsOnLCA(
 		buf       bytes.Buffer
 		flag      = diffRemovedLine
 		lcaTblDef *plan.TableDef
-		mots      = fmt.Sprintf(" {MO_TS=%d} ", snapshot.PhysicalTime)
+		mots      = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 	)
 
 	if lcaTableId == 0 {
@@ -1014,6 +1015,7 @@ func handleDelsOnLCA(
 	// composite pk
 	if baseTblDef.Pkey.CompPkeyCol != nil {
 		var (
+			bufVals bytes.Buffer
 			tuple   types.Tuple
 			pkNames = lcaTblDef.Pkey.Names
 		)
@@ -1025,82 +1027,92 @@ func handleDelsOnLCA(
 				return nil, err
 			}
 
-			buf.WriteString("(")
+			bufVals.WriteString("row(")
 
 			for j, _ := range tuple {
-				buf.WriteString(pkNames[j])
-				buf.WriteString(" = ")
+				//buf.WriteString(pkNames[j])
+				//buf.WriteString(" = ")
 
 				switch pk := tuple[j].(type) {
 				case string:
-					buf.WriteString("'")
-					buf.WriteString(pk)
-					buf.WriteString("'")
+					bufVals.WriteString("'")
+					bufVals.WriteString(pk)
+					bufVals.WriteString("'")
 				case float32:
-					buf.WriteString(strconv.FormatFloat(float64(pk), 'f', -1, 32))
+					bufVals.WriteString(strconv.FormatFloat(float64(pk), 'f', -1, 32))
 				case float64:
-					buf.WriteString(strconv.FormatFloat(pk, 'f', -1, 64))
+					bufVals.WriteString(strconv.FormatFloat(pk, 'f', -1, 64))
 				case bool:
-					buf.WriteString(strconv.FormatBool(pk))
+					bufVals.WriteString(strconv.FormatBool(pk))
 				case uint8:
-					buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+					bufVals.WriteString(strconv.FormatUint(uint64(pk), 10))
 				case int8:
-					buf.WriteString(strconv.FormatInt(int64(pk), 10))
+					bufVals.WriteString(strconv.FormatInt(int64(pk), 10))
 				case uint16:
-					buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+					bufVals.WriteString(strconv.FormatUint(uint64(pk), 10))
 				case int16:
-					buf.WriteString(strconv.FormatInt(int64(pk), 10))
+					bufVals.WriteString(strconv.FormatInt(int64(pk), 10))
 				case uint32:
-					buf.WriteString(strconv.FormatUint(uint64(pk), 10))
+					bufVals.WriteString(strconv.FormatUint(uint64(pk), 10))
 				case int32:
-					buf.WriteString(strconv.FormatInt(int64(pk), 10))
+					bufVals.WriteString(strconv.FormatInt(int64(pk), 10))
 				case uint64:
-					buf.WriteString(strconv.FormatUint(pk, 10))
+					bufVals.WriteString(strconv.FormatUint(pk, 10))
 				case int64:
-					buf.WriteString(strconv.FormatInt(pk, 10))
+					bufVals.WriteString(strconv.FormatInt(pk, 10))
 				case []uint8:
-					buf.WriteString("'")
-					buf.WriteString(string(pk))
-					buf.WriteString("'")
+					bufVals.WriteString("'")
+					bufVals.WriteString(string(pk))
+					bufVals.WriteString("'")
 				case types.Timestamp:
-					buf.WriteString("'")
-					buf.WriteString(pk.String2(time.Local, dels.GetType().Scale))
-					buf.WriteString("'")
+					bufVals.WriteString("'")
+					bufVals.WriteString(pk.String2(time.Local, dels.GetType().Scale))
+					bufVals.WriteString("'")
 				case types.Datetime:
-					buf.WriteString("'")
-					buf.WriteString(pk.String2(dels.GetType().Scale))
-					buf.WriteString("'")
+					bufVals.WriteString("'")
+					bufVals.WriteString(pk.String2(dels.GetType().Scale))
+					bufVals.WriteString("'")
 				case types.Date:
-					buf.WriteString("'")
-					buf.WriteString(pk.String())
-					buf.WriteString("'")
+					bufVals.WriteString("'")
+					bufVals.WriteString(pk.String())
+					bufVals.WriteString("'")
 				case types.Decimal64:
-					buf.WriteString(pk.Format(dels.GetType().Scale))
+					bufVals.WriteString(pk.Format(dels.GetType().Scale))
 				case types.Decimal128:
-					buf.WriteString(pk.Format(dels.GetType().Scale))
+					bufVals.WriteString(pk.Format(dels.GetType().Scale))
 				case types.Decimal256:
-					buf.WriteString(pk.Format(dels.GetType().Scale))
+					bufVals.WriteString(pk.Format(dels.GetType().Scale))
 				default:
 					return nil, moerr.NewInternalErrorNoCtxf("unknown pk type: %T", pk)
 				}
 
 				if j != len(tuple)-1 {
-					buf.WriteString(" AND ")
+					bufVals.WriteString(", ")
 				}
 			}
 
-			buf.WriteString(")")
+			bufVals.WriteString(")")
 
 			if i != len(cols)-1 {
-				buf.WriteString(" OR ")
+				bufVals.WriteString(", ")
 			}
 		}
 
-		sql = fmt.Sprintf(
-			"select * from %s.%s %s where %s ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots, buf.String(),
-		)
+		buf.WriteString(fmt.Sprintf(
+			"SELECT lca.* FROM %s.%s %s AS lca JOIN (values %s) as pks(%s) ON ",
+			lcaTblDef.DbName, lcaTblDef.Name, mots,
+			bufVals.String(), strings.Join(pkNames, ","),
+		))
 
+		for i := range pkNames {
+			buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
+			if i != len(pkNames)-1 {
+				buf.WriteString(" AND ")
+			}
+		}
+		buf.WriteString(";")
+
+		sql = buf.String()
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
@@ -1148,6 +1160,8 @@ func handleDelsOnLCA(
 	if sqlRet, err = sqlexec.RunSql(ses.proc, sql); err != nil {
 		return nil, err
 	}
+
+	defer sqlRet.Close()
 
 	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
 		for i := range rowCnt {
