@@ -426,10 +426,10 @@ func (s *TableDetector) scanTable() error {
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			tblId := vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
-			tblName := cols[1].UnsafeGetStringAt(i)
+			tblName := cols[1].GetStringAt(i)
 			dbId := vector.MustFixedColWithTypeCheck[uint64](cols[2])[i]
-			dbName := cols[3].UnsafeGetStringAt(i)
-			createSql := cols[4].UnsafeGetStringAt(i)
+			dbName := cols[3].GetStringAt(i)
+			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
 
 			// skip table with foreign key
