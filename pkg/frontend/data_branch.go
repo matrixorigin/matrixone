@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -64,6 +63,10 @@ const (
 	lcaOther
 	lcaLeft
 	lcaRight
+)
+
+const (
+	batchCnt = objectio.BlockMaxRows * 10
 )
 
 type collectRange struct {
@@ -431,7 +434,7 @@ func mergeDiff(
 		}
 		buf.WriteString(")")
 
-		if cnt >= objectio.BlockMaxRows {
+		if cnt >= batchCnt {
 			if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
 				return err
 			}
@@ -832,7 +835,7 @@ func diff(
 							return
 						}
 
-						if tarDelsOnLCA.Length() >= objectio.BlockMaxRows*10 || tarDelsOnLCA.Size() >= mpool.GB {
+						if tarDelsOnLCA.Length() >= batchCnt || tarDelsOnLCA.Size() >= mpool.GB {
 							if tmpRows, err = handleDelsOnLCA(
 								ctx, ses, bh, tarDelsOnLCA, true,
 								tarTblDef, baseTblDef,
@@ -890,7 +893,7 @@ func diff(
 				return err
 			}
 
-			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows*10 || baseDelsOnLCA.Size() >= mpool.GB {
+			if baseDelsOnLCA.Length() >= batchCnt || baseDelsOnLCA.Size() >= mpool.GB {
 				if tmpRows, err = handleDelsOnLCA(
 					ctx, ses, bh, baseDelsOnLCA, false,
 					tarTblDef, baseTblDef,
@@ -984,11 +987,13 @@ func handleDelsOnLCA(
 ) (rows [][]any, err error) {
 
 	var (
-		sql       string
-		buf       bytes.Buffer
-		flag      = diffRemovedLine
-		lcaTblDef *plan.TableDef
-		mots      = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
+		sql         string
+		buf         bytes.Buffer
+		flag        = diffRemovedLine
+		lcaTblDef   *plan.TableDef
+		prepareSqls []string
+		cleanSqls   []string
+		mots        = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 	)
 
 	if lcaTableId == 0 {
@@ -1099,75 +1104,30 @@ func handleDelsOnLCA(
 		}
 
 		// if the lca is very large
-		if true {
-			tmpTable := fmt.Sprintf("%s.`%s`", lcaTblDef.DbName, uuid.New().String())
-			buf.WriteString(fmt.Sprintf("create table %s as select ", tmpTable))
-			buf.WriteString(strings.Join(pkNames, ","))
-			buf.WriteString(fmt.Sprintf(" from %s.%s%s where 1=0; ", lcaTblDef.DbName, lcaTblDef.Name, mots))
+		tmpTable := fmt.Sprintf("%s.`%s`", lcaTblDef.DbName, uuid.New().String())
+		buf.WriteString(fmt.Sprintf("create table %s as select ", tmpTable))
+		buf.WriteString(strings.Join(pkNames, ","))
+		buf.WriteString(fmt.Sprintf(" from %s.%s%s where 1=0; ", lcaTblDef.DbName, lcaTblDef.Name, mots))
+		prepareSqls = append(prepareSqls, buf.String())
+		buf.Reset()
 
-			//fmt.Println(buf.String())
-			if _, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
-				return nil, err
+		buf.WriteString(fmt.Sprintf("insert into %s (%s) values %s;",
+			tmpTable, strings.Join(pkNames, ","), bufVals.String()))
+		prepareSqls = append(prepareSqls, buf.String())
+		buf.Reset()
+
+		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca join %s as pks on ",
+			lcaTblDef.DbName, lcaTblDef.Name, mots, tmpTable))
+
+		for i := range pkNames {
+			buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
+			if i != len(pkNames)-1 {
+				buf.WriteString(" AND ")
 			}
-			buf.Reset()
-
-			buf.WriteString(fmt.Sprintf("insert into %s (%s) values %s;",
-				tmpTable, strings.Join(pkNames, ","), bufVals.String()))
-
-			//fmt.Println(buf.String())
-			if _, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
-				return nil, err
-			}
-
-			if ret, err := sqlexec.RunSql(ses.proc, fmt.Sprintf("select * from %s", tmpTable)); err != nil {
-				return nil, err
-			} else {
-				ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
-					for i := range cols {
-						fmt.Println(common.MoVectorToString(cols[i], rows))
-					}
-					return true
-				})
-			}
-
-			defer func() {
-				if _, err = sqlexec.RunSql(
-					ses.proc, fmt.Sprintf("drop table if exists %s;", tmpTable),
-				); err != nil {
-				}
-			}()
-
-			buf.Reset()
-			buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca join %s as pks on ",
-				lcaTblDef.DbName, lcaTblDef.Name, mots, tmpTable))
-
-			for i := range pkNames {
-				buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
-				if i != len(pkNames)-1 {
-					buf.WriteString(" AND ")
-				}
-			}
-
-			sql = buf.String()
-			//fmt.Println(sql)
-			//fmt.Println()
-		} else {
-			buf.WriteString(fmt.Sprintf(
-				"SELECT lca.* FROM %s.%s %s AS lca JOIN (values %s) as pks(%s) ON ",
-				lcaTblDef.DbName, lcaTblDef.Name, mots,
-				bufVals.String(), strings.Join(pkNames, ","),
-			))
-
-			for i := range pkNames {
-				buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
-				if i != len(pkNames)-1 {
-					buf.WriteString(" AND ")
-				}
-			}
-
-			buf.WriteString(";")
-			sql = buf.String()
 		}
+
+		sql = buf.String()
+		cleanSqls = append(cleanSqls, fmt.Sprintf("drop table if exists %s", tmpTable))
 
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
@@ -1209,30 +1169,48 @@ func handleDelsOnLCA(
 		)
 	}
 
-	var (
-		sqlRet executor.Result
-	)
+	if err = sqlexec.RunTxn(ses.proc, func(txnExecutor executor.TxnExecutor) error {
+		var (
+			sqlRet executor.Result
+		)
 
-	if sqlRet, err = sqlexec.RunSql(ses.proc, sql); err != nil {
+		for _, s := range prepareSqls {
+			if sqlRet, err = txnExecutor.Exec(s, executor.StatementOption{}); err != nil {
+				return err
+			}
+			sqlRet.Close()
+		}
+
+		if sqlRet, err = txnExecutor.Exec(sql, executor.StatementOption{}); err != nil {
+			return err
+		}
+		defer sqlRet.Close()
+
+		sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+			for i := range rowCnt {
+				row := make([]any, len(cols)+2)
+				row[0] = tarTblDef.Name
+				row[1] = flag
+				for j := range cols {
+					if err = extractRowFromVector(ctx, ses, cols[j], j+2, row, i, true); err != nil {
+						return false
+					}
+				}
+				rows = append(rows, row)
+			}
+			return true
+		})
+
+		for _, s := range cleanSqls {
+			if sqlRet, err = txnExecutor.Exec(s, executor.StatementOption{}); err != nil {
+				return err
+			}
+			sqlRet.Close()
+		}
+		return err
+	}); err != nil {
 		return nil, err
 	}
-
-	defer sqlRet.Close()
-
-	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
-		for i := range rowCnt {
-			row := make([]any, len(cols)+2)
-			row[0] = tarTblDef.Name
-			row[1] = flag
-			for j := range cols {
-				if err = extractRowFromVector(ctx, ses, cols[j], j+2, row, i, true); err != nil {
-					return false
-				}
-			}
-			rows = append(rows, row)
-		}
-		return true
-	})
 
 	return
 }
