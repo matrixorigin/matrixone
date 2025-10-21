@@ -58,9 +58,12 @@ func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 
 func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 
 	encoded := &EncodedAgg{
@@ -81,13 +84,13 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffers(
+	return marshalRetAndGroupsToBuffer(
 		bucketIdx, bucket, buf,
 		&exec.ret.optSplitResult, exec.groups)
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkRetAndGroupsToBuffer(
+	return marshalChunkToBuffer(
 		chunk, buf,
 		&exec.ret.optSplitResult, exec.groups)
 }
@@ -103,17 +106,17 @@ func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empti
 			}
 		}
 	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// XXX: unless we do not support median(distinct X), this is a bug.
+	// group, so distinct is not used.
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) medianColumnExecSelf[T, R] {
 	var r R
+	// XXX: this distinct impl. is totall screwed.
 	s := medianColumnExecSelf[T, R]{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[R](mg, info.retType, info.emptyNull, r),
-	}
-	if info.IsDistinct() {
-		s.distinctHash = newDistinctHash()
+		ret:           initAggResultWithFixedTypeResult[R](mg, info.retType, info.emptyNull, r, info.IsDistinct()),
 	}
 	return s
 }

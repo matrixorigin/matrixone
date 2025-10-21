@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -104,9 +105,12 @@ func (exec *aggregatorFromBytesToBytes) GetOptResult() SplitResult {
 
 func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 	encoded := EncodedAgg{
 		Info:    d,
@@ -119,17 +123,18 @@ func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
 
 func (exec *aggregatorFromBytesToBytes) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// this groups is not distict
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *aggregatorFromBytesToBytes) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffers(
+	return marshalRetAndGroupsToBuffer(
 		bucketIdx, bucket, buf,
 		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
 }
 
 func (exec *aggregatorFromBytesToBytes) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkRetAndGroupsToBuffer(
+	return marshalChunkToBuffer(
 		chunk, buf,
 		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
 }
@@ -147,7 +152,9 @@ func (exec *aggregatorFromBytesToBytes) init(
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
 		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))
 	}
-	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v)
+
+	// XXX distinct is always false?
+	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v, false)
 
 	exec.singleAggInfo = info
 	exec.singleAggExecExtraInformation = emptyExtraInfo

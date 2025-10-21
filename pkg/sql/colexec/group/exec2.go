@@ -242,6 +242,17 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 		}
+
+		// spilling -- spill whatever left in memory, and load first spilled bucket.
+		if group.ctr.isSpilling() {
+			if err := group.spillDataToDisk(proc); err != nil {
+				return vm.CancelResult, err
+			}
+			if _, err := group.loadSpilledData(proc); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+
 		return group.outputOneBatch(proc)
 
 	case vm.Eval:
@@ -251,6 +262,23 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, nil
 	}
 	return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "bug: unknown group state")
+}
+
+func (group *Group) memUsed() int64 {
+	var memUsed int64
+
+	// group by
+	for _, b := range group.ctr.groupByBatches {
+		memUsed += int64(b.Size())
+	}
+	// times 2, so that roughly we have the hashtable size.
+	memUsed *= 2
+
+	// aggs
+	for _, ag := range group.ctr.aggList {
+		memUsed += ag.Size()
+	}
+	return memUsed
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
@@ -282,10 +310,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
 		count := bat.RowCount()
 		for i := 0; i < count; i += hashmap.UnitLimit {
-			n := count - i
-			if n > hashmap.UnitLimit {
-				n = hashmap.UnitLimit
-			}
+			n := min(count-i, hashmap.UnitLimit)
 			// we will put rows of mini batch,starting from [i: i+n) into the hash table.
 			originGroupCount := group.ctr.hr.Hash.GroupCount()
 
@@ -321,7 +346,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				}
 			}
 		} // end of mini batch for loop
-		return false, nil
+
+		// check size
+		return group.memUsed() > group.SpillMem, nil
 	}
 }
 
@@ -406,29 +433,20 @@ func (group *Group) loadSpilledData(proc *process.Process) (bool, error) {
 	return false, moerr.NewInternalError(proc.Ctx, "not implemented")
 }
 
-func (ctr *container) spilling() bool {
-	return false
+func (ctr *container) isSpilling() bool {
+	return ctr.spillBkts != nil
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
 	if group.NeedEval {
-		if group.ctr.spilling() {
-			// finish the spilling, then load first spilled part back.
-			if err := group.spillDataToDisk(proc); err != nil {
-				return vm.CancelResult, err
-			}
-			if _, err := group.loadSpilledData(proc); err != nil {
-				return vm.CancelResult, err
-			}
-		}
-
+		// read next result batch
 		res, hasMore, err := group.getNextFinalResult(proc)
 		if err != nil {
 			return vm.CancelResult, err
 		}
 
 		// no more data, but we are spilling so we need to load next spilled part.
-		if !hasMore && group.ctr.spilling() {
+		if !hasMore && group.ctr.isSpilling() {
 			hasMore, err = group.loadSpilledData(proc)
 			if err != nil {
 				return vm.CancelResult, err
@@ -462,13 +480,41 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 }
 
 func (group *Group) getNextFinalResult(proc *process.Process) (vm.CallResult, bool, error) {
-	return vm.CancelResult, false, moerr.NewInternalError(proc.Ctx, "not implemented")
+	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
+	// now we need to flush the final result of agg to output batches.
+	if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
+		// exhaust batches, done.
+		return vm.CancelResult, false, nil
+	}
+	curr := group.ctr.currBatchIdx
+	group.ctr.currBatchIdx += 1
+	hasMore := group.ctr.currBatchIdx < len(group.ctr.groupByBatches)
+
+	if curr == 0 {
+		// flush aggs.   this api is insane
+		group.ctr.flushed = nil
+		for _, ag := range group.ctr.aggList {
+			vecs, err := ag.Flush()
+			if err != nil {
+				return vm.CancelResult, false, err
+			}
+			for j := range vecs {
+				group.ctr.groupByBatches[j].Vecs = append(
+					group.ctr.groupByBatches[j].Vecs, vecs[j])
+			}
+		}
+	}
+
+	// get the groupby batch
+	batch := group.ctr.groupByBatches[curr]
+	res := vm.NewCallResult()
+	res.Batch = batch
+	return res, hasMore, nil
 }
 
 func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallResult, bool, error) {
-	// where are we ...
-	// the groupby batches are now in groupbybatches.  partial agg result is in
-	// agglist.  now, we need to stream the partial results in the group by batch as aggs.
+	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
+	// now, we need to stream the partial results in the group by batch as aggs.
 	if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
 		// done.
 		return vm.CancelResult, false, nil

@@ -347,10 +347,9 @@ func (d dummyBinaryMarshaler) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
 
-func marshalRetAndGroupsAndDistinctHashToBuffers[T encoding.BinaryMarshaler](
+func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 	bucketIdx []int64, bucket int64, buf *bytes.Buffer,
-	ret *optSplitResult, groups []T,
-	isDistinct bool, distinctHash *distinctHash) error {
+	ret *optSplitResult, groups []T) error {
 	cnt, flags := computeChunkFlags(bucketIdx, bucket, ret.optInformation.chunkSize)
 	buf.Write(types.EncodeInt64(&cnt))
 	if cnt == 0 {
@@ -369,30 +368,17 @@ func marshalRetAndGroupsAndDistinctHashToBuffers[T encoding.BinaryMarshaler](
 				if err != nil {
 					return err
 				}
-				nbs := int32(len(bs))
-				buf.Write(types.EncodeInt32(&nbs))
-				buf.Write(bs)
+				if err = types.WriteSizeBytes(bs, buf); err != nil {
+					return err
+				}
 			}
-		}
-	}
-
-	if isDistinct {
-		if err := distinctHash.marshalToBuffers(bucketIdx, bucket, buf); err != nil {
-			return err
 		}
 	}
 	return nil
 }
 
-func marshalRetAndGroupsToBuffers[T encoding.BinaryMarshaler](
-	bucketIdx []int64, bucket int64, buf *bytes.Buffer,
-	ret *optSplitResult, groups []T) error {
-	return marshalRetAndGroupsAndDistinctHashToBuffers(bucketIdx, bucket, buf, ret, groups, false, nil)
-}
-
 func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buffer,
-	ret *optSplitResult, groups []T,
-	isDistinct bool, distinctHash *distinctHash) error {
+	ret *optSplitResult, groups []T) error {
 	chunkSz := ret.optInformation.chunkSize
 	start := chunkSz * chunk
 	chunkNGroup := ret.getNthChunkSize(chunk)
@@ -413,21 +399,10 @@ func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buff
 			if err != nil {
 				return err
 			}
-			nbs := int32(len(bs))
-			buf.Write(types.EncodeInt32(&nbs))
-			buf.Write(bs)
-		}
-	}
-
-	if isDistinct {
-		if err := distinctHash.marshalChunkToBuffer(start, chunkNGroup, buf); err != nil {
-			return err
+			if err = types.WriteSizeBytes(bs, buf); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
-}
-
-func marshalChunkRetAndGroupsToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buffer,
-	ret *optSplitResult, groups []T) error {
-	return marshalChunkToBuffer(chunk, buf, ret, groups, false, nil)
 }

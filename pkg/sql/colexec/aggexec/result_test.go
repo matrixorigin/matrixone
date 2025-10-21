@@ -15,11 +15,12 @@
 package aggexec
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // there is very important to check the result's extendResultPurely first.
@@ -34,7 +35,7 @@ func TestExtendResultPurely(t *testing.T) {
 	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
 	{
 		osr := optSplitResult{}
-		osr.init(mg, types.T_bool.ToType(), false)
+		osr.init(mg, types.T_bool.ToType(), false, false)
 		osr.optInformation.chunkSize = blockLimitation
 
 		// pre extendResultPurely 130 rows.
@@ -65,7 +66,7 @@ func TestFlushAll(t *testing.T) {
 	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
 	{
 		osr := optSplitResult{}
-		osr.init(mg, types.T_bool.ToType(), false)
+		osr.init(mg, types.T_bool.ToType(), false, false)
 		osr.optInformation.chunkSize = blockLimitation
 
 		require.NoError(t, osr.preExtend(130))
@@ -81,7 +82,7 @@ func TestFlushAll(t *testing.T) {
 
 	{
 		osr := optSplitResult{}
-		osr.init(mg, types.T_bool.ToType(), false)
+		osr.init(mg, types.T_bool.ToType(), false, false)
 		osr.optInformation.chunkSize = blockLimitation
 
 		require.NoError(t, osr.extendResultPurely(201))
@@ -125,20 +126,21 @@ func TestResultSerialization(t *testing.T) {
 		r1 := aggResultWithFixedType[int64]{}
 		r1.optSplitResult.optInformation.chunkSize = 2
 		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
-		r1.init(proc, types.T_int64.ToType(), true)
+		r1.init(proc, types.T_int64.ToType(), true, false)
 
 		_, _, _, _, err := r1.resExtend(7)
 		require.NoError(t, err)
 
-		data1, data2, err := r1.marshalToBytes()
+		data1, data2, dist, err := r1.marshalToBytes()
 		require.NoError(t, err)
+		require.Equal(t, nil, dist)
 
 		r2 := aggResultWithFixedType[int64]{}
-		r2.init(proc, types.T_int64.ToType(), true)
+		r2.init(proc, types.T_int64.ToType(), true, false)
 		r2.optSplitResult.optInformation.chunkSize = 2
 		r2.optSplitResult.optInformation.doesThisNeedEmptyList = true
 
-		require.NoError(t, r2.unmarshalFromBytes(data1, data2))
+		require.NoError(t, r2.unmarshalFromBytes(data1, data2, nil))
 
 		require.Equal(t, len(r1.resultList), len(r2.resultList))
 		require.Equal(t, len(r1.emptyList), len(r2.emptyList))
@@ -154,20 +156,21 @@ func TestResultSerialization(t *testing.T) {
 		r1 := aggResultWithBytesType{}
 		r1.optSplitResult.optInformation.chunkSize = 2
 		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
-		r1.init(proc, types.T_varchar.ToType(), true)
+		r1.init(proc, types.T_varchar.ToType(), true, false)
 
 		_, _, _, _, err := r1.resExtend(15)
 		require.NoError(t, err)
 
-		data1, data2, err := r1.marshalToBytes()
+		data1, data2, dist, err := r1.marshalToBytes()
 		require.NoError(t, err)
+		require.Equal(t, nil, dist)
 
 		r2 := aggResultWithBytesType{}
-		r2.init(proc, types.T_varchar.ToType(), true)
+		r2.init(proc, types.T_varchar.ToType(), true, false)
 		r2.optSplitResult.optInformation.chunkSize = 2
 		r2.optSplitResult.optInformation.doesThisNeedEmptyList = true
 
-		require.NoError(t, r2.unmarshalFromBytes(data1, data2))
+		require.NoError(t, r2.unmarshalFromBytes(data1, data2, nil))
 
 		require.Equal(t, len(r1.resultList), len(r2.resultList))
 		require.Equal(t, len(r1.emptyList), len(r2.emptyList))
@@ -186,7 +189,7 @@ func TestResultSize(t *testing.T) {
 	// Test aggResultWithFixedType
 	{
 		before := proc.Mp().CurrNB()
-		r := initAggResultWithFixedTypeResult[int64](proc, types.T_int64.ToType(), true, 0)
+		r := initAggResultWithFixedTypeResult[int64](proc, types.T_int64.ToType(), true, 0, false)
 		r.optInformation.chunkSize = chunkSize
 
 		initialSize := r.Size()
@@ -206,7 +209,7 @@ func TestResultSize(t *testing.T) {
 	// Test aggResultWithBytesType
 	{
 		before := proc.Mp().CurrNB()
-		r := initAggResultWithBytesTypeResult(proc, types.T_varchar.ToType(), true, "")
+		r := initAggResultWithBytesTypeResult(proc, types.T_varchar.ToType(), true, "", false)
 		r.optInformation.chunkSize = chunkSize
 
 		initialSize := r.Size()

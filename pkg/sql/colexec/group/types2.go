@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -62,6 +63,13 @@ type Group struct {
 	PreAllocSize uint64
 }
 
+type spillBucket struct {
+	shift  int64
+	bucket int64
+	again  []spillBucket
+	file   *os.File
+}
+
 // container running context.
 type container struct {
 	state        vm.CtrState
@@ -84,6 +92,10 @@ type container struct {
 
 	// aggs, which holds the intermediate state of agg functions.
 	aggList []aggexec.AggFuncExec
+	flushed [][]*vector.Vector
+
+	// spill
+	spillBkts []spillBucket
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {

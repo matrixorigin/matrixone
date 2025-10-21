@@ -370,3 +370,7 @@ func (m *IntHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int
 
 	return n, nil
 }
+
+func (m *IntHashMap) AllGroupHash() []uint64 {
+	return m.hashMap.AllGroupHash()
+}

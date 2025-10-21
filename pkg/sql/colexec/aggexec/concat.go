@@ -29,7 +29,6 @@ import (
 type groupConcatExec struct {
 	multiAggInfo
 	ret aggResultWithBytesType
-	distinctHash
 
 	separator []byte
 }
@@ -40,7 +39,7 @@ func (exec *groupConcatExec) GetOptResult() SplitResult {
 
 func (exec *groupConcatExec) marshal() ([]byte, error) {
 	d := exec.multiAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -48,14 +47,12 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 		Info:    d,
 		Result:  r,
 		Empties: em,
-		Groups:  [][]byte{exec.separator},
+		// Oh, this is so f**ked.
+		Groups: [][]byte{exec.separator},
 	}
-	if exec.IsDistinct() {
-		data, err := exec.distinctHash.marshal()
-		if err != nil {
-			return nil, err
-		}
-		encoded.Groups = append(encoded.Groups, data)
+
+	if dist != nil {
+		encoded.Groups = append(encoded.Groups, dist...)
 	}
 	return encoded.Marshal()
 }
@@ -64,27 +61,34 @@ func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
 	}
-	if exec.IsDistinct() {
-		if len(groups) > 1 {
-			if err := exec.distinctHash.unmarshal(groups[1]); err != nil {
-				return err
-			}
-		}
-	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+	return exec.ret.unmarshalFromBytes(result, empties, groups[1:])
 }
 
 func (exec *groupConcatExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsAndDistinctHashToBuffers[dummyBinaryMarshaler](
+	err := marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		bucketIdx, bucket, buf,
-		&exec.ret.optSplitResult, nil,
-		exec.IsDistinct(), &exec.distinctHash)
+		&exec.ret.optSplitResult, nil)
+	if err != nil {
+		return err
+	}
+
+	if err = types.WriteSizeBytes(exec.separator, buf); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (exec *groupConcatExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkToBuffer[dummyBinaryMarshaler](chunk, buf,
-		&exec.ret.optSplitResult, nil,
-		exec.IsDistinct(), &exec.distinctHash)
+	err := marshalChunkToBuffer[dummyBinaryMarshaler](chunk, buf,
+		&exec.ret.optSplitResult, nil)
+	if err != nil {
+		return err
+	}
+
+	if err = types.WriteSizeBytes(exec.separator, buf); err != nil {
+		return err
+	}
+	return nil
 }
 
 func GroupConcatReturnType(args []types.Type) types.Type {
@@ -99,11 +103,8 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string) AggFuncExec {
 	exec := &groupConcatExec{
 		multiAggInfo: info,
-		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, ""),
+		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, "", info.distinct),
 		separator:    []byte(separator),
-	}
-	if info.distinct {
-		exec.distinctHash = newDistinctHash()
 	}
 	return exec
 }
@@ -116,11 +117,6 @@ func isValidGroupConcatUnit(value []byte) error {
 }
 
 func (exec *groupConcatExec) GroupGrow(more int) error {
-	if exec.IsDistinct() {
-		if err := exec.distinctHash.grows(more); err != nil {
-			return err
-		}
-	}
 	return exec.ret.grows(more)
 }
 
@@ -137,14 +133,13 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		}
 	}
 
-	if exec.IsDistinct() {
-		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); err != nil || !need {
-			return err
-		}
-	}
-
 	x, y := exec.ret.updateNextAccessIdx(groupIndex)
 	exec.ret.setGroupNotEmpty(x, y)
+
+	if need, err := exec.ret.distinctFill(x, y, vectors, row); err != nil || !need {
+		return err
+	}
+
 	r := exec.ret.get()
 	if len(r) > 0 {
 		r = append(r, exec.separator...)
@@ -189,7 +184,8 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error {
 	x1, y1 := exec.ret.updateNextAccessIdx(idx1)
 	x2, y2 := other.ret.updateNextAccessIdx(idx2)
-	if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
+
+	if err := exec.ret.distinctMerge(x1, &other.ret.optSplitResult, x2); err != nil {
 		return err
 	}
 	empty1, empty2 := exec.ret.isGroupEmpty(x1, y1), other.ret.isGroupEmpty(x2, y2)
@@ -230,12 +226,11 @@ func (exec *groupConcatExec) Flush() ([]*vector.Vector, error) {
 }
 
 func (exec *groupConcatExec) Free() {
-	exec.distinctHash.free()
 	exec.ret.free()
 }
 
 func (exec *groupConcatExec) Size() int64 {
-	return exec.ret.Size() + exec.distinctHash.Size() + int64(cap(exec.separator))
+	return exec.ret.Size() + int64(cap(exec.separator))
 }
 
 var GroupConcatUnsupportedTypes = []types.T{
