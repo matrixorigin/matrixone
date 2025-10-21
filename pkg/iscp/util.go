@@ -441,7 +441,7 @@ func checkLease(
 	}
 	defer txn.Commit(ctxWithTimeout)
 
-	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP"`
+	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
 	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
 	if err != nil {
 		return
