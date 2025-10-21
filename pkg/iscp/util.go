@@ -453,6 +453,10 @@ func checkLease(
 			return false
 		}
 		runner := cols[0].GetStringAt(0)
+		if runner == "" {
+			err = moerr.NewInternalErrorNoCtx("task runner is null")
+			return false
+		}
 		if runner == cnUUID {
 			ok = true
 		} else {
