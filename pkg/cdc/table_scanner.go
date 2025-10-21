@@ -117,12 +117,6 @@ func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs 
 	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
 	runner, exists := s.activeRunners[key]
 	if !exists {
-		logutil.Warn(
-			"CDC-StateManager-UpdateActiveRunner-KeyNotFound",
-			zap.String("key", key),
-			zap.String("dbName", tblInfo.SourceDbName),
-			zap.String("tblName", tblInfo.SourceTblName),
-		)
 		return
 	}
 	if start {
