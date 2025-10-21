@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -888,7 +890,7 @@ func diff(
 				return err
 			}
 
-			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows*10 || tarDelsOnLCA.Size() >= mpool.GB {
+			if baseDelsOnLCA.Length() >= objectio.BlockMaxRows*10 || baseDelsOnLCA.Size() >= mpool.GB {
 				if tmpRows, err = handleDelsOnLCA(
 					ctx, ses, bh, baseDelsOnLCA, false,
 					tarTblDef, baseTblDef,
@@ -1027,12 +1029,10 @@ func handleDelsOnLCA(
 				return nil, err
 			}
 
-			bufVals.WriteString("row(")
+			//bufVals.WriteString("row(")
+			bufVals.WriteString("(")
 
 			for j, _ := range tuple {
-				//buf.WriteString(pkNames[j])
-				//buf.WriteString(" = ")
-
 				switch pk := tuple[j].(type) {
 				case string:
 					bufVals.WriteString("'")
@@ -1098,21 +1098,77 @@ func handleDelsOnLCA(
 			}
 		}
 
-		buf.WriteString(fmt.Sprintf(
-			"SELECT lca.* FROM %s.%s %s AS lca JOIN (values %s) as pks(%s) ON ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots,
-			bufVals.String(), strings.Join(pkNames, ","),
-		))
+		// if the lca is very large
+		if true {
+			tmpTable := fmt.Sprintf("%s.`%s`", lcaTblDef.DbName, uuid.New().String())
+			buf.WriteString(fmt.Sprintf("create table %s as select ", tmpTable))
+			buf.WriteString(strings.Join(pkNames, ","))
+			buf.WriteString(fmt.Sprintf(" from %s.%s%s where 1=0; ", lcaTblDef.DbName, lcaTblDef.Name, mots))
 
-		for i := range pkNames {
-			buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
-			if i != len(pkNames)-1 {
-				buf.WriteString(" AND ")
+			//fmt.Println(buf.String())
+			if _, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+				return nil, err
 			}
-		}
-		buf.WriteString(";")
+			buf.Reset()
 
-		sql = buf.String()
+			buf.WriteString(fmt.Sprintf("insert into %s (%s) values %s;",
+				tmpTable, strings.Join(pkNames, ","), bufVals.String()))
+
+			//fmt.Println(buf.String())
+			if _, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+				return nil, err
+			}
+
+			if ret, err := sqlexec.RunSql(ses.proc, fmt.Sprintf("select * from %s", tmpTable)); err != nil {
+				return nil, err
+			} else {
+				ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+					for i := range cols {
+						fmt.Println(common.MoVectorToString(cols[i], rows))
+					}
+					return true
+				})
+			}
+
+			defer func() {
+				if _, err = sqlexec.RunSql(
+					ses.proc, fmt.Sprintf("drop table if exists %s;", tmpTable),
+				); err != nil {
+				}
+			}()
+
+			buf.Reset()
+			buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca join %s as pks on ",
+				lcaTblDef.DbName, lcaTblDef.Name, mots, tmpTable))
+
+			for i := range pkNames {
+				buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
+				if i != len(pkNames)-1 {
+					buf.WriteString(" AND ")
+				}
+			}
+
+			sql = buf.String()
+			//fmt.Println(sql)
+			//fmt.Println()
+		} else {
+			buf.WriteString(fmt.Sprintf(
+				"SELECT lca.* FROM %s.%s %s AS lca JOIN (values %s) as pks(%s) ON ",
+				lcaTblDef.DbName, lcaTblDef.Name, mots,
+				bufVals.String(), strings.Join(pkNames, ","),
+			))
+
+			for i := range pkNames {
+				buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
+				if i != len(pkNames)-1 {
+					buf.WriteString(" AND ")
+				}
+			}
+
+			buf.WriteString(";")
+			sql = buf.String()
+		}
+
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
