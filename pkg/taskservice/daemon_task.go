@@ -52,10 +52,6 @@ func (t *startTask) Handle(_ context.Context) error {
 			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
 				return
 			}
-			// if async index cdc task quit without error
-			if t.task.task.TaskType == task.TaskType_ISCP && err == nil {
-				return
-			}
 			t.runner.removeDaemonTask(t.task.task.ID)
 		}()
 
@@ -611,6 +607,9 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool,
 	// When update the daemon task, add the condition that last heartbeat of
 	// the task must be timeout or be null, which means that other runners does
 	// NOT try to start this task.
+	if dt.task.TaskType == task.TaskType_ISCP {
+		logutil.Infof("debug_iscp_start update daemon task, runnerID=%s", r.runnerID)
+	}
 	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t},
 		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()))
 	if err != nil {
