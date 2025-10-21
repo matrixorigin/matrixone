@@ -55,6 +55,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			bc.cteState = parent.cteState
 		}
 		bc.snapshot = parent.snapshot
+		bc.remapOption = parent.remapOption
 	}
 
 	return bc
