@@ -118,10 +118,8 @@ func ISCPTaskExecutorFactory(
 			return
 		}
 		exec.run(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		}
+		<-ctx.Done()
+		return
 	}
 }
 
