@@ -115,13 +115,23 @@ func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
+	runner, exists := s.activeRunners[key]
+	if !exists {
+		logutil.Warn(
+			"CDC-StateManager-UpdateActiveRunner-KeyNotFound",
+			zap.String("key", key),
+			zap.String("dbName", tblInfo.SourceDbName),
+			zap.String("tblName", tblInfo.SourceTblName),
+		)
+		return
+	}
 	if start {
-		s.activeRunners[key].CreateAt = time.Now()
-		s.activeRunners[key].FromTs = fromTs
-		s.activeRunners[key].ToTs = toTs
-		s.activeRunners[key].EndAt = time.Time{}
+		runner.CreateAt = time.Now()
+		runner.FromTs = fromTs
+		runner.ToTs = toTs
+		runner.EndAt = time.Time{}
 	} else {
-		s.activeRunners[key].EndAt = time.Now()
+		runner.EndAt = time.Now()
 	}
 }
 
