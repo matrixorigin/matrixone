@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -201,9 +202,12 @@ func (exec *aggregatorFromBytesToFixed[to]) GetOptResult() SplitResult {
 
 func (exec *aggregatorFromBytesToFixed[to]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 	encoded := &EncodedAgg{
 		Info:    d,
@@ -215,20 +219,21 @@ func (exec *aggregatorFromBytesToFixed[to]) marshal() ([]byte, error) {
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffers(
+	return marshalRetAndGroupsToBuffer(
 		bucketIdx, bucket, buf,
 		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkRetAndGroupsToBuffer(
+	return marshalChunkToBuffer(
 		chunk, buf,
 		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// groups used as above, distinct is nil.
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) init(
@@ -244,7 +249,7 @@ func (exec *aggregatorFromBytesToFixed[to]) init(
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
 		v = resultInitMethod.(InitFixedResultOfAgg[to])(info.retType, info.argType)
 	}
-	exec.ret = initAggResultWithFixedTypeResult[to](mg, info.retType, info.emptyNull, v)
+	exec.ret = initAggResultWithFixedTypeResult[to](mg, info.retType, info.emptyNull, v, false)
 
 	exec.singleAggInfo = info
 	exec.singleAggExecExtraInformation = emptyExtraInfo

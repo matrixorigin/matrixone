@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,7 +44,7 @@ func (exec *countColumnExec) GetOptResult() SplitResult {
 
 func (exec *countColumnExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -51,52 +52,31 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 		Info:    d,
 		Result:  r,
 		Empties: em,
-		Groups:  nil,
-	}
-	if exec.IsDistinct() {
-		data, err := exec.distinctHash.marshal()
-		if err != nil {
-			return nil, err
-		}
-		if len(data) > 0 {
-			encoded.Groups = [][]byte{data}
-		}
+		Groups:  dist,
 	}
 	return encoded.Marshal()
 }
 
 func (exec *countColumnExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsAndDistinctHashToBuffers[dummyBinaryMarshaler](
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		bucketIdx, bucket, buf,
-		&exec.ret.optSplitResult, nil,
-		exec.IsDistinct(), &exec.distinctHash)
+		&exec.ret.optSplitResult, nil)
 }
 
 func (exec *countColumnExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
-		&exec.ret.optSplitResult, nil,
-		exec.IsDistinct(), &exec.distinctHash)
+		&exec.ret.optSplitResult, nil)
 }
 
 func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	if exec.IsDistinct() {
-		if len(groups) > 0 {
-			if err := exec.distinctHash.unmarshal(groups[0]); err != nil {
-				return err
-			}
-		}
-	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+	return exec.ret.unmarshalFromBytes(result, empties, groups)
 }
 
 func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	exec := &countColumnExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
-	}
-	if info.distinct {
-		exec.distinctHash = newDistinctHash()
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, info.distinct),
 	}
 	return exec
 }
@@ -304,9 +284,12 @@ func (exec *countStarExec) GetOptResult() SplitResult {
 
 func (exec *countStarExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should has been nil")
 	}
 	encoded := EncodedAgg{
 		Info:    d,
@@ -318,24 +301,24 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 }
 
 func (exec *countStarExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffers[dummyBinaryMarshaler](
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		bucketIdx, bucket, buf,
 		&exec.ret.optSplitResult, nil)
 }
 func (exec *countStarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkRetAndGroupsToBuffer[dummyBinaryMarshaler](
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
 		&exec.ret.optSplitResult, nil)
 }
 
 func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
-	return exec.ret.unmarshalFromBytes(result, empties)
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	return &countStarExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, false),
 	}
 }
 
