@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -69,6 +72,128 @@ const (
 const (
 	batchCnt = objectio.BlockMaxRows * 10
 )
+
+const (
+	defaultSQLPoolSize = 4
+)
+
+type asyncSQLExecutor struct {
+	pool   *ants.Pool
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	errMu sync.Mutex
+	err   error
+}
+
+func newAsyncSQLExecutor(size int, parents ...context.Context) (*asyncSQLExecutor, error) {
+	parent := context.Background()
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	pool, err := ants.NewPool(size, ants.WithNonblocking(false))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &asyncSQLExecutor{
+		pool:   pool,
+		ctx:    ctx,
+		cancel: cancel,
+	}, nil
+}
+
+func (e *asyncSQLExecutor) Submit(task func(context.Context) error) error {
+	if err := e.Err(); err != nil {
+		return err
+	}
+
+	if e.ctx.Err() != nil {
+		return e.ctx.Err()
+	}
+
+	e.wg.Add(1)
+	if err := e.pool.Submit(func() {
+		defer e.wg.Done()
+		if e.ctx.Err() != nil {
+			return
+		}
+		if err := task(e.ctx); err != nil {
+			e.setError(err)
+		}
+	}); err != nil {
+		e.wg.Done()
+		e.setError(err)
+		return err
+	}
+
+	return nil
+}
+
+func (e *asyncSQLExecutor) Wait() error {
+	e.wg.Wait()
+	return e.Err()
+}
+
+func (e *asyncSQLExecutor) Close() {
+	e.cancel()
+	if e.pool != nil {
+		e.pool.Release()
+	}
+}
+
+func (e *asyncSQLExecutor) Err() error {
+	e.errMu.Lock()
+	defer e.errMu.Unlock()
+	return e.err
+}
+
+func (e *asyncSQLExecutor) setError(err error) {
+	if err == nil {
+		return
+	}
+
+	e.errMu.Lock()
+	if e.err == nil {
+		e.err = err
+		e.cancel()
+	}
+	e.errMu.Unlock()
+}
+
+type rowsCollector struct {
+	mu   sync.Mutex
+	rows [][]any
+}
+
+func (c *rowsCollector) addRow(row []any) {
+	c.mu.Lock()
+	c.rows = append(c.rows, row)
+	c.mu.Unlock()
+}
+
+func (c *rowsCollector) addRows(rows [][]any) {
+	if len(rows) == 0 {
+		return
+	}
+	c.mu.Lock()
+	c.rows = append(c.rows, rows...)
+	c.mu.Unlock()
+}
+
+func (c *rowsCollector) snapshot() [][]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.rows) == 0 {
+		return nil
+	}
+	cp := make([][]any, len(c.rows))
+	copy(cp, c.rows)
+	return cp
+}
 
 type collectRange struct {
 	from []types.TS
@@ -105,7 +230,7 @@ type diffExtra struct {
 		rows       [][]any
 		pkKind     int
 		pkColIdxes []int
-		pkTypes    []types.Type
+		colTypes   []types.Type
 	}
 }
 
@@ -298,7 +423,7 @@ func handleSnapshotMerge(
 			execCtx, bh, ses, tables.baseRel,
 			extra.outputArgs.rows, nil,
 			lcaEmpty, conflictOpt,
-			extra.outputArgs.pkTypes,
+			extra.outputArgs.colTypes,
 			extra.outputArgs.pkColIdxes,
 		)
 	}
@@ -385,7 +510,7 @@ func handleSnapshotMerge(
 		execCtx, bh, ses, tables.baseRel,
 		extra1.outputArgs.rows, extra2.outputArgs.rows,
 		lcaType, conflictOpt,
-		extra1.outputArgs.pkTypes,
+		extra1.outputArgs.colTypes,
 		extra1.outputArgs.pkColIdxes,
 	)
 }
@@ -404,10 +529,21 @@ func mergeDiff(
 ) (err error) {
 
 	var (
-		cnt    int
-		buf    bytes.Buffer
-		sqlRet executor.Result
+		cnt int
+		buf bytes.Buffer
 	)
+
+	sqlRunner, runnerErr := newAsyncSQLExecutor(defaultSQLPoolSize)
+	if runnerErr != nil {
+		return runnerErr
+	}
+	defer func() {
+		waitErr := sqlRunner.Wait()
+		sqlRunner.Close()
+		if err == nil {
+			err = waitErr
+		}
+	}()
 
 	initSqlBuf := func() {
 		cnt = 0
@@ -416,6 +552,31 @@ func mergeDiff(
 			dstRel.GetTableDef(execCtx.reqCtx).DbName,
 			dstRel.GetTableDef(execCtx.reqCtx).Name),
 		)
+	}
+
+	flushCurrent := func() error {
+		if cnt == 0 {
+			return nil
+		}
+
+		sql := buf.String()
+		if err := sqlRunner.Submit(func(ctx context.Context) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			sqlRet, err := sqlexec.RunSql(ses.proc, sql)
+			if err != nil {
+				return err
+			}
+			sqlRet.Close()
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		initSqlBuf()
+		return nil
 	}
 
 	writeOneRow := func(row []any) error {
@@ -448,11 +609,9 @@ func mergeDiff(
 		buf.WriteString(")")
 
 		if cnt >= batchCnt {
-			if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+			if err := flushCurrent(); err != nil {
 				return err
 			}
-			sqlRet.Close()
-			initSqlBuf()
 		}
 		return nil
 	}
@@ -532,11 +691,8 @@ func mergeDiff(
 	default:
 	}
 
-	if buf.Len() > 0 && cnt > 0 {
-		if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
-			return err
-		}
-		sqlRet.Close()
+	if err := flushCurrent(); err != nil {
+		return err
 	}
 
 	return nil
@@ -546,13 +702,13 @@ func compareRows(
 	row1 []any,
 	row2 []any,
 	pkColIdxes []int,
-	pkTypes []types.Type,
+	colTypes []types.Type,
 	onlyByPK bool,
 ) int {
 
 	for i, idx := range pkColIdxes {
 		if cmp := types.CompareValues(
-			row1[idx+2], row2[idx+2], pkTypes[i].Oid,
+			row1[idx+2], row2[idx+2], colTypes[i].Oid,
 		); cmp == 0 {
 			continue
 		} else {
@@ -578,7 +734,7 @@ func sortDiffResultRows(
 	)
 
 	twoRowsCompare := func(a, b []any, onlyByPK bool) int {
-		return compareRows(a, b, extra.outputArgs.pkColIdxes, extra.outputArgs.pkTypes, onlyByPK)
+		return compareRows(a, b, extra.outputArgs.pkColIdxes, extra.outputArgs.colTypes, onlyByPK)
 	}
 
 	slices.SortFunc(rows, func(a, b []any) int {
@@ -641,12 +797,28 @@ func diff(
 		mp     = ses.proc.Mp()
 		pkKind int
 
-		pkColIdxes []int
-		pkTypes    []types.Type
+		pkColIdxes     []int
+		neededColIdxes []int
+		neededColTypes []types.Type
 
 		baseDataHashmap      databranchutils.BranchHashmap
 		baseTombstoneHashmap databranchutils.BranchHashmap
 	)
+
+	collector := &rowsCollector{}
+	delsRunner, runnerErr := newAsyncSQLExecutor(defaultSQLPoolSize, ctx)
+	if runnerErr != nil {
+		return runnerErr
+	}
+	var delsWaited bool
+	defer func() {
+		if !delsWaited {
+			if waitErr := delsRunner.Wait(); err == nil {
+				err = waitErr
+			}
+		}
+		delsRunner.Close()
+	}()
 
 	defer func() {
 		if baseDataHashmap != nil {
@@ -659,7 +831,7 @@ func diff(
 		if extra != nil && err == nil {
 			extra.outputArgs.rows = rows
 			extra.outputArgs.pkKind = pkKind
-			extra.outputArgs.pkTypes = pkTypes
+			extra.outputArgs.colTypes = neededColTypes
 			extra.outputArgs.pkColIdxes = pkColIdxes
 		}
 	}()
@@ -670,7 +842,7 @@ func diff(
 		for i, col := range baseTblDef.Cols {
 			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
 				pkColIdxes = append(pkColIdxes, i)
-				pkTypes = append(pkTypes, types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+				//pkTypes = append(pkTypes, types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
 			}
 		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -680,8 +852,8 @@ func diff(
 		for _, name := range pkNames {
 			idx := int(baseTblDef.Name2ColIndex[name])
 			pkColIdxes = append(pkColIdxes, idx)
-			pkCol := baseTblDef.Cols[idx]
-			pkTypes = append(pkTypes, types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale))
+			//pkCol := baseTblDef.Cols[idx]
+			//pkTypes = append(pkTypes, types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale))
 		}
 	} else {
 		// normal pk
@@ -689,8 +861,8 @@ func diff(
 		pkName := baseTblDef.Pkey.PkeyColName
 		idx := int(baseTblDef.Name2ColIndex[pkName])
 		pkColIdxes = append(pkColIdxes, idx)
-		pkCol := baseTblDef.Cols[idx]
-		pkTypes = append(pkTypes, types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale))
+		//pkCol := baseTblDef.Cols[idx]
+		//pkTypes = append(pkTypes, types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale))
 	}
 
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
@@ -701,17 +873,46 @@ func diff(
 
 	var (
 		mrs      *MysqlResultSet
-		tmpRows  [][]any
 		pkVecs   []*vector.Vector
 		checkRet []databranchutils.GetResult
 
-		dataBat        *batch.Batch
-		tombstoneBat   *batch.Batch
-		neededColIdxes []int
+		dataBat      *batch.Batch
+		tombstoneBat *batch.Batch
 
 		tarDelsOnLCA  *vector.Vector
 		baseDelsOnLCA *vector.Vector
 	)
+
+	enqueueHandleDels := func(vec *vector.Vector, isTar bool, snap timestamp.Timestamp) error {
+		if vec == nil || vec.Length() == 0 {
+			return nil
+		}
+
+		taskVec := vec
+		if err := delsRunner.Submit(func(taskCtx context.Context) error {
+			defer taskVec.Free(mp)
+			if taskCtx.Err() != nil {
+				return taskCtx.Err()
+			}
+
+			tmpRows, err := handleDelsOnLCA(
+				taskCtx, ses, taskVec, isTar,
+				tarTblDef, baseTblDef,
+				snap, dagInfo.lcaTableId,
+				neededColTypes,
+			)
+			if err != nil {
+				return err
+			}
+			collector.addRows(tmpRows)
+			return nil
+		}); err != nil {
+			taskVec.Free(mp)
+			return err
+		}
+
+		return nil
+	}
 
 	defer func() {
 		if dataBat != nil {
@@ -728,7 +929,9 @@ func diff(
 		}
 	}()
 
-	if mrs, neededColIdxes, err = buildShowDiffSchema(ctx, ses, tarTblDef, baseTblDef); err != nil {
+	if mrs, neededColIdxes, neededColTypes, err = buildShowDiffSchema(
+		ctx, ses, tarTblDef, baseTblDef,
+	); err != nil {
 		return
 	}
 
@@ -766,14 +969,15 @@ func diff(
 						row[0] = tarTblDef.Name
 						row[1] = diffAddedLine
 
-						for _, idx := range neededColIdxes {
-							if err = extractRowFromVector(
-								ctx, ses, dataBat.Vecs[idx], idx+2, row, i, true,
-							); err != nil {
-								return
-							}
+						for x, idx := range neededColIdxes {
+							row[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), neededColTypes[x].Oid)
+							//if err = extractRowFromVector(
+							//	ctx, ses, dataBat.Vecs[idx], idx+2, row, i, true,
+							//); err != nil {
+							//	return
+							//}
 						}
-						rows = append(rows, row)
+						collector.addRow(row)
 					} else {
 						// exists in the base table, we should compare the left columns
 						if pkKind == fakeKind {
@@ -782,10 +986,10 @@ func diff(
 							var (
 								allEqual = true
 								tuple    types.Tuple
-								valTypes []types.Type
+								//valTypes []types.Type
 							)
 
-							if tuple, valTypes, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
+							if tuple, _, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
 								return
 							}
 
@@ -807,21 +1011,23 @@ func diff(
 								row2 := make([]any, len(neededColIdxes)+2)
 								row1[0], row1[1] = tarTblDef.Name, diffRemovedLine
 								row2[0], row2[1] = tarTblDef.Name, diffAddedLine
-								for _, idx := range neededColIdxes {
-									switch val := tuple[idx].(type) {
-									case types.Timestamp:
-										row1[idx+2] = val.String2(ses.timeZone, valTypes[idx].Scale)
-									default:
-										row1[idx+2] = val
-									}
+								for x, idx := range neededColIdxes {
+									row1[idx+2] = tuple[idx]
+									//switch val := tuple[idx].(type) {
+									//case types.Timestamp:
+									//	row1[idx+2] = val.String2(ses.timeZone, valTypes[idx].Scale)
+									//default:
+									//	row1[idx+2] = val
+									//}
 
-									if err = extractRowFromVector(
-										ctx, ses, dataBat.Vecs[idx], idx+2, row2, i, true,
-									); err != nil {
-										return
-									}
+									row2[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), neededColTypes[x].Oid)
+									//if err = extractRowFromVector(
+									//	ctx, ses, dataBat.Vecs[idx], idx+2, row2, i, true,
+									//); err != nil {
+									//	return
+									//}
 								}
-								rows = append(rows, row1, row2)
+								collector.addRows([][]any{row1, row2})
 							}
 						}
 					}
@@ -849,15 +1055,12 @@ func diff(
 						}
 
 						if tarDelsOnLCA.Length() >= batchCnt || tarDelsOnLCA.Size() >= mpool.GB {
-							if tmpRows, err = handleDelsOnLCA(
-								ctx, ses, bh, tarDelsOnLCA, true,
-								tarTblDef, baseTblDef,
-								dagInfo.tarBranchTS.ToTimestamp(), dagInfo.lcaTableId,
+							if err = enqueueHandleDels(
+								tarDelsOnLCA, true, dagInfo.tarBranchTS.ToTimestamp(),
 							); err != nil {
 								return
 							}
-							tarDelsOnLCA.CleanOnlyData()
-							rows = append(rows, tmpRows...)
+							tarDelsOnLCA = nil
 						}
 
 					} else {
@@ -874,19 +1077,20 @@ func diff(
 		//row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 		for _, r := range data {
 			row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
-			if tuple, valTypes, err := baseDataHashmap.DecodeRow(r); err != nil {
+			if tuple, _, err := baseDataHashmap.DecodeRow(r); err != nil {
 				return err
 			} else {
 				for i := range tuple {
-					switch val := tuple[i].(type) {
-					case types.Timestamp:
-						row = append(row, val.String2(ses.timeZone, valTypes[i].Scale))
-					default:
-						row = append(row, tuple[i])
-					}
+					row = append(row, tuple[i])
+					//switch val := tuple[i].(type) {
+					//case types.Timestamp:
+					//	row = append(row, val.String2(ses.timeZone, valTypes[i].Scale))
+					//default:
+					//	row = append(row, tuple[i])
+					//}
 				}
 			}
-			rows = append(rows, row)
+			collector.addRow(row)
 		}
 		return nil
 	}); err != nil {
@@ -907,15 +1111,12 @@ func diff(
 			}
 
 			if baseDelsOnLCA.Length() >= batchCnt || baseDelsOnLCA.Size() >= mpool.GB {
-				if tmpRows, err = handleDelsOnLCA(
-					ctx, ses, bh, baseDelsOnLCA, false,
-					tarTblDef, baseTblDef,
-					dagInfo.baseBranchTS.ToTimestamp(), dagInfo.lcaTableId,
+				if err = enqueueHandleDels(
+					baseDelsOnLCA, false, dagInfo.baseBranchTS.ToTimestamp(),
 				); err != nil {
 					return err
 				}
-				baseDelsOnLCA.CleanOnlyData()
-				rows = append(rows, tmpRows...)
+				baseDelsOnLCA = nil
 			}
 		}
 		return nil
@@ -924,28 +1125,46 @@ func diff(
 	}
 
 	if tarDelsOnLCA != nil && tarDelsOnLCA.Length() > 0 {
-		if tmpRows, err = handleDelsOnLCA(
-			ctx, ses, bh, tarDelsOnLCA, true,
-			tarTblDef, baseTblDef,
-			dagInfo.tarBranchTS.ToTimestamp(), dagInfo.lcaTableId,
+		if err = enqueueHandleDels(
+			tarDelsOnLCA, true, dagInfo.tarBranchTS.ToTimestamp(),
 		); err != nil {
 			return
 		}
-		rows = append(rows, tmpRows...)
+		tarDelsOnLCA = nil
 	}
 
 	if baseDelsOnLCA != nil && baseDelsOnLCA.Length() > 0 {
-		if tmpRows, err = handleDelsOnLCA(
-			ctx, ses, bh, baseDelsOnLCA, false,
-			tarTblDef, baseTblDef,
-			dagInfo.baseBranchTS.ToTimestamp(), dagInfo.lcaTableId,
+		if err = enqueueHandleDels(
+			baseDelsOnLCA, false, dagInfo.baseBranchTS.ToTimestamp(),
 		); err != nil {
 			return
 		}
-		rows = append(rows, tmpRows...)
+		baseDelsOnLCA = nil
 	}
 
+	if waitErr := delsRunner.Wait(); waitErr != nil {
+		err = waitErr
+		return
+	}
+	delsWaited = true
+
+	rows = collector.snapshot()
+
 	for _, row := range rows {
+		for j := 2; j < len(row); j++ {
+			switch v := row[j].(type) {
+			case types.Timestamp:
+				row[j] = v.String2(ses.timeZone, neededColTypes[j-2].Scale)
+			case types.Datetime:
+				row[j] = v.String2(neededColTypes[j-2].Scale)
+			case types.Decimal64:
+				row[j] = v.Format(neededColTypes[j-2].Scale)
+			case types.Decimal128:
+				row[j] = v.Format(neededColTypes[j-2].Scale)
+			case types.Decimal256:
+				row[j] = v.Format(neededColTypes[j-2].Scale)
+			}
+		}
 		mrs.AddRow(row)
 	}
 
@@ -990,13 +1209,13 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 func handleDelsOnLCA(
 	ctx context.Context,
 	ses *Session,
-	bh BackgroundExec,
 	dels *vector.Vector,
 	isTarDels bool,
 	tarTblDef *plan.TableDef,
 	baseTblDef *plan.TableDef,
 	snapshot timestamp.Timestamp,
 	lcaTableId uint64,
+	colTypes []types.Type,
 ) (rows [][]any, err error) {
 
 	var (
@@ -1182,6 +1401,9 @@ func handleDelsOnLCA(
 		)
 	}
 
+	// why runTxn here?
+	// we need to ensure the temporary created table should be clear if some err happened.
+	// the left sqls are read only,
 	if err = sqlexec.RunTxn(ses.proc, func(txnExecutor executor.TxnExecutor) error {
 		var (
 			sqlRet executor.Result
@@ -1205,9 +1427,10 @@ func handleDelsOnLCA(
 				row[0] = tarTblDef.Name
 				row[1] = flag
 				for j := range cols {
-					if err = extractRowFromVector(ctx, ses, cols[j], j+2, row, i, true); err != nil {
-						return false
-					}
+					row[j+2] = types.DecodeValue(cols[j].GetRawBytesAt(i), colTypes[j].Oid)
+					//if err = extractRowFromVector(ctx, ses, cols[j], j+2, row, i, true); err != nil {
+					//	return false
+					//}
 				}
 				rows = append(rows, row)
 			}
@@ -1233,7 +1456,7 @@ func buildShowDiffSchema(
 	ses *Session,
 	tarTblDef *plan.TableDef,
 	baseTblDef *plan.TableDef,
-) (mrs *MysqlResultSet, neededColIdxes []int, err error) {
+) (mrs *MysqlResultSet, neededColIdxes []int, neededColTypes []types.Type, err error) {
 
 	var (
 		showCols []*MysqlColumn
@@ -1265,6 +1488,7 @@ func buildShowDiffSchema(
 
 		nCol.SetName(col.Name)
 		showCols = append(showCols, nCol)
+		neededColTypes = append(neededColTypes, t)
 		neededColIdxes = append(neededColIdxes, i)
 	}
 
@@ -1273,7 +1497,7 @@ func buildShowDiffSchema(
 		mrs.AddColumn(col)
 	}
 
-	return mrs, neededColIdxes, nil
+	return mrs, neededColIdxes, neededColTypes, nil
 }
 
 func buildHashmapForBaseTable(
