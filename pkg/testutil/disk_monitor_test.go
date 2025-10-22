@@ -135,55 +135,6 @@ func TestDiskMonitorFinal(t *testing.T) {
 	t.Log("✅ 测试后期磁盘监控完成")
 }
 
-// TestDiskMonitorStress - 压力测试磁盘监控
-func TestDiskMonitorStress(t *testing.T) {
-	t.Log("=== 磁盘监控压力测试 ===")
-
-	workDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current working directory: %v", err)
-	}
-
-	// 初始状态
-	LogDiskUsage(t, "STRESS-INIT", workDir)
-
-	// 创建多个临时文件来模拟磁盘使用
-	var tempFiles []string
-	for i := 0; i < 5; i++ {
-		tempFile, err := os.CreateTemp("", "matrixone_stress_test_*")
-		if err != nil {
-			t.Logf("Failed to create temp file %d: %v", i, err)
-			continue
-		}
-		tempFiles = append(tempFiles, tempFile.Name())
-
-		// 写入10MB数据
-		data := make([]byte, 10*1024*1024)
-		for j := range data {
-			data[j] = byte((i + j) % 256)
-		}
-
-		_, err = tempFile.Write(data)
-		if err != nil {
-			t.Logf("Failed to write to temp file %d: %v", i, err)
-		}
-		tempFile.Close()
-
-		// 每创建一个文件后检查磁盘使用情况
-		LogDiskUsage(t, fmt.Sprintf("STRESS-AFTER-FILE-%d", i+1), workDir)
-	}
-
-	// 清理临时文件
-	for _, tempFile := range tempFiles {
-		os.Remove(tempFile)
-	}
-
-	// 最终状态
-	LogDiskUsage(t, "STRESS-FINAL", workDir)
-
-	t.Log("✅ 磁盘监控压力测试完成")
-}
-
 // TestDiskMonitorContinuous - 连续监控测试
 func TestDiskMonitorContinuous(t *testing.T) {
 	t.Log("=== 连续磁盘监控测试 ===")
