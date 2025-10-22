@@ -109,7 +109,7 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		for vIdx, pIdx := range uniqueColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		bitMap, err = util.SerialWithCompacted(vs, preInsertUnique.ctr.buf.Vecs[indexColPos], proc, &preInsertUnique.packers, util.DefaultPackerSize)
+		bitMap, err = util.SerialWithCompacted(vs, preInsertUnique.ctr.buf.Vecs[indexColPos], proc, &preInsertUnique.packers)
 		if err != nil {
 			return result, err
 		}

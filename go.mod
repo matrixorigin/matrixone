@@ -25,6 +25,7 @@ require (
 	github.com/buger/jsonparser v1.1.1
 	github.com/bytedance/sonic v1.14.1
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
+	github.com/cespare/xxhash v1.1.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/colinmarc/hdfs/v2 v2.4.0

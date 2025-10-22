@@ -111,7 +111,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		bitMap, err = util.SerialWithoutCompacted(vs, preInsertSecIdx.ctr.buf.Vecs[indexColPos], proc, &preInsertSecIdx.packers, util.DefaultPackerSize)
+		bitMap, err = util.SerialWithoutCompacted(vs, preInsertSecIdx.ctr.buf.Vecs[indexColPos], proc, &preInsertSecIdx.packers)
 		if err != nil {
 			return result, err
 		}

@@ -1771,7 +1771,6 @@ func appendPrimaryConstraintPlan(
 					Children:    []int32{lastNodeId},
 					GroupBy:     aggGroupBy,
 					ProjectList: aggProject,
-					SpillMem:    builder.aggSpillMem,
 				}
 				lastNodeId = builder.appendNode(aggNode, bindCtx)
 

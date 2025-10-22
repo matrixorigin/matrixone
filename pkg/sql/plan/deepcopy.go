@@ -1018,13 +1018,38 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		return nil
 	}
 
-	var copyAnalyzeInfo = *analyzeinfo
-	copyAnalyzeInfo.TimeConsumedArrayMajor = slices.Clone(analyzeinfo.GetTimeConsumedArrayMajor())
-	copyAnalyzeInfo.TimeConsumedArrayMinor = slices.Clone(analyzeinfo.GetTimeConsumedArrayMinor())
-
-	// clear the unrecognized fields, do not mess with the proto stuff.
-	copyAnalyzeInfo.XXX_unrecognized = nil
-	copyAnalyzeInfo.XXX_sizecache = 0
-
-	return &copyAnalyzeInfo
+	return &plan.AnalyzeInfo{
+		InputBlocks:            analyzeinfo.GetInputBlocks(),
+		InputRows:              analyzeinfo.GetInputRows(),
+		OutputRows:             analyzeinfo.GetOutputRows(),
+		InputSize:              analyzeinfo.GetInputSize(),
+		OutputSize:             analyzeinfo.GetOutputSize(),
+		TimeConsumed:           analyzeinfo.GetTimeConsumed(),
+		TimeConsumedArrayMajor: slices.Clone(analyzeinfo.GetTimeConsumedArrayMajor()),
+		TimeConsumedArrayMinor: slices.Clone(analyzeinfo.GetTimeConsumedArrayMinor()),
+		MemorySize:             analyzeinfo.GetMemorySize(),
+		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
+		DiskIO:                 analyzeinfo.GetDiskIO(),
+		WrittenRows:            analyzeinfo.GetWrittenRows(),
+		DeletedRows:            analyzeinfo.GetDeletedRows(),
+		ScanBytes:              analyzeinfo.GetScanBytes(),
+		S3List:                 analyzeinfo.GetS3List(),
+		S3Put:                  analyzeinfo.GetS3Put(),
+		S3Get:                  analyzeinfo.GetS3Get(),
+		S3Head:                 analyzeinfo.GetS3Head(),
+		S3Delete:               analyzeinfo.GetS3Delete(),
+		S3DeleteMul:            analyzeinfo.GetS3DeleteMul(),
+		CacheRead:              analyzeinfo.GetCacheRead(),
+		CacheHit:               analyzeinfo.GetCacheHit(),
+		CacheMemoryRead:        analyzeinfo.GetCacheMemoryRead(),
+		CacheMemoryHit:         analyzeinfo.GetCacheMemoryHit(),
+		CacheDiskRead:          analyzeinfo.GetCacheDiskRead(),
+		CacheDiskHit:           analyzeinfo.GetCacheDiskHit(),
+		CacheRemoteRead:        analyzeinfo.GetCacheRemoteRead(),
+		CacheRemoteHit:         analyzeinfo.GetCacheRemoteHit(),
+		NetworkIO:              analyzeinfo.GetNetworkIO(),
+		ScanTime:               analyzeinfo.GetScanTime(),
+		InsertTime:             analyzeinfo.GetInsertTime(),
+		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
+	}
 }

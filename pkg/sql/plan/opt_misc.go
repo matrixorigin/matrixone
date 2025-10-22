@@ -789,7 +789,6 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewTag())
 	node.Children[0] = project.Children[0]
-	node.SpillMem = builder.aggSpillMem
 }
 
 // reuse removeSimpleProjections to delete this plan node
