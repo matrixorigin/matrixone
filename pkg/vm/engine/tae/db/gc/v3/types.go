@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -147,7 +148,7 @@ type Cleaner interface {
 	DisableGC()
 	GCEnabled() bool
 	GetMPool() *mpool.MPool
-	GetSnapshots() (*logtail.SnapshotInfo, error)
+	GetSnapshots() (map[uint32]containers.Vector, error)
 	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
 	Verify(ctx context.Context) string
 	ISCPTables() (map[uint64]types.TS, error)
