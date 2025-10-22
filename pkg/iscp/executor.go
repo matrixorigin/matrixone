@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"sync"
 	"time"
@@ -51,9 +52,7 @@ const (
 	MOISCPLogTableName = catalog.MO_ISCP_LOG
 )
 
-var running bool
-
-var runningMu sync.Mutex
+var running atomic.Bool
 
 const (
 	DefaultGCInterval             = time.Hour
@@ -86,18 +85,10 @@ func ISCPTaskExecutorFactory(
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
 
-		err = func() error {
-			runningMu.Lock()
-			defer runningMu.Unlock()
-			if running {
-				logutil.Error("ISCPTaskExecutor is already running")
-				return moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
-			}
-			running = true
-			return nil
-		}()
-		if err != nil {
-			return
+		if !running.CompareAndSwap(false, true) {
+			// already running
+			logutil.Error("ISCPTaskExecutor is already running")
+			return moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
 		}
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
