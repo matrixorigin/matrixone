@@ -599,7 +599,7 @@ func (c *Controller) SwitchTxnMode(
 	return cmd.err
 }
 
-func (c *Controller) AssembleDB(ctx context.Context) (err error) {
+func (c *Controller) AssembleDB(ctx context.Context, phaseMap map[string]*PhaseInfo) (err error) {
 	var (
 		db            = c.db
 		txnMode       = db.GetTxnMode()
@@ -623,6 +623,8 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		return moerr.NewTxnControlErrorNoCtxf("bad txn mode %d", txnMode)
 	}
 
+	// Phase: Initialize transaction manager and logtail manager
+	txnMgrStartTime := time.Now()
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		db.Opts.Ctx,
 		db.Catalog,
@@ -652,6 +654,10 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.TxnMgr.Start(db.Opts.Ctx)
 	db.LogtailMgr.Start()
+	phaseMap["init-txn-logtail-mgr"] = &PhaseInfo{
+		Start:    txnMgrStartTime,
+		Duration: time.Since(txnMgrStartTime),
+	}
 
 	rollbackSteps.Add("stop logtail mgr", func() error {
 		db.LogtailMgr.Stop()
@@ -662,6 +668,8 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		return nil
 	})
 
+	// Phase: Initialize checkpoint runner and GC components
+	ckpRunnerStartTime := time.Now()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		db.Opts.Ctx,
 		db.Runtime,
@@ -718,6 +726,10 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		}, cmd_util.CheckerKeyTTL)
 
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
+	phaseMap["init-checkpoint-gc"] = &PhaseInfo{
+		Start:    ckpRunnerStartTime,
+		Duration: time.Since(ckpRunnerStartTime),
+	}
 
 	var (
 		checkpointed        types.TS
@@ -739,11 +751,24 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 			db.ReplayCtl = replayCtl
 		}
 	}()
+
+	// Phase 1: Replay from checkpoints
+	ckpStartTime := time.Now()
+	logutil.Info(Phase_Open + "-checkpoint-replay-start")
 	if checkpointed, ckpLSN, releaseReplayPinned, err = c.replayFromCheckpoints(ctx); err != nil {
 		return
 	}
+	ckpDuration := time.Since(ckpStartTime)
+	phaseMap["checkpoint-replay"] = &PhaseInfo{
+		Start:    ckpStartTime,
+		Duration: ckpDuration,
+	}
+
 	db.TxnMgr.TryUpdateMaxCommittedTS(checkpointed)
 
+	// Phase 2: Replay WAL entries
+	walReplayStartTime := time.Now()
+	logutil.Info(Phase_Open + "-wal-replay-start")
 	if replayCtl, err = db.ReplayWal(
 		ctx, checkpointed, ckpLSN, releaseReplayPinned,
 	); err != nil {
@@ -761,10 +786,23 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		if err = replayCtl.Wait(); err != nil {
 			return
 		}
+		walReplayDuration := time.Since(walReplayStartTime)
+		phaseMap["wal-replay"] = &PhaseInfo{
+			Start:    walReplayStartTime,
+			Duration: walReplayDuration,
+		}
 		replayCtl.Stop()
 		replayCtl = nil
+	} else {
+		// In replay mode, wal replay runs in background
+		phaseMap["wal-replay"] = &PhaseInfo{
+			Start: walReplayStartTime,
+			Mode:  "background",
+		}
 	}
 
+	// Phase: Start merge scheduler and background services
+	startServicesTime := time.Now()
 	db.MergeScheduler = merge.NewMergeScheduler(
 		db.Runtime.Options.CheckpointCfg.ScanInterval,
 		&merge.TNCatalogEventSource{Catalog: db.Catalog, TxnManager: db.TxnMgr},
@@ -791,6 +829,10 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.CronJobs = tasks.NewCancelableJobs()
 	err = AddCronJobs(db)
+	phaseMap["start-services"] = &PhaseInfo{
+		Start:    startServicesTime,
+		Duration: time.Since(startServicesTime),
+	}
 	return
 }
 
@@ -801,25 +843,21 @@ func (c *Controller) replayFromCheckpoints(ctx context.Context) (
 	err error,
 ) {
 	var (
-		db  = c.db
-		now = time.Now()
+		db = c.db
 	)
 	defer func() {
-		logger := logutil.Info
 		if err != nil {
 			if release != nil {
 				release()
 				release = nil
 			}
-			logger = logutil.Error
+			logutil.Error(
+				Phase_Open+"-checkpoint-replay-error",
+				zap.String("checkpointed", checkpointed.ToString()),
+				zap.Uint64("checkpoint-lsn", ckpLSN),
+				zap.Error(err),
+			)
 		}
-		logger(
-			Phase_Open,
-			zap.Duration("replay-checkpoints-cost", time.Since(now)),
-			zap.String("checkpointed", checkpointed.ToString()),
-			zap.Uint64("checkpoint-lsn", ckpLSN),
-			zap.Error(err),
-		)
 	}()
 
 	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir())

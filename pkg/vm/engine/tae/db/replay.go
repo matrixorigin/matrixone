@@ -227,13 +227,15 @@ func (replayer *WalReplayer) Schedule(
 
 	go func() {
 		var err2 error
+		replayStartTime := time.Now()
 		defer func() {
 			logger := logutil.Info
 			if err2 != nil {
 				logger = logutil.Error
 			}
 			logger(
-				"Wal-Replay-Trace-End",
+				"Wal-Replay-Summary",
+				zap.Duration("total-cost", time.Since(replayStartTime)),
 				zap.Duration("apply-cost", replayer.applyDuration),
 				zap.Int("read-count", replayer.readCount),
 				zap.Int("apply-count", replayer.applyCount),
