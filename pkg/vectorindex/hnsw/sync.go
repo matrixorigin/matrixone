@@ -399,8 +399,8 @@ func (s *HnswSync[T]) insertAllInParallel(sqlproc *sqlexec.SqlProcess, maxcap ui
 					continue
 				}
 
-				// Only INSERT or UPSERT with midx[i] == -1 need to add to model
-				if midx[i] != -1 {
+				// Only INSERT or UPSERT with midx[j] == -1 need to add to model
+				if midx[j] != -1 {
 					// key exists and ignore
 					continue
 				}
