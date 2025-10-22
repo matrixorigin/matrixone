@@ -20,24 +20,39 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/pierrec/lz4/v4"
 )
 
 func TestLz4(t *testing.T) {
+	// 测试前检查磁盘空间
+	testutil.CheckDiskSpaceBeforeTest(t, 1)
+
 	var err error
 
 	xs := []int64{200, 200, 0, 200, 10, 30, 20, 1111}
 	raw := types.EncodeSlice(xs)
 	fmt.Printf("raw: %v\n", raw)
+
+	// 测试中期监控
+	testutil.MonitorDiskDuringTest(t, "Lz4-MID")
+
 	buf := make([]byte, lz4.CompressBlockBound(len(raw)))
 	if buf, err = Compress(raw, buf, Lz4); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("buf: %v\n", buf)
+
+	// 解压前监控
+	testutil.MonitorDiskDuringTest(t, "Lz4-BEFORE-DECOMPRESS")
+
 	data, err := Decompress(buf, raw, Lz4)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("dat: %v\n", data)
+
+	// 测试后监控
+	testutil.MonitorDiskDuringTest(t, "Lz4-AFTER")
 }

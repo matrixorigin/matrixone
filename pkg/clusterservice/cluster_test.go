@@ -27,12 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestClusterReady(t *testing.T) {
+	// 测试前检查磁盘空间
+	testutil.CheckDiskSpaceBeforeTest(t, 1)
+
 	runClusterTest(
 		time.Hour,
 		func(hc *testHAKeeperClient, c *cluster) {
+			// 测试中期监控
+			testutil.MonitorDiskDuringTest(t, "ClusterReady-MID")
+
 			cc := make(chan struct{})
 			go func() {
 				defer close(cc)
@@ -44,6 +51,9 @@ func TestClusterReady(t *testing.T) {
 				assert.Fail(t, "wait ready timeout")
 			}
 		})
+
+	// 测试后监控
+	testutil.MonitorDiskDuringTest(t, "ClusterReady-AFTER")
 }
 
 func TestClusterForceRefresh(t *testing.T) {
