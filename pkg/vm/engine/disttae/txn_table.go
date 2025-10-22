@@ -783,7 +783,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}()
 
 	defer func() {
-		if len(tbl.tableName) < 20 && strings.Contains(tbl.db.databaseName, "test") {
+		if len(tbl.tableName) < 20 && strings.Contains(tbl.db.databaseName, "tpch") {
 			if x, ok := common2.RangesCnt.Load(tbl.tableName); ok {
 				common2.RangesCnt.Store(tbl.tableName, x.(int)+blocks.Len())
 			} else {
