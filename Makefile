@@ -188,20 +188,6 @@ debug: override CGO_DEBUG_OPT := debug
 debug: build
 
 ###############################################################################
-# run unit tests
-###############################################################################
-# Excluding frontend test cases temporarily
-# Argument SKIP_TEST to skip a specific go test
-.PHONY: ut
-ut: config cgo thirdparties
-	$(info [Unit testing])
-ifeq ($(UNAME_S),darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
-else
-	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
-endif
-
-###############################################################################
 # disk monitoring tests
 ###############################################################################
 .PHONY: ut-disk-monitor
@@ -226,6 +212,20 @@ endif
 	@echo "📊 测试后磁盘使用情况:"
 	@go test -v ./pkg/testutil -run "TestDiskMonitorCleanup" -timeout 2m
 	@echo "✅ 带磁盘监控的单元测试完成"
+
+###############################################################################
+# run unit tests
+###############################################################################
+# Excluding frontend test cases temporarily
+# Argument SKIP_TEST to skip a specific go test
+.PHONY: ut
+ut: config cgo thirdparties
+	$(info [Unit testing])
+ifeq ($(UNAME_S),darwin)
+	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+else
+	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+endif
 
 ###############################################################################
 # bvt and unit test
