@@ -109,7 +109,7 @@ func NewMergeScheduler(
 	sched.rc = rscthrottler.NewMemThrottler(
 		"Merge",
 		3.0/4.0,
-		rscthrottler.WithAllowOutOfLimitAcquire(),
+		rscthrottler.WithLimitIsTheBoss(),
 	)
 
 	sched.stopped.Store(true)
