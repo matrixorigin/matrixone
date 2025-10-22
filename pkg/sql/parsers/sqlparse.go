@@ -16,6 +16,7 @@ package parsers
 
 import (
 	"context"
+	"encoding/json"
 	gotrace "runtime/trace"
 	"strings"
 
@@ -200,4 +201,158 @@ func SplitSqlBySemicolon(sql string) []string {
 	}
 
 	return ret
+}
+
+func extractLeadingHints(sql string) []string {
+	if len(sql) == 0 {
+		return []string{""}
+	}
+
+	stmts := SplitSqlBySemicolon(sql)
+	results := make([]string, len(stmts))
+
+	isSpace := func(b byte) bool {
+		switch b {
+		case ' ', '\t', '\n', '\r', '\f':
+			return true
+		default:
+			return false
+		}
+	}
+
+	for idx, stmt := range stmts {
+		if len(stmt) == 0 {
+			results[idx] = ""
+			continue
+		}
+		i := 0
+		for i < len(stmt) && isSpace(stmt[i]) {
+			i++
+		}
+
+		var builder strings.Builder
+		for i < len(stmt) {
+			if i+2 < len(stmt) && stmt[i] == '/' && stmt[i+1] == '*' && (stmt[i+2] == '!' || stmt[i+2] == '+') {
+				end := strings.Index(stmt[i+3:], "*/")
+				// Determine content start: strip opening marker
+				contentStart := i + 3
+				if stmt[i+2] == '!' && i+3 < len(stmt) && stmt[i+3] == '+' {
+					contentStart = i + 4 // for '/*!+' skip both
+				}
+				if stmt[i+2] == '+' {
+					contentStart = i + 3 // for '/*+'
+				}
+				if end < 0 {
+					// unterminated: append inner content
+					if contentStart < len(stmt) {
+						builder.WriteString(stmt[contentStart:])
+					}
+					break
+				}
+				end += i + 3
+				contentEnd := end // exclude closing '*/' by stopping at its start
+				if contentStart <= contentEnd {
+					builder.WriteString(stmt[contentStart:contentEnd])
+				}
+				i = end
+				for i < len(stmt) && isSpace(stmt[i]) {
+					i++
+				}
+				continue
+			}
+
+			break
+		}
+
+		if builder.Len() > 0 {
+			results[idx] = builder.String()
+		} else {
+			results[idx] = ""
+		}
+	}
+
+	return results
+}
+
+type RewriteMap struct {
+	// RawRewrites carries the raw SQL strings from JSON input.
+	RawRewrites map[string]string `json:"rewrites"`
+}
+
+// AddRewriteHints The position of the hint at the beginning is different from that in MySQL.
+// Placing it in the parser for parsing will lead to syntax conflicts,
+// so it can only be parsed separately
+func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) error {
+	hints := extractLeadingHints(sql)
+	if len(hints) != len(stmts) {
+		return moerr.NewParseError(ctx, "parse hints bug")
+	}
+	for i, stmt := range stmts {
+		switch stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+			// ok
+		default:
+			continue
+		}
+		hint := strings.TrimSpace(hints[i])
+		if hint == "" || (len(hint) > 0 && hint[0] != '{') {
+			continue
+		}
+
+		var rewriteMap RewriteMap
+		if err := json.Unmarshal([]byte(hint), &rewriteMap); err != nil {
+			return moerr.NewParseError(ctx, err.Error())
+		}
+		if len(rewriteMap.RawRewrites) == 0 {
+			continue
+		}
+		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string]*tree.Rewrite)}
+		for k, v := range rewriteMap.RawRewrites {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				return moerr.NewParseError(ctx, "empty table and database")
+			}
+			// key can be "table" or "db.table"
+			parts := strings.Split(key, ".")
+			db, table := "", ""
+			if len(parts) == 2 {
+				db = strings.TrimSpace(parts[0])
+				table = strings.TrimSpace(parts[1])
+			} else {
+				return moerr.NewParseError(ctx, "the mapping name needs to include database name")
+			}
+			if table == "" || db == "" {
+				return moerr.NewParseError(ctx, "empty table or database")
+			}
+			if v == "" {
+				return moerr.NewParseError(ctx, "statement")
+			}
+			st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
+			if err != nil {
+				return moerr.NewParseError(ctx, err.Error())
+			}
+
+			switch st.(type) {
+			case *tree.Select, *tree.ParenSelect:
+				// ok
+			default:
+				return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+			}
+			if _, ok := rewriteOption.Rewrites[key]; ok {
+				return moerr.NewParseError(ctx, "duplicate mapping names")
+			}
+			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st}
+		}
+		if len(rewriteOption.Rewrites) > 0 {
+			switch s := stmt.(type) {
+			case *tree.Select:
+				s.RewriteOption = rewriteOption
+			case *tree.ParenSelect:
+				if s.Select != nil {
+					s.Select.RewriteOption = rewriteOption
+				}
+			}
+		}
+	}
+	return nil
 }
