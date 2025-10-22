@@ -297,6 +297,9 @@ const (
 	ErrStaleRead        uint16 = 22101
 	ErrNoWatermarkFound uint16 = 22102
 
+	// Group 14: TaskService
+	ErrExecutorRunning uint16 = 22201
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -534,6 +537,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 13: CDC
 	ErrStaleRead:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
 	ErrNoWatermarkFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC task: no watermark found of table %s.%s"},
+
+	// Group 14: Task Service
+	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1578,6 +1584,10 @@ func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 
 func NewTxnUnknown(ctx context.Context, txnID string) *Error {
 	return newError(ctx, ErrTxnUnknown, txnID)
+}
+
+func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
+	return newError(ctx, ErrExecutorRunning, executor)
 }
 
 var contextFunc atomic.Value

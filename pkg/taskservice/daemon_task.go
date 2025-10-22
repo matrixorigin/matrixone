@@ -52,7 +52,12 @@ func (t *startTask) Handle(_ context.Context) error {
 			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
 				return
 			}
-			t.runner.removeDaemonTask(t.task.task.ID)
+
+			// When executor is already running, skip removeDaemonTask.
+			if err == nil || !moerr.IsMoErrCode(err, moerr.ErrExecutorRunning) {
+				t.runner.removeDaemonTask(t.task.task.ID)
+			}
+
 		}()
 
 		ok, err := t.runner.startDaemonTask(ctx, t.task)
@@ -71,7 +76,11 @@ func (t *startTask) Handle(_ context.Context) error {
 		// the task encounters some error or be canceled.
 		if err = t.task.executor(ctx, &t.task.task); err != nil {
 			// set the record of this task error message.
-			t.runner.setDaemonTaskError(ctx, t.task, err)
+			// skip setError when executor is already running as
+			// we should not run executor again
+			if !moerr.IsMoErrCode(err, moerr.ErrExecutorRunning) {
+				t.runner.setDaemonTaskError(ctx, t.task, err)
+			}
 		}
 	}); err != nil {
 		return err

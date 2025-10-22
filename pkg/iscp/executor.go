@@ -17,7 +17,6 @@ package iscp
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 
 	"sync"
 	"time"
@@ -84,16 +83,23 @@ func ISCPTaskExecutorFactory(
 	cdUUID string,
 	mp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) (err error) {
-	logutil.Infof("debug_iscp_start stack is %v", string(debug.Stack()))
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
 
-		runningMu.Lock()
-		defer runningMu.Unlock()
-		if running {
+		err = func() error {
+			runningMu.Lock()
+			defer runningMu.Unlock()
+			if running {
+				logutil.Error("ISCPTaskExecutor is already running")
+				return moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
+			}
+			running = true
+			return nil
+		}()
+		if err != nil {
 			return
 		}
-		running = true
+
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		exec, err = NewISCPTaskExecutor(
 			ctx,
