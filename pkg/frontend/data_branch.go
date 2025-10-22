@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	common2 "github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -123,13 +124,25 @@ func handleDataBranch(
 	case *tree.DataBranchDiff:
 		t := time.Now()
 		defer func() {
-			fmt.Println("handle snapshot diff takes", time.Since(t))
+			mm := make(map[string]int)
+			common2.RangesCnt.Range(func(key, value any) bool {
+				mm[key.(string)] = value.(int)
+				return true
+			})
+			fmt.Printf("handle snapshot diff takes: %v, ranges: %v\n", time.Since(t), mm)
+			common2.RangesCnt.Clear()
 		}()
 		return handleSnapshotDiff(execCtx, ses, st, nil)
 	case *tree.DataBranchMerge:
 		t := time.Now()
 		defer func() {
-			fmt.Println("handle snapshot merge takes", time.Since(t))
+			mm := make(map[string]int)
+			common2.RangesCnt.Range(func(key, value any) bool {
+				mm[key.(string)] = value.(int)
+				return true
+			})
+			fmt.Printf("handle snapshot merge takes: %v, ranges: %v\n", time.Since(t), mm)
+			common2.RangesCnt.Clear()
 		}()
 		return handleSnapshotMerge(execCtx, ses, st)
 	default:

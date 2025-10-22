@@ -14,7 +14,10 @@
 
 package common
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 const (
 	KiB = 1024
@@ -46,3 +49,5 @@ func ConvertBytesToHumanReadable(bytes int64) string {
 	}
 	return fmt.Sprintf("%.2f TiB", num/TiB)
 }
+
+var RangesCnt sync.Map
