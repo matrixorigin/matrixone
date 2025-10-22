@@ -202,11 +202,11 @@ func (db *DB) ForceCheckpoint(
 func (db *DB) ForceGlobalCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	historyRetention time.Duration,
+	histroyRetention time.Duration,
 ) (err error) {
 	t0 := time.Now()
 	err = db.BGFlusher.ForceFlush(ctx, ts)
-	forceFlushDuration := time.Since(t0)
+	forceICKPDuration := time.Since(t0)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -215,8 +215,8 @@ func (db *DB) ForceGlobalCheckpoint(
 		logger(
 			"DB-Force-ICKP",
 			zap.Duration("total-cost", time.Since(t0)),
-			zap.Duration("force-flush-cost", forceFlushDuration),
-			zap.Duration("histroy-retention", historyRetention),
+			zap.Duration("force-flush-cost", forceICKPDuration),
+			zap.Duration("histroy-retention", histroyRetention),
 			zap.Error(err),
 		)
 	}()
@@ -226,7 +226,7 @@ func (db *DB) ForceGlobalCheckpoint(
 	}
 
 	err = db.BGCheckpointRunner.ForceGCKP(
-		ctx, ts, historyRetention,
+		ctx, ts, histroyRetention,
 	)
 	return err
 }
@@ -284,7 +284,7 @@ func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxnByCtx(id)
 	if txn == nil {
-		err = moerr.NewTxnNotFoundNoCtx()
+		err = moerr.NewNotFoundNoCtx()
 	}
 	return
 }

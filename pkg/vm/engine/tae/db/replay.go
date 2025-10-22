@@ -85,8 +85,6 @@ func (ctl *replayCtl) Wait() (err error) {
 func (ctl *replayCtl) Done(err error) {
 	ctl.err = err
 	ctl.doneTime = time.Now()
-	// PXU TODO: why onSuccess is called even if there is an error. since
-	// any error before will be panic.(Fix it later)
 	if ctl.onSuccess != nil {
 		ctl.onSuccess()
 	}
@@ -282,11 +280,11 @@ func (replayer *WalReplayer) MakeReplayHandle(
 		}
 		codec := objectio.GetIOEntryCodec(*head)
 		entry, err := codec.Decode(payload[4:])
+		txnCmd := entry.(*txnbase.TxnCmd)
+		txnCmd.Lsn = lsn
 		if err != nil {
 			panic(err)
 		}
-		txnCmd := entry.(*txnbase.TxnCmd)
-		txnCmd.Lsn = lsn
 		sender <- txnCmd
 		return driver.RE_Nomal
 	}

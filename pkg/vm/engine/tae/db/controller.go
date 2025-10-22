@@ -183,13 +183,15 @@ func (c *Controller) stopReceiver(fn func() error) bool {
 	closeCmd := newControlCmd(context.Background(), ControlCmd_Customized, "")
 	closeCmd.fn = fn
 	if c.closedCmd.CompareAndSwap(nil, closeCmd) {
-		lastLogTime := time.Now()
+		now := time.Now()
 		for {
 			if _, err := c.queue.Enqueue(closeCmd); err != nil {
-				time.Sleep(time.Millisecond * 20)
-				if time.Since(lastLogTime) > 10*time.Second {
-					logutil.Warn("controller-stopReceiver", zap.Error(err))
-					lastLogTime = time.Now()
+				time.Sleep(time.Millisecond * 1)
+				if int(time.Since(now).Seconds())%10 == 1 {
+					logutil.Warn(
+						"controller-stopReceiver",
+						zap.Error(err),
+					)
 				}
 				continue
 			}
@@ -604,11 +606,13 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		db            = c.db
 		txnMode       = db.GetTxnMode()
 		rollbackSteps stepFuncs
+		errMsg        string
 	)
 	defer func() {
 		if err != nil {
 			logutil.Error(
 				Phase_Open,
+				zap.String("error-msg", errMsg),
 				zap.Error(err),
 			)
 			if err2 := rollbackSteps.Apply(
