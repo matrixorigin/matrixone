@@ -974,3 +974,18 @@ func (txnop *testTxnOp) ExitRollbackStmt() {
 func (txnop *testTxnOp) SetFootPrints(id int, enter bool) {
 
 }
+
+func (txnop *testTxnOp) Set(string, any) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (txnop *testTxnOp) Get(string) (any, bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (txnop *testTxnOp) Delete(string) {
+	//TODO implement me
+	panic("implement me")
+}
