@@ -16,7 +16,6 @@ package testutil
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"syscall"
 	"testing"
