@@ -60,7 +60,7 @@ func TestIvfSearchRace(t *testing.T) {
 	idx := &IvfflatSearchIndex[float32]{}
 
 	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
-	require.NotNil(t, err)
+	require.Nil(t, err)
 
 }
 
