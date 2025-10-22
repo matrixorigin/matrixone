@@ -1148,6 +1148,7 @@ func Test_mysqlSinker_ClearError(t *testing.T) {
 
 func Test_mysqlSinker_Reset(t *testing.T) {
 	s := &mysqlSinker{}
+	s.mysql = &mysqlSink{}
 	s.sqlBufs[0] = make([]byte, sqlBufReserved, 1024)
 	s.sqlBufs[1] = make([]byte, sqlBufReserved, 1024)
 	s.curBufIdx = 0
