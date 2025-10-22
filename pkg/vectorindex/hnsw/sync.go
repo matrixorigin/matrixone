@@ -283,6 +283,11 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 	s.nupdate.Store(nupdate)
 	s.ndelete.Store(ndelete)
 
+	logutil.Infof("hnsw_cdc_update[%p]: INPUT db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+		s,
+		s.tblcfg.DbName, s.tblcfg.SrcTable,
+		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
+
 	// update max capacity from indexes
 	maxcap = uint(s.tblcfg.IndexCapacity)
 	for _, m := range s.indexes {
@@ -347,6 +352,26 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 		if err != nil {
 			return 0, nil, err
 		}
+	}
+
+	// check UPSERT is actual INSERT or UPDATE
+	if nupdate > 0 {
+		nupdate_insert := int32(0)
+		nupdate_update := int32(0)
+		for i, row := range cdc.Data {
+			if row.Type == vectorindex.CDC_UPSERT {
+				if midx[i] == -1 {
+					// this is INSERT
+					nupdate_insert += 1
+
+				} else {
+					// this is UPDATE
+					nupdate_update += 1
+				}
+			}
+		}
+		s.ninsert.Add(nupdate_insert)
+		s.nupdate.Store(nupdate_update)
 	}
 
 	return maxcap, midx, nil
@@ -536,7 +561,7 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 		return err
 	}
 
-	logutil.Infof("hnsw_cdc_update[%p]: db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+	logutil.Infof("hnsw_cdc_update[%p]: ACTUAL db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
 		s,
 		s.tblcfg.DbName, s.tblcfg.SrcTable,
 		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
