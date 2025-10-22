@@ -547,6 +547,7 @@ func (s *mysqlSinker) Reset() {
 	s.preRowType = NoOp
 	s.preSqlBufLen = sqlBufReserved
 	s.ClearError()
+	s.mysql.Reset()
 }
 
 func (s *mysqlSinker) Close() {
