@@ -589,6 +589,9 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	_, err = db.DropRelationByName(schema.Name)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+
+	_, err = tae.GetTxnByID([]byte("not exist"))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNotFound))
 }
 
 func TestCRUD(t *testing.T) {
@@ -4487,7 +4490,7 @@ func TestBlockRead(t *testing.T) {
 			cacheVectors := containers.NewVectors(len(colIdxs) + 1)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
+				beforeDel, nil, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4498,7 +4501,7 @@ func TestBlockRead(t *testing.T) {
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
+				afterFirstDel, nil, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
@@ -4508,7 +4511,7 @@ func TestBlockRead(t *testing.T) {
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
+				afterSecondDel, nil, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4521,7 +4524,7 @@ func TestBlockRead(t *testing.T) {
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				0,
-				afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
+				afterSecondDel, nil, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4535,7 +4538,7 @@ func TestBlockRead(t *testing.T) {
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				0,
-				afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
+				afterSecondDel, nil, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))
@@ -4636,7 +4639,7 @@ func TestBlockRead2(t *testing.T) {
 				ds.SetTS(beforeDel)
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-					beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
+					beforeDel, nil, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4648,7 +4651,7 @@ func TestBlockRead2(t *testing.T) {
 				logutil.Infof("meta location: %v", info.MetaLocation().String())
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-					afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
+					afterFirstDel, nil, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, 7, b2.Vecs[0].Length())
@@ -4658,7 +4661,7 @@ func TestBlockRead2(t *testing.T) {
 				b3 := buildBatch(colTyps)
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-					afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
+					afterSecondDel, nil, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4671,7 +4674,7 @@ func TestBlockRead2(t *testing.T) {
 					[]uint16{2},
 					[]types.Type{types.T_Rowid.ToType()},
 					0,
-					afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
+					afterSecondDel, nil, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, 1, len(b4.Vecs))
@@ -4685,7 +4688,7 @@ func TestBlockRead2(t *testing.T) {
 					ds, []uint16{2},
 					[]types.Type{types.T_Rowid.ToType()},
 					0,
-					afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
+					afterSecondDel, nil, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
 				)
 				assert.NoError(t, err)
 				assert.Equal(t, 1, len(b5.Vecs))
@@ -7239,12 +7242,6 @@ func TestSnapshotMeta(t *testing.T) {
 	}
 	//db.DiskCleaner.GetCleaner().DisableGC()
 
-	snapshots := make([]int64, 0)
-	for i := 0; i < 10; i++ {
-		time.Sleep(20 * time.Millisecond)
-		snapshot := time.Now().UTC().Unix()
-		snapshots = append(snapshots, snapshot)
-	}
 	testutils.WaitExpect(10000, func() bool {
 		return testutil.AllCheckpointsFinished(db)
 	})
@@ -7254,6 +7251,12 @@ func TestSnapshotMeta(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
+	snapshots := make([]int64, 0)
+	for i := 0; i < 10; i++ {
+		time.Sleep(20 * time.Millisecond)
+		snapshot := time.Now().UTC().UnixNano()
+		snapshots = append(snapshots, snapshot)
+	}
 	for i, snapshot := range snapshots {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
 		vecTypes := []types.Type{types.T_uint64.ToType(),
@@ -7336,11 +7339,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	snaps, err := db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
-	defer logtail.CloseSnapshotList(snaps)
-	assert.Equal(t, 1, len(snaps))
-	for _, snap := range snaps {
-		assert.Equal(t, len(snapshots), snap.Length())
-	}
+	assert.Equal(t, len(snapshots), len(snaps.ToTsList()))
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
@@ -7361,11 +7360,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
-	defer logtail.CloseSnapshotList(snaps)
-	assert.Equal(t, 1, len(snaps))
-	for _, snap := range snaps {
-		assert.Equal(t, len(snapshots), snap.Length())
-	}
+	assert.Equal(t, len(snapshots), len(snaps.ToTsList()))
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 }

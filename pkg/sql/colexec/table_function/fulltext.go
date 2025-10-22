@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -41,19 +42,19 @@ var ft_runSql = sqlexec.RunSql
 var ft_runSql_streaming = sqlexec.RunStreamingSql
 
 type fulltextState struct {
-	inited      bool
-	errors      chan error
-	stream_chan chan executor.Result
-	n_result    uint64
-	sacc        *fulltext.SearchAccum
-	limit       uint64
-	nrows       int
-	idx2word    map[int]string
-	agghtab     map[any]uint64
-	aggcnt      []int64
-	mpool       *fulltext.FixedBytePool
-	param       fulltext.FullTextParserParam
-	docLenMap   map[any]int32
+	inited    bool
+	errCh     chan error
+	streamCh  chan executor.Result
+	n_result  uint64
+	sacc      *fulltext.SearchAccum
+	limit     uint64
+	nrows     int
+	idx2word  map[int]string
+	agghtab   map[any]uint64
+	aggcnt    []int64
+	mpool     *fulltext.FixedBytePool
+	param     fulltext.FullTextParserParam
+	docLenMap map[any]int32
 
 	// holding output batch
 	batch *batch.Batch
@@ -80,7 +81,7 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 
 	for {
 		select {
-		case res, ok := <-u.stream_chan:
+		case res, ok := <-u.streamCh:
 			if !ok {
 				return
 			}
@@ -168,8 +169,8 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 		u.batch = tf.createResultBatch()
-		u.errors = make(chan error)
-		u.stream_chan = make(chan executor.Result, 8)
+		u.errCh = make(chan error)
+		u.streamCh = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
 		u.docLenMap = make(map[any]int32)
@@ -225,20 +226,23 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 }
 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
-func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
+func runWordStats(
+	ctx context.Context,
+	u *fulltextState,
+	proc *process.Process,
+	s *fulltext.SearchAccum,
+) (result executor.Result, err error) {
 
-	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo)
-	if err != nil {
-		return executor.Result{}, err
+	var sql string
+	if sql, err = fulltext.PatternToSql(
+		s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo,
+	); err != nil {
+		return
 	}
 
-	//logutil.Infof("SQL is %s", sql)
-	res, err := ft_runSql_streaming(proc, sql, u.stream_chan, u.errors)
-	if err != nil {
-		return executor.Result{}, err
-	}
+	result, err = ft_runSql_streaming(ctx, proc, sql, u.streamCh, u.errCh)
 
-	return res, nil
+	return
 }
 
 // evaluate the score for all document vectors in Agg hashtable.
@@ -297,12 +301,12 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	var ok bool
 
 	select {
-	case res, ok = <-u.stream_chan:
+	case res, ok = <-u.streamCh:
 		if !ok {
 			// channel closed and evaluate the rest of result
 			return true, nil
 		}
-	case err = <-u.errors:
+	case err = <-u.errCh:
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
@@ -320,7 +324,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// doc_id any
-		doc_id := vector.GetAny(bat.Vecs[0], i)
+		doc_id := vector.GetAny(bat.Vecs[0], i, false)
 
 		bytes, ok := doc_id.([]byte)
 		if ok {
@@ -437,8 +441,15 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (executor.Resu
 	return res, nil
 }
 
-func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
-	mode int64, scoreAlgo fulltext.FullTextScoreAlgo, bat *batch.Batch) (err error) {
+func fulltextIndexMatch(
+	u *fulltextState,
+	proc *process.Process,
+	tableFunction *TableFunction,
+	srctbl, tblname, pattern string,
+	mode int64,
+	scoreAlgo fulltext.FullTextScoreAlgo,
+	bat *batch.Batch,
+) (err error) {
 
 	opStats := tableFunction.OpAnalyzer.GetOpStats()
 
@@ -469,34 +480,50 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	// we should wait the goroutine exit completely here,
 	// even the SQL stream is done inside the `runWordStats`.
 	// or will be resulting in data race on the tableFunction.
-	waiter := sync.WaitGroup{}
+	var (
+		waiter      sync.WaitGroup
+		ctx, cancel = context.WithCancelCause(proc.GetTopContext())
+	)
+	defer cancel(nil)
+
 	waiter.Add(1)
-
-	defer func() {
-		waiter.Wait()
-	}()
-
 	go func() {
-		defer func() {
-			waiter.Done()
-		}()
+		defer waiter.Done()
 
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
-		res, err := runWordStats(u, proc, u.sacc)
-		if err != nil {
-			u.errors <- err
+		res, err2 := runWordStats(ctx, u, proc, u.sacc)
+		if err2 != nil {
+			u.errCh <- err2
 			return
 		}
-
 		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
 	}()
 
 	// get batch from SQL executor
 	sql_closed := false
 	for !sql_closed {
-		sql_closed, err = groupby(u, proc, u.sacc)
-		if err != nil {
-			return err
+		if sql_closed, err = groupby(u, proc, u.sacc); err != nil {
+			// notify the producer to stop the sql streaming
+			cancel(err)
+			break
+		}
+	}
+
+	// wait for the sql streaming to be closed. make sure all the remaining
+	// results in stream_chan are closed.
+	if !sql_closed {
+		for res := range u.streamCh {
+			res.Close()
+		}
+	}
+
+	waiter.Wait()
+
+	if err == nil {
+		// fetch potential remaining errors from error_chan
+		select {
+		case err = <-u.errCh:
+		default:
 		}
 	}
 
@@ -506,5 +533,5 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: diff %v\n", diff))
 		os.Stderr.WriteString(u.mpool.String())
 	*/
-	return nil
+	return
 }

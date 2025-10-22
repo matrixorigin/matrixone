@@ -15,7 +15,6 @@
 package ivfflat
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,25 +28,23 @@ import (
 )
 
 // give blob
-func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
-	// don't close channel because it may run faster than err_chan
-	//defer close(ch)
-	err_chan <- moerr.NewInternalErrorNoCtx("sql error")
+func mock_runSql(
+	proc *process.Process,
+	sql string,
+) (executor.Result, error) {
 	return executor.Result{}, nil
 }
 
-func mock_runSql_streaming_parser_error(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+func mock_runSql_parser_error(
+	proc *process.Process,
+	sql string,
+) (executor.Result, error) {
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
-}
-
-func mock_runSql_streaming_cancel(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
-	proc.Cancel(moerr.NewInternalErrorNoCtx("user cancel"))
-	return executor.Result{}, nil
 }
 
 func TestIvfSearchRace(t *testing.T) {
 
-	runSql_streaming = mock_runSql_streaming
+	runSql = mock_runSql
 
 	var idxcfg vectorindex.IndexConfig
 	var tblcfg vectorindex.IndexTableConfig
@@ -69,35 +66,13 @@ func TestIvfSearchRace(t *testing.T) {
 
 func TestIvfSearchParserError(t *testing.T) {
 
-	runSql_streaming = mock_runSql_streaming_parser_error
+	runSql = mock_runSql_parser_error
 
 	var idxcfg vectorindex.IndexConfig
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
-
-	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
-
-	v := []float32{0, 1, 2}
-	rt := vectorindex.RuntimeConfig{}
-
-	idx := &IvfflatSearchIndex[float32]{}
-
-	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
-	require.NotNil(t, err)
-}
-
-func TestIvfSearchCancel(t *testing.T) {
-
-	runSql_streaming = mock_runSql_streaming_cancel
-
-	var idxcfg vectorindex.IndexConfig
-	var tblcfg vectorindex.IndexTableConfig
-
-	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
-	proc.Ctx, proc.Cancel = context.WithCancelCause(proc.Ctx)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 

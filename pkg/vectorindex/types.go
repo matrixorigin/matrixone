@@ -17,6 +17,7 @@ package vectorindex
 import (
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -87,8 +88,9 @@ type IndexConfig struct {
 }
 
 type RuntimeConfig struct {
-	Limit uint
-	Probe uint
+	Limit             uint
+	Probe             uint
+	BackgroundQueries []*plan.Query
 }
 
 // nthread == 0, result will return NumCPU - 1

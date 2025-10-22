@@ -42,6 +42,13 @@ const (
 	Phase_Open = "open-tae"
 )
 
+// PhaseInfo records timing information for each phase during database opening
+type PhaseInfo struct {
+	Start    time.Time
+	Duration time.Duration
+	Mode     string // optional, for phases like wal-replay that may run in background
+}
+
 func fillRuntimeOptions(opts *options.Options) {
 	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
 	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
@@ -65,7 +72,6 @@ func Open(
 	dbOpts ...DBOption,
 ) (db *DB, err error) {
 	opts = opts.FillDefaults(dirname)
-	// TODO: remove
 	fillRuntimeOptions(opts)
 
 	var (
@@ -73,7 +79,10 @@ func Open(
 		startTime     = time.Now()
 		rollbackSteps stepFuncs
 		logger        = logutil.Info
+		phaseMap      = make(map[string]*PhaseInfo) // Track timing of each phase
 	)
+
+	logutil.Info(Phase_Open+"-start", zap.String("dirname", dirname))
 
 	defer func() {
 		if err == nil && dbLocker != nil {
@@ -88,14 +97,31 @@ func Open(
 			}
 			logger = logutil.Error
 		}
-		logger(
-			Phase_Open,
-			zap.Duration("total-cost", time.Since(startTime)),
-			zap.String("mode", db.GetTxnMode().String()),
-			zap.String("db-dirname", dirname),
-			zap.String("config", opts.JsonString()),
-			zap.Error(err),
-		)
+		totalCost := time.Since(startTime)
+		fields := []zap.Field{
+			zap.Duration("total-cost", totalCost),
+			zap.String("dirname", dirname),
+		}
+		// Add detailed phase timings
+		if len(phaseMap) > 0 {
+			for phase, info := range phaseMap {
+				if info.Mode != "" {
+					// For phases with mode (like background wal-replay)
+					fields = append(fields, zap.String(phase,
+						fmt.Sprintf("{start:%s, mode:%s}",
+							info.Start.Format("15:04:05.000"), info.Mode)))
+				} else {
+					// For normal phases with duration
+					fields = append(fields, zap.String(phase,
+						fmt.Sprintf("{start:%s, duration:%s}",
+							info.Start.Format("15:04:05.000"), info.Duration)))
+				}
+			}
+		}
+		if err != nil {
+			fields = append(fields, zap.Error(err))
+		}
+		logger(Phase_Open+"-end", fields...)
 	}()
 
 	db = &DB{
@@ -119,15 +145,19 @@ func Open(
 		return
 	}
 
+	walStartTime := time.Now()
 	if opts.WalClientFactory != nil {
 		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
 	} else {
 		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}
-
 	rollbackSteps.Add("rollback open wal", func() error {
 		return db.Wal.Close()
 	})
+	phaseMap["init-wal-handle"] = &PhaseInfo{
+		Start:    walStartTime,
+		Duration: time.Since(walStartTime),
+	}
 
 	scheduler := newTaskScheduler(
 		db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers,
@@ -148,10 +178,12 @@ func Open(
 		dbutils.WithRuntimeOptions(db.Opts),
 	)
 
+	catalogStartTime := time.Now()
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
 	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo, dataFactory); err != nil {
+		logutil.Error(Phase_Open+"-open-catalog-error", zap.Error(err))
 		return
 	}
 	db.usageMemo.C = db.Catalog
@@ -159,15 +191,22 @@ func Open(
 		db.Catalog.Close()
 		return nil
 	})
+	phaseMap["open-catalog"] = &PhaseInfo{
+		Start:    catalogStartTime,
+		Duration: time.Since(catalogStartTime),
+	}
 
 	db.Controller = NewController(db)
-	if err = db.Controller.AssembleDB(ctx); err != nil {
+	assembleStartTime := time.Now()
+	if err = db.Controller.AssembleDB(ctx, phaseMap); err != nil {
 		return
+	}
+	phaseMap["assemble-db"] = &PhaseInfo{
+		Start:    assembleStartTime,
+		Duration: time.Since(assembleStartTime),
 	}
 	db.Controller.Start()
 
-	// For debug or test
-	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
 	return
 }
 

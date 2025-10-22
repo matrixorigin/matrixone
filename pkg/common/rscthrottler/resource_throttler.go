@@ -68,6 +68,8 @@ type memThrottler struct {
 		// if false, the acquiring fails if
 		// the wanted memory exceeds the available.
 		allowOutOfMemoryAcquire bool
+
+		limitIsTheBoss bool
 	}
 }
 
@@ -177,10 +179,14 @@ func (m *memThrottler) Available() int64 {
 		actualMaxMemory = int64(m.actualTotalMemory.Load())
 	)
 
-	if actualMaxMemory-rss >= limit {
-		avail = limit - reserved
+	if m.options.limitIsTheBoss {
+		avail = limit - rss - reserved
 	} else {
-		avail = actualMaxMemory - rss - reserved
+		if actualMaxMemory-rss >= limit {
+			avail = limit - reserved
+		} else {
+			avail = actualMaxMemory - rss - reserved
+		}
 	}
 
 	if avail < 0 {
@@ -288,6 +294,12 @@ func WithAllowOutOfLimitAcquire() MemThrottlerOption {
 func WithConstLimit(constLimit int64) MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.constLimit = constLimit
+	}
+}
+
+func WithLimitIsTheBoss() MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.limitIsTheBoss = true
 	}
 }
 
