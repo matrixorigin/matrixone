@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	common2 "github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -778,6 +779,16 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 		if err != nil {
 			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
+		}
+	}()
+
+	defer func() {
+		if len(tbl.tableName) < 20 && strings.Contains(tbl.db.databaseName, "test") {
+			if x, ok := common2.RangesCnt.Load(tbl.tableName); ok {
+				common2.RangesCnt.Store(tbl.tableName, x.(int)+blocks.Len())
+			} else {
+				common2.RangesCnt.Store(tbl.tableName, blocks.Len())
+			}
 		}
 	}()
 
