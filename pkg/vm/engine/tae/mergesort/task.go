@@ -333,6 +333,6 @@ func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
 		estSize += int(obj.Rows()) * 30
 		totalSize += int(obj.OriginSize()) / 2
 	}
-	estSize += totalSize / 3 * 2 // leave some margin for gc
+	estSize += totalSize / 3 * 4 // leave some margin for gc
 	return estSize
 }
