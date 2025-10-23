@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -132,7 +133,10 @@ func (r *DataRetrieverImpl) Next() *ISCPData {
 	var data *ISCPData
 	select {
 	case <-r.ctx.Done():
-		return nil
+		return &ISCPData{
+			noMoreData: true,
+			err:        moerr.NewInternalErrorNoCtx("context cancelled"),
+		}
 	case data = <-r.insertDataCh:
 	}
 	return data
