@@ -15,7 +15,6 @@
 package hnsw
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -24,11 +23,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -37,10 +37,6 @@ import (
 )
 
 // CdcSync is the main function to update hnsw index via CDC.  SQL function hnsw_cdc_update() will call this function.
-
-const (
-	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s' and account_id = %d) and algo='hnsw' and name = '%s';"
-)
 
 var runTxn = sqlexec.RunTxn
 var runCatalogSql = sqlexec.RunSql
@@ -79,41 +75,10 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	db string,
 	tbl string,
 	idxname string,
+	idxdefs []*plan.IndexDef,
 	vectype int32,
 	dimension int32) (*HnswSync[T], error) {
 	var err error
-
-	accountId := uint32(0)
-	if sqlproc.Proc != nil {
-		accountId, err = defines.GetAccountId(sqlproc.GetContext())
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		accountId = sqlproc.SqlCtx.AccountId
-	}
-
-	// get index catalog
-	sql := fmt.Sprintf(catalogsql, tbl, db, accountId, idxname)
-	res, err := runCatalogSql(sqlproc, sql)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Close()
-
-	//os.Stderr.WriteString(sql)
-
-	if len(res.Batches) == 0 {
-		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("hnsw cdc sync: no secondary index tables found with accountID %d, table %s and db %s",
-			accountId, tbl, db))
-	}
-
-	bat := res.Batches[0]
-
-	idxtblvec := bat.Vecs[0]
-	algotypevec := bat.Vecs[1]
-	paramvec := bat.Vecs[2]
-	colvec := bat.Vecs[3]
 
 	var idxtblcfg vectorindex.IndexTableConfig
 	var param vectorindex.HnswParam
@@ -140,18 +105,18 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 		idxtblcfg.IndexCapacity = 1000000
 	}
 
-	for i := 0; i < bat.RowCount(); i++ {
-
-		idxtbl := idxtblvec.UnsafeGetStringAt(i)
-		algotyp := algotypevec.UnsafeGetStringAt(i)
+	for i, idxdef := range idxdefs {
+		idxtbl := idxdef.IndexTableName
+		algotyp := idxdef.IndexAlgoTableType
+		if len(idxdef.Parts) != 1 {
+			return nil, moerr.NewInternalError(sqlproc.GetContext(), "HnswSync: number of index parts != 1")
+		}
 
 		if i == 0 {
-			paramstr := paramvec.UnsafeGetStringAt(i)
-			cname := colvec.UnsafeGetStringAt(i)
-			//os.Stderr.WriteString(fmt.Sprintf("idxtbl %s, type %s, param %s, cname %s\n", idxtbl, algotyp, paramstr, cname))
-			idxtblcfg.KeyPart = cname
+			idxtblcfg.KeyPart = idxdef.Parts[0]
+			paramstr := idxdef.IndexAlgoParams
 			if len(paramstr) > 0 {
-				err := json.Unmarshal([]byte(paramstr), &param)
+				err := sonic.Unmarshal([]byte(paramstr), &param)
 				if err != nil {
 					return nil, err
 				}
@@ -160,10 +125,8 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 
 		if algotyp == catalog.Hnsw_TblType_Metadata {
 			idxtblcfg.MetadataTable = idxtbl
-
 		} else if algotyp == catalog.Hnsw_TblType_Storage {
 			idxtblcfg.IndexTable = idxtbl
-
 		}
 	}
 

@@ -535,7 +535,7 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 }
 
 func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
-	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.meta.VecType, w.meta.Dimension)
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension)
 }
 
 // Implementation of Ivfflat Sql writer
