@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+//	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	common2 "github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -70,11 +70,11 @@ const (
 )
 
 const (
-	batchCnt = objectio.BlockMaxRows * 10
+	batchCnt = objectio.BlockMaxRows
 )
 
 const (
-	defaultSQLPoolSize = 4
+	defaultSQLPoolSize = 64
 )
 
 type asyncSQLExecutor struct {
@@ -524,7 +524,7 @@ func mergeDiff(
 	rows2 [][]any,
 	lcaType int,
 	conflictOpt int,
-	pkTypes []types.Type,
+	colTypes []types.Type,
 	pkColIdxes []int,
 ) (err error) {
 
@@ -599,6 +599,26 @@ func mergeDiff(
 				buf.WriteString("'")
 				buf.WriteString(r.String())
 				buf.WriteString("'")
+			case types.Timestamp:
+				buf.WriteString("'")
+				buf.WriteString(r.String2(ses.timeZone, colTypes[j-2].Scale))
+				buf.WriteString("'")
+			case types.Datetime:
+				buf.WriteString("'")
+				buf.WriteString(r.String2(colTypes[j-2].Scale))
+				buf.WriteString("'")
+			case types.Decimal64:
+				buf.WriteString("'")
+				buf.WriteString(r.Format(colTypes[j-2].Scale))
+				buf.WriteString("'")
+			case types.Decimal128:
+				buf.WriteString("'")
+				buf.WriteString(r.Format(colTypes[j-2].Scale))
+				buf.WriteString("'")
+			case types.Decimal256:
+				buf.WriteString("'")
+				buf.WriteString(r.Format(colTypes[j-2].Scale))
+				buf.WriteString("'")
 			default:
 				buf.WriteString(fmt.Sprintf("%v", r))
 			}
@@ -608,7 +628,8 @@ func mergeDiff(
 		}
 		buf.WriteString(")")
 
-		if cnt >= batchCnt {
+		if cnt >= batchCnt*10 {
+			fmt.Println("flushCurrent", len(rows1), len(rows2))
 			if err := flushCurrent(); err != nil {
 				return err
 			}
@@ -653,7 +674,7 @@ func mergeDiff(
 				continue
 			}
 
-			cmp := compareRows(rows1[i], rows2[j], pkColIdxes, pkTypes, true)
+			cmp := compareRows(rows1[i], rows2[j], pkColIdxes, colTypes, true)
 			if cmp == 0 { // conflict
 				switch conflictOpt {
 				case tree.CONFLICT_FAIL:
@@ -829,7 +850,7 @@ func diff(
 		}
 
 		if extra != nil && err == nil {
-			extra.outputArgs.rows = rows
+			extra.outputArgs.rows = collector.rows
 			extra.outputArgs.pkKind = pkKind
 			extra.outputArgs.colTypes = neededColTypes
 			extra.outputArgs.pkColIdxes = pkColIdxes
@@ -899,6 +920,7 @@ func diff(
 				taskCtx, ses, taskVec, isTar,
 				tarTblDef, baseTblDef,
 				snap, dagInfo.lcaTableId,
+				pkColIdxes,
 				neededColTypes,
 			)
 			if err != nil {
@@ -1149,23 +1171,29 @@ func diff(
 	delsWaited = true
 
 	rows = collector.snapshot()
+	//
+	//for _, row := range rows {
+	//	for j := 2; j < len(row); j++ {
+	//		switch v := row[j].(type) {
+	//		case types.Timestamp:
+	//			row[j] = v.String2(ses.timeZone, neededColTypes[j-2].Scale)
+	//		case types.Datetime:
+	//			row[j] = v.String2(neededColTypes[j-2].Scale)
+	//		case types.Decimal64:
+	//			row[j] = v.Format(neededColTypes[j-2].Scale)
+	//		case types.Decimal128:
+	//			row[j] = v.Format(neededColTypes[j-2].Scale)
+	//		case types.Decimal256:
+	//			row[j] = v.Format(neededColTypes[j-2].Scale)
+	//		}
+	//	}
+	//}
 
-	for _, row := range rows {
-		for j := 2; j < len(row); j++ {
-			switch v := row[j].(type) {
-			case types.Timestamp:
-				row[j] = v.String2(ses.timeZone, neededColTypes[j-2].Scale)
-			case types.Datetime:
-				row[j] = v.String2(neededColTypes[j-2].Scale)
-			case types.Decimal64:
-				row[j] = v.Format(neededColTypes[j-2].Scale)
-			case types.Decimal128:
-				row[j] = v.Format(neededColTypes[j-2].Scale)
-			case types.Decimal256:
-				row[j] = v.Format(neededColTypes[j-2].Scale)
-			}
-		}
-		mrs.AddRow(row)
+	if len(rows) > 0 {
+		xRow := make([]any, len(rows[0]))
+		copy(xRow, rows[0])
+		xRow[0] = strconv.FormatInt(int64(len(rows)), 10)
+		mrs.AddRow(xRow)
 	}
 
 	return trySaveQueryResult(ctx, ses, mrs)
@@ -1215,6 +1243,7 @@ func handleDelsOnLCA(
 	baseTblDef *plan.TableDef,
 	snapshot timestamp.Timestamp,
 	lcaTableId uint64,
+	pkIdxes []int,
 	colTypes []types.Type,
 ) (rows [][]any, err error) {
 
@@ -1266,8 +1295,8 @@ func handleDelsOnLCA(
 				return nil, err
 			}
 
-			//bufVals.WriteString("row(")
-			bufVals.WriteString("(")
+			bufVals.WriteString("row(")
+			//bufVals.WriteString("(")
 
 			for j, _ := range tuple {
 				switch pk := tuple[j].(type) {
@@ -1334,22 +1363,45 @@ func handleDelsOnLCA(
 				bufVals.WriteString(", ")
 			}
 		}
+		
+		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
+		buf.WriteString(fmt.Sprintf("join (values %s) as pks(%s) on ", bufVals.String(), strings.Join(pkNames, ",")))
+		for i := range pkNames {
+			buf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
+			switch typ := colTypes[pkIdxes[i]]; typ.Oid {
+			case types.T_int32:
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as int)", pkNames[i]))
+			case types.T_int64:
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as bigint)", pkNames[i]))
+			default:
+				buf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
+			}
+			if i != len(pkNames)-1 {
+				buf.WriteString(" AND ")
+			}
+		}
 
+		sql = buf.String()
+
+/*
+		pkFields := strings.Join(pkNames, ",")
 		// if the lca is very large
 		tmpTable := fmt.Sprintf("%s.`%s`", lcaTblDef.DbName, uuid.New().String())
+		
 		buf.WriteString(fmt.Sprintf("create table %s as select ", tmpTable))
-		buf.WriteString(strings.Join(pkNames, ","))
+		buf.WriteString(pkFields)
 		buf.WriteString(fmt.Sprintf(" from %s.%s%s where 1=0; ", lcaTblDef.DbName, lcaTblDef.Name, mots))
 		prepareSqls = append(prepareSqls, buf.String())
 		buf.Reset()
 
+
 		buf.WriteString(fmt.Sprintf("insert into %s (%s) values %s;",
-			tmpTable, strings.Join(pkNames, ","), bufVals.String()))
+		tmpTable, pkFields, bufVals.String()))
 		prepareSqls = append(prepareSqls, buf.String())
 		buf.Reset()
 
 		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca join %s as pks on ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots, tmpTable))
+		lcaTblDef.DbName, lcaTblDef.Name, mots, tmpTable))
 
 		for i := range pkNames {
 			buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
@@ -1360,7 +1412,7 @@ func handleDelsOnLCA(
 
 		sql = buf.String()
 		cleanSqls = append(cleanSqls, fmt.Sprintf("drop table if exists %s", tmpTable))
-
+*/
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
