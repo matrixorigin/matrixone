@@ -106,10 +106,9 @@ func New(
 			},
 		),
 	}
-	e.mu.snapParts = make(map[[2]uint64]*struct {
-		sync.Mutex
-		snaps []*logtailreplay.Partition
-	})
+	// Initialize snapshot manager
+	e.snapshotMgr = NewSnapshotManager()
+	e.snapshotMgr.Init()
 
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
