@@ -39,7 +39,7 @@ import (
 // CdcSync is the main function to update hnsw index via CDC.  SQL function hnsw_cdc_update() will call this function.
 
 const (
-	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s' and account_id = %d) and algo='hnsw';"
+	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s' and account_id = %d) and algo='hnsw' and name = '%s';"
 )
 
 var runTxn = sqlexec.RunTxn
@@ -56,6 +56,7 @@ type HnswSync[T types.RealNumbers] struct {
 	nupdate atomic.Int32
 	current *HnswModel[T]
 	last    *HnswModel[T]
+	idxname string
 }
 
 func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (err error) {
@@ -77,6 +78,7 @@ func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vect
 func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	db string,
 	tbl string,
+	idxname string,
 	vectype int32,
 	dimension int32) (*HnswSync[T], error) {
 	var err error
@@ -92,7 +94,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	}
 
 	// get index catalog
-	sql := fmt.Sprintf(catalogsql, tbl, db, accountId)
+	sql := fmt.Sprintf(catalogsql, tbl, db, accountId, idxname)
 	res, err := runCatalogSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -219,7 +221,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	ts := time.Now().Unix()
-	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts}
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts, idxname: idxname}
 
 	// save all model to local by LoadIndex and Unload
 	err = sync.DownloadAll(sqlproc)
@@ -283,9 +285,9 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 	s.nupdate.Store(nupdate)
 	s.ndelete.Store(ndelete)
 
-	logutil.Infof("hnsw_cdc_update[%p]: INPUT db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+	logutil.Infof("hnsw_cdc_update[%p]: INPUT db=%s, table=%s, index=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
 		s,
-		s.tblcfg.DbName, s.tblcfg.SrcTable,
+		s.tblcfg.DbName, s.tblcfg.SrcTable, s.idxname,
 		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
 	// update max capacity from indexes
@@ -561,9 +563,9 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 		return err
 	}
 
-	logutil.Infof("hnsw_cdc_update[%p]: ACTUAL db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+	logutil.Infof("hnsw_cdc_update[%p]: ACTUAL db=%s, table=%s, index=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
 		s,
-		s.tblcfg.DbName, s.tblcfg.SrcTable,
+		s.tblcfg.DbName, s.tblcfg.SrcTable, s.idxname,
 		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
 	if len(cdc.Data) == int(s.ninsert.Load()) {

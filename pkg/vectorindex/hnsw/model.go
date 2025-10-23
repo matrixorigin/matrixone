@@ -352,7 +352,7 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 	}
 
 	if uint(len(vec)) != dim {
-		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch dimension not match (expected %d but got %d)", dim, len(vec)))
 	}
 
 	defer runtime.KeepAlive(vec)

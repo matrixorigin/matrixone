@@ -463,6 +463,13 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
 	}
+
+	if row[w.partsPos[0]] == nil {
+		// vector is nil, do Delete
+		w.cdc.Delete(key)
+		return nil
+	}
+
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
@@ -479,10 +486,18 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 }
 
 func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
+
 	key, ok := row[w.pkPos].(int64)
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
 	}
+
+	if row[w.partsPos[0]] == nil {
+		// vector is nil, do Delete
+		w.cdc.Delete(key)
+		return nil
+	}
+
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
@@ -520,7 +535,7 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 }
 
 func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
-	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension)
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.meta.VecType, w.meta.Dimension)
 }
 
 // Implementation of Ivfflat Sql writer
