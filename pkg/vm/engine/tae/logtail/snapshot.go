@@ -1926,7 +1926,6 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 					dbTableSnapshots[dbID] = make([]types.TS, 0)
 				}
 				dbTableSnapshots[dbID] = append(dbTableSnapshots[dbID], tableTSList...)
-				delete(snapshots.tables, tableID)
 			}
 		}
 	}
@@ -1953,14 +1952,14 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 		var allApplicableSnapshots []types.TS
 
 		// 1. Add table-specific snapshots
-		if tableTSList := snapshots.tables[tid]; len(tableTSList) > 0 {
-			logutil.Warn("GC-PANIC-DUP-TABLE-SNAP",
-				zap.String("level", "table"),
-				zap.Uint64("id", tid),
-				zap.Int("count", len(tableTSList)),
-			)
-			allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
-		}
+		//if tableTSList := snapshots.tables[tid]; len(tableTSList) > 0 {
+		//	logutil.Warn("GC-PANIC-DUP-TABLE-SNAP",
+		//		zap.String("level", "table"),
+		//		zap.Uint64("id", tid),
+		//		zap.Int("count", len(tableTSList)),
+		//	)
+		//	allApplicableSnapshots = append(allApplicableSnapshots, tableTSList...)
+		//}
 
 		// 2. Add snapshots from other tables in the same database (if any table in this DB has snapshots)
 		if dbTableTSList := dbTableSnapshots[info.dbID]; len(dbTableTSList) > 0 {
@@ -2034,7 +2033,6 @@ func (sm *SnapshotMeta) MergeTableInfo(
 					dbTableSnapshots[dbID] = make([]types.TS, 0)
 				}
 				dbTableSnapshots[dbID] = append(dbTableSnapshots[dbID], tableTSList...)
-				delete(snapshots.tables, tableID)
 			}
 		}
 	}
@@ -2059,9 +2057,9 @@ func (sm *SnapshotMeta) MergeTableInfo(
 			var applicableSnapshots []types.TS
 
 			// 1. Add table-specific snapshots
-			if tableSnapshots := snapshots.tables[table.tid]; len(tableSnapshots) > 0 {
-				applicableSnapshots = append(applicableSnapshots, tableSnapshots...)
-			}
+			//if tableSnapshots := snapshots.tables[table.tid]; len(tableSnapshots) > 0 {
+			//	applicableSnapshots = append(applicableSnapshots, tableSnapshots...)
+			//}
 
 			// 2. Add snapshots from other tables in the same database (if any table in this DB has snapshots)
 			if dbTableTSList := dbTableSnapshots[table.dbID]; len(dbTableTSList) > 0 {
