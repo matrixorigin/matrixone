@@ -39,7 +39,6 @@ import (
 // CdcSync is the main function to update hnsw index via CDC.  SQL function hnsw_cdc_update() will call this function.
 
 var runTxn = sqlexec.RunTxn
-var runCatalogSql = sqlexec.RunSql
 
 type HnswSync[T types.RealNumbers] struct {
 	indexes []*HnswModel[T]
