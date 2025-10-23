@@ -157,14 +157,15 @@ func (tp *TrackedPartitions) Add(
 	trackedSnap := NewTrackedPartition(partition)
 
 	// Check if we need to evict old snapshots (LRU by count)
-	if len(tp.snaps) >= maxCount {
+	// Only evict if maxCount > 0 and we have reached the limit
+	if maxCount > 0 && len(tp.snaps) >= maxCount {
 		// Sort by last access time (oldest first)
 		sort.Slice(tp.snaps, func(i, j int) bool {
 			return tp.snaps[i].GetLastAccessTime().Before(
 				tp.snaps[j].GetLastAccessTime())
 		})
 
-		// Evict oldest snapshots
+		// Evict oldest snapshots to make room for new one
 		evictCount := len(tp.snaps) - maxCount + 1
 		for i := 0; i < evictCount; i++ {
 			evicted := tp.snaps[i]
@@ -181,6 +182,7 @@ func (tp *TrackedPartitions) Add(
 
 		if tp.metrics != nil {
 			tp.metrics.LRUEvictions.Add(int64(evictCount))
+			tp.metrics.TotalSnapshots.Add(-int64(evictCount)) // Decrease total
 		}
 	}
 
