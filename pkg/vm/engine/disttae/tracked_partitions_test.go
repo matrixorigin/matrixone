@@ -54,15 +54,18 @@ func TestTrackedPartition(t *testing.T) {
 		oldTime := time.Now().Add(-1 * time.Hour).UnixNano()
 		tp.lastAccess.Store(oldTime)
 
+		// Record time before calling GetPartition
+		timeBefore := time.Now().UnixNano()
+
 		// GetPartition should update access time to current time
 		retrieved := tp.GetPartition()
 		assert.Equal(t, p, retrieved)
 
 		newAccessTime := tp.lastAccess.Load()
 		assert.True(t, newAccessTime > oldTime, "Access time should be updated")
-		// Verify it's recent (within last second)
-		assert.True(t, newAccessTime >= time.Now().Add(-1*time.Second).UnixNano(),
-			"Access time should be recent")
+		// Verify it's after timeBefore (deterministic)
+		assert.True(t, newAccessTime >= timeBefore,
+			"Access time should be >= time before GetPartition call")
 	})
 
 	t.Run("GetAge", func(t *testing.T) {
@@ -481,7 +484,8 @@ func TestSnapshotManager(t *testing.T) {
 			}(i)
 		}
 
-		// Concurrent GC calls
+		// Concurrent GC calls (these won't actually GC due to GCInterval check)
+		// Init() just set lastGCTime, and default GCInterval is 30 minutes
 		for i := 0; i < 5; i++ {
 			wg.Add(1)
 			go func() {
@@ -495,7 +499,7 @@ func TestSnapshotManager(t *testing.T) {
 		// We added 20 snapshots across 15 unique tables (3 dbIDs × 5 tableIDs)
 		// Each Add creates a snapshot, so we should have exactly 20 creates
 		assert.Equal(t, int64(20), mgr.metrics.SnapshotCreates.Load(), "Should have created exactly 20 snapshots")
-		// Total snapshots should be 20 (no evictions expected with default config)
+		// Total snapshots should be 20 (GC won't run due to GCInterval, and MaxAge is 5 hours)
 		assert.Equal(t, int64(20), mgr.metrics.TotalSnapshots.Load(), "Should have 20 total snapshots")
 	})
 }
