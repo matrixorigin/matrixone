@@ -185,9 +185,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if err != nil {
 		return
 	}
-	if len(res.Batches) == 0 {
-		return nil, nil, moerr.NewEmptyVector(proc.Ctx)
-	}
 
 	if len(rt.BackgroundQueries) > 0 {
 		rt.BackgroundQueries[0] = res.LogicalPlan
@@ -195,15 +192,19 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	distances = make([]float64, 0, rt.Limit)
 	resid := make([]any, 0, rt.Limit)
-	bat := res.Batches[0]
 
-	for i := 0; i < bat.RowCount(); i++ {
-		pk := vector.GetAny(bat.Vecs[0], i, true)
-		resid = append(resid, pk)
+	if len(res.Batches) == 0 {
+		return resid, distances, nil
+	}
 
-		dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
-		//dist = metric.DistanceTransformIvfflat(dist, idxcfg.OpType, metric.MetricType(idxcfg.Ivfflat.Metric))
-		distances = append(distances, dist)
+	for _, bat := range res.Batches {
+		for i := 0; i < bat.RowCount(); i++ {
+			pk := vector.GetAny(bat.Vecs[0], i, true)
+			resid = append(resid, pk)
+
+			dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
+			distances = append(distances, dist)
+		}
 	}
 
 	res.Close()
