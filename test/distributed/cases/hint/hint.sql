@@ -1,4 +1,6 @@
 set enable_remap_hint = 1;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
 -- verify the basic rewriting functionality of a single table
 drop database if exists hint_test;
 create database hint_test;
@@ -511,19 +513,33 @@ insert into orders values
     }
 } */
 select * from users, orders where users.id = orders.user_id;
+drop database hint_test;
 
 
 
 -- performance testing
+-- @bvt:issue#22662
+-- @session:id=1&user=acc01:test_account&password=111
+set enable_remap_hint = 1;
+drop database if exists acc01_test;
+create database acc01_test;
+use acc01_test;
 drop table if exists large_table;
 create table large_table (
     id int,
     data varchar(100)
 );
 insert into large_table select result, 2 from generate_series(1, 1000000) g;
-
-/*+ {"rewrites": {"hint_test.large_table": "SELECT * FROM large_table WHERE id < 1000"}} */
-select count (*) from hint_test.large_table;
+/*+ {
+    "rewrites": {
+        "hint_test.large_table": "SELECT * FROM large_table WHERE id < 1000"
+  }
+} */
+select count(*) from large_table;
 select count(*) from large_table where id < 1000;
-
-drop database hint_test;
+drop database acc01_test;
+set enable_remap_hint = 0;
+-- @session
+-- @bvt:issue
+drop account acc01;
+set enable_remap_hint = 0;
