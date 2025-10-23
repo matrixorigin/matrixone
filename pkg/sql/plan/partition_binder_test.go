@@ -54,6 +54,57 @@ func TestConstructListExpression(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestConstructListExpression_DuplicateWithinPartitionShouldFail(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t1 (a int) partition by list columns(a) (partition p1 values in (1, 1));"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.ListType)
+
+	binder := newTestPartitionBinder()
+
+	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
+	require.Error(t, err)
+}
+
+func TestConstructListExpression_OverlapAcrossPartitionsShouldFail(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t1 (a int) partition by list columns(a) (partition p0 values in (1), partition p1 values in (1,2));"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.ListType)
+
+	binder := newTestPartitionBinder()
+
+	// validate partition 0 ok
+	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
+	require.NoError(t, err)
+	// validate partition 1 should fail due to overlap value 1
+	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 1)
+	require.Error(t, err)
+}
+
+func TestConstructListExpression_NonOverlapAcrossPartitionsOK(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t1 (a int) partition by list columns(a) (partition p0 values in (1), partition p1 values in (2));"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.ListType)
+
+	binder := newTestPartitionBinder()
+
+	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
+	require.NoError(t, err)
+	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 1)
+	require.NoError(t, err)
+}
+
 func TestConstructRangeExpression(t *testing.T) {
 	ctx := context.Background()
 	sql := "create table t1 (a int) partition by range columns(a) (partition p1 values less than (1));"
@@ -120,6 +171,58 @@ func TestConstructRangeExpressionWithMaxValueFirstPartition(t *testing.T) {
 	expr0, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
 	require.NoError(t, err)
 	require.NotNil(t, expr0)
+}
+
+func TestConstructRangeExpression_StrictIncreasing_EqualShouldFail(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t2 (a int) partition by range columns(a) (partition p0 values less than (10), partition p1 values less than (10));"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.RangeType)
+
+	binder := newTestPartitionBinder()
+
+	// position 1 should fail since 10 < 10 is false
+	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 1)
+	require.Error(t, err)
+}
+
+func TestConstructRangeExpression_StrictIncreasing_DecreasingShouldFail(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t2 (a int) partition by range columns(a) (partition p0 values less than (20), partition p1 values less than (10));"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.RangeType)
+
+	binder := newTestPartitionBinder()
+
+	// position 1 should fail since 20 < 10 is false
+	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 1)
+	require.Error(t, err)
+}
+
+func TestConstructRangeExpression_MaxValueMustBeLast(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t2 (a int) partition by range columns(a) (partition p0 values less than (MAXVALUE), partition p1 values less than (30));"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.RangeType)
+
+	binder := newTestPartitionBinder()
+
+	// position 0 should fail because MAXVALUE must be last
+	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
+	require.Error(t, err)
+
+	// position 1 should also fail because previous is MAXVALUE
+	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 1)
+	require.Error(t, err)
 }
 
 func TestConstructHashExpression(t *testing.T) {
