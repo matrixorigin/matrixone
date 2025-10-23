@@ -57,6 +57,7 @@ func ExecuteIteration(
 	defer packer.Close()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithoutTimeout := ctx
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
 
@@ -191,7 +192,7 @@ func ExecuteIteration(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
 	if err != nil {
 		return
 	}
@@ -253,7 +254,7 @@ func ExecuteIteration(
 			continue
 		}
 		dataRetrievers[i] = NewDataRetriever(
-			ctx,
+			ctxWithoutTimeout,
 			iterCtx.accountID,
 			iterCtx.tableID,
 			iterCtx.jobNames[i],
@@ -284,7 +285,7 @@ func ExecuteIteration(
 		return
 	}
 
-	ctxWithCancel, cancel := context.WithCancel(ctx)
+	ctxWithCancel, cancel := context.WithCancel(ctxWithoutTimeout)
 	changeHandelWg := sync.WaitGroup{}
 	changeHandelWg.Add(1)
 	go func() {
