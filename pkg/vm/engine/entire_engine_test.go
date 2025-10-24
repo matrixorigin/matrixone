@@ -500,3 +500,18 @@ func (o *testOperator) ExitRunSql() {}
 func (o *testOperator) GetWaitActiveCost() time.Duration {
 	return time.Duration(0)
 }
+
+func (o *testOperator) Set(string, any) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) Get(string) (any, bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) Delete(string) {
+	//TODO implement me
+	panic("implement me")
+}

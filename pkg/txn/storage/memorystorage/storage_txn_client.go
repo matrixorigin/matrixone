@@ -385,3 +385,15 @@ func (s *StorageTxnOperator) NextSequence() uint64 {
 func (s *StorageTxnOperator) GetWaitActiveCost() time.Duration {
 	return time.Duration(0)
 }
+
+func (s *StorageTxnOperator) Set(key string, value any) {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) Get(key string) (any, bool) {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) Delete(key string) {
+	panic("should not call")
+}
