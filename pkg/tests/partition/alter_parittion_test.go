@@ -259,6 +259,151 @@ func TestAlterTableAddPartition(t *testing.T) {
 	)
 }
 
+// TestAlterTableAddPartition_List_OverlapShouldFail ensures adding a LIST partition with overlapping values fails
+func TestAlterTableAddPartition_List_OverlapShouldFail(t *testing.T) {
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		func(c embed.Cluster) int32 { return 0 },
+		"create table %s (c int comment 'abc', b int) partition by list (c) (partition p0 values in (1, 2), partition p1 values in (3))",
+		partition.PartitionMethod_List,
+		func(idx int, p partition.Partition) {},
+		func(db string, table string, cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+			// Try to add a partition with overlapping value 2
+			cs := cn.RawService().(cnservice.Service)
+			exec := cs.GetSQLExecutor()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			err := exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					_, err := txn.Exec(
+						fmt.Sprintf("alter table %s add partition (partition p2 values in (2, 5))", table),
+						executor.StatementOption{},
+					)
+					return err
+				},
+				executor.Options{}.WithDatabase(db),
+			)
+			require.Error(t, err)
+		},
+		func(cn embed.ServiceOperator, pm partition.PartitionMetadata) {},
+	)
+}
+
+// TestAlterTableAddPartition_List_DuplicateWithinNewPartitionShouldFail ensures duplicates in a single LIST partition are rejected
+func TestAlterTableAddPartition_List_DuplicateWithinNewPartitionShouldFail(t *testing.T) {
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		func(c embed.Cluster) int32 { return 0 },
+		"create table %s (c int comment 'abc', b int) partition by list (c) (partition p0 values in (1))",
+		partition.PartitionMethod_List,
+		func(idx int, p partition.Partition) {},
+		func(db string, table string, cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+			cs := cn.RawService().(cnservice.Service)
+			exec := cs.GetSQLExecutor()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			err := exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					_, err := txn.Exec(
+						fmt.Sprintf("alter table %s add partition (partition p1 values in (5, 5))", table),
+						executor.StatementOption{},
+					)
+					return err
+				},
+				executor.Options{}.WithDatabase(db),
+			)
+			require.Error(t, err)
+		},
+		func(cn embed.ServiceOperator, pm partition.PartitionMetadata) {},
+	)
+}
+
+// TestAlterTableAddPartition_Range_Success adds a valid tail range partition
+func TestAlterTableAddPartition_Range_Success(t *testing.T) {
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		func(c embed.Cluster) int32 { return 0 },
+		"create table %s (c int comment 'abc', b int) partition by range columns(c) (partition p0 values less than (10), partition p1 values less than (20))",
+		partition.PartitionMethod_Range,
+		func(idx int, p partition.Partition) {},
+		func(db string, table string, cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+			testutils.ExecSQLWithReadResult(
+				t,
+				db,
+				cn,
+				nil,
+				fmt.Sprintf("alter table %s add partition (partition p2 values less than (30))", table),
+			)
+
+			metadata := getMetadata(t, 0, db, table, cn)
+			require.Equal(t, 3, len(metadata.Partitions))
+		},
+		func(cn embed.ServiceOperator, pm partition.PartitionMetadata) {},
+	)
+}
+
+// TestAlterTableAddPartition_Range_InvalidOrderShouldFail adds an out-of-order range partition and expects failure
+func TestAlterTableAddPartition_Range_InvalidOrderShouldFail(t *testing.T) {
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		func(c embed.Cluster) int32 { return 0 },
+		"create table %s (c int comment 'abc', b int) partition by range columns(c) (partition p0 values less than (10), partition p1 values less than (20))",
+		partition.PartitionMethod_Range,
+		func(idx int, p partition.Partition) {},
+		func(db string, table string, cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+			cs := cn.RawService().(cnservice.Service)
+			exec := cs.GetSQLExecutor()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			err := exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					_, err := txn.Exec(
+						fmt.Sprintf("alter table %s add partition (partition p2 values less than (15))", table),
+						executor.StatementOption{},
+					)
+					return err
+				},
+				executor.Options{}.WithDatabase(db),
+			)
+			require.Error(t, err)
+		},
+		func(cn embed.ServiceOperator, pm partition.PartitionMetadata) {},
+	)
+}
+
+// TestAlterTableAddPartition_Hash_ShouldFail ensures ADD PARTITION on hash-partitioned tables is not supported
+func TestAlterTableAddPartition_Hash_ShouldFail(t *testing.T) {
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		func(c embed.Cluster) int32 { return 0 },
+		"create table %s (c int comment 'abc', b int) partition by hash(c) partitions 2",
+		partition.PartitionMethod_Hash,
+		func(idx int, p partition.Partition) {},
+		func(db string, table string, cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+			cs := cn.RawService().(cnservice.Service)
+			exec := cs.GetSQLExecutor()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			err := exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					_, err := txn.Exec(
+						fmt.Sprintf("alter table %s add partition (partition p2 values in (5))", table),
+						executor.StatementOption{},
+					)
+					return err
+				},
+				executor.Options{}.WithDatabase(db),
+			)
+			require.Error(t, err)
+		},
+		func(cn embed.ServiceOperator, pm partition.PartitionMetadata) {},
+	)
+}
+
 // TestAlterTablePartitionBy tests the ALTER TABLE PARTITION BY functionality
 func TestAlterTablePartitionBy(t *testing.T) {
 	runPartitionTableCreateAndDeleteTestsWithAware(
