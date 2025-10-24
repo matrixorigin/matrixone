@@ -44,9 +44,11 @@ try:
     PROMPT_TOOLKIT_AVAILABLE = True
 except ImportError:
     PROMPT_TOOLKIT_AVAILABLE = False
+
     # Provide stub classes for documentation generation
     class Completer:
         """Stub Completer class when prompt_toolkit is not available"""
+
         pass
 
 
@@ -169,6 +171,7 @@ else:
     # Stub class for documentation generation when prompt_toolkit is not available
     class MODiagCompleter:
         """Smart completer for mo-diag commands (stub when prompt_toolkit unavailable)"""
+
         def __init__(self, cli_instance):
             self.cli = cli_instance
 
@@ -367,7 +370,11 @@ class MatrixOneCLI(cmd.Cmd):
             self.client.connect(host=host, port=port, user=user, password=password, database=database)
             self.current_database = database
             if database:
-                self.prompt = f'{Colors.BOLD}{Colors.GREEN}MO-DIAG{Colors.RESET}{Colors.BOLD}[{Colors.YELLOW}{database}{Colors.RESET}{Colors.BOLD}]{Colors.GREEN}>{Colors.RESET} '
+                self.prompt = (
+                    f'{Colors.BOLD}{Colors.GREEN}MO-DIAG{Colors.RESET}{Colors.BOLD}'
+                    f'[{Colors.YELLOW}{database}{Colors.RESET}{Colors.BOLD}]'
+                    f'{Colors.GREEN}>{Colors.RESET} '
+                )
             else:
                 self.prompt = f'{Colors.BOLD}{Colors.GREEN}MO-DIAG>{Colors.RESET} '
             print(
@@ -399,7 +406,11 @@ class MatrixOneCLI(cmd.Cmd):
         try:
             self.client.execute(f"USE {database}")
             self.current_database = database
-            self.prompt = f'{Colors.BOLD}{Colors.GREEN}MO-DIAG{Colors.RESET}{Colors.BOLD}[{Colors.YELLOW}{database}{Colors.RESET}{Colors.BOLD}]{Colors.GREEN}>{Colors.RESET} '
+            self.prompt = (
+                f'{Colors.BOLD}{Colors.GREEN}MO-DIAG{Colors.RESET}{Colors.BOLD}'
+                f'[{Colors.YELLOW}{database}{Colors.RESET}{Colors.BOLD}]'
+                f'{Colors.GREEN}>{Colors.RESET} '
+            )
             print(f"{Colors.GREEN}✓ Switched to database: {database}{Colors.RESET}")
         except Exception as e:
             print(f"❌ Failed to switch database: {e}")
@@ -629,7 +640,8 @@ class MatrixOneCLI(cmd.Cmd):
                     special_index_statuses = []
                     vector_index_issues = []
 
-                    # Group indexes by name to avoid processing same index multiple times (e.g., IVF has multiple physical tables)
+                    # Group indexes by name to avoid processing same index multiple times
+                    # (e.g., IVF has multiple physical tables)
                     seen_indexes = {}
                     for idx in indexes:
                         idx_name = idx['index_name']
@@ -922,7 +934,8 @@ class MatrixOneCLI(cmd.Cmd):
             if not verbose:
                 # Compact table view
                 print(
-                    f"{'Table':<30} | {'Index':<25} | {'Column':<20} | {'Centroids':<10} | {'Vectors':<12} | {'Balance':<10} | {'Status':<15}"
+                    f"{'Table':<30} | {'Index':<25} | {'Column':<20} | {'Centroids':<10} | "
+                    f"{'Vectors':<12} | {'Balance':<10} | {'Status':<15}"
                 )
                 print("-" * 150)
 
@@ -985,7 +998,9 @@ class MatrixOneCLI(cmd.Cmd):
                                     # Compact view
                                     status = "✓ active"
                                     print(
-                                        f"{table_name:<30} | {index_name:<25} | {column_name:<20} | {total_centroids:<10} | {total_vectors:<12,} | {balance:<10.2f} | {status:<15}"
+                                        f"{table_name:<30} | {index_name:<25} | {column_name:<20} | "
+                                        f"{total_centroids:<10} | {total_vectors:<12,} | "
+                                        f"{balance:<10.2f} | {status:<15}"
                                     )
 
                                 total_ivf_indexes += 1
@@ -994,14 +1009,16 @@ class MatrixOneCLI(cmd.Cmd):
                                     print("\nCentroid Distribution: ⚠️  No centroids found (empty index)")
                                 else:
                                     print(
-                                        f"{table_name:<30} | {index_name:<25} | {column_name:<20} | {'0':<10} | {'0':<12} | {'N/A':<10} | {'⚠️ empty':<15}"
+                                        f"{table_name:<30} | {index_name:<25} | {column_name:<20} | "
+                                        f"{'0':<10} | {'0':<12} | {'N/A':<10} | {'⚠️ empty':<15}"
                                     )
                         else:
                             if verbose:
                                 print("\nCentroid Distribution: ⚠️  No distribution data available")
                             else:
                                 print(
-                                    f"{table_name:<30} | {index_name:<25} | {column_name:<20} | {'?':<10} | {'?':<12} | {'?':<10} | {'⚠️ no data':<15}"
+                                    f"{table_name:<30} | {index_name:<25} | {column_name:<20} | "
+                                    f"{'?':<10} | {'?':<12} | {'?':<10} | {'⚠️ no data':<15}"
                                 )
                     else:
                         # Index exists but no stats available
@@ -1011,7 +1028,8 @@ class MatrixOneCLI(cmd.Cmd):
                             print(f"Status: ⚠️  {algo_table_type if algo_table_type else 'No stats available'}")
                         else:
                             print(
-                                f"{table_name:<30} | {index_name:<25} | {column_name:<20} | {'?':<10} | {'?':<12} | {'?':<10} | {'⚠️ no stats':<15}"
+                                f"{table_name:<30} | {index_name:<25} | {column_name:<20} | "
+                                f"{'?':<10} | {'?':<12} | {'?':<10} | {'⚠️ no stats':<15}"
                             )
 
                 except Exception as e:
@@ -1023,7 +1041,8 @@ class MatrixOneCLI(cmd.Cmd):
                     else:
                         error_msg = str(e)[:10]
                         print(
-                            f"{table_name:<30} | {index_name:<25} | {column_name:<20} | {'?':<10} | {'?':<12} | {'?':<10} | {'❌ ' + error_msg:<15}"
+                            f"{table_name:<30} | {index_name:<25} | {column_name:<20} | "
+                            f"{'?':<10} | {'?':<12} | {'?':<10} | {'❌ ' + error_msg:<15}"
                         )
                     continue
 
@@ -1187,14 +1206,17 @@ class MatrixOneCLI(cmd.Cmd):
 
                             print(f"  └─ {bold('Data')}")
                             print(
-                                f"     Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                f"     Objects: {len(unique_objs)} | Rows: {total_rows:,} | "
+                                f"Null: {total_null:,} | Original: {format_size(total_origin)} | "
+                                f"Compressed: {format_size(total_compress)}"
                             )
 
                             # Show object details
                             if unique_objs:
                                 print(f"\n     {bold('Objects:')}")
                                 print(
-                                    f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                    f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | "
+                                    f"{'Original Size':<15} | {'Compressed Size':<15}"
                                 )
                                 print("     " + "-" * 148)
                                 for obj in unique_objs:
@@ -1204,7 +1226,8 @@ class MatrixOneCLI(cmd.Cmd):
                                     orig_size = getattr(obj, 'origin_size', 0) or 0
                                     comp_size = getattr(obj, 'compress_size', 0) or 0
                                     print(
-                                        f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                        f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | "
+                                        f"{format_size(orig_size):<15} | {format_size(comp_size):<15}"
                                     )
                     except Exception:
                         pass
@@ -1225,13 +1248,16 @@ class MatrixOneCLI(cmd.Cmd):
 
                                     print(f"\n  └─ {bold('Tombstone')}")
                                     print(
-                                        f"     Objects: {len(unique_tomb_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                        f"     Objects: {len(unique_tomb_objs)} | Rows: {total_rows:,} | "
+                                        f"Null: {total_null:,} | Original: {format_size(total_origin)} | "
+                                        f"Compressed: {format_size(total_compress)}"
                                     )
 
                                     # Show tombstone object details
                                     print(f"\n     {bold('Objects:')}")
                                     print(
-                                        f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                        f"     {'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | "
+                                        f"{'Original Size':<15} | {'Compressed Size':<15}"
                                     )
                                     print("     " + "-" * 148)
                                     for obj in unique_tomb_objs:
@@ -1241,7 +1267,8 @@ class MatrixOneCLI(cmd.Cmd):
                                         orig_size = getattr(obj, 'origin_size', 0) or 0
                                         comp_size = getattr(obj, 'compress_size', 0) or 0
                                         print(
-                                            f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                            f"     {obj_name:<50} | {rows:<12,} | {nulls:<10,} | "
+                                            f"{format_size(orig_size):<15} | {format_size(comp_size):<15}"
                                         )
                         except Exception:
                             pass
@@ -1319,14 +1346,18 @@ class MatrixOneCLI(cmd.Cmd):
 
                                             print(f"{data_indent}└─ {bold('Data')}")
                                             print(
-                                                f"{obj_indent}Objects: {len(unique_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                                f"{obj_indent}Objects: {len(unique_objs)} | Rows: {total_rows:,} | "
+                                                f"Null: {total_null:,} | Original: {format_size(total_origin)} | "
+                                                f"Compressed: {format_size(total_compress)}"
                                             )
 
                                             # Show object details
                                             if unique_objs:
                                                 print(f"\n{obj_indent}{bold('Objects:')}")
                                                 print(
-                                                    f"{obj_indent}{'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                                    f"{obj_indent}{'Object Name':<50} | {'Rows':<12} | "
+                                                    f"{'Null Cnt':<10} | {'Original Size':<15} | "
+                                                    f"{'Compressed Size':<15}"
                                                 )
                                                 print(obj_indent + "-" * 148)
                                                 for obj in unique_objs:
@@ -1336,7 +1367,9 @@ class MatrixOneCLI(cmd.Cmd):
                                                     orig_size = getattr(obj, 'origin_size', 0) or 0
                                                     comp_size = getattr(obj, 'compress_size', 0) or 0
                                                     print(
-                                                        f"{obj_indent}{obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                                        f"{obj_indent}{obj_name:<50} | {rows:<12,} | "
+                                                        f"{nulls:<10,} | {format_size(orig_size):<15} | "
+                                                        f"{format_size(comp_size):<15}"
                                                     )
                                     except Exception:
                                         pass
@@ -1365,12 +1398,17 @@ class MatrixOneCLI(cmd.Cmd):
 
                                                     print(f"\n{data_indent}└─ {bold('Tombstone')}")
                                                     print(
-                                                        f"{obj_indent}Objects: {len(unique_tomb_objs)} | Rows: {total_rows:,} | Null: {total_null:,} | Original: {format_size(total_origin)} | Compressed: {format_size(total_compress)}"
+                                                        f"{obj_indent}Objects: {len(unique_tomb_objs)} | "
+                                                        f"Rows: {total_rows:,} | Null: {total_null:,} | "
+                                                        f"Original: {format_size(total_origin)} | "
+                                                        f"Compressed: {format_size(total_compress)}"
                                                     )
 
                                                     print(f"\n{obj_indent}{bold('Objects:')}")
                                                     print(
-                                                        f"{obj_indent}{'Object Name':<50} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                                                        f"{obj_indent}{'Object Name':<50} | {'Rows':<12} | "
+                                                        f"{'Null Cnt':<10} | {'Original Size':<15} | "
+                                                        f"{'Compressed Size':<15}"
                                                     )
                                                     print(obj_indent + "-" * 148)
                                                     for obj in unique_tomb_objs:
@@ -1380,7 +1418,9 @@ class MatrixOneCLI(cmd.Cmd):
                                                         orig_size = getattr(obj, 'origin_size', 0) or 0
                                                         comp_size = getattr(obj, 'compress_size', 0) or 0
                                                         print(
-                                                            f"{obj_indent}{obj_name:<50} | {rows:<12,} | {nulls:<10,} | {format_size(orig_size):<15} | {format_size(comp_size):<15}"
+                                                            f"{obj_indent}{obj_name:<50} | {rows:<12,} | "
+                                                            f"{nulls:<10,} | {format_size(orig_size):<15} | "
+                                                            f"{format_size(comp_size):<15}"
                                                         )
                                         except Exception:
                                             pass
@@ -1471,7 +1511,8 @@ class MatrixOneCLI(cmd.Cmd):
                     print(f"\n{Colors.BOLD}Table: {table_name}{Colors.RESET} ({len(unique_objs)} objects)")
                     print("-" * 150)
                     print(
-                        f"{'Object Name':<50} | {'Create Time':<20} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                        f"{'Object Name':<50} | {'Create Time':<20} | {'Rows':<12} | "
+                        f"{'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
                     )
                     print("-" * 150)
                     for obj in unique_objs:
@@ -1483,7 +1524,8 @@ class MatrixOneCLI(cmd.Cmd):
                     print(f"\n{Colors.BOLD}Tombstone{Colors.RESET} ({len(unique_objs)} objects)")
                     print("-" * 150)
                     print(
-                        f"{'Object Name':<50} | {'Create Time':<20} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                        f"{'Object Name':<50} | {'Create Time':<20} | {'Rows':<12} | "
+                        f"{'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
                     )
                     print("-" * 150)
                     for obj in unique_objs:
