@@ -956,6 +956,7 @@ var (
 		"mo_pitr":                     0,
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_BRANCH_METADATA:    0,
 	}
 )
 

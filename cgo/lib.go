@@ -16,5 +16,6 @@ package cgo
 
 /*
 #cgo CFLAGS: -O3 -std=c99
+#cgo LDFLAGS: -lm
 */
 import "C"

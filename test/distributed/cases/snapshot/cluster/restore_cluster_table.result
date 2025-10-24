@@ -409,6 +409,7 @@ insert into t3 values (1,6),(2,6),(3,6);
 show tables;
 Tables_in_mo_catalog
 mo_account
+mo_branch_metadata
 mo_iscp_log
 mo_cache
 mo_cdc_task
@@ -519,6 +520,7 @@ a    account_id
 show tables;
 Tables_in_mo_catalog
 mo_account
+mo_branch_metadata
 mo_iscp_log
 mo_cache
 mo_cdc_task

@@ -14,7 +14,9 @@
 
 package common
 
-import "fmt"
+import (
+	"fmt"
+)
 
 const (
 	KiB = 1024

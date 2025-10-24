@@ -22,6 +22,7 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_account
+mo_branch_metadata
 mo_iscp_log
 mo_cache
 mo_cdc_task

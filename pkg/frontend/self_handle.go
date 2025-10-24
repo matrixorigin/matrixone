@@ -536,6 +536,19 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleCloneTable(execCtx, ses, st, nil); err != nil {
 			return
 		}
+
+	case *tree.DataBranchDiff,
+		*tree.DataBranchMerge,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDeleteDatabase,
+		*tree.DataBranchCreateDatabase:
+
+		ses.EnterFPrint(FPDataBranch)
+		defer ses.ExitFPrint(FPDataBranch)
+		if err = handleDataBranch(execCtx, ses, st); err != nil {
+			return
+		}
 	}
 	return
 }

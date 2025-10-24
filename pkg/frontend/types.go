@@ -191,6 +191,7 @@ const (
 	FPShowRecoveryWindow
 	FPCloneDatabase
 	FPCloneTable
+	FPDataBranch
 )
 
 type (
