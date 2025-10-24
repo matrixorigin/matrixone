@@ -292,8 +292,11 @@ const (
 	CONFLICT_ACCEPT
 )
 
-type DiffAsOpt struct {
-	As TableName
+type DiffOutputOpt struct {
+	// store the result to another table called `As`
+	As    TableName
+	Limit *int64
+	Count bool
 }
 
 type DataBranchDiff struct {
@@ -301,7 +304,7 @@ type DataBranchDiff struct {
 
 	TargetTable TableName
 	BaseTable   TableName
-	DiffAsOpts  *DiffAsOpt
+	OutputOpt   *DiffOutputOpt
 }
 
 func (s *DataBranchDiff) TypeName() string {
