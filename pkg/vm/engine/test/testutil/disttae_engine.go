@@ -216,9 +216,15 @@ func NewTestDisttaeEngine(
 	setServerLevelParams(de)
 
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
-	err = de.Engine.InitLogTailPushModel(de.ctx, de.timestampWaiter)
+	if err = de.Engine.InitLogTailPushModel(de.ctx, de.timestampWaiter); err != nil {
+		return de, err
+	}
+
+	// Start unified GC scheduler
+	go de.Engine.RunGCScheduler(de.ctx)
+
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
-	return de, err
+	return de, nil
 }
 func (de *TestDisttaeEngine) GetTxnClient() client.TxnClient {
 	return de.txnClient
