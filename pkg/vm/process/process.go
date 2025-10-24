@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -266,10 +267,17 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	return fields
 }
 
-func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, error) {
+func (proc *Process) GetSpillFileService() (*fileservice.LocalFS, error) {
 	local, err := fileservice.Get[fileservice.MutableFileService](proc.Base.FileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	return fileservice.SubPath(local, defines.SpillFileServiceName).(fileservice.MutableFileService), nil
+	spillfs := fileservice.SubPath(local, defines.SpillFileServiceName)
+
+	// cast spillfs to *LocalFS
+	ret, ok := spillfs.(*fileservice.LocalFS)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("spillfs is not a LocalFS")
+	}
+	return ret, nil
 }
