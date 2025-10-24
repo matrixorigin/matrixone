@@ -150,28 +150,37 @@ func loadCheckpointMeta(
 	metaFiles []ioutil.TSRangeFile,
 	fs fileservice.FileService,
 ) (entries []*CheckpointEntry, err error) {
-	// Collect all meta file names
-	fileNames := make([]string, len(metaFiles))
-	for i, metaFile := range metaFiles {
-		fileNames[i] = metaFile.GetCKPFullName()
-	}
-
-	// Create reader using NewCKPMetaReader
-	reader := NewCKPMetaReader(sid, "", fileNames, 0, fs)
-	getter := MetadataEntryGetter{reader: reader}
-	defer getter.Close()
-
-	// Read all entries
 	allEntries := make([]*CheckpointEntry, 0)
-	for {
-		batchEntries, err := getter.NextBatch(ctx, nil, common.DebugAllocator)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				break
+
+	// Process each meta file individually to apply the filtering logic
+	for _, metaFile := range metaFiles {
+		// Create reader for this specific file
+		reader := NewCKPMetaReader(sid, "", []string{metaFile.GetCKPFullName()}, 0, fs)
+		getter := MetadataEntryGetter{reader: reader}
+		defer getter.Close()
+
+		// Read entries from this file
+		fileEntries := make([]*CheckpointEntry, 0)
+		for {
+			batchEntries, err := getter.NextBatch(ctx, nil, common.DebugAllocator)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+					break
+				}
+				return nil, err
 			}
-			return nil, err
+			fileEntries = append(fileEntries, batchEntries...)
 		}
-		allEntries = append(allEntries, batchEntries...)
+
+		// Filter entries that match the file's start and end timestamps
+		// This replicates the logic from appendCheckpointToBatch
+		fileStart := metaFile.GetStart()
+		fileEnd := metaFile.GetEnd()
+		for _, entry := range fileEntries {
+			if entry.start.EQ(fileStart) && entry.end.EQ(fileEnd) {
+				allEntries = append(allEntries, entry)
+			}
+		}
 	}
 
 	// Apply the same logic as ListSnapshotCheckpointWithMeta
