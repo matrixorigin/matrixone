@@ -20,16 +20,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lni/vfs"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 
@@ -228,35 +224,3 @@ func TestReplay2(t *testing.T) {
 // 	wg.Wait()
 // 	t.Logf("time cost: %v", time.Since(now))
 // }
-
-func TestNewClientFailed(t *testing.T) {
-
-	service, ccfg := initTest(t)
-	defer service.Close()
-
-	fault.Enable()
-	defer fault.Disable()
-	rmFn, err := objectio.InjectWALReplayFailed("new client")
-	assert.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
-	idx := 0
-	mockFactory := func() (logservice.Client, error) {
-
-		if idx > 10 {
-			rmFn()
-		}
-		idx++
-		var client logservice.Client
-		var err error
-		if msg, injected := objectio.WALReplayFailedExecutorInjected(); injected && msg == "new client" {
-			err = moerr.NewInternalErrorNoCtx("mock error")
-		} else {
-
-			client, err = logservice.NewClient(ctx, "", *ccfg)
-		}
-		return client, err
-	}
-	newClient(mockFactory, 100, 100, time.Millisecond*100, time.Minute*5)
-}

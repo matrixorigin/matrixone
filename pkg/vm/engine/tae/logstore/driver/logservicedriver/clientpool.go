@@ -121,7 +121,7 @@ type wrappedClient struct {
 	writeToken uint64
 }
 
-func newClient(
+func NewClient(
 	factory LogServiceClientFactory, bufSize int, retryTimes int, retryInterval, retryDuration time.Duration,
 ) *wrappedClient {
 	var (
@@ -255,7 +255,7 @@ func newClientPool(cfg *Config) *clientPool {
 	}
 
 	for i := 0; i < cfg.ClientMaxCount; i++ {
-		pool.clients[i] = newClient(cfg.ClientFactory, cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
+		pool.clients[i] = NewClient(cfg.ClientFactory, cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
 	}
 	return pool
 }
@@ -288,7 +288,7 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	if c.closed {
 		return nil, ErrClientPoolClosed
 	}
-	client := newClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
+	client := NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
 	return client, nil
 }
 
