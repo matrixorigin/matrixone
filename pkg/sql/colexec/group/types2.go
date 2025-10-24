@@ -64,10 +64,11 @@ type Group struct {
 }
 
 type spillBucket struct {
-	shift  int64
-	bucket int64
-	again  []spillBucket
-	file   *os.File
+	lv      int           // spill level
+	reading int           // current reading bucket index
+	again   []spillBucket // spill buckets
+	gbBatch *batch.Batch  // group by batch
+	file    *os.File      // spill file
 }
 
 // container running context.
@@ -95,7 +96,7 @@ type container struct {
 	flushed [][]*vector.Vector
 
 	// spill
-	spillBkts []spillBucket
+	spillBkt spillBucket
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {

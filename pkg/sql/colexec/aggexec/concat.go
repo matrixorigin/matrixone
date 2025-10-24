@@ -64,9 +64,9 @@ func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [
 	return exec.ret.unmarshalFromBytes(result, empties, groups[1:])
 }
 
-func (exec *groupConcatExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+func (exec *groupConcatExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	err := marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
-		bucketIdx, bucket, buf,
+		cnt, flags, buf,
 		&exec.ret.optSplitResult, nil)
 	if err != nil {
 		return err
