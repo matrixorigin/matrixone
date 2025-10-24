@@ -18,8 +18,9 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -487,24 +488,9 @@ func (e *Engine) getOrCreateSnapPartBy(
 			tbl.db.op.Txn().DebugString())
 	}
 
-	//check whether the snapshot partitions are available for reuse.
-	e.mu.Lock()
-	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
-	if !ok {
-		e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}] = &struct {
-			sync.Mutex
-			snaps []*logtailreplay.Partition
-		}{}
-		tblSnaps = e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
-	}
-	e.mu.Unlock()
-
-	tblSnaps.Lock()
-	defer tblSnaps.Unlock()
-	for _, snap := range tblSnaps.snaps {
-		if snap.Snapshot().CanServe(ts) {
-			return snap.Snapshot(), nil
-		}
+	// Try to find existing snapshot that can serve this timestamp
+	if ps := e.snapshotMgr.Find(tbl.db.databaseId, tbl.tableId, ts); ps != nil {
+		return ps, nil
 	}
 
 	//new snapshot partition and apply checkpoints into it.
@@ -555,14 +541,35 @@ func (e *Engine) getOrCreateSnapPartBy(
 		return nil
 	})
 	if err != nil {
-		logutil.Infof("Snapshot consumeSnapCkps failed, err:%v", err)
+		logutil.Error("Snapshot consumeSnapCkps failed", zap.Error(err))
 		return nil, err
 	}
-	if snap.Snapshot().CanServe(ts) {
-		tblSnaps.snaps = append(tblSnaps.snaps, snap)
-		return snap.Snapshot(), nil
+	if !snap.Snapshot().CanServe(ts) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"snapshot partition cannot serve ts after consuming checkpoints, ts:%s, table:%s",
+			ts.ToString(), tbl.tableName)
 	}
-	panic("impossible path")
+
+	// Add the new snapshot with LRU eviction
+	ps := e.snapshotMgr.Add(
+		tbl.db.databaseId,
+		tbl.tableId,
+		snap,
+		tbl.tableName,
+		ts,
+	)
+
+	// Log total snapshots
+	metrics := e.snapshotMgr.GetMetrics()
+	logutil.Info(
+		"Snapshot-Added",
+		zap.Int64("total-snaps-global", metrics.TotalSnapshots.Load()),
+	)
+
+	// Trigger GC check if needed
+	e.snapshotMgr.MaybeStartGC()
+
+	return ps, nil
 }
 
 func (e *Engine) GetOrCreateLatestPart(
