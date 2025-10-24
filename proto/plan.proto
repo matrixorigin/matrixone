@@ -1672,6 +1672,7 @@ message CloneTable {
 
 message AlterPartitionOption {
 	AlterPartitionType AlterType = 1;
+	repeated PartitionDef PartitionDefs = 2;
 }
 
 enum AlterPartitionType {
