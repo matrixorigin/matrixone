@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
@@ -51,11 +52,12 @@ func (t *startTask) Handle(_ context.Context) error {
 			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
 				return
 			}
-			// if async index cdc task quit without error
-			if t.task.task.TaskType == task.TaskType_ISCP && err == nil {
-				return
+
+			// When executor is already running, skip removeDaemonTask.
+			if err == nil || !moerr.IsMoErrCode(err, moerr.ErrExecutorRunning) {
+				t.runner.removeDaemonTask(t.task.task.ID)
 			}
-			t.runner.removeDaemonTask(t.task.task.ID)
+
 		}()
 
 		ok, err := t.runner.startDaemonTask(ctx, t.task)
@@ -74,7 +76,11 @@ func (t *startTask) Handle(_ context.Context) error {
 		// the task encounters some error or be canceled.
 		if err = t.task.executor(ctx, &t.task.task); err != nil {
 			// set the record of this task error message.
-			t.runner.setDaemonTaskError(ctx, t.task, err)
+			// skip setError when executor is already running as
+			// we should not run executor again
+			if !moerr.IsMoErrCode(err, moerr.ErrExecutorRunning) {
+				t.runner.setDaemonTaskError(ctx, t.task, err)
+			}
 		}
 	}); err != nil {
 		return err
@@ -453,15 +459,27 @@ func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
 		}
 	}
 
+	newCreate := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_Created),
+		WithLabels(IN, labels),
+	)
+	stoppedRunning := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_Running),
+		WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+	)
+	for _, t := range newCreate {
+		if t.TaskType == task.TaskType_ISCP {
+			logutil.Infof("debug_iscp_start new iscp executor")
+		}
+	}
+	for _, t := range stoppedRunning {
+		if t.TaskType == task.TaskType_ISCP {
+			logutil.Infof("debug_iscp_start stopped iscp executor")
+		}
+	}
 	return r.mergeTasks(
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Created),
-			WithLabels(IN, labels),
-		),
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_Running),
-			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-		),
+		newCreate,
+		stoppedRunning,
 	)
 }
 
@@ -562,6 +580,9 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 	r.daemonTasks.Lock()
 	tasks := make([]*daemonTask, 0, len(r.daemonTasks.m))
 	for _, dt := range r.daemonTasks.m {
+		if dt.task.TaskType == task.TaskType_ISCP {
+			logutil.Infof("debug_iscp_start do send heartbeat iscp executor")
+		}
 		tasks = append(tasks, dt)
 	}
 	r.daemonTasks.Unlock()
@@ -595,6 +616,9 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool,
 	// When update the daemon task, add the condition that last heartbeat of
 	// the task must be timeout or be null, which means that other runners does
 	// NOT try to start this task.
+	if dt.task.TaskType == task.TaskType_ISCP {
+		logutil.Infof("debug_iscp_start update daemon task, runnerID=%s", r.runnerID)
+	}
 	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t},
 		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()))
 	if err != nil {

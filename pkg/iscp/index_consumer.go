@@ -21,13 +21,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 /* IndexConsumer */
@@ -36,43 +41,29 @@ type IndexEntry struct {
 	indexes []*plan.IndexDef
 }
 
-var sqlExecutorFactory = _sqlExecutorFactory
-
-func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
-	// sql executor
-	v, ok := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		//os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", cnUUID))
-		return nil, moerr.NewNotSupportedNoCtx("no implement sqlExecutor")
-	}
-	exec := v.(executor.SQLExecutor)
-	return exec, nil
-}
-
 /* IndexConsumer */
 type IndexConsumer struct {
 	cnUUID       string
+	cnEngine     engine.Engine
+	cnTxnClient  client.TxnClient
 	jobID        JobID
 	info         *ConsumerInfo
 	tableDef     *plan.TableDef
 	sqlWriter    IndexSqlWriter
-	exec         executor.SQLExecutor
 	rowdata      []any
 	rowdelete    []any
 	sqlBufSendCh chan []byte
+	algo         string
 }
 
 var _ Consumer = new(IndexConsumer)
 
 func NewIndexConsumer(cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
 	tableDef *plan.TableDef,
 	jobID JobID,
 	info *ConsumerInfo) (Consumer, error) {
-
-	exec, err := sqlExecutorFactory(cnUUID)
-	if err != nil {
-		return nil, err
-	}
 
 	ie := &IndexEntry{indexes: make([]*plan.IndexDef, 0, 3)}
 
@@ -95,21 +86,22 @@ func NewIndexConsumer(cnUUID string,
 	}
 
 	c := &IndexConsumer{cnUUID: cnUUID,
-		jobID:     jobID,
-		info:      info,
-		tableDef:  tableDef,
-		sqlWriter: sqlwriter,
-		exec:      exec,
-		rowdata:   make([]any, len(tableDef.Cols)),
-		rowdelete: make([]any, 1),
+		cnEngine:    cnEngine,
+		cnTxnClient: cnTxnClient,
+		jobID:       jobID,
+		info:        info,
+		tableDef:    tableDef,
+		sqlWriter:   sqlwriter,
+		rowdata:     make([]any, len(tableDef.Cols)),
+		rowdelete:   make([]any, 1),
+		algo:        ie.algo,
 		//sqlBufSendCh: make(chan []byte),
 	}
 
 	return c, nil
 }
 
-func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
-
+func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 	datatype := r.GetDataType()
 
 	if datatype == ISCPDataType_Snapshot {
@@ -125,58 +117,182 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 				if !ok {
 					return
 				}
-				func() {
-					newctx, cancel := context.WithTimeout(ctx, time.Hour)
 
-					defer cancel()
-					//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
-					opts := executor.Options{}.WithAccountID(r.GetAccountID())
-					res, err := c.exec.Exec(newctx, string(sql), opts)
-					if err != nil {
-						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
-						os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
-						os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
-						errch <- err
-					}
-					res.Close()
-				}()
+				// no transaction required and commit every time.
+				err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+						sqlctx := sqlproc.SqlCtx
+
+						res, err := ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
+						if err != nil {
+							logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
+							os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
+							os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+							return err
+						}
+						res.Close()
+						return nil
+					})
+
+				if err != nil {
+					errch <- err
+					return
+				}
 			}
 		}
 
 	} else {
-		// TAIL
-		newctx, cancel := context.WithTimeout(ctx, time.Hour)
-		defer cancel()
-		opts := executor.Options{}
-		err := c.exec.ExecTxn(newctx,
-			func(exec executor.TxnExecutor) error {
+
+		// all updates under same transaction and transaction can last very long so set timeout to 24 hours
+		err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
+			func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+				sqlctx := sqlproc.SqlCtx
+
+				// TAIL
 				for {
 					select {
 					case <-ctx.Done():
-						return nil
+						return
 					case e2 := <-errch:
-						return e2
+						errch <- e2
+						return
 					case sql, ok := <-c.sqlBufSendCh:
 						if !ok {
 							// channel closed
-							return r.UpdateWatermark(exec, opts.StatementOption())
+							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 						}
 
 						// update SQL
-						res, err := exec.Exec(string(sql), opts.StatementOption().WithAccountID(r.GetAccountID()))
+						var res executor.Result
+						res, err = ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
 						if err != nil {
 							return err
 						}
 						res.Close()
 					}
 				}
-			}, opts)
+			})
+
 		if err != nil {
 			errch <- err
 			return
 		}
 	}
+}
 
+func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+
+	datatype := r.GetDataType()
+
+	// Suppose we shoult not use transaction here for Snapshot type and commit every time a new batch comes.
+	// However, HNSW only run in local without save to database until Sync.Save().
+	// HNSW is okay to have similar implementation to TAIL
+
+	var err error
+	var sync *hnsw.HnswSync[T]
+
+	// read-only sql so no need transaction here.  All models are loaded at startup.
+	err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+		func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+
+			w := c.sqlWriter.(*HnswSqlWriter[T])
+			sync, err = w.NewSync(sqlproc)
+			return err
+		})
+
+	if err != nil {
+		errch <- err
+		return
+	}
+
+	if sync == nil {
+		errch <- moerr.NewInternalErrorNoCtx("failed create HnswSync")
+		return
+	}
+
+	defer func() {
+		if sync != nil {
+			sync.Destroy()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e2 := <-errch:
+			errch <- e2
+			return
+		case sql, ok := <-c.sqlBufSendCh:
+			if !ok {
+				// channel closed
+
+				// we need a transaction here to save model files and update watermark
+				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
+					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+						sqlctx := sqlproc.SqlCtx
+
+						// save model to db
+						err = sync.Save(sqlproc)
+						if err != nil {
+							return
+						}
+
+						// update watermark
+						if datatype == ISCPDataType_Tail {
+							err = r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+							if err != nil {
+								return
+							}
+						}
+						return
+
+					})
+
+				if err != nil {
+					errch <- err
+					return
+				}
+				return
+			}
+
+			// sql -> cdc
+			var cdc vectorindex.VectorIndexCdc[T]
+			err = sonic.Unmarshal(sql, &cdc)
+			if err != nil {
+				errch <- err
+				return
+			}
+
+			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
+			err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+				func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+					return sync.Update(sqlproc, &cdc)
+				})
+
+			if err != nil {
+				errch <- err
+				return
+			}
+
+		}
+	}
+
+}
+
+func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
+
+	switch c.sqlWriter.(type) {
+	case *HnswSqlWriter[float32]:
+		// init HnswSync[float32]
+		runHnsw[float32](c, ctx, errch, r)
+	case *HnswSqlWriter[float64]:
+		// init HnswSync[float64]
+		runHnsw[float64](c, ctx, errch, r)
+	default:
+		// run fulltext/ivfflat index
+		runIndex(c, ctx, errch, r)
+	}
 }
 
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {

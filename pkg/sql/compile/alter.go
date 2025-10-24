@@ -48,6 +48,7 @@ func convertDBEOB(ctx context.Context, e error, name string) error {
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
+
 	if dbName == "" {
 		dbName = c.db
 	}
@@ -148,7 +149,27 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if qry.Options.SkipPkDedup || len(qry.Options.SkipUniqueIdxDedup) > 0 {
 		opt = opt.WithAlterCopyOpt(qry.Options)
 	}
-	// 4. copy the original table data to the temporary replica table
+
+	//4. obtain relation for new tables
+	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
+			zap.String("databaseName", dbName),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
+		return err
+	}
+
+	//5. ISCP: temp table already created pitr and iscp job with temp table name
+	// and we don't want iscp to run with temp table so drop pitr and iscp job with the temp table here
+	newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
+	err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
+	if err != nil {
+		return err
+	}
+
+	// 6. copy the original table data to the temporary replica table
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
@@ -160,17 +181,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	//5. obtain relation for new tables
-	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
-	if err != nil {
-		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
-			zap.String("databaseName", dbName),
-			zap.String("origin tableName", qry.GetTableDef().Name),
-			zap.String("copy table name", qry.CopyTableDef.Name),
-			zap.Error(err))
-		return err
-	}
-
 	//6. copy on writing unaffected index table
 	if err = cloneUnaffectedIndexes(
 		c, dbName, qry.Options.SkipIndexesCopy, qry.AffectedCols, newRel, qry.TableDef, nil,
@@ -178,7 +188,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// 7. drop original table
+	// 7. drop original table.
+	// ISCP: That will also drop ISCP related jobs and pitr of the original table.
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
 	if err := c.runSqlWithOptions(
 		dropSql,
@@ -190,26 +201,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.String("copy tableName", qry.CopyTableDef.Name),
 			zap.Error(err))
 		return err
-	}
-
-	// 7.1 delete all index objects of the table in mo_catalog.mo_indexes
-	if qry.Database != catalog.MO_CATALOG && qry.TableDef.Name != catalog.MO_INDEXES {
-		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
-			deleteSql := fmt.Sprintf(
-				deleteMoIndexesWithTableIdFormat,
-				qry.GetTableDef().TblId,
-			)
-			err = c.runSql(deleteSql)
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "delete all index meta data of origin table in `mo_indexes` for alter table",
-					zap.String("databaseName", dbName),
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("delete all index sql", deleteSql),
-					zap.Error(err))
-
-				return err
-			}
-		}
 	}
 
 	newId := newRel.GetTableID(c.proc.Ctx)
@@ -236,13 +227,25 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	newTableDef := newRel.CopyTableDef(c.proc.Ctx)
 	//--------------------------------------------------------------------------------------------------------------
 	{
 		// 9. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
-		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
+		unaffectedIndexProcessed := make(map[string]bool)
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
+
+		isAffectedIndex := func(indexDef *plan.IndexDef, affectedCols []string) bool {
+			affected := false
+			for _, part := range indexDef.Parts {
+				if slices.Index(affectedCols, part) != -1 {
+					affected = true
+					break
+				}
+			}
+			return affected
+		}
 
 		for _, indexDef := range newTableDef.Indexes {
 
@@ -250,19 +253,49 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
 			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
 			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
-			affected := false
-			for _, part := range indexDef.Parts {
-				if slices.Index(qry.AffectedCols, part) != -1 {
-					affected = true
-					break
-				}
-			}
 
-			if !affected {
-				// column not affected means index already cloned in cloneUnaffectedIndexes()
+			if !indexDef.Unique && (catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo)) {
+				// ivf/hnsw/fulltext index
+
+				if !isAffectedIndex(indexDef, qry.AffectedCols) {
+					// column not affected means index already cloned in cloneUnaffectedIndexes()
+
+					if unaffectedIndexProcessed[indexDef.IndexName] {
+						// unaffectedIndex already processed.
+						continue
+					}
+
+					valid, err := checkValidIndexCdc(newTableDef, indexDef.IndexName)
+					if err != nil {
+						return err
+					}
+
+					if valid {
+						// index table may not be fully sync'd with source table via ISCP during alter table
+						// clone index table (with ISCP) may not be a complete clone
+						// so register ISCP job with startFromNow = false
+						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
+						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+						if err != nil {
+							return err
+						}
+
+						logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+					}
+
+					unaffectedIndexProcessed[indexDef.IndexName] = true
+
+					continue
+				}
+
+			} else {
+				// ignore regular/master/unique index
 				continue
 			}
 
+			// only affected ivf/hnsw/fulltext index will go here
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
 				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -271,6 +304,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						IndexDefs: make(map[string]*plan.IndexDef),
 					}
 				}
+
 				ty := catalog.ToLower(indexDef.IndexAlgoTableType)
 				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
 			}
@@ -287,6 +321,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 		}
 		for _, multiTableIndex := range multiTableIndexes {
+
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(
@@ -694,6 +729,13 @@ func cloneUnaffectedIndexes(
 		AlgoTableType  string
 	}
 
+	type IndexTableInfo struct {
+		Unique          bool
+		IndexAlgo       string
+		IndexAlgoParams string
+		Indexes         []IndexTypeInfo
+	}
+
 	var (
 		clone *table_clone.TableClone
 
@@ -702,8 +744,8 @@ func cloneUnaffectedIndexes(
 
 		newTblDef = newRel.GetTableDef(c.proc.Ctx)
 
-		oriIdxColNameToTblName = make(map[string][]IndexTypeInfo)
-		newIdxColNameToTblName = make(map[string][]IndexTypeInfo)
+		oriIdxColNameToTblName = make(map[string]*IndexTableInfo)
+		newIdxColNameToTblName = make(map[string]*IndexTableInfo)
 	)
 
 	logutil.Infof("cloneUnaffectedIndex: affected cols %v\n", affectedCols)
@@ -769,10 +811,18 @@ func cloneUnaffectedIndexes(
 
 		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
-			m = make([]IndexTypeInfo, 0, 3)
+			m = &IndexTableInfo{
+				Unique:          idxTbl.Unique,
+				IndexAlgo:       idxTbl.IndexAlgo,
+				IndexAlgoParams: idxTbl.IndexAlgoParams,
+				Indexes:         make([]IndexTypeInfo, 0, 3),
+			}
+
 		}
 
-		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		m.Indexes = append(m.Indexes,
+			IndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
+				AlgoTableType: idxTbl.IndexAlgoTableType})
 		oriIdxColNameToTblName[idxTbl.IndexName] = m
 	}
 
@@ -783,10 +833,17 @@ func cloneUnaffectedIndexes(
 
 		m, ok := newIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
-			m = make([]IndexTypeInfo, 0, 3)
+			m = &IndexTableInfo{
+				Unique:          idxTbl.Unique,
+				IndexAlgo:       idxTbl.IndexAlgo,
+				IndexAlgoParams: idxTbl.IndexAlgoParams,
+				Indexes:         make([]IndexTypeInfo, 0, 3),
+			}
 		}
 
-		m = append(m, IndexTypeInfo{IndexTableName: idxTbl.IndexTableName, AlgoTableType: idxTbl.IndexAlgoTableType})
+		m.Indexes = append(m.Indexes,
+			IndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
+				AlgoTableType: idxTbl.IndexAlgoTableType})
 		newIdxColNameToTblName[idxTbl.IndexName] = m
 		logutil.Infof("cloneUnaffectedIndex: new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
 	}
@@ -804,11 +861,24 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		for _, oriIdxTblName := range oriIdxTblNames {
+		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		if err != nil {
+			return err
+		}
+
+		if !oriIdxTblNames.Unique &&
+			((catalog.IsFullTextIndexAlgo(oriIdxTblNames.IndexAlgo) && async) ||
+				catalog.IsHnswIndexAlgo(oriIdxTblNames.IndexAlgo)) {
+			// skip fultext async index and hsnw index clone because index table may not be fully sync'd
+			logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
+			continue
+		}
+
+		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
 
 			var newIdxTblName IndexTypeInfo
 			found := false
-			for _, idxinfo := range newIdxTblNames {
+			for _, idxinfo := range newIdxTblNames.Indexes {
 				if oriIdxTblName.AlgoTableType == idxinfo.AlgoTableType {
 					newIdxTblName = idxinfo
 					found = true
@@ -820,8 +890,32 @@ func cloneUnaffectedIndexes(
 				continue
 			}
 
+			// IVF index table is NOT empty and clone will have duplicate rows
+			// Delete the table
+			if !oriIdxTblNames.Unique &&
+				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
+				// delete all content but avoid truncate table with WHERE TRUE
+				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
+				err := c.runSql(sql)
+				if err != nil {
+					return err
+				}
+			}
+
+			if !oriIdxTblNames.Unique &&
+				async &&
+				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) &&
+				oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+				// skip async IVF entries index table
+				logutil.Infof("cloneUnaffectedIndex: skip async IVF entries index table %v\n", oriIdxTblName)
+				continue
+			}
+
 			logutil.Infof("cloneUnaffectedIndex: clone %v -> %v\n", oriIdxTblName, newIdxTblName)
 			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
+			if err != nil {
+				return err
+			}
 
 			clonePlan := plan.CloneTable{
 				CreateTable:     nil,

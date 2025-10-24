@@ -89,6 +89,7 @@ func (jobEntry *JobEntry) update(
 				[]*JobStatus{jobStatus},
 				watermark,
 				errMsg,
+				[]uint64{jobEntry.currentLSN},
 			)
 		}
 		jobEntry.currentLSN = jobStatus.LSN
@@ -123,6 +124,7 @@ func (jobEntry *JobEntry) UpdateWatermark(
 			[]*JobStatus{{}},
 			jobEntry.watermark,
 			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), jobEntry.watermark.ToString()),
+			[]uint64{jobEntry.currentLSN},
 		)
 	}
 	jobEntry.watermark = to
@@ -151,6 +153,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		jobEntry.watermark,
 		statusJson,
 		ISCPJobState_Completed,
+		jobEntry.currentLSN,
 	)
 	result, err := ExecWithResult(
 		ctx,
