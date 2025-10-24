@@ -154,9 +154,6 @@ func loadCheckpointMeta(
 
 	// Process each meta file individually to apply the filtering logic
 	for _, metaFile := range metaFiles {
-		if metaFile == nil {
-			continue // Skip nil meta files
-		}
 
 		// Create reader for this specific file
 		reader := NewCKPMetaReader(sid, "", []string{metaFile.GetCKPFullName()}, 0, fs)
