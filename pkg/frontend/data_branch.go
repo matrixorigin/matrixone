@@ -69,7 +69,7 @@ const (
 )
 
 const (
-	batchCnt = objectio.BlockMaxRows * 2
+	batchCnt = objectio.BlockMaxRows * 20
 )
 
 const (
@@ -196,6 +196,23 @@ func (c *rowsCollector) snapshot() [][]any {
 	cp := make([][]any, len(c.rows))
 	copy(cp, c.rows)
 	return cp
+}
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+func acquireBuffer() *bytes.Buffer {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func releaseBuffer(buf *bytes.Buffer) {
+	buf.Reset()
+	bufferPool.Put(buf)
 }
 
 type collectRange struct {
@@ -358,9 +375,16 @@ func handleSnapshotMerge(
 		deferred    func(error) error
 		conflictOpt int
 
-		tables  tablePair
-		dagInfo branchMetaInfo
+		limitDiff int64
+		tables    tablePair
+		dagInfo   branchMetaInfo
 	)
+
+	branchDiff := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{
+			Limit: &limitDiff,
+		},
+	}
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
 		return err
@@ -400,7 +424,7 @@ func handleSnapshotMerge(
 		extra.inputArgs.tarSnapshot = tables.tarSnapshot
 		extra.inputArgs.baseSnapshot = tables.baseSnapshot
 
-		if err = handleSnapshotDiff(execCtx, ses, &tree.DataBranchDiff{}, &extra); err != nil {
+		if err = handleSnapshotDiff(execCtx, ses, branchDiff, &extra); err != nil {
 			return
 		}
 
@@ -476,7 +500,7 @@ func handleSnapshotMerge(
 	extra1.inputArgs.tarSnapshot = tables.tarSnapshot
 	extra1.inputArgs.baseSnapshot = lcaSnapshot
 
-	if err = handleSnapshotDiff(execCtx, ses, &tree.DataBranchDiff{}, &extra1); err != nil {
+	if err = handleSnapshotDiff(execCtx, ses, branchDiff, &extra1); err != nil {
 		return
 	}
 
@@ -486,7 +510,7 @@ func handleSnapshotMerge(
 	extra2.inputArgs.tarSnapshot = tables.baseSnapshot
 	extra2.inputArgs.baseSnapshot = lcaSnapshot
 
-	if err = handleSnapshotDiff(execCtx, ses, &tree.DataBranchDiff{}, &extra2); err != nil {
+	if err = handleSnapshotDiff(execCtx, ses, branchDiff, &extra2); err != nil {
 		return
 	}
 
@@ -514,10 +538,9 @@ func mergeDiff(
 	pkColIdxes []int,
 ) (err error) {
 
-	var (
-		cnt int
-		buf bytes.Buffer
-	)
+	var cnt int
+	buf := acquireBuffer()
+	defer releaseBuffer(buf)
 
 	sqlRunner, runnerErr := newAsyncSQLExecutor(runtime.NumCPU())
 	if runnerErr != nil {
@@ -566,7 +589,7 @@ func mergeDiff(
 	}
 
 	writeOneRow := func(row []any) error {
-		if buf.Bytes()[buf.Len()-1] == ')' {
+		if buf.Len() > 0 && buf.Bytes()[buf.Len()-1] == ')' {
 			buf.WriteString(",")
 		}
 		cnt++
@@ -614,8 +637,7 @@ func mergeDiff(
 		}
 		buf.WriteString(")")
 
-		if cnt >= batchCnt*5 {
-			fmt.Println("flushCurrent", len(rows1), len(rows2))
+		if cnt >= batchCnt/2 {
 			if err := flushCurrent(); err != nil {
 				return err
 			}
@@ -1239,13 +1261,15 @@ func handleDelsOnLCA(
 
 	var (
 		sql         string
-		buf         bytes.Buffer
 		flag        = diffRemovedLine
 		lcaTblDef   *plan.TableDef
 		prepareSqls []string
 		cleanSqls   []string
 		mots        = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 	)
+
+	buf := acquireBuffer()
+	defer releaseBuffer(buf)
 
 	if lcaTableId == 0 {
 		return nil, moerr.NewInternalErrorNoCtxf(
@@ -1273,10 +1297,12 @@ func handleDelsOnLCA(
 	// composite pk
 	if baseTblDef.Pkey.CompPkeyCol != nil {
 		var (
-			bufVals bytes.Buffer
 			tuple   types.Tuple
 			pkNames = lcaTblDef.Pkey.Names
 		)
+
+		bufVals := acquireBuffer()
+		defer releaseBuffer(bufVals)
 
 		cols, area := vector.MustVarlenaRawData(dels)
 		for i := range cols {
@@ -1354,6 +1380,7 @@ func handleDelsOnLCA(
 			}
 		}
 
+		buf.Reset()
 		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
 		buf.WriteString(fmt.Sprintf("join (values %s) as pks(%s) on ", bufVals.String(), strings.Join(pkNames, ",")))
 		for i := range pkNames {
@@ -1383,6 +1410,7 @@ func handleDelsOnLCA(
 
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		buf.Reset()
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
 		for i, pk := range pks {
 			buf.WriteString(strconv.FormatUint(pk, 10))
@@ -1398,6 +1426,7 @@ func handleDelsOnLCA(
 
 		// real pk
 	} else {
+		buf.Reset()
 		for i := range dels.Length() {
 			b := dels.GetRawBytesAt(i)
 			val := types.DecodeValue(b, dels.GetType().Oid)
