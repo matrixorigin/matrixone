@@ -188,6 +188,32 @@ debug: override CGO_DEBUG_OPT := debug
 debug: build
 
 ###############################################################################
+# disk monitoring tests
+###############################################################################
+.PHONY: ut-disk-monitor
+ut-disk-monitor: config cgo thirdparties
+	$(info [Disk monitoring unit testing])
+	@echo "🚀 开始磁盘监控测试..."
+	@go test -v ./pkg/testutil -run "TestDiskMonitor" -timeout 10m
+	@echo "✅ 磁盘监控测试完成"
+
+.PHONY: ut-with-disk-monitor
+ut-with-disk-monitor: config cgo thirdparties
+	$(info [Unit testing with disk monitoring])
+	@echo "🚀 开始带磁盘监控的单元测试..."
+	@echo "📊 测试前磁盘使用情况:"
+	@go test -v ./pkg/testutil -run "TestDiskMonitorSuite" -timeout 5m
+	@echo "📊 运行主要单元测试..."
+ifeq ($(UNAME_S),darwin)
+	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+else
+	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+endif
+	@echo "📊 测试后磁盘使用情况:"
+	@go test -v ./pkg/testutil -run "TestDiskMonitorCleanup" -timeout 2m
+	@echo "✅ 带磁盘监控的单元测试完成"
+
+###############################################################################
 # run unit tests
 ###############################################################################
 # Excluding frontend test cases temporarily

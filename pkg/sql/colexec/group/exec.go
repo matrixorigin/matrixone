@@ -207,12 +207,6 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 					return nil, err
 				}
 				group.ctr.result1.ToPopped[0].SetRowCount(1)
-			} else {
-				// update stats
-				if group.OpAnalyzer != nil && group.ctr.hr.Hash != nil {
-					group.OpAnalyzer.Alloc(group.ctr.hr.Hash.Size())
-				}
-				// the others are in GroupResultBuffer -- later.
 			}
 			continue
 		}

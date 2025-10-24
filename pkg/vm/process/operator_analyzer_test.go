@@ -184,7 +184,6 @@ func TestOperatorStats_String(t *testing.T) {
 		TimeConsumed     int64
 		WaitTimeConsumed int64
 		MemorySize       int64
-		SpillSize        int64
 		InputRows        int64
 		InputSize        int64
 		OutputRows       int64
@@ -217,7 +216,7 @@ func TestOperatorStats_String(t *testing.T) {
 		want   string
 	}{
 		{
-			// CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes CacheRead:428 CacheMemoryRead:428
+			// CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes CacheRead:428 CacheMemoryRead:428
 			name: "test01",
 			fields: fields{
 				OperatorName:     "testOp",
@@ -225,7 +224,6 @@ func TestOperatorStats_String(t *testing.T) {
 				TimeConsumed:     54449492,
 				WaitTimeConsumed: 0,
 				MemorySize:       131072,
-				SpillSize:        131072,
 				InputRows:        1248064,
 				InputSize:        19969024,
 				OutputRows:       0,
@@ -254,7 +252,7 @@ func TestOperatorStats_String(t *testing.T) {
 					OpScanTime: 452,
 				},
 			},
-			want: " CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 CacheRead:428 CacheHit:428 CacheMemoryRead:428 CacheMemoryHit:428 CacheDiskRead:428 CacheDiskHit:428 CacheRemoteRead:428 CacheRemoteHit:428 ScanTime:452ns ",
+			want: " CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 CacheRead:428 CacheHit:428 CacheMemoryRead:428 CacheMemoryHit:428 CacheDiskRead:428 CacheDiskHit:428 CacheRemoteRead:428 CacheRemoteHit:428 ScanTime:452ns ",
 		},
 	}
 	for _, tt := range tests {
@@ -265,7 +263,6 @@ func TestOperatorStats_String(t *testing.T) {
 				TimeConsumed:     tt.fields.TimeConsumed,
 				WaitTimeConsumed: tt.fields.WaitTimeConsumed,
 				MemorySize:       tt.fields.MemorySize,
-				SpillSize:        tt.fields.SpillSize,
 				InputRows:        tt.fields.InputRows,
 				InputSize:        tt.fields.InputSize,
 				OutputRows:       tt.fields.OutputRows,

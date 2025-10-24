@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -138,7 +139,7 @@ func (c *MockCleaner) GetMPool() *mpool.MPool {
 	return nil
 }
 
-func (c *MockCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
+func (c *MockCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	return nil, nil
 }
 

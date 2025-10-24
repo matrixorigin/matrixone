@@ -243,11 +243,11 @@ func NewMockSnapshotMeta() *MockSnapshotMeta {
 
 // AccountToTableSnapshots mocks the same method in logtail.SnapshotMeta
 func (m *MockSnapshotMeta) AccountToTableSnapshots(
-	snapshots *logtail.SnapshotInfo,
+	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
-) (map[uint64][]types.TS, map[uint64]*types.TS) {
+) (map[uint64][]types.TS, map[uint64][]types.TS) {
 	tableSnapshots := make(map[uint64][]types.TS)
-	tablePitrs := make(map[uint64]*types.TS)
+	tablePitrs := make(map[uint64][]types.TS)
 	return tableSnapshots, tablePitrs
 }
 
