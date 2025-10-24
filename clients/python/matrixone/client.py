@@ -1778,6 +1778,7 @@ class Client(BaseMatrixOneClient):
                             fulltext_sql += f" WITH PARSER {index.parser}"
                         try:
                             _exec_sql(fulltext_sql)
+                            self.logger.info(f"✓ Created fulltext index '{index.name}'")
                         except Exception as e:
                             self.logger.warning(f"Failed to create fulltext index {index.name}: {e}")
                     elif isinstance(index, VectorIndex):
@@ -1785,6 +1786,7 @@ class Client(BaseMatrixOneClient):
                         try:
                             vector_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
                             _exec_sql(vector_sql)
+                            self.logger.info(f"✓ Created vector index '{index.name}'")
                         except Exception as e:
                             self.logger.warning(f"Failed to create vector index {index.name}: {e}")
                     else:
@@ -1792,6 +1794,7 @@ class Client(BaseMatrixOneClient):
                         try:
                             index_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
                             _exec_sql(index_sql)
+                            self.logger.info(f"✓ Created index '{index.name}'")
                         except Exception as e:
                             self.logger.warning(f"Failed to create index {index.name}: {e}")
 

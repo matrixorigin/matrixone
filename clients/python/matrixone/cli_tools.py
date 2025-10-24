@@ -1539,7 +1539,8 @@ class MatrixOneCLI(cmd.Cmd):
                         print(f"\n{Colors.BOLD}Index: {index_name}{Colors.RESET} ({len(unique_objs)} objects)")
                         print("-" * 150)
                         print(
-                            f"{'Object Name':<50} | {'Create Time':<20} | {'Rows':<12} | {'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
+                            f"{'Object Name':<50} | {'Create Time':<20} | {'Rows':<12} | "
+                            f"{'Null Cnt':<10} | {'Original Size':<15} | {'Compressed Size':<15}"
                         )
                         print("-" * 150)
                         for obj in unique_objs:
@@ -1562,7 +1563,8 @@ class MatrixOneCLI(cmd.Cmd):
                 print(f"\n📊 Table Statistics for '{database}.{table_name}':")
                 print("=" * 120)
                 print(
-                    f"{'Component':<30} | {'Objects':<10} | {'Rows':<15} | {'Null Count':<12} | {'Original Size':<15} | {'Compressed Size':<15}"
+                    f"{'Component':<30} | {'Objects':<10} | {'Rows':<15} | "
+                    f"{'Null Count':<12} | {'Original Size':<15} | {'Compressed Size':<15}"
                 )
                 print("-" * 120)
 
@@ -1570,14 +1572,18 @@ class MatrixOneCLI(cmd.Cmd):
                 if table_name in stats:
                     table_stats = stats[table_name]
                     print(
-                        f"{table_name:<30} | {table_stats['total_objects']:<10} | {table_stats['row_cnt']:<15,} | {table_stats['null_cnt']:<12,} | {table_stats['original_size']:<15} | {table_stats['compress_size']:<15}"  # type: ignore[call-overload]
+                        f"{table_name:<30} | {table_stats['total_objects']:<10} | "
+                        f"{table_stats['row_cnt']:<15,} | {table_stats['null_cnt']:<12,} | "
+                        f"{table_stats['original_size']:<15} | {table_stats['compress_size']:<15}"  # type: ignore
                     )
 
                 # Show tombstone stats
                 if 'tombstone' in stats:
                     tomb_stats = stats['tombstone']
                     print(
-                        f"{'  └─ tombstone':<30} | {tomb_stats['total_objects']:<10} | {tomb_stats['row_cnt']:<15,} | {tomb_stats['null_cnt']:<12,} | {tomb_stats['original_size']:<15} | {tomb_stats['compress_size']:<15}"  # type: ignore[call-overload]
+                        f"{'  └─ tombstone':<30} | {tomb_stats['total_objects']:<10} | "
+                        f"{tomb_stats['row_cnt']:<15,} | {tomb_stats['null_cnt']:<12,} | "
+                        f"{tomb_stats['original_size']:<15} | {tomb_stats['compress_size']:<15}"  # type: ignore
                     )
 
                 # Show index stats - use get_table_indexes_detail to get all physical tables
@@ -1642,7 +1648,9 @@ class MatrixOneCLI(cmd.Cmd):
                                             label = f"  └─ index: {idx_name}"
 
                                         print(
-                                            f"{label:<30} | {len(unique_objs):<10} | {total_rows:<15,} | {total_null:<12,} | {format_size(total_origin):<15} | {format_size(total_compress):<15}"
+                                            f"{label:<30} | {len(unique_objs):<10} | {total_rows:<15,} | "
+                                            f"{total_null:<12,} | {format_size(total_origin):<15} | "
+                                            f"{format_size(total_compress):<15}"
                                         )
 
                                         # Show tombstone if requested
@@ -1669,7 +1677,10 @@ class MatrixOneCLI(cmd.Cmd):
 
                                                         tomb_label = "      └─ tombstone"
                                                         print(
-                                                            f"{tomb_label:<30} | {len(unique_tomb_objs):<10} | {total_rows:<15,} | {total_null:<12,} | {format_size(total_origin):<15} | {format_size(total_compress):<15}"
+                                                            f"{tomb_label:<30} | {len(unique_tomb_objs):<10} | "
+                                                            f"{total_rows:<15,} | {total_null:<12,} | "
+                                                            f"{format_size(total_origin):<15} | "
+                                                            f"{format_size(total_compress):<15}"
                                                         )
                                             except Exception:
                                                 pass
