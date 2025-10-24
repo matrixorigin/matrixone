@@ -157,7 +157,6 @@ func loadCheckpointMeta(
 		// Create reader for this specific file
 		reader := NewCKPMetaReader(sid, "", []string{metaFile.GetCKPFullName()}, 0, fs)
 		getter := MetadataEntryGetter{reader: reader}
-		defer getter.Close()
 
 		// Read entries from this file
 		fileEntries := make([]*CheckpointEntry, 0)
@@ -167,10 +166,12 @@ func loadCheckpointMeta(
 				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 					break
 				}
+				getter.Close() // Close getter before returning error
 				return nil, err
 			}
 			fileEntries = append(fileEntries, batchEntries...)
 		}
+		getter.Close() // Close getter after successful reading
 
 		// Filter entries that match the file's start and end timestamps
 		// This replicates the logic from appendCheckpointToBatch
@@ -204,8 +205,10 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 
 	// Find the maximum global end timestamp
 	var maxGlobalEnd types.TS
+	hasGlobalCheckpoint := false
 	for _, entry := range entries {
 		if entry.entryType == ET_Global {
+			hasGlobalCheckpoint = true
 			if entry.end.GT(&maxGlobalEnd) {
 				maxGlobalEnd = entry.end
 			}
@@ -217,14 +220,22 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 		return entries[i].end.LT(&entries[j].end)
 	})
 
+	// If no global checkpoint found, return all entries
+	if !hasGlobalCheckpoint {
+		return entries
+	}
+
 	// Find the appropriate truncation point
+	// Look for entries that are at or after the max global checkpoint
 	for i := range entries {
-		p := maxGlobalEnd.Prev()
-		if entries[i].end.Equal(&p) || (entries[i].end.Equal(&maxGlobalEnd) &&
-			entries[i].entryType == ET_Global) {
+		// If this entry's end is equal to maxGlobalEnd and it's a global checkpoint,
+		// or if this entry's end is the next timestamp after maxGlobalEnd
+		if (entries[i].end.Equal(&maxGlobalEnd) && entries[i].entryType == ET_Global) ||
+			entries[i].end.GT(&maxGlobalEnd) {
 			return entries[i:]
 		}
 	}
 
+	// If no suitable truncation point found, return all entries
 	return entries
 }
