@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,11 +69,11 @@ const (
 )
 
 const (
-	batchCnt = objectio.BlockMaxRows
+	batchCnt = objectio.BlockMaxRows * 2
 )
 
 const (
-	defaultSQLPoolSize = 64
+	defaultSQLPoolSize = 8
 )
 
 type asyncSQLExecutor struct {
@@ -86,6 +87,10 @@ type asyncSQLExecutor struct {
 }
 
 func newAsyncSQLExecutor(size int, parents ...context.Context) (*asyncSQLExecutor, error) {
+	if size <= 0 {
+		size = defaultSQLPoolSize
+	}
+
 	parent := context.Background()
 	if len(parents) > 0 && parents[0] != nil {
 		parent = parents[0]
@@ -514,7 +519,7 @@ func mergeDiff(
 		buf bytes.Buffer
 	)
 
-	sqlRunner, runnerErr := newAsyncSQLExecutor(defaultSQLPoolSize)
+	sqlRunner, runnerErr := newAsyncSQLExecutor(runtime.NumCPU())
 	if runnerErr != nil {
 		return runnerErr
 	}
@@ -609,7 +614,7 @@ func mergeDiff(
 		}
 		buf.WriteString(")")
 
-		if cnt >= batchCnt*10 {
+		if cnt >= batchCnt*5 {
 			fmt.Println("flushCurrent", len(rows1), len(rows2))
 			if err := flushCurrent(); err != nil {
 				return err
@@ -806,7 +811,7 @@ func diff(
 	)
 
 	collector := &rowsCollector{}
-	delsRunner, runnerErr := newAsyncSQLExecutor(defaultSQLPoolSize, ctx)
+	delsRunner, runnerErr := newAsyncSQLExecutor(runtime.NumCPU(), ctx)
 	if runnerErr != nil {
 		return runnerErr
 	}
