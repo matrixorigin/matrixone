@@ -232,7 +232,7 @@ import (
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
-    diffAsOpt   *tree.DiffAsOpt
+    diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -354,7 +354,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -566,7 +566,7 @@ import (
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
-%type <diffAsOpt> diff_as_opt
+%type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -7982,12 +7982,12 @@ branch_stmt:
 	t.DatabaseName = tree.Identifier($5)
 	$$ = t
     }
-|   DATA BRANCH DIFF table_name AGAINST table_name diff_as_opt
+|   DATA BRANCH DIFF table_name AGAINST table_name diff_output_opt
     {
     	t := tree.NewDataBranchDiff()
     	t.TargetTable = *$4
     	t.BaseTable = *$6
-    	t.DiffAsOpts = $7
+    	t.OutputOpt = $7
     	$$ = t
     }
 |   DATA BRANCH MERGE table_name INTO table_name conflict_opt
@@ -8000,14 +8000,27 @@ branch_stmt:
     }
 
 
-diff_as_opt:
+diff_output_opt:
     {
        $$ = nil
     }
-    | AS table_name
+    | OUTPUT AS table_name
     {
-        $$ = &tree.DiffAsOpt {
-            As: *$2,
+        $$ = &tree.DiffOutputOpt {
+            As: *$3,
+        }
+    }
+    | OUTPUT LIMIT INTEGRAL
+    {
+    	x := $3.(int64)
+    	$$ = &tree.DiffOutputOpt {
+           Limit: &x,
+        }
+    }
+    | OUTPUT COUNT
+    {
+    	$$ = &tree.DiffOutputOpt {
+           Count: true,
         }
     }
 
