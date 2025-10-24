@@ -2704,6 +2704,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		return
 	}
 
+	if stmt.RewriteOption != nil {
+		ctx.remapOption = stmt.RewriteOption
+	}
+
 	var projectionBinder *ProjectionBinder
 	var havingBinder *HavingBinder
 	var boundHavingList []*plan.Expr
@@ -4398,6 +4402,38 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				break
 			}
 			schema = ctx.defaultDatabase
+		}
+
+		if ctx.remapOption != nil {
+			// The map key must contain a database to prevent the following situation
+			// /*+ { “rewrites” : {
+			// “t1”: “select a, b, c from db2.t1”,
+			// }} */
+			// Select * from t1; // current database is db1
+			// /*+ { “rewrites” : {
+			// “t1”: “select a, b, c from db2.t1”,
+			// }} */
+			// Select * from db1.t1; // db2.t1?
+			if len(schema) == 0 {
+				schema = builder.compCtx.DefaultDatabase()
+			}
+			key := schema + "." + table
+			if rewrite, ok := ctx.remapOption.Rewrites[key]; ok {
+				// prevent recursion from occurring
+				m := ctx.remapOption
+				ctx.remapOption = nil
+				nodeID, err = builder.buildTable(rewrite.Stmt, ctx, preNodeId, leftCtx)
+				if err != nil {
+					return
+				}
+				// Do not bind here to avoid double-binding. Instead, set the
+				// subquery context name so the outer AliasedTableExpr binds once.
+				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
+					builder.ctxByNode[nodeID].cteName = key
+				}
+				ctx.remapOption = m
+				return
+			}
 		}
 
 		if tbl.AtTsExpr != nil {

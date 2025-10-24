@@ -2222,6 +2222,15 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if err != nil {
 			return nil, err
 		}
+		v, err := ses.GetSessionSysVar("enable_remap_hint")
+		if err == nil {
+			if on, convErr := valueIsBoolTrue(v); convErr == nil && on {
+				err = parsers.AddRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql())
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
 
 	for _, stmt := range stmts {

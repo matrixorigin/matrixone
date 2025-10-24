@@ -330,6 +330,8 @@ type BindContext struct {
 	lower int64
 
 	groupingFlag []bool
+
+	remapOption *tree.RewriteOption
 }
 
 type SelectField struct {

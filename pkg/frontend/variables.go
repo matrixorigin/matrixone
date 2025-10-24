@@ -3535,6 +3535,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
+	"enable_remap_hint": {
+		Name:              "enable_remap_hint",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_remap_hint"),
+		Default:           int64(0),
+	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,
