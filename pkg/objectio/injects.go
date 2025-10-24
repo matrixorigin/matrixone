@@ -56,6 +56,8 @@ const (
 
 	FJ_CDCScanTable = "fj/cdc/scantable"
 
+	FJ_WALReplayFailed = "fj/wal/replay/failed"
+
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
 	FJ_CDCHandleErr              = "fj/cdc/handleerr"
 	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
@@ -634,4 +636,27 @@ func CDCAddExecErrInjected() bool {
 func CDCAddExecConsumeTruncateInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
 	return injected
+}
+
+func WALReplayFailedExecutorInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_WALReplayFailed)
+	return sarg, injected
+}
+
+func InjectWALReplayFailed(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_WALReplayFailed,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_WALReplayFailed)
+	}
+	return
 }
