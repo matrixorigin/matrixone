@@ -391,3 +391,79 @@ func TestHexadecimalLiteral(t *testing.T) {
 		}
 	}
 }
+
+func TestScannerPoolCleanupAndThreshold(t *testing.T) {
+	// Case 1: normal small SQL should be pooled and fields cleared
+	s := NewScanner(dialect.MYSQL, "select 1")
+	// grow strBuilder a little to ensure it is cleared on Put
+	s.strBuilder.WriteString("abc")
+	PutScanner(s)
+
+	// Fetch again to see if we receive a cleared scanner from pool
+	s2 := NewScanner(dialect.MYSQL, "select 2")
+	if s2.LastToken != "" || s2.LastError != nil || s2.MysqlSpecialComment != nil || s2.Pos != 0 || s2.Line != 0 || s2.Col != 0 || s2.PrePos != 0 {
+		t.Fatalf("pooled scanner should be reset: %+v", s2)
+	}
+	if s2.strBuilder.Len() != 0 {
+		t.Fatalf("strBuilder should be cleared")
+	}
+	PutScanner(s2)
+
+	// Case 2: big SQL (>1MiB) should NOT be pooled
+	big := make([]byte, (1<<20)+10)
+	for i := range big {
+		big[i] = 'a'
+	}
+	sbig := NewScanner(dialect.MYSQL, string(big))
+	// also grow internal builder to simulate expansion
+	sbig.strBuilder.Grow(1 << 20)
+	PutScanner(sbig)
+
+	// Next Get should not necessarily return the same oversized instance; at least, it must be a clean one
+	s3 := NewScanner(dialect.MYSQL, "select 3")
+	if s3.buf != "select 3" {
+		t.Fatalf("unexpected scanner buf after Get")
+	}
+	PutScanner(s3)
+}
+
+func TestPutScannerSmallKeepsBuffers(t *testing.T) {
+	// Small SQL should keep buf and builder content when returned to pool
+	sql := "select 1"
+	s := NewScanner(dialect.MYSQL, sql)
+	s.strBuilder.WriteString("xyz")
+	PutScanner(s)
+
+	if s.buf == "" {
+		t.Fatalf("small scanner buf should not be cleared on PutScanner")
+	}
+	if s.strBuilder.Len() == 0 {
+		t.Fatalf("small scanner strBuilder should retain content on PutScanner")
+	}
+
+	// When taking from pool next time, setSql will Reset the builder length
+	s2 := NewScanner(dialect.MYSQL, "select 2")
+	if s2.strBuilder.Len() != 0 {
+		t.Fatalf("builder length must be reset on setSql")
+	}
+	PutScanner(s2)
+}
+
+func TestPutScannerOversizedClearsBuffers(t *testing.T) {
+	// Big SQL should be cleared and dropped
+	big := make([]byte, (1<<20)+123)
+	for i := range big {
+		big[i] = 'b'
+	}
+	s := NewScanner(dialect.MYSQL, string(big))
+	s.strBuilder.Grow(1 << 20)
+	s.strBuilder.WriteString("payload")
+	PutScanner(s)
+
+	if s.buf != "" {
+		t.Fatalf("oversized scanner buf should be cleared on PutScanner")
+	}
+	if s.strBuilder.Len() != 0 {
+		t.Fatalf("oversized scanner strBuilder should be zeroed on PutScanner")
+	}
+}
