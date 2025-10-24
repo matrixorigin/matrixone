@@ -106,10 +106,9 @@ func New(
 			},
 		),
 	}
-	e.mu.snapParts = make(map[[2]uint64]*struct {
-		sync.Mutex
-		snaps []*logtailreplay.Partition
-	})
+	// Initialize snapshot manager
+	e.snapshotMgr = NewSnapshotManager()
+	e.snapshotMgr.Init()
 
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
@@ -848,4 +847,47 @@ func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 
 func (e *Engine) HasTempEngine() bool {
 	return false
+}
+
+// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
+func (e *Engine) RunGCScheduler(ctx context.Context) {
+	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
+	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
+	snapshotTicker := time.NewTicker(gcSnapshotTicker)
+
+	defer unusedTableTicker.Stop()
+	defer partitionStateTicker.Stop()
+	defer snapshotTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Infof("GC scheduler exit.")
+			return
+
+		case <-unusedTableTicker.C:
+			// GC unused tables in PushClient
+			e.pClient.TryGC(ctx)
+
+		case <-partitionStateTicker.C:
+			// GC partition states
+			e.gcPartitionState(ctx)
+
+		case <-snapshotTicker.C:
+			// GC snapshot partitions
+			e.snapshotMgr.MaybeStartGC()
+		}
+	}
+}
+
+// gcPartitionState runs GC for partition states
+func (e *Engine) gcPartitionState(ctx context.Context) {
+	if e.pClient.subscriber == nil {
+		return
+	}
+	if !e.pClient.receivedLogTailTime.ready.Load() {
+		return
+	}
+	logutil.Debugf("Running partition state GC")
+	e.pClient.doGCPartitionState(ctx, e)
 }
