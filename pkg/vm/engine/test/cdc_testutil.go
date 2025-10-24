@@ -17,15 +17,19 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
@@ -435,4 +439,115 @@ func CheckTableData(
 		return true
 	})
 	assert.Equal(t, rowCount, 0)
+}
+
+type MockEngineSink struct {
+	engine    *testutil.TestDisttaeEngine
+	accountId uint32
+
+	// SQL executor
+	sqlExecutor executor.SQLExecutor
+	currentTxn  client.TxnOperator
+
+	ExecutedSQLs  []string
+	SendCount     int
+	BeginCount    int
+	CommitCount   int
+	RollbackCount int
+}
+
+func NewMockEngineSink(
+	engine *testutil.TestDisttaeEngine,
+	accountId uint32,
+) *MockEngineSink {
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing SQL executor")
+	}
+
+	return &MockEngineSink{
+		engine:       engine,
+		accountId:    accountId,
+		sqlExecutor:  v.(executor.SQLExecutor),
+		ExecutedSQLs: make([]string, 0),
+	}
+}
+
+func (s *MockEngineSink) Send(ctx context.Context, ar *cdc.ActiveRoutine, sqlBuf []byte, needRetry bool) error {
+
+	sql := string(sqlBuf)
+	sql = strings.TrimSpace(sql)
+
+	if sql == "" || sql == "fakeSql" {
+		return nil
+	}
+
+	s.ExecutedSQLs = append(s.ExecutedSQLs, sql)
+	s.SendCount++
+
+	ctx = defines.AttachAccountId(ctx, s.accountId)
+
+	opts := executor.Options{}.WithDisableIncrStatement()
+	if s.currentTxn != nil {
+		opts = opts.WithTxn(s.currentTxn)
+	}
+
+	_, err := s.sqlExecutor.Exec(ctx, sql, opts)
+	return err
+}
+
+func (s *MockEngineSink) SendBegin(ctx context.Context) error {
+
+	ctx = defines.AttachAccountId(ctx, s.accountId)
+	txn, err := s.engine.NewTxnOperator(ctx, s.engine.Now())
+	if err != nil {
+		return err
+	}
+
+	s.currentTxn = txn
+	s.BeginCount++
+
+	return nil
+}
+
+func (s *MockEngineSink) SendCommit(ctx context.Context) error {
+	ctx = defines.AttachAccountId(ctx, s.accountId)
+	err := s.currentTxn.Commit(ctx)
+	s.currentTxn = nil
+	s.CommitCount++
+	return err
+}
+
+func (s *MockEngineSink) SendRollback(ctx context.Context) error {
+	ctx = defines.AttachAccountId(ctx, s.accountId)
+	err := s.currentTxn.Rollback(ctx)
+	s.currentTxn = nil
+	s.RollbackCount++
+	return err
+}
+
+func (s *MockEngineSink) Reset() {
+	s.currentTxn = nil
+}
+
+func (s *MockEngineSink) Close() {
+
+	if s.currentTxn != nil {
+		ctx := context.Background()
+		ctx = defines.AttachAccountId(ctx, s.accountId)
+		_ = s.currentTxn.Rollback(ctx)
+		s.currentTxn = nil
+	}
+}
+
+func (s *MockEngineSink) GetStats() (sends, begins, commits, rollbacks int, sqls []string) {
+	return s.SendCount, s.BeginCount, s.CommitCount, s.RollbackCount, s.ExecutedSQLs
+}
+
+func (s *MockEngineSink) ClearStats() {
+	s.ExecutedSQLs = make([]string, 0)
+	s.SendCount = 0
+	s.BeginCount = 0
+	s.CommitCount = 0
+	s.RollbackCount = 0
 }
