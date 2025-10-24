@@ -237,8 +237,12 @@ func BenchmarkS3FS(b *testing.B) {
 			ObjectStorageArguments{
 				Name:      "bench",
 				Endpoint:  "disk",
+				IsMinio:   false,
+				Region:    "",
 				Bucket:    b.TempDir(),
 				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				KeyID:     "",
+				KeySecret: "",
 			},
 			CacheConfig{
 				DiskPath: ptrTo(cacheDir),

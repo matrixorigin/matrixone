@@ -17,6 +17,8 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +27,6 @@ import (
 func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileService) {
 
 	b.Run("parallel raed", func(b *testing.B) {
-		ctx := context.Background()
 		fs := newFS()
 		defer fs.Close(ctx)
 
@@ -76,4 +77,52 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 
 	})
 
+	b.Run("write", func(b *testing.B) {
+		b.Run("1K", func(b *testing.B) {
+			benchmarkWrite(ctx, b, KB, newFS)
+		})
+		b.Run("4K", func(b *testing.B) {
+			benchmarkWrite(ctx, b, 4*KB, newFS)
+		})
+		b.Run("128K", func(b *testing.B) {
+			benchmarkWrite(ctx, b, 128*KB, newFS)
+		})
+	})
+
+}
+
+func benchmarkWrite(ctx context.Context, b *testing.B, fileSize int64, newFS func() FileService) {
+	data := make([]byte, fileSize)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	b.ResetTimer()
+	b.SetBytes(fileSize)
+
+	fs := newFS()
+	defer fs.Close(ctx)
+
+	var n atomic.Int64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			filePath := fmt.Sprintf("benchmark_write_%d_%d_%d", fileSize, b.N, n.Add(1))
+
+			vector := IOVector{
+				FilePath: filePath,
+				Entries: []IOEntry{
+					{
+						Size: fileSize,
+						Data: data,
+					},
+				},
+			}
+
+			err := fs.Write(ctx, vector)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+		}
+	})
 }
