@@ -154,6 +154,10 @@ func loadCheckpointMeta(
 
 	// Process each meta file individually to apply the filtering logic
 	for _, metaFile := range metaFiles {
+		if metaFile == nil {
+			continue // Skip nil meta files
+		}
+
 		// Create reader for this specific file
 		reader := NewCKPMetaReader(sid, "", []string{metaFile.GetCKPFullName()}, 0, fs)
 		getter := MetadataEntryGetter{reader: reader}
@@ -166,12 +170,12 @@ func loadCheckpointMeta(
 				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 					break
 				}
-				getter.Close() // Close getter before returning error
+				getter.Close() // Close immediately on error
 				return nil, err
 			}
 			fileEntries = append(fileEntries, batchEntries...)
 		}
-		getter.Close() // Close getter after successful reading
+		getter.Close() // Close after successful reading
 
 		// Filter entries that match the file's start and end timestamps
 		// This replicates the logic from appendCheckpointToBatch
@@ -190,7 +194,8 @@ func loadCheckpointMeta(
 func filterEntriesByTimestamp(entries []*CheckpointEntry, fileStart, fileEnd *types.TS) []*CheckpointEntry {
 	filteredEntries := make([]*CheckpointEntry, 0)
 	for _, entry := range entries {
-		if entry.start.EQ(fileStart) && entry.end.EQ(fileEnd) {
+		if entry != nil && fileStart != nil && fileEnd != nil &&
+			entry.start.EQ(fileStart) && entry.end.EQ(fileEnd) {
 			filteredEntries = append(filteredEntries, entry)
 		}
 	}
@@ -205,10 +210,8 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 
 	// Find the maximum global end timestamp
 	var maxGlobalEnd types.TS
-	hasGlobalCheckpoint := false
 	for _, entry := range entries {
-		if entry.entryType == ET_Global {
-			hasGlobalCheckpoint = true
+		if entry != nil && entry.entryType == ET_Global {
 			if entry.end.GT(&maxGlobalEnd) {
 				maxGlobalEnd = entry.end
 			}
@@ -217,25 +220,23 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 
 	// Sort by end timestamp
 	sort.Slice(entries, func(i, j int) bool {
+		if entries[i] == nil || entries[j] == nil {
+			return false
+		}
 		return entries[i].end.LT(&entries[j].end)
 	})
 
-	// If no global checkpoint found, return all entries
-	if !hasGlobalCheckpoint {
-		return entries
-	}
-
 	// Find the appropriate truncation point
-	// Look for entries that are at or after the max global checkpoint
 	for i := range entries {
-		// If this entry's end is equal to maxGlobalEnd and it's a global checkpoint,
-		// or if this entry's end is the next timestamp after maxGlobalEnd
-		if (entries[i].end.Equal(&maxGlobalEnd) && entries[i].entryType == ET_Global) ||
-			entries[i].end.GT(&maxGlobalEnd) {
+		if entries[i] == nil {
+			continue
+		}
+		p := maxGlobalEnd.Prev()
+		if entries[i].end.Equal(&p) || (entries[i].end.Equal(&maxGlobalEnd) &&
+			entries[i].entryType == ET_Global) {
 			return entries[i:]
 		}
 	}
 
-	// If no suitable truncation point found, return all entries
 	return entries
 }
