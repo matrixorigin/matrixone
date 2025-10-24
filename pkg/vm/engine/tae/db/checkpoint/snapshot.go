@@ -176,15 +176,24 @@ func loadCheckpointMeta(
 		// This replicates the logic from appendCheckpointToBatch
 		fileStart := metaFile.GetStart()
 		fileEnd := metaFile.GetEnd()
-		for _, entry := range fileEntries {
-			if entry.start.EQ(fileStart) && entry.end.EQ(fileEnd) {
-				allEntries = append(allEntries, entry)
-			}
-		}
+		filteredEntries := filterEntriesByTimestamp(fileEntries, fileStart, fileEnd)
+		allEntries = append(allEntries, filteredEntries...)
 	}
 
 	// Apply the same logic as ListSnapshotCheckpointWithMeta
 	return filterSnapshotEntries(allEntries), nil
+}
+
+// filterEntriesByTimestamp filters checkpoint entries that match the given start and end timestamps
+// This function replicates the filtering logic from the original appendCheckpointToBatch function
+func filterEntriesByTimestamp(entries []*CheckpointEntry, fileStart, fileEnd *types.TS) []*CheckpointEntry {
+	filteredEntries := make([]*CheckpointEntry, 0)
+	for _, entry := range entries {
+		if entry.start.EQ(fileStart) && entry.end.EQ(fileEnd) {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+	return filteredEntries
 }
 
 // filterSnapshotEntries implements the same logic as ListSnapshotCheckpointWithMeta
