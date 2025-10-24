@@ -291,9 +291,9 @@ func (exec *aggregatorFromFixedToFixed[from, to]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *aggregatorFromFixedToFixed[from, to]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+func (exec *aggregatorFromFixedToFixed[from, to]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
-		bucketIdx, bucket, buf,
+		cnt, flags, buf,
 		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
 }
 

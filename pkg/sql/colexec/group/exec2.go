@@ -16,13 +16,16 @@ package group
 
 import (
 	"bytes"
+	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -34,15 +37,15 @@ var makeAggExec = aggexec.MakeAgg
 const (
 	// we use this size as preferred output batch size, which is typical
 	// in MO.
-	aggBatchSize  = 8192
-	aggBatchShift = 12
-	aggBatchMask  = aggBatchSize - 1
+	aggBatchSize = 8192
 
 	// we use this size as pre-allocated size for hash table.
 	aggHtPreAllocSize = 1024
 
 	// spill parameters.
 	spillNumBuckets = 32
+	spillMaskBits   = 5
+	spillMaxPass    = 3
 )
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
@@ -234,7 +237,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.spillDataToDisk(proc)
+					group.spillDataToDisk(proc, &group.ctr.spillBkt)
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
@@ -245,7 +248,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if err := group.spillDataToDisk(proc); err != nil {
+			if err := group.spillDataToDisk(proc, &group.ctr.spillBkt); err != nil {
 				return vm.CancelResult, err
 			}
 			if _, err := group.loadSpilledData(proc); err != nil {
@@ -370,13 +373,13 @@ func (ctr *container) buildHashTable(proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) createNewGroupByBatch(proc *process.Process, vs []*vector.Vector) *batch.Batch {
+func (ctr *container) createNewGroupByBatch(proc *process.Process, vs []*vector.Vector, size int) *batch.Batch {
 	// what is so special about off heap?
 	b := batch.NewOffHeapWithSize(len(vs))
 	for i, vec := range vs {
 		b.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 	}
-	b.PreExtend(proc.Mp(), aggBatchSize)
+	b.PreExtend(proc.Mp(), size)
 	b.SetRowCount(0)
 	return b
 }
@@ -390,7 +393,7 @@ func (ctr *container) appendGroupByBatch(
 	// first find the target batch.
 	if len(ctr.groupByBatches) == 0 ||
 		ctr.groupByBatches[len(ctr.groupByBatches)-1].RowCount() >= aggBatchSize {
-		ctr.groupByBatches = append(ctr.groupByBatches, ctr.createNewGroupByBatch(proc, vs))
+		ctr.groupByBatches = append(ctr.groupByBatches, ctr.createNewGroupByBatch(proc, vs, aggBatchSize))
 	}
 	currBatch := ctr.groupByBatches[len(ctr.groupByBatches)-1]
 	spaceLeft := aggBatchSize - currBatch.RowCount()
@@ -426,15 +429,94 @@ func (ctr *container) appendGroupByBatch(
 	return toIncrease, nil
 }
 
-func (group *Group) spillDataToDisk(proc *process.Process) error {
-	return moerr.NewInternalError(proc.Ctx, "not implemented")
+func (group *Group) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) error {
+	// we only allow to spill up to spillMaxPass passes.
+	// each pass we take spillMaskBits bits from the hashCode, and use them as the index
+	// to select the spill bucket.  Default params, 32^3 = 32768 spill buckets -- if this
+	// is still not enough, probably we cannot do much anyway, just fail the query.
+	if parentBkt.lv >= spillMaxPass {
+		return moerr.NewInternalError(proc.Ctx, "spill level too deep")
+	}
+
+	lv := parentBkt.lv + 1
+
+	// initialing spill structure.
+	if len(parentBkt.again) == 0 {
+		parentBkt.again = make([]spillBucket, spillNumBuckets)
+		fnuuid, _ := uuid.NewV7()
+
+		// log the spill file name.
+		logutil.Infof("spilling data to disk, level %d, file %s", parentBkt.lv, fnuuid.String())
+
+		spillfs, err := proc.GetSpillFileService()
+		if err != nil {
+			return err
+		}
+
+		for i := range parentBkt.again {
+			parentBkt.again[i].lv = lv
+			group.ctr.createNewGroupByBatch(proc, group.ctr.groupByBatches[0].Vecs, aggBatchSize)
+			fn := fnuuid.String() + fmt.Sprintf("_%d.spill", i)
+			if parentBkt.again[i].file, err = spillfs.CreateAndRemoveFile(proc.Ctx, fn); err != nil {
+				return err
+			}
+		}
+	}
+
+	// compute spill bucket.
+	hashCodes := group.ctr.hr.Hash.AllGroupHash()
+	for i, hashCode := range hashCodes {
+		hashCodes[i] = (hashCode >> (64 - spillMaskBits*lv)) & (spillMaskBits - 1)
+	}
+
+	if parentBkt.gbBatch == nil {
+		parentBkt.gbBatch = group.ctr.createNewGroupByBatch(
+			proc, group.ctr.groupByBatches[0].Vecs, aggBatchSize)
+	}
+
+	// each bucket,
+	buf := bytes.NewBuffer(make([]byte, 0, 1024))
+	for i := 0; i < spillNumBuckets; i++ {
+		buf.Reset()
+		cnt, flags := computeChunkFlags(hashCodes, uint64(i), aggBatchSize)
+		buf.Write(types.EncodeInt64(&cnt))
+		if cnt == 0 {
+			continue
+		}
+
+		// extend the group by batch to the new size, set row count to 0, then we union
+		// group by batches to the parent batch.
+		parentBkt.gbBatch.PreExtend(proc.Mp(), int(cnt))
+		parentBkt.gbBatch.SetRowCount(0)
+		for nthBatch, gb := range group.ctr.groupByBatches {
+			for j := range gb.Vecs {
+				err := parentBkt.gbBatch.Vecs[j].UnionBatch(
+					gb.Vecs[j], 0, len(flags[nthBatch]), flags[nthBatch], proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
+		}
+		// write batch to buf
+		parentBkt.gbBatch.MarshalBinaryWithBuffer(buf)
+
+		// save aggs to buf
+		for _, ag := range group.ctr.aggList {
+			ag.SaveIntermediateResult(cnt, flags, buf)
+		}
+
+		parentBkt.again[i].file.Write(buf.Bytes())
+	}
+
+	return nil
 }
+
 func (group *Group) loadSpilledData(proc *process.Process) (bool, error) {
 	return false, moerr.NewInternalError(proc.Ctx, "not implemented")
 }
 
 func (ctr *container) isSpilling() bool {
-	return ctr.spillBkts != nil
+	return len(ctr.spillBkt.again) != 0
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
@@ -534,4 +616,34 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	res := vm.NewCallResult()
 	res.Batch = batch
 	return res, hasMore, nil
+}
+
+// given buckets, and a specific bucket, compute the flags for vector union.
+func computeChunkFlags(bucketIdx []uint64, bucket uint64, chunkSize int) (int64, [][]uint8) {
+	// compute the number of chunks,
+	nChunks := (len(bucketIdx) + chunkSize - 1) / chunkSize
+
+	// return values
+	cnt := int64(0)
+	flags := make([][]uint8, nChunks)
+	for i := range flags {
+		flags[i] = make([]uint8, chunkSize)
+	}
+
+	nextX := 0
+	nextY := 0
+
+	for _, idx := range bucketIdx {
+		nextY += 1
+		if nextY == chunkSize {
+			nextX += 1
+			nextY = 0
+		}
+
+		if idx == bucket {
+			flags[nextX][nextY] = 1
+			cnt += 1
+		}
+	}
+	return cnt, flags
 }

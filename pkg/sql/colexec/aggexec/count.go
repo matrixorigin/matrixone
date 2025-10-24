@@ -57,9 +57,9 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countColumnExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+func (exec *countColumnExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
-		bucketIdx, bucket, buf,
+		cnt, flags, buf,
 		&exec.ret.optSplitResult, nil)
 }
 
@@ -300,9 +300,9 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countStarExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+func (exec *countStarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
-		bucketIdx, bucket, buf,
+		cnt, flags, buf,
 		&exec.ret.optSplitResult, nil)
 }
 func (exec *countStarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {

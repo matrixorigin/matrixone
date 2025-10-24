@@ -66,9 +66,9 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountFixedExec[T]) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+func (exec *approxCountFixedExec[T]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
-		bucketIdx, bucket, buf,
+		cnt, flags, buf,
 		&exec.ret.optSplitResult, exec.groups)
 }
 
@@ -137,9 +137,9 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountVarExec) SaveIntermediateResult(bucketIdx []int64, bucket int64, buf *bytes.Buffer) error {
+func (exec *approxCountVarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
-		bucketIdx, bucket, buf,
+		cnt, flags, buf,
 		&exec.ret.optSplitResult, exec.groups)
 }
 

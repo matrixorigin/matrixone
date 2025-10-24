@@ -112,7 +112,7 @@ type AggFuncExec interface {
 	Flush() ([]*vector.Vector, error)
 
 	// Serialize intermediate result to bytes.
-	SaveIntermediateResult(buketIdx []int64, bucket int64, buf *bytes.Buffer) error
+	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
 	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
 
 	Size() int64
@@ -309,36 +309,6 @@ func makeWindowExec(
 	return makeRankDenseRankRowNumber(mg, info), nil
 }
 
-// given buckets, and a specific bucket, compute the flags for vector union.
-func computeChunkFlags(bucketIdx []int64, bucket int64, chunkSize int) (int64, [][]uint8) {
-	// compute the number of chunks,
-	nChunks := (len(bucketIdx) + chunkSize - 1) / chunkSize
-
-	// return values
-	cnt := int64(0)
-	flags := make([][]uint8, nChunks)
-	for i := range flags {
-		flags[i] = make([]uint8, chunkSize)
-	}
-
-	nextX := 0
-	nextY := 0
-
-	for _, idx := range bucketIdx {
-		nextY += 1
-		if nextY == chunkSize {
-			nextX += 1
-			nextY = 0
-		}
-
-		if idx == bucket {
-			flags[nextX][nextY] = 1
-			cnt += 1
-		}
-	}
-	return cnt, flags
-}
-
 type dummyBinaryMarshaler struct {
 	encoding.BinaryMarshaler
 }
@@ -348,9 +318,8 @@ func (d dummyBinaryMarshaler) MarshalBinary() ([]byte, error) {
 }
 
 func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
-	bucketIdx []int64, bucket int64, buf *bytes.Buffer,
+	cnt int64, flags [][]uint8, buf *bytes.Buffer,
 	ret *optSplitResult, groups []T) error {
-	cnt, flags := computeChunkFlags(bucketIdx, bucket, ret.optInformation.chunkSize)
 	buf.Write(types.EncodeInt64(&cnt))
 	if cnt == 0 {
 		return nil
@@ -359,18 +328,19 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 		return err
 	}
 	if len(groups) > 0 {
-		if len(groups) != len(bucketIdx) {
-			return moerr.NewInternalErrorNoCtx("approx_count: the number of groups does not match the number of buckets")
-		}
-		for i := range groups {
-			if bucketIdx[i] == bucket {
-				bs, err := groups[i].MarshalBinary()
-				if err != nil {
-					return err
+		groupIdx := 0
+		for i := range flags {
+			for j := range flags[i] {
+				if flags[i][j] == 1 {
+					bs, err := groups[groupIdx].MarshalBinary()
+					if err != nil {
+						return err
+					}
+					if err = types.WriteSizeBytes(bs, buf); err != nil {
+						return err
+					}
 				}
-				if err = types.WriteSizeBytes(bs, buf); err != nil {
-					return err
-				}
+				groupIdx += 1
 			}
 		}
 	}
