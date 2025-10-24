@@ -109,7 +109,7 @@ func NewMergeScheduler(
 	sched.rc = rscthrottler.NewMemThrottler(
 		"Merge",
 		3.0/4.0,
-		rscthrottler.WithLimitIsTheBoss(),
+		rscthrottler.WithSpecializedForMerge(),
 	)
 
 	sched.stopped.Store(true)
@@ -810,7 +810,6 @@ func (a *MergeScheduler) handleMainLoop() {
 		case <-nextReadyAt:
 			// continue the loop
 		case <-heartbeat.Chan():
-			a.rc.PrintUsage()
 			a.rc.Refresh()
 		// continue the loop
 		case <-vacuumCheckTicker.Chan():
