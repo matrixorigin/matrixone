@@ -118,7 +118,7 @@ func ExecuteIteration(
 					iterCtx.jobIDs,
 					iterCtx.lsn,
 					statuses,
-					iterCtx.fromTS,
+					types.MaxTs(),
 					errMsg,
 					preLSN,
 				)
@@ -587,7 +587,7 @@ var GetJobSpecs = func(
 				jobIDs,
 				lsns,
 				jobStatuses,
-				watermark,
+				types.MaxTs(),
 				errMsg,
 				prevLSNs,
 			)
