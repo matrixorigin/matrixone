@@ -10,7 +10,7 @@ create table t1(a bigint primary key, b vecf32(3),c int,key c_k(c));
 -- empty data
 create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 20 EF_CONSTRUCTION 100 EF_SEARCH 100 ASYNC;
 
--- select sleep(30);
+-- select sleep(10);
 
 insert into t1 values (0, "[1,2,3]", 1);
 -- select hnsw_cdc_update('hnsw_cdc', 't1', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[1,2,3]}]}');
@@ -24,7 +24,7 @@ insert into t1 values (1, "[2,3,4]", 1);
 DELETE FROM t1 WHERE a=1;
 -- select hnsw_cdc_update('hnsw_cdc', 't1', 3, '{"start":"", "end":"", "cdc":[{"t":"D", "pk":0}]}');
 
-select sleep(30);
+select sleep(10);
 
 -- test with multi-cn is tricky.  since model is cached in memory, model may not be updated after CDC sync'd.  The only way to test is to all INSERT/DELETE/UPDATE before SELECT.
 -- already update to [4,5,6], result is [4,5,6]
@@ -41,13 +41,13 @@ drop table t1;
 -- t2
 create table t2(a bigint primary key, b vecf32(128));
 create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 20 EF_CONSTRUCTION 100 EF_SEARCH 100 ASYNC;
--- select sleep(30);
+-- select sleep(10);
 
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2 fields terminated by ':' parallel 'true';
 
 select count(*) from t2;
 
-select sleep(30);
+select sleep(10);
 
 select * from t2 order by L2_DISTANCE(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") ASC LIMIT 1;
 
@@ -77,7 +77,7 @@ load data infile {'filepath'='$resources/vector/sift128_base_10k_2.csv.gz', 'com
 
 select count(*) from t3;
 
-select sleep(20);
+select sleep(10);
 
 select * from t3 order by L2_DISTANCE(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") ASC LIMIT 1;
 
