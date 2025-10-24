@@ -16,12 +16,7 @@ insert into users values
 (2, 'Bob', 30, 'Shanghai'),
 (3, 'Charlie', 35, 'Guangzhou'),
 (4, 'David', 28, 'Shenzhen');
-/*+ {
-"rewrites": {
-"hint_test.users": "SELECT * FROM hint_test.users WHERE age > 28"
-}
-} */
-select * from hint_test.users;
+/*+ { "rewrites": { "hint_test.users": "SELECT * FROM hint_test.users WHERE age > 28" } } */ select * from hint_test.users;
 id    name    age    city
 2    Bob    30    Shanghai
 3    Charlie    35    Guangzhou
@@ -54,13 +49,7 @@ insert into products values
 (2, 'Mouse', 50.00, 'Electronics'),
 (3, 'Desk', 800.00, 'Furniture'),
 (4, 'Chair', 600.00, 'Furniture');
-/*+ {
-"rewrites": {
-"hint_test.orders": "SELECT * FROM orders WHERE status = 'completed'",
-"hint_test.products": "SELECT * FROM products WHERE category = 'Electronics'"
-}
-} */
-select o.order_id, o.amount, p.product_name, p.price
+/*+ { "rewrites": { "hint_test.orders": "SELECT * FROM orders WHERE status = 'completed'", "hint_test.products": "SELECT * FROM products WHERE category = 'Electronics'" } } */ select o.order_id, o.amount, p.product_name, p.price
 from orders o, products p
 where o.user_id = 1;
 order_id    amount    product_name    price
@@ -82,12 +71,7 @@ insert into users values
 (2, 'Bob', 30, 'Shanghai'),
 (3, 'Charlie', 35, 'Guangzhou'),
 (4, 'David', 28, 'Shenzhen');
-/*+ {
-"rewrites": {
-"hint_test.users": "SELECT * FROM users WHERE city = 'Beijing'"
-}
-} */
-select * from users;
+/*+ { "rewrites": { "hint_test.users": "SELECT * FROM users WHERE city = 'Beijing'" } } */ select * from users;
 id    name    age    city
 1    Alice    25    Beijing
 drop table if exists sales;
@@ -106,12 +90,7 @@ insert into sales values
 (4, 2, 25, '2025-01-03'),
 (5, 3, 30, '2025-01-02');
 
-/*+ {
-"rewrites": {
-"hint_test.sales_summary": "SELECT product_id, SUM(quantity) as total_quantity, COUNT(*) as sale_count FROM sales GROUP BY product_id"
-}
-} */
-select * from hint_test.sales_summary where total_quantity > 20;
+/*+ { "rewrites": { "hint_test.sales_summary": "SELECT product_id, SUM(quantity) as total_quantity, COUNT(*) as sale_count FROM sales GROUP BY product_id" } } */ select * from hint_test.sales_summary where total_quantity > 20;
 
 drop table sales_summary;
 
@@ -122,12 +101,7 @@ select id, name, age, city
 from users
 where age between 25 and 35;
 
-/*+ {
-"rewrites": {
-"hint_test.user_list": "SELECT * FROM active_users"
-}
-} */
-select * from user_list where city = 'Shanghai';
+/*+ { "rewrites": { "hint_test.user_list": "SELECT * FROM active_users" } } */ select * from user_list where city = 'Shanghai';
 
 drop table if exists transactions;
 
@@ -147,22 +121,12 @@ insert into transactions values
 (5, 3, 150.00, '2024-01-02', 'purchase'),
 (6, 1, 75.00, '2024-01-03', 'refund');
 
-/*+ {
-"rewrites": {
-"hint_test.daily_summary": "SELECT trans_date, trans_type, COUNT(*) as trans_count, SUM(amount) as total_amount FROM transactions GROUP BY trans_date, trans_type"
-}
-} */
-select trans_date, trans_type, total_amount
+/*+ { "rewrites": { "hint_test.daily_summary": "SELECT trans_date, trans_type, COUNT(*) as trans_count, SUM(amount) as total_amount FROM transactions GROUP BY trans_date, trans_type" } } */ select trans_date, trans_type, total_amount
 from daily_summary
 where trans_type = 'purchase'
 order by trans_date;
 
-/*+ {
-"rewrites": {
-"hint_test.user_monthly_stats": "SELECT user_id, DATE_FORMAT(trans_date, '%Y-%m') as month, trans_type, COUNT(*) as count, SUM(amount) as total, AVG(amount) as avg_amount FROM transactions GROUP BY user_id, DATE_FORMAT(trans_date, '%Y-%m'), trans_type"
-}
-} */
-select user_id, month, trans_type, total
+/*+ { "rewrites": { "hint_test.user_monthly_stats": "SELECT user_id, DATE_FORMAT(trans_date, '%Y-%m') as month, trans_type, COUNT(*) as count, SUM(amount) as total, AVG(amount) as avg_amount FROM transactions GROUP BY user_id, DATE_FORMAT(trans_date, '%Y-%m'), trans_type" } } */ select user_id, month, trans_type, total
 from user_monthly_stats
 where total > 100
 order by user_id, month;
@@ -186,12 +150,7 @@ insert into customer_orders values
 (3, 'Charlie', 302, 800.00),
 (3, 'Charlie', 303, 1200.00);
 
-/*+ {
-"rewrites": {
-"hint_test.high_value_customers": "SELECT customer_id, customer_name, COUNT(*) as order_count, SUM(order_amount) as total_spent, AVG(order_amount) as avg_order FROM customer_orders GROUP BY customer_id, customer_name HAVING SUM(order_amount) >= 1000"
-}
-} */
-select customer_name, order_count, total_spent
+/*+ { "rewrites": { "hint_test.high_value_customers": "SELECT customer_id, customer_name, COUNT(*) as order_count, SUM(order_amount) as total_spent, AVG(order_amount) as avg_order FROM customer_orders GROUP BY customer_id, customer_name HAVING SUM(order_amount) >= 1000" } } */ select customer_name, order_count, total_spent
 from high_value_customers
 order by total_spent desc;
 
@@ -214,12 +173,7 @@ insert into employee_sales values
 (4, 'David', 'Marketing', 12000, '2024-01-01'),
 (5, 'Eve', 'Marketing', 9000, '2024-01-01');
 
-/*+ {
-"rewrites": {
-"hint_test.dept_rankings": "SELECT emp_id, emp_name, department, monthly_sales, RANK() OVER (PARTITION BY department ORDER BY monthly_sales DESC) as dept_rank, SUM(monthly_sales) OVER (PARTITION BY department) as dept_total FROM employee_sales"
-}
-} */
-select emp_name, department, monthly_sales, dept_rank
+/*+ { "rewrites": { "hint_test.dept_rankings": "SELECT emp_id, emp_name, department, monthly_sales, RANK() OVER (PARTITION BY department ORDER BY monthly_sales DESC) as dept_rank, SUM(monthly_sales) OVER (PARTITION BY department) as dept_total FROM employee_sales" } } */ select emp_name, department, monthly_sales, dept_rank
 from dept_rankings
 where dept_rank <= 2
 order by department, dept_rank;
@@ -242,12 +196,7 @@ insert into sales values
 (4, 2, 25, '2025-01-03'),
 (5, 3, 30, '2025-01-02');
 
-/*+ {
-"rewrites": {
-"hint_test.top_products": "SELECT product_id, product_name, category, (SELECT AVG(quantity) FROM sales s2 WHERE s2.category = s1.category) as category_avg_qty, quantity FROM sales s1 WHERE quantity > (SELECT AVG(quantity) FROM sales s3 WHERE s3.category = s1.category)"
-}
-} */
-select product_name, category, quantity, category_avg_qty
+/*+ { "rewrites": { "hint_test.top_products": "SELECT product_id, product_name, category, (SELECT AVG(quantity) FROM sales s2 WHERE s2.category = s1.category) as category_avg_qty, quantity FROM sales s1 WHERE quantity > (SELECT AVG(quantity) FROM sales s3 WHERE s3.category = s1.category)" } } */ select product_name, category, quantity, category_avg_qty
 from top_products
 order by category, quantity desc;
 
@@ -277,12 +226,7 @@ insert into offline_sales values
 ('Laptop', 1100.00, '2024-01-01'),
 ('Keyboard', 80.00, '2024-01-03');
 
-/*+ {
-"rewrites": {
-"hint_test.all_sales": "SELECT product, SUM(amount) as total_revenue, COUNT(*) as sale_count FROM (SELECT product, amount FROM online_sales UNION ALL SELECT product, amount FROM offline_sales) combined GROUP BY product"
-}
-} */
-select product, total_revenue, sale_count
+/*+ { "rewrites": { "hint_test.all_sales": "SELECT product, SUM(amount) as total_revenue, COUNT(*) as sale_count FROM (SELECT product, amount FROM online_sales UNION ALL SELECT product, amount FROM offline_sales) combined GROUP BY product" } } */ select product, total_revenue, sale_count
 from all_sales
 where total_revenue > 100
 order by total_revenue desc;
@@ -313,49 +257,26 @@ insert into sales values
 (8, 'Pen', 'Stationery', 200, 5.00, '2024-01-08'),
 (9, 'Notebook', 'Stationery', 100, 15.00, '2024-01-09');
 
-/*+ {
-"rewrites": {
-"hint_test.sales_segments": "SELECT category, SUM(CASE WHEN price >= 1000 THEN quantity ELSE 0 END) as high_price_qty, SUM(CASE WHEN price < 1000 AND price >= 100 THEN quantity ELSE 0 END) as mid_price_qty, SUM(CASE WHEN price < 100 THEN quantity ELSE 0 END) as low_price_qty, COUNT(DISTINCT product_id) as product_variety FROM sales GROUP BY category"
-}
-} */
-select category, high_price_qty, mid_price_qty, low_price_qty, product_variety
+/*+ { "rewrites": { "hint_test.sales_segments": "SELECT category, SUM(CASE WHEN price >= 1000 THEN quantity ELSE 0 END) as high_price_qty, SUM(CASE WHEN price < 1000 AND price >= 100 THEN quantity ELSE 0 END) as mid_price_qty, SUM(CASE WHEN price < 100 THEN quantity ELSE 0 END) as low_price_qty, COUNT(DISTINCT product_id) as product_variety FROM sales GROUP BY category" } } */ select category, high_price_qty, mid_price_qty, low_price_qty, product_variety
 from sales_segments
 where product_variety >= 2
 order by category;
 
 drop table sales;
 
-/*+ {
-"rewrites": {}
-} */
-select * from users;
+/*+ { "rewrites": {} } */ select * from users;
 id    name    age    city
 1    Alice    25    Beijing
 2    Bob    30    Shanghai
 3    Charlie    35    Guangzhou
 4    David    28    Shenzhen
-/*+ {} */
-select * from users;
+/*+ {} */ select * from users;
 id    name    age    city
 1    Alice    25    Beijing
 2    Bob    30    Shanghai
 3    Charlie    35    Guangzhou
 4    David    28    Shenzhen
-/*+ {
-"rewrites": {
-"hint_test.t1": "SELECT * FROM users WHERE id = 1",
-"hint_test.t2": "SELECT * FROM users WHERE id = 2",
-"hint_test.t3": "SELECT * FROM users WHERE id = 3",
-"hint_test.t4": "SELECT * FROM users WHERE id = 4",
-"hint_test.t5": "SELECT * FROM orders WHERE order_id = 1",
-"hint_test.t6": "SELECT * FROM orders WHERE order_id = 2",
-"hint_test.t7": "SELECT * FROM products WHERE product_id = 1",
-"hint_test.t8": "SELECT * FROM products WHERE product_id = 2",
-"hint_test.t9": "SELECT * FROM sales WHERE sale_id = 1",
-"hint_test.t10": "SELECT * FROM sales WHERE sale_id = 2"
-}
-} */
-select * from t1
+/*+ { "rewrites": { "hint_test.t1": "SELECT * FROM users WHERE id = 1", "hint_test.t2": "SELECT * FROM users WHERE id = 2", "hint_test.t3": "SELECT * FROM users WHERE id = 3", "hint_test.t4": "SELECT * FROM users WHERE id = 4", "hint_test.t5": "SELECT * FROM orders WHERE order_id = 1", "hint_test.t6": "SELECT * FROM orders WHERE order_id = 2", "hint_test.t7": "SELECT * FROM products WHERE product_id = 1", "hint_test.t8": "SELECT * FROM products WHERE product_id = 2", "hint_test.t9": "SELECT * FROM sales WHERE sale_id = 1", "hint_test.t10": "SELECT * FROM sales WHERE sale_id = 2" } } */ select * from t1
 union all
 select * from t2;
 id    name    age    city
@@ -367,60 +288,21 @@ id int,
 value varchar(50)
 );
 insert into `user-data` values (1, 'test');
-/*+ {
-"rewrites": {
-"hint_test.user-data": "SELECT * FROM `user-data` WHERE id = 1"
-}
-} */
-select * from `user-data`;
+/*+ { "rewrites": { "hint_test.user-data": "SELECT * FROM `user-data` WHERE id = 1" } } */ select * from `user-data`;
 id    value
 1    test
 drop table `user-data`;
-/*+ {
-"rewrites": {
-"hint_test.users": "SELECT * FROM users"
-} */
-select * from users;
-Not a valid escape sequence: {
-"rewrites": {
-"hint_test.users": "SELECT * FROM users"
-} */
-select * from users;
-/*+ {
-rewrites: {
-"hint_test.users": "SELECT * FROM users"
-}
-} */
-select * from users;
+/*+ { "rewrites": { "hint_test.users": "SELECT * FROM users" } */ select * from users;
+Not a valid escape sequence: { "rewrites": { "hint_test.users": "SELECT * FROM users" } */ select * from users;
+/*+ { rewrites: { "hint_test.users": "SELECT * FROM users" } } */ select * from users;
 SQL parser error: invalid character 'r' looking for beginning of object key string
-/*+ {
-"rewrites": {
-"hint_test.test_table": "SELECT * FROM non_existing_table"
-}
-} */
-select * from test_table;
+/*+ { "rewrites": { "hint_test.test_table": "SELECT * FROM non_existing_table" } } */ select * from test_table;
 SQL parser error: table "non_existing_table" does not exist
-/*+ {
-"rewrites": {
-"hint_test.t1": "SELECT * FROM t2",
-"hint_test.t2": "SELECT * FROM users"
-}
-} */
-select * from t1;
+/*+ { "rewrites": { "hint_test.t1": "SELECT * FROM t2", "hint_test.t2": "SELECT * FROM users" } } */ select * from t1;
 SQL parser error: table "t2" does not exist
-/*+ {
-"rewrites": {
-"hint_test.users": "SELET * FORM users"
-}
-} */
-select * from users;
+/*+ { "rewrites": { "hint_test.users": "SELET * FORM users" } } */ select * from users;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "SELET * FORM users";
-/*+ {
-"rewrites": {
-"hint_test.users": "SELECT * FROM users WHERE age > 25"
-}
-} */
-select * from users;
+/*+ { "rewrites": { "hint_test.users": "SELECT * FROM users WHERE age > 25" } } */ select * from users;
 id    name    age    city
 2    Bob    30    Shanghai
 3    Charlie    35    Guangzhou
@@ -444,13 +326,7 @@ name varchar(50)
 table users already exists
 insert into Users values (1, 'Test');
 Column count doesn't match value count at row 1
-/*+ {
-"rewrites": {
-"hint_test.users": "SELECT * FROM Users WHERE id = 1",
-"hint_test.USERS": "SELECT * FROM Users WHERE id = 2"
-}
-} */
-SELECT * FROM users;
+/*+ { "rewrites": { "hint_test.users": "SELECT * FROM Users WHERE id = 1", "hint_test.USERS": "SELECT * FROM Users WHERE id = 2" } } */ SELECT * FROM users;
 id    name    age    city
 1    Alice    25    Beijing
 SELECT * FROM USERS;
@@ -489,17 +365,7 @@ insert into orders values
 (2, 2, 200.00, 'pending'),
 (3, 1, 150.00, 'completed'),
 (4, 3, 300.00, 'cancelled');
-/*+ {
-"rewrites": {
-"hint_test.users": "SELECT * FROM users WHERE age > 25"
-}
-} */
-/*+ {
-"rewrites": {
-"hint_test.orders": "SELECT * FROM orders WHERE status = 'completed'"
-}
-} */
-select * from users, orders where users.id = orders.user_id;
+/*+ { "rewrites": { "hint_test.users": "SELECT * FROM users WHERE age > 25" } } */ /*+ { "rewrites": { "hint_test.orders": "SELECT * FROM orders WHERE status = 'completed'" } } */ select * from users, orders where users.id = orders.user_id;
 id    name    age    city    order_id    user_id    amount    status
 2    Bob    30    Shanghai    2    2    200.00    pending
 3    Charlie    35    Guangzhou    4    3    300.00    cancelled
@@ -521,12 +387,7 @@ data varchar(100)
 
 insert into large_table select result, 2 from generate_series(1, 1000000) g;
 
-/*+ {
-"rewrites": {
-"hint_test.large_table": "SELECT * FROM large_table WHERE id < 1000"
-}
-} */
-select count(*) from large_table;
+/*+ { "rewrites": { "hint_test.large_table": "SELECT * FROM large_table WHERE id < 1000" } } */ select count(*) from large_table;
 
 select count(*) from large_table where id < 1000;
 
