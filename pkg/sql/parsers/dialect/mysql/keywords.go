@@ -663,5 +663,6 @@ func init() {
 		"accept":                     CONFLICT_ACCEPT,
 		"diff":                       DIFF,
 		"conflict":                   CONFLICT,
+		"output":                     OUTPUT,
 	}
 }

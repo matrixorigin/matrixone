@@ -24,9 +24,7 @@ import (
 	"sync"
 	"time"
 
-//	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	common2 "github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -247,28 +245,8 @@ func handleDataBranch(
 	case *tree.DataBranchDeleteTable:
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
-		t := time.Now()
-		defer func() {
-			mm := make(map[string]int)
-			common2.RangesCnt.Range(func(key, value any) bool {
-				mm[key.(string)] = value.(int)
-				return true
-			})
-			fmt.Printf("handle snapshot diff takes: %v, ranges: %v\n", time.Since(t), mm)
-			common2.RangesCnt.Clear()
-		}()
 		return handleSnapshotDiff(execCtx, ses, st, nil)
 	case *tree.DataBranchMerge:
-		t := time.Now()
-		defer func() {
-			mm := make(map[string]int)
-			common2.RangesCnt.Range(func(key, value any) bool {
-				mm[key.(string)] = value.(int)
-				return true
-			})
-			fmt.Printf("handle snapshot merge takes: %v, ranges: %v\n", time.Since(t), mm)
-			common2.RangesCnt.Clear()
-		}()
 		return handleSnapshotMerge(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
@@ -348,12 +326,15 @@ func handleSnapshotDiff(
 	}
 
 	if err = diff(
-		execCtx.reqCtx, ses,
-		tarTblDef, baseTblDef,
-		tarHandle, baseHandle,
-		stmt.DiffAsOpts,
+		execCtx.reqCtx,
+		ses,
+		tarTblDef,
+		baseTblDef,
+		tarHandle,
+		baseHandle,
+		stmt.OutputOpt,
 		dagInfo,
-		bh, extra,
+		extra,
 	); err != nil {
 		return
 	}
@@ -807,14 +788,12 @@ func diff(
 	baseTblDef *plan.TableDef,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
-	diffAsOpt *tree.DiffAsOpt,
+	outputOpt *tree.DiffOutputOpt,
 	dagInfo branchMetaInfo,
-	bh BackgroundExec,
 	extra *diffExtra,
 ) (err error) {
 
 	var (
-		rows   [][]any
 		mp     = ses.proc.Mp()
 		pkKind int
 
@@ -863,7 +842,6 @@ func diff(
 		for i, col := range baseTblDef.Cols {
 			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
 				pkColIdxes = append(pkColIdxes, i)
-				//pkTypes = append(pkTypes, types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
 			}
 		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -873,8 +851,6 @@ func diff(
 		for _, name := range pkNames {
 			idx := int(baseTblDef.Name2ColIndex[name])
 			pkColIdxes = append(pkColIdxes, idx)
-			//pkCol := baseTblDef.Cols[idx]
-			//pkTypes = append(pkTypes, types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale))
 		}
 	} else {
 		// normal pk
@@ -882,8 +858,6 @@ func diff(
 		pkName := baseTblDef.Pkey.PkeyColName
 		idx := int(baseTblDef.Name2ColIndex[pkName])
 		pkColIdxes = append(pkColIdxes, idx)
-		//pkCol := baseTblDef.Cols[idx]
-		//pkTypes = append(pkTypes, types.New(types.T(pkCol.Typ.Id), pkCol.Typ.Width, pkCol.Typ.Scale))
 	}
 
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
@@ -993,11 +967,6 @@ func diff(
 
 						for x, idx := range neededColIdxes {
 							row[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), neededColTypes[x].Oid)
-							//if err = extractRowFromVector(
-							//	ctx, ses, dataBat.Vecs[idx], idx+2, row, i, true,
-							//); err != nil {
-							//	return
-							//}
 						}
 						collector.addRow(row)
 					} else {
@@ -1008,7 +977,6 @@ func diff(
 							var (
 								allEqual = true
 								tuple    types.Tuple
-								//valTypes []types.Type
 							)
 
 							if tuple, _, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
@@ -1035,19 +1003,7 @@ func diff(
 								row2[0], row2[1] = tarTblDef.Name, diffAddedLine
 								for x, idx := range neededColIdxes {
 									row1[idx+2] = tuple[idx]
-									//switch val := tuple[idx].(type) {
-									//case types.Timestamp:
-									//	row1[idx+2] = val.String2(ses.timeZone, valTypes[idx].Scale)
-									//default:
-									//	row1[idx+2] = val
-									//}
-
 									row2[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), neededColTypes[x].Oid)
-									//if err = extractRowFromVector(
-									//	ctx, ses, dataBat.Vecs[idx], idx+2, row2, i, true,
-									//); err != nil {
-									//	return
-									//}
 								}
 								collector.addRows([][]any{row1, row2})
 							}
@@ -1096,7 +1052,6 @@ func diff(
 
 	// iterate the left base table data
 	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
-		//row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 		for _, r := range data {
 			row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
 			if tuple, _, err := baseDataHashmap.DecodeRow(r); err != nil {
@@ -1104,12 +1059,6 @@ func diff(
 			} else {
 				for i := range tuple {
 					row = append(row, tuple[i])
-					//switch val := tuple[i].(type) {
-					//case types.Timestamp:
-					//	row = append(row, val.String2(ses.timeZone, valTypes[i].Scale))
-					//default:
-					//	row = append(row, tuple[i])
-					//}
 				}
 			}
 			collector.addRow(row)
@@ -1170,33 +1119,69 @@ func diff(
 	}
 	delsWaited = true
 
-	rows = collector.snapshot()
-	//
-	//for _, row := range rows {
-	//	for j := 2; j < len(row); j++ {
-	//		switch v := row[j].(type) {
-	//		case types.Timestamp:
-	//			row[j] = v.String2(ses.timeZone, neededColTypes[j-2].Scale)
-	//		case types.Datetime:
-	//			row[j] = v.String2(neededColTypes[j-2].Scale)
-	//		case types.Decimal64:
-	//			row[j] = v.Format(neededColTypes[j-2].Scale)
-	//		case types.Decimal128:
-	//			row[j] = v.Format(neededColTypes[j-2].Scale)
-	//		case types.Decimal256:
-	//			row[j] = v.Format(neededColTypes[j-2].Scale)
-	//		}
-	//	}
-	//}
+	return satisfyDiffOutputOpt(ctx, ses, collector, mrs, neededColTypes, outputOpt)
+}
 
-	if len(rows) > 0 {
-		xRow := make([]any, len(rows[0]))
-		copy(xRow, rows[0])
-		xRow[0] = strconv.FormatInt(int64(len(rows)), 10)
-		mrs.AddRow(xRow)
+func satisfyDiffOutputOpt(
+	ctx context.Context,
+	ses *Session,
+	collector *rowsCollector,
+	mrs *MysqlResultSet,
+	neededColTypes []types.Type,
+	outputOpt *tree.DiffOutputOpt,
+) (err error) {
+
+	fillMrsWithRows := func(limit int64) {
+		rows := collector.snapshot()
+		for i, row := range rows {
+			if limit >= 0 && int64(i) >= limit {
+				break
+			}
+
+			for j := 2; j < len(row); j++ {
+				switch v := row[j].(type) {
+				case types.Timestamp:
+					row[j] = v.String2(ses.timeZone, neededColTypes[j-2].Scale)
+				case types.Datetime:
+					row[j] = v.String2(neededColTypes[j-2].Scale)
+				case types.Decimal64:
+					row[j] = v.Format(neededColTypes[j-2].Scale)
+				case types.Decimal128:
+					row[j] = v.Format(neededColTypes[j-2].Scale)
+				case types.Decimal256:
+					row[j] = v.Format(neededColTypes[j-2].Scale)
+				}
+			}
+			mrs.AddRow(row)
+		}
 	}
 
-	return trySaveQueryResult(ctx, ses, mrs)
+	if outputOpt == nil {
+		fillMrsWithRows(-1)
+		return trySaveQueryResult(ctx, ses, mrs)
+	}
+
+	if outputOpt.Limit != nil {
+		fillMrsWithRows(*outputOpt.Limit)
+		return trySaveQueryResult(ctx, ses, mrs)
+	}
+
+	if outputOpt.Count {
+		ses.ClearAllMysqlResultSet()
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		mrs = ses.GetMysqlResultSet()
+
+		col := new(MysqlColumn)
+		col.SetName("Count(*)")
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+		mrs.AddColumn(col)
+		mrs.AddRow([]any{int64(len(collector.rows))})
+
+		return trySaveQueryResult(ctx, ses, mrs)
+	}
+
+	panic(fmt.Sprintf("unreachable: %v", outputOpt))
 }
 
 func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
@@ -1363,16 +1348,24 @@ func handleDelsOnLCA(
 				bufVals.WriteString(", ")
 			}
 		}
-		
+
 		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
 		buf.WriteString(fmt.Sprintf("join (values %s) as pks(%s) on ", bufVals.String(), strings.Join(pkNames, ",")))
 		for i := range pkNames {
 			buf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
 			switch typ := colTypes[pkIdxes[i]]; typ.Oid {
 			case types.T_int32:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as int)", pkNames[i]))
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
 			case types.T_int64:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as bigint)", pkNames[i]))
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
+			case types.T_uint32:
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
+			case types.T_uint64:
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
+			case types.T_float32:
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
+			case types.T_float64:
+				buf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
 			default:
 				buf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
 			}
@@ -1383,36 +1376,6 @@ func handleDelsOnLCA(
 
 		sql = buf.String()
 
-/*
-		pkFields := strings.Join(pkNames, ",")
-		// if the lca is very large
-		tmpTable := fmt.Sprintf("%s.`%s`", lcaTblDef.DbName, uuid.New().String())
-		
-		buf.WriteString(fmt.Sprintf("create table %s as select ", tmpTable))
-		buf.WriteString(pkFields)
-		buf.WriteString(fmt.Sprintf(" from %s.%s%s where 1=0; ", lcaTblDef.DbName, lcaTblDef.Name, mots))
-		prepareSqls = append(prepareSqls, buf.String())
-		buf.Reset()
-
-
-		buf.WriteString(fmt.Sprintf("insert into %s (%s) values %s;",
-		tmpTable, pkFields, bufVals.String()))
-		prepareSqls = append(prepareSqls, buf.String())
-		buf.Reset()
-
-		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca join %s as pks on ",
-		lcaTblDef.DbName, lcaTblDef.Name, mots, tmpTable))
-
-		for i := range pkNames {
-			buf.WriteString(fmt.Sprintf("lca.%s = pks.%s", pkNames[i], pkNames[i]))
-			if i != len(pkNames)-1 {
-				buf.WriteString(" AND ")
-			}
-		}
-
-		sql = buf.String()
-		cleanSqls = append(cleanSqls, fmt.Sprintf("drop table if exists %s", tmpTable))
-*/
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
@@ -1480,9 +1443,6 @@ func handleDelsOnLCA(
 				row[1] = flag
 				for j := range cols {
 					row[j+2] = types.DecodeValue(cols[j].GetRawBytesAt(i), colTypes[j].Oid)
-					//if err = extractRowFromVector(ctx, ses, cols[j], j+2, row, i, true); err != nil {
-					//	return false
-					//}
 				}
 				rows = append(rows, row)
 			}

@@ -114,10 +114,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 	for i, column := range cols {
 		column = strings.ToLower(column)
-		if column == objectio.DefaultCommitTS_Attr {
-			mixin.columns.seqnums[i] = objectio.SEQNUM_COMMITTS
-			mixin.columns.colTypes[i] = objectio.TSType
-		} else if objectio.IsPhysicalAddr(column) {
+		if objectio.IsPhysicalAddr(column) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
@@ -340,7 +337,7 @@ func NewReader(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
-//orderedScan bool, // it should be included in filter or expr.
+	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
 	threshHold uint64,
 	filterHint engine.FilterHint,
