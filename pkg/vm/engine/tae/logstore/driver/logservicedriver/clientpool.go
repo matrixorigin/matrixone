@@ -30,6 +30,10 @@ import (
 
 const (
 	DefaultRecordSize = mpool.MB
+
+	DefaultRetryDuration = time.Minute * 5
+	DefaultRetryTimes    = 300
+	DefaultRetryInterval = time.Second
 )
 
 var ErrNoClientAvailable = moerr.NewInternalErrorNoCtx("no client available")
@@ -118,13 +122,26 @@ type wrappedClient struct {
 }
 
 func newClient(
-	factory LogServiceClientFactory, bufSize int,
+	factory LogServiceClientFactory, bufSize int, retryTimes int, retryInterval, retryDuration time.Duration,
 ) *wrappedClient {
 	var (
 		err    error
 		client BackendClient
 	)
-	if client, err = factory(); err != nil {
+	startTime := time.Now()
+	for i := 0; i < retryTimes; i++ {
+		if time.Since(startTime) > retryDuration {
+			break
+		}
+		client, err = factory()
+		if err == nil {
+			break
+		} else {
+			logutil.Errorf("WAL-Replay failed to create log service client: %v", err)
+		}
+		time.Sleep(retryInterval)
+	}
+	if err != nil {
 		panic(err)
 	}
 	return &wrappedClient{
@@ -238,7 +255,7 @@ func newClientPool(cfg *Config) *clientPool {
 	}
 
 	for i := 0; i < cfg.ClientMaxCount; i++ {
-		pool.clients[i] = newClient(cfg.ClientFactory, cfg.ClientBufSize)
+		pool.clients[i] = newClient(cfg.ClientFactory, cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
 	}
 	return pool
 }
@@ -271,7 +288,7 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	if c.closed {
 		return nil, ErrClientPoolClosed
 	}
-	client := newClient(c.cfg.ClientFactory, c.cfg.ClientBufSize)
+	client := newClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
 	return client, nil
 }
 
