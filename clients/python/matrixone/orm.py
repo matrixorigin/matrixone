@@ -811,8 +811,8 @@ class BaseMatrixOneQuery:
                 import re
 
                 on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
-                # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-                on_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", on_condition)
+                # Note: Keep table prefixes for JOIN conditions to avoid ambiguity
+                # Do NOT remove table.column format, it's needed for proper JOIN
             else:
                 # String condition
                 on_condition = str(onclause)

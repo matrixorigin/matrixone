@@ -549,6 +549,280 @@ class StageOperationsDemo:
 
         self.logger.info("✅ Cleanup completed")
 
+    def test_real_world_ecommerce_pipeline(self, client):
+        """
+        Real-world example: E-commerce Order Data Pipeline
+
+        Scenario:
+        An e-commerce company receives daily order files from multiple sources:
+        - customers.csv: Customer dimension data
+        - products.jsonline: Product catalog updates (JSON format)
+        - orders.csv: Daily order transactions
+        - shipping.tsv: Shipping logistics data
+
+        This pipeline demonstrates:
+        1. Creating a centralized data stage for multi-source ingestion
+        2. Loading data from multiple file formats (CSV, JSON, TSV)
+        3. Building a star schema (dimensions + facts)
+        4. Business intelligence queries
+        5. Incremental data loading (delta loads)
+
+        """
+        print("\n" + "=" * 60)
+        print("REAL-WORLD EXAMPLE: E-commerce Data Pipeline")
+        print("=" * 60)
+        self.results['tests_run'] += 1
+
+        try:
+            # Step 1: Create centralized data stage
+            print("\n📦 Step 1: Setting up E-commerce Data Stage")
+            print("-" * 60)
+
+            stage_path = os.path.join(TMPFILES_DIR, 'ecommerce_data')
+            os.makedirs(stage_path, exist_ok=True)
+
+            stage = client.stage.create_local(
+                'ecommerce_data_stage', stage_path, comment='Centralized stage for e-commerce data ingestion'
+            )
+            self.results['stages_created'].append('ecommerce_data_stage')
+
+            print(f"✅ Stage created: {stage.name}")
+            print(f"   Purpose: Centralized data ingestion point")
+            print(f"   Location: {stage.url}")
+
+            # Step 2: Create data warehouse tables (star schema)
+            print("\n📊 Step 2: Creating Star Schema Tables")
+            print("-" * 60)
+
+            # Dimension: Customers
+            class Customer(Base):
+                __tablename__ = 'dim_customers'
+                customer_id = Column(Integer, primary_key=True)
+                customer_name = Column(String(100))
+                email = Column(String(100))
+                country = Column(String(50))
+                signup_date = Column(String(20))
+
+            # Dimension: Products
+            class Product(Base):
+                __tablename__ = 'dim_products'
+                product_id = Column(Integer, primary_key=True)
+                product_name = Column(String(200))
+                category = Column(String(50))
+                price = Column(DECIMAL(10, 2))
+                stock_quantity = Column(Integer)
+
+            # Fact: Orders
+            class Order(Base):
+                __tablename__ = 'fact_orders'
+                order_id = Column(Integer, primary_key=True)
+                customer_id = Column(Integer)
+                product_id = Column(Integer)
+                quantity = Column(Integer)
+                order_amount = Column(DECIMAL(12, 2))
+                order_date = Column(String(20))
+                status = Column(String(20))
+
+            # Fact: Shipping
+            class Shipping(Base):
+                __tablename__ = 'fact_shipping'
+                shipping_id = Column(Integer, primary_key=True)
+                order_id = Column(Integer)
+                carrier = Column(String(50))
+                tracking_number = Column(String(100))
+                ship_date = Column(String(20))
+                delivery_date = Column(String(20))
+
+            # Create all tables
+            for table_class in [Customer, Product, Order, Shipping]:
+                try:
+                    client.drop_table(table_class)
+                except:
+                    pass
+                client.create_table(table_class)
+                self.results['tables_created'].append(table_class.__tablename__)
+                print(f"✅ Created table: {table_class.__tablename__}")
+
+            # Step 3: Generate sample data files
+            print("\n📝 Step 3: Generating Sample Data Files")
+            print("-" * 60)
+
+            # customers.csv
+            customers_file = os.path.join(stage_path, 'customers.csv')
+            with open(customers_file, 'w') as f:
+                f.write('customer_id,customer_name,email,country,signup_date\n')
+                f.write('1001,Alice Johnson,alice@email.com,USA,2024-01-15\n')
+                f.write('1002,Bob Smith,bob@email.com,UK,2024-01-20\n')
+                f.write('1003,Carol Wang,carol@email.com,China,2024-02-01\n')
+                f.write('1004,David Brown,david@email.com,Canada,2024-02-15\n')
+            self.results['files_created'].append(customers_file)
+            print(f"✅ Generated: customers.csv (4 records)")
+
+            # products.jsonline
+            products_file = os.path.join(stage_path, 'products.jsonline')
+            with open(products_file, 'w') as f:
+                f.write(
+                    '{"product_id":2001,"product_name":"Laptop Pro 15","category":"Electronics","price":1299.99,"stock_quantity":50}\n'
+                )
+                f.write(
+                    '{"product_id":2002,"product_name":"Wireless Mouse","category":"Accessories","price":29.99,"stock_quantity":200}\n'
+                )
+                f.write(
+                    '{"product_id":2003,"product_name":"USB-C Cable","category":"Accessories","price":19.99,"stock_quantity":500}\n'
+                )
+                f.write(
+                    '{"product_id":2004,"product_name":"Monitor 27inch","category":"Electronics","price":399.99,"stock_quantity":75}\n'
+                )
+            self.results['files_created'].append(products_file)
+            print(f"✅ Generated: products.jsonline (4 records)")
+
+            # orders.csv
+            orders_file = os.path.join(stage_path, 'orders.csv')
+            with open(orders_file, 'w') as f:
+                f.write('order_id,customer_id,product_id,quantity,order_amount,order_date,status\n')
+                f.write('5001,1001,2001,1,1299.99,2024-10-20,completed\n')
+                f.write('5002,1002,2002,2,59.98,2024-10-21,completed\n')
+                f.write('5003,1003,2003,3,59.97,2024-10-22,processing\n')
+                f.write('5004,1001,2004,1,399.99,2024-10-23,shipped\n')
+                f.write('5005,1004,2001,1,1299.99,2024-10-24,processing\n')
+            self.results['files_created'].append(orders_file)
+            print(f"✅ Generated: orders.csv (5 records)")
+
+            # shipping.tsv
+            shipping_file = os.path.join(stage_path, 'shipping.tsv')
+            with open(shipping_file, 'w') as f:
+                f.write('shipping_id\torder_id\tcarrier\ttracking_number\tship_date\tdelivery_date\n')
+                f.write('7001\t5001\tFedEx\tFDX123456789\t2024-10-21\t2024-10-23\n')
+                f.write('7002\t5002\tUPS\tUPS987654321\t2024-10-22\t2024-10-25\n')
+                f.write('7003\t5004\tDHL\tDHL456789123\t2024-10-24\t2024-10-27\n')
+            self.results['files_created'].append(shipping_file)
+            print(f"✅ Generated: shipping.tsv (3 records)")
+
+            # Step 4: Load data from stage
+            print("\n🚀 Step 4: Loading Data from Stage")
+            print("-" * 60)
+
+            # Load customers
+            print("Loading customers dimension...")
+            stage.load_csv('customers.csv', Customer, ignore_lines=1)
+            count = client.query(Customer).count()
+            print(f"✅ Loaded {count} customers")
+
+            # Load products (JSON) - jsondata is auto-defaulted to OBJECT
+            print("Loading products dimension...")
+            stage.load_json('products.jsonline', Product)
+            count = client.query(Product).count()
+            print(f"✅ Loaded {count} products")
+
+            # Load orders
+            print("Loading orders fact table...")
+            stage.load_csv('orders.csv', Order, ignore_lines=1)
+            count = client.query(Order).count()
+            print(f"✅ Loaded {count} orders")
+
+            # Load shipping (TSV)
+            print("Loading shipping logistics...")
+            stage.load_tsv('shipping.tsv', Shipping, ignore_lines=1)
+            count = client.query(Shipping).count()
+            print(f"✅ Loaded {count} shipping records")
+
+            # Step 5: Business Intelligence Queries (using client.query ORM)
+            print("\n📊 Step 5: Business Intelligence Analysis")
+            print("-" * 60)
+
+            from sqlalchemy import func
+
+            # Revenue by customer using client.query() ORM with SQLAlchemy expressions
+            print("\n💰 Revenue Analysis:")
+            revenue_results = (
+                client.query(
+                    Order,
+                    Customer.customer_name,
+                    Customer.country,
+                    func.sum(Order.order_amount).label('total_revenue'),
+                    func.count(Order.order_id).label('order_count'),
+                )
+                .join(Customer, Customer.customer_id == Order.customer_id)
+                .group_by(Customer.customer_name, Customer.country)
+                .order_by(func.sum(Order.order_amount).desc())
+                .all()
+            )
+            for row in revenue_results:
+                print(f"  {row.customer_name} ({row.country}): ${row.total_revenue} from {row.order_count} orders")
+
+            # Top products using client.query() ORM with SQLAlchemy expressions
+            print("\n🔥 Top Selling Products:")
+            products_results = (
+                client.query(
+                    Order,
+                    Product.product_name,
+                    Product.category,
+                    func.sum(Order.quantity).label('units_sold'),
+                    func.sum(Order.order_amount).label('revenue'),
+                )
+                .join(Product, Product.product_id == Order.product_id)
+                .group_by(Product.product_name, Product.category)
+                .order_by(func.sum(Order.quantity).desc())
+                .all()
+            )
+            for row in products_results:
+                print(f"  {row.product_name} ({row.category}): {row.units_sold} units, ${row.revenue} revenue")
+
+            # Order status using client.query() ORM (simple aggregation, no join)
+            print("\n📦 Order Fulfillment Status:")
+            status_results = (
+                client.query(Order.status, func.count().label('count'), func.sum(Order.order_amount).label('value'))
+                .group_by(Order.status)
+                .order_by(func.count().desc())
+                .all()
+            )
+            for row in status_results:
+                print(f"  {row.status}: {row.count} orders, ${row.value} value")
+
+            # Step 6: Incremental Loading (Delta)
+            print("\n🔄 Step 6: Incremental Data Loading")
+            print("-" * 60)
+
+            # New orders delta file
+            delta_file = os.path.join(stage_path, 'orders_delta.csv')
+            with open(delta_file, 'w') as f:
+                f.write('order_id,customer_id,product_id,quantity,order_amount,order_date,status\n')
+                f.write('5006,1002,2003,5,99.95,2024-10-25,processing\n')
+                f.write('5007,1003,2002,1,29.99,2024-10-25,completed\n')
+            self.results['files_created'].append(delta_file)
+
+            print("📥 Loading incremental orders...")
+            stage.load_csv('orders_delta.csv', Order, ignore_lines=1)
+            count = client.query(Order).count()
+            print(f"✅ Total orders now: {count} (+2 new)")
+
+            # Summary
+            print("\n" + "=" * 60)
+            print("📊 Pipeline Summary")
+            print("=" * 60)
+            print(f"✅ Stage: {stage.name}")
+            print(f"✅ Tables: 4 (2 dimensions, 2 facts)")
+            print(f"✅ Files: 5 (CSV, JSONLINE, TSV)")
+            print(f"✅ Records: ~20+")
+            print(f"✅ BI Queries: 3")
+
+            print("\n💡 Key Takeaways:")
+            print("  • Centralized stage simplifies multi-source data ingestion")
+            print("  • Supports multiple formats (CSV, JSON, TSV, Parquet)")
+            print("  • Direct load methods provide clean, intuitive API")
+            print("  • Enables real-world ETL/ELT patterns")
+            print("  • Perfect for data warehouse and analytics workloads")
+            print("  • Mirrors Snowflake/cloud data warehouse Stage concepts")
+
+            self.results['tests_passed'] += 1
+
+        except Exception as e:
+            print(f"❌ E-commerce pipeline test failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+            self.results['tests_failed'] += 1
+
     def run(self):
         """Run all stage operation demos"""
         print("=" * 60)
@@ -563,7 +837,6 @@ class StageOperationsDemo:
         client.connect(host=host, port=port, user=user, password=password, database=database)
 
         try:
-            # Run all tests
             self.test_create_local_stage(client)
             self.test_create_file_stage(client)
             self.test_create_stage_with_if_not_exists(client)
@@ -576,6 +849,7 @@ class StageOperationsDemo:
             self.test_stage_formats(client)
             self.test_multiple_stages(client)
             self.test_stage_in_transaction(client)
+            self.test_real_world_ecommerce_pipeline(client)
 
             # Print results
             print("\n" + "=" * 60)
