@@ -21,7 +21,6 @@ Test that main interfaces work in both transaction contexts:
 import pytest
 import pytest_asyncio
 from matrixone import Client, AsyncClient
-from contextlib import contextmanager
 from .test_config import online_config
 from matrixone.sqlalchemy_ext import boolean_match
 
@@ -971,9 +970,9 @@ class TestAsyncTransactionManagerConsistency:
             # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that managers are the correct types
+            from matrixone.snapshot import SnapshotManager
+            from matrixone.clone import CloneManager
             from matrixone.client import (
-                TransactionSnapshotManager,
-                TransactionCloneManager,
                 TransactionRestoreManager,
                 TransactionPitrManager,
                 TransactionPubSubManager,
@@ -982,8 +981,8 @@ class TestAsyncTransactionManagerConsistency:
                 TransactionFulltextIndexManager,
             )
 
-            assert isinstance(tx.snapshots, TransactionSnapshotManager)
-            assert isinstance(tx.clone, TransactionCloneManager)
+            assert isinstance(tx.snapshots, SnapshotManager)
+            assert isinstance(tx.clone, CloneManager)
             assert isinstance(tx.restore, TransactionRestoreManager)
             assert isinstance(tx.pitr, TransactionPitrManager)
             assert isinstance(tx.pubsub, TransactionPubSubManager)
@@ -1009,9 +1008,9 @@ class TestAsyncTransactionManagerConsistency:
             # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that managers are the correct types
+            from matrixone.snapshot import AsyncSnapshotManager
+            from matrixone.clone import AsyncCloneManager
             from matrixone.async_client import (
-                AsyncTransactionSnapshotManager,
-                AsyncTransactionCloneManager,
                 AsyncTransactionRestoreManager,
                 AsyncTransactionPitrManager,
                 AsyncTransactionPubSubManager,
@@ -1020,8 +1019,8 @@ class TestAsyncTransactionManagerConsistency:
                 AsyncTransactionFulltextIndexManager,
             )
 
-            assert isinstance(tx.snapshots, AsyncTransactionSnapshotManager)
-            assert isinstance(tx.clone, AsyncTransactionCloneManager)
+            assert isinstance(tx.snapshots, AsyncSnapshotManager)
+            assert isinstance(tx.clone, AsyncCloneManager)
             assert isinstance(tx.restore, AsyncTransactionRestoreManager)
             assert isinstance(tx.pitr, AsyncTransactionPitrManager)
             assert isinstance(tx.pubsub, AsyncTransactionPubSubManager)

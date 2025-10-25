@@ -102,13 +102,15 @@ class Session(SQLAlchemySession):
         self.client = client
 
         # Import manager classes dynamically to avoid circular imports
+        # These are defined in their respective modules
+        from .snapshot import SnapshotManager
+        from .clone import CloneManager
+
         # These are defined in client.py after the Session class
         import sys
 
         client_module = sys.modules.get('matrixone.client')
         if client_module:
-            TransactionSnapshotManager = getattr(client_module, 'TransactionSnapshotManager')
-            TransactionCloneManager = getattr(client_module, 'TransactionCloneManager')
             TransactionVectorIndexManager = getattr(client_module, 'TransactionVectorIndexManager')
             TransactionFulltextIndexManager = getattr(client_module, 'TransactionFulltextIndexManager')
 
@@ -121,9 +123,10 @@ class Session(SQLAlchemySession):
         from .restore import TransactionRestoreManager
         from .account import TransactionAccountManager
 
-        # Create managers that use this session
-        self.snapshots = TransactionSnapshotManager(client, self)
-        self.clone = TransactionCloneManager(client, self)
+        # Create managers that use this session as executor
+        # The executor pattern allows managers to work in both client and session contexts
+        self.snapshots = SnapshotManager(client, executor=self)
+        self.clone = CloneManager(client, executor=self)
         self.restore = TransactionRestoreManager(client, self)
         self.pitr = TransactionPitrManager(client, self)
         self.pubsub = TransactionPubSubManager(client, self)
@@ -501,8 +504,6 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         async_client_module = sys.modules.get('matrixone.async_client')
         if async_client_module:
-            AsyncTransactionSnapshotManager = getattr(async_client_module, 'AsyncTransactionSnapshotManager')
-            AsyncTransactionCloneManager = getattr(async_client_module, 'AsyncTransactionCloneManager')
             AsyncTransactionVectorIndexManager = getattr(async_client_module, 'AsyncTransactionVectorIndexManager')
             AsyncTransactionFulltextIndexManager = getattr(async_client_module, 'AsyncTransactionFulltextIndexManager')
             AsyncTransactionPitrManager = getattr(async_client_module, 'AsyncTransactionPitrManager')
@@ -511,12 +512,15 @@ class AsyncSession(SQLAlchemyAsyncSession):
             AsyncTransactionAccountManager = getattr(async_client_module, 'AsyncTransactionAccountManager')
 
         # These are defined in their respective modules
+        from .snapshot import AsyncSnapshotManager
+        from .clone import AsyncCloneManager
         from .load_data import AsyncTransactionLoadDataManager
         from .stage import AsyncTransactionStageManager
 
-        # Create managers that use this session
-        self.snapshots = AsyncTransactionSnapshotManager(client, self)
-        self.clone = AsyncTransactionCloneManager(client, self)
+        # Create managers that use this session as executor
+        # The executor pattern allows managers to work in both client and session contexts
+        self.snapshots = AsyncSnapshotManager(client, executor=self)
+        self.clone = AsyncCloneManager(client, executor=self)
         self.restore = AsyncTransactionRestoreManager(client, self)
         self.pitr = AsyncTransactionPitrManager(client, self)
         self.pubsub = AsyncTransactionPubSubManager(client, self)

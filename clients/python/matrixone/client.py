@@ -41,7 +41,7 @@ from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
 from .restore import RestoreManager, TransactionRestoreManager
-from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
+from .snapshot import SnapshotManager
 from .clone import CloneManager
 from .sqlalchemy_ext import MatrixOneDialect
 from .version import get_version_manager
@@ -3006,8 +3006,8 @@ class Session(SQLAlchemySession):
     - Automatic commit/rollback handling
 
     Available Managers:
-    - snapshots: TransactionSnapshotManager for snapshot operations
-    - clone: TransactionCloneManager for clone operations
+    - snapshots: SessionSnapshotManager for snapshot operations
+    - clone: SessionCloneManager for clone operations
     - restore: TransactionRestoreManager for restore operations
     - pitr: TransactionPitrManager for point-in-time recovery
     - pubsub: TransactionPubSubManager for pub/sub operations
@@ -3052,8 +3052,9 @@ class Session(SQLAlchemySession):
         self.client = client
 
         # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this session
-        self.snapshots = TransactionSnapshotManager(client, self)
-        self.clone = TransactionCloneManager(client, self)
+        # Use executor pattern: managers use this session as executor
+        self.snapshots = SnapshotManager(client, executor=self)
+        self.clone = CloneManager(client, executor=self)
         self.restore = TransactionRestoreManager(client, self)
         self.pitr = TransactionPitrManager(client, self)
         self.pubsub = TransactionPubSubManager(client, self)
@@ -3608,77 +3609,6 @@ class Session(SQLAlchemySession):
         self.execute(sql)
 
         return self
-
-
-class TransactionSnapshotManager(SnapshotManager):
-    """Snapshot manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    def create(
-        self,
-        name: str,
-        level: Union[str, SnapshotLevel],
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> Snapshot:
-        """Create snapshot within transaction"""
-        return super().create(name, level, database, table, description, self.transaction_wrapper)
-
-    def get(self, name: str) -> Snapshot:
-        """Get snapshot within transaction"""
-        return super().get(name, self.transaction_wrapper)
-
-    def delete(self, name: str) -> None:
-        """Delete snapshot within transaction"""
-        return super().delete(name, self.transaction_wrapper)
-
-
-class TransactionCloneManager(CloneManager):
-    """Clone manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    def clone_database(
-        self,
-        target_db: str,
-        source_db: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone database within transaction"""
-        return super().clone_database(target_db, source_db, snapshot_name, if_not_exists, self.transaction_wrapper)
-
-    def clone_table(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone table within transaction"""
-        return super().clone_table(target_table, source_table, snapshot_name, if_not_exists, self.transaction_wrapper)
-
-    def clone_database_with_snapshot(
-        self, target_db: str, source_db: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone database with snapshot within transaction"""
-        return super().clone_database_with_snapshot(
-            target_db, source_db, snapshot_name, if_not_exists, self.transaction_wrapper
-        )
-
-    def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone table with snapshot within transaction"""
-        return super().clone_table_with_snapshot(
-            target_table, source_table, snapshot_name, if_not_exists, self.transaction_wrapper
-        )
 
 
 class VectorManager:

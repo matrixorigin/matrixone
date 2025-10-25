@@ -71,8 +71,6 @@ from matrixone.clone import CloneManager
 from matrixone.client import (
     Client,
     Session,
-    TransactionSnapshotManager,
-    TransactionCloneManager,
 )
 from matrixone.exceptions import SnapshotError, CloneError
 
@@ -295,13 +293,13 @@ class TestUnifiedTransaction(unittest.TestCase):
             self.assertTrue(True)  # Test passes if session reuse works
 
     def test_transaction_snapshot_manager_integration(self):
-        """Test TransactionSnapshotManager integration"""
+        """Test SessionSnapshotManager integration"""
         # Mock transaction wrapper
         mock_tx = Mock()
         mock_tx.execute = Mock()
 
-        # Create TransactionSnapshotManager
-        tx_snapshots = TransactionSnapshotManager(self.mock_client, mock_tx)
+        # Create SnapshotManager with executor
+        tx_snapshots = SnapshotManager(self.mock_client, executor=mock_tx)
 
         # Mock get method
         mock_snapshot = Snapshot("test_snap", SnapshotLevel.CLUSTER, datetime.now())
@@ -313,13 +311,13 @@ class TestUnifiedTransaction(unittest.TestCase):
             self.assertEqual(result, mock_snapshot)
 
     def test_transaction_clone_manager_integration(self):
-        """Test TransactionCloneManager integration"""
+        """Test SessionCloneManager integration"""
         # Mock transaction wrapper
         mock_tx = Mock()
         mock_tx.execute = Mock()
 
-        # Create TransactionCloneManager
-        tx_clone = TransactionCloneManager(self.mock_client, mock_tx)
+        # Create CloneManager with executor
+        tx_clone = CloneManager(self.mock_client, executor=mock_tx)
 
         # Test database clone
         tx_clone.clone_database("target_db", "source_db")

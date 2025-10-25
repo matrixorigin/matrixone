@@ -14,6 +14,8 @@
 
 """
 MatrixOne Snapshot Management
+
+Unified snapshot management supporting sync/async and client/session executors.
 """
 
 from datetime import datetime
@@ -63,58 +65,126 @@ class Snapshot:
         return f"Snapshot(name='{self.name}', level='{self.level}', created_at='{self.created_at}')"
 
 
-class SnapshotManager:
+class BaseSnapshotManager:
     """
-    Snapshot management for MatrixOne database operations.
+    Base snapshot manager with shared logic for sync and async implementations.
+
+    This base class contains all the SQL building logic that is shared between
+    sync and async implementations. Subclasses only need to implement the
+    execution methods.
+    """
+
+    def __init__(self, client, executor=None):
+        """
+        Initialize base snapshot manager.
+
+        Args:
+            client: MatrixOne client instance
+            executor: Optional executor (e.g., session) for executing SQL.
+                     If None, uses client as executor
+        """
+        self.client = client
+        self.executor = executor
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self.client
+
+    def _build_create_sql(
+        self,
+        name: str,
+        level: Union[str, SnapshotLevel],
+        database: Optional[str] = None,
+        table: Optional[str] = None,
+    ) -> str:
+        """Build CREATE SNAPSHOT SQL statement"""
+        # Convert string to enum if needed
+        if isinstance(level, str):
+            try:
+                level_enum = SnapshotLevel(level.lower())
+            except ValueError:
+                raise SnapshotError(f"Invalid snapshot level: {level}")
+        else:
+            level_enum = level
+
+        # Build CREATE SNAPSHOT SQL using correct MatrixOne syntax
+        if level_enum == SnapshotLevel.CLUSTER:
+            return f"CREATE SNAPSHOT {name} FOR CLUSTER"
+        elif level_enum == SnapshotLevel.ACCOUNT:
+            return f"CREATE SNAPSHOT {name} FOR ACCOUNT"
+        elif level_enum == SnapshotLevel.DATABASE:
+            if not database:
+                raise SnapshotError("Database name required for database level snapshot")
+            return f"CREATE SNAPSHOT {name} FOR DATABASE {database}"
+        elif level_enum == SnapshotLevel.TABLE:
+            if not database or not table:
+                raise SnapshotError("Database and table names required for table level snapshot")
+            return f"CREATE SNAPSHOT {name} FOR TABLE {database} {table}"
+        else:
+            raise SnapshotError(f"Unsupported snapshot level: {level_enum}")
+
+    def _parse_snapshot_row(self, row) -> Snapshot:
+        """Parse a snapshot row from database query result"""
+        # Convert timestamp to datetime
+        timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
+
+        # Convert level string to enum
+        level_str = row[2]
+        try:
+            level_enum = SnapshotLevel(level_str.lower())
+        except ValueError:
+            # If enum conversion fails, keep as string for backward compatibility
+            level_enum = level_str
+
+        return Snapshot(
+            name=row[0],  # sname
+            level=level_enum,  # level (now as enum)
+            created_at=timestamp,  # ts
+            description=None,  # Not available
+            database=row[4],  # database_name
+            table=row[5],  # table_name
+        )
+
+
+class SnapshotManager(BaseSnapshotManager):
+    """
+    Synchronous snapshot management for MatrixOne database operations.
 
     This class provides comprehensive snapshot functionality for creating, managing,
     and restoring database snapshots at various levels (database, table, or cluster).
     Snapshots enable point-in-time recovery and data protection capabilities.
 
     Key Features:
-
     - Create snapshots at database, table, or cluster level
     - List and query existing snapshots
-    - Restore data from snapshots
     - Snapshot lifecycle management
-    - Integration with transaction operations
+    - Transaction-aware operations via executor pattern
+    - Unified interface for client and session contexts
 
-    Supported Snapshot Levels:
-    - CLUSTER: Full cluster snapshot
-    - DATABASE: Database-level snapshot
-    - TABLE: Table-level snapshot
+    Executor Pattern:
+    - If executor is None, uses self.client.execute (default executor)
+    - If executor is provided (e.g., session), uses executor.execute
+    - This allows the same logic to work in both client and session contexts
 
     Usage Examples::
 
-        # Create a database snapshot
+        # Using client directly
         snapshot = client.snapshots.create(
             name='daily_backup',
             level=SnapshotLevel.DATABASE,
-            database='my_database',
-            description='Daily backup snapshot'
+            database='my_database'
         )
 
-        # Create a table snapshot
-        snapshot = client.snapshots.create(
-            name='users_backup',
-            level=SnapshotLevel.TABLE,
-            database='my_database',
-            table='users',
-            description='Users table backup'
-        )
+        # Using within a session (transaction)
+        with client.session() as session:
+            snapshot = session.snapshots.create(
+                name='daily_backup',
+                level=SnapshotLevel.DATABASE,
+                database='my_database'
+            )
 
-        # List all snapshots
-        snapshots = client.snapshots.list()
-
-        # Restore from snapshot
-        client.snapshots.restore('daily_backup', 'restored_database')
-
-    Note: Snapshot functionality requires MatrixOne version 1.0.0 or higher. For older versions,
-    use backup/restore operations instead.
+    Note: Snapshot functionality requires MatrixOne version 1.0.0 or higher.
     """
-
-    def __init__(self, client):
-        self.client = client
 
     @requires_version(
         min_version="1.0.0",
@@ -129,135 +199,72 @@ class SnapshotManager:
         database: Optional[str] = None,
         table: Optional[str] = None,
         description: Optional[str] = None,
-        executor=None,
     ) -> Snapshot:
         """
-        Create a snapshot
+        Create a snapshot.
 
-        Args::
-
+        Args:
             name: Snapshot name
             level: Snapshot level (SnapshotLevel enum or string)
             database: Database name (for database/table level)
             table: Table name (for table level)
-            description: Snapshot description
-            executor: Optional executor (e.g., transaction wrapper)
+            description: Snapshot description (not currently used by MatrixOne)
 
-        Returns::
-
+        Returns:
             Snapshot object
         """
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        # Convert string to enum if needed
-        if isinstance(level, str):
-            try:
-                level_enum = SnapshotLevel(level.lower())
-            except ValueError:
-                raise SnapshotError(f"Invalid snapshot level: {level}")
-        else:
-            level_enum = level
-
-        # Build CREATE SNAPSHOT SQL using correct MatrixOne syntax
-        if level_enum == SnapshotLevel.CLUSTER:
-            sql = f"CREATE SNAPSHOT {name} FOR CLUSTER"
-        elif level_enum == SnapshotLevel.ACCOUNT:
-            sql = f"CREATE SNAPSHOT {name} FOR ACCOUNT"
-        elif level_enum == SnapshotLevel.DATABASE:
-            if not database:
-                raise SnapshotError("Database name required for database level snapshot")
-            sql = f"CREATE SNAPSHOT {name} FOR DATABASE {database}"
-        elif level_enum == SnapshotLevel.TABLE:
-            if not database or not table:
-                raise SnapshotError("Database and table names required for table level snapshot")
-            sql = f"CREATE SNAPSHOT {name} FOR TABLE {database} {table}"
-
-        # Note: MatrixOne doesn't support COMMENT in CREATE SNAPSHOT
-        # if description:
-        #     sql += f" COMMENT '{description}'"
+        sql = self._build_create_sql(name, level, database, table)
 
         try:
-            # Use provided executor or default client execute
-            execute_func = executor.execute if executor else self.client.execute
-            execute_func(sql)
-
+            self._get_executor().execute(sql)
             # Get snapshot info
-            snapshot_info = self.get(name, executor=executor)
-            return snapshot_info
-
+            return self.get(name)
         except Exception as e:
             raise SnapshotError(f"Failed to create snapshot: {e}") from None
 
     def list(self) -> List[Snapshot]:
         """
-        List all snapshots
+        List all snapshots.
 
-        Returns::
-
+        Returns:
             List of Snapshot objects
         """
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         try:
-            # Query snapshot information using mo_catalog.mo_snapshots
-            result = self.client.execute(
-                """
-                SELECT sname, ts, level, account_name, database_name, table_name
-                FROM mo_catalog.mo_snapshots
-                ORDER BY ts DESC
-            """
+            result = self._get_executor().execute(
+                "SELECT sname, ts, level, account_name, database_name, table_name FROM mo_catalog.mo_snapshots"
             )
 
             snapshots = []
-            for row in result.fetchall():
-                # Convert timestamp to datetime
-                timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
-
-                # Convert level string to enum
-                level_str = row[2]
-                try:
-                    level_enum = SnapshotLevel(level_str.lower())
-                except ValueError:
-                    # If enum conversion fails, keep as string for backward compatibility
-                    level_enum = level_str
-
-                snapshot = Snapshot(
-                    name=row[0],  # sname
-                    level=level_enum,  # level (now as enum)
-                    created_at=timestamp,  # ts
-                    description=None,  # Not available
-                    database=row[4],  # database_name
-                    table=row[5],  # table_name
-                )
-                snapshots.append(snapshot)
+            rows = result.fetchall()
+            for row in rows:
+                snapshots.append(self._parse_snapshot_row(row))
 
             return snapshots
 
         except Exception as e:
             raise SnapshotError(f"Failed to list snapshots: {e}") from None
 
-    def get(self, name: str, executor=None) -> Snapshot:
+    def get(self, name: str) -> Snapshot:
         """
-        Get snapshot by name
+        Get snapshot by name.
 
-        Args::
-
+        Args:
             name: Snapshot name
-            executor: Optional executor (e.g., transaction wrapper)
 
-        Returns::
-
+        Returns:
             Snapshot object
         """
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         try:
-            # Use provided executor or default client execute
-            execute_func = executor.execute if executor else self.client.execute
-            result = execute_func(
+            result = self._get_executor().execute(
                 """
                 SELECT sname, ts, level, account_name, database_name, table_name
                 FROM mo_catalog.mo_snapshots
@@ -270,64 +277,179 @@ class SnapshotManager:
             if not row:
                 raise SnapshotError(f"Snapshot '{name}' not found")
 
-            # Convert timestamp to datetime
-            timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
-
-            # Convert level string to enum
-            level_str = row[2]
-            try:
-                level_enum = SnapshotLevel(level_str.lower())
-            except ValueError:
-                # If enum conversion fails, keep as string for backward compatibility
-                level_enum = level_str
-
-            return Snapshot(
-                name=row[0],  # sname
-                level=level_enum,  # level (now as enum)
-                created_at=timestamp,  # ts
-                description=None,  # Not available
-                database=row[4],  # database_name
-                table=row[5],  # table_name
-            )
+            return self._parse_snapshot_row(row)
 
         except Exception as e:
             if "not found" in str(e):
                 raise e
             raise SnapshotError(f"Failed to get snapshot: {e}")
 
-    def delete(self, name: str, executor=None) -> None:
+    def delete(self, name: str) -> None:
         """
-        Delete snapshot
+        Delete snapshot.
 
-        Args::
-
+        Args:
             name: Snapshot name
-            executor: Optional executor (e.g., transaction wrapper)
         """
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
         try:
-            # Use provided executor or default client execute
-            execute_func = executor.execute if executor else self.client.execute
-            execute_func(f"DROP SNAPSHOT {name}")
+            self._get_executor().execute(f"DROP SNAPSHOT {name}")
         except Exception as e:
             raise SnapshotError(f"Failed to delete snapshot: {e}") from None
 
     def exists(self, name: str) -> bool:
         """
-        Check if snapshot exists
+        Check if snapshot exists.
 
-        Args::
-
+        Args:
             name: Snapshot name
 
-        Returns::
-
+        Returns:
             True if snapshot exists, False otherwise
         """
         try:
             self.get(name)
+            return True
+        except SnapshotError:
+            return False
+
+
+class AsyncSnapshotManager(BaseSnapshotManager):
+    """
+    Asynchronous snapshot management for MatrixOne database operations.
+
+    Provides the same functionality as SnapshotManager but with async/await support.
+    Uses the same executor pattern to support both client and session contexts.
+    Shares SQL building logic with the synchronous version via BaseSnapshotManager.
+    """
+
+    @requires_version(
+        min_version="1.0.0",
+        feature_name="snapshot_creation",
+        description="Snapshot creation functionality",
+        alternative="Use backup/restore operations instead",
+    )
+    async def create(
+        self,
+        name: str,
+        level: Union[str, SnapshotLevel],
+        database: Optional[str] = None,
+        table: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Snapshot:
+        """
+        Create a snapshot asynchronously.
+
+        Args:
+            name: Snapshot name
+            level: Snapshot level (SnapshotLevel enum or string)
+            database: Database name (for database/table level)
+            table: Table name (for table level)
+            description: Snapshot description (not currently used by MatrixOne)
+
+        Returns:
+            Snapshot object
+        """
+        if not self.client._engine:
+            raise ConnectionError("Not connected to database")
+
+        sql = self._build_create_sql(name, level, database, table)
+
+        try:
+            await self._get_executor().execute(sql)
+            # Get snapshot info
+            return await self.get(name)
+        except Exception as e:
+            raise SnapshotError(f"Failed to create snapshot: {e}") from None
+
+    async def list(self) -> List[Snapshot]:
+        """
+        List all snapshots asynchronously.
+
+        Returns:
+            List of Snapshot objects
+        """
+        if not self.client._engine:
+            raise ConnectionError("Not connected to database")
+
+        try:
+            result = await self._get_executor().execute(
+                "SELECT sname, ts, level, account_name, database_name, table_name FROM mo_catalog.mo_snapshots"
+            )
+
+            snapshots = []
+            rows = result.fetchall()
+            for row in rows:
+                snapshots.append(self._parse_snapshot_row(row))
+
+            return snapshots
+
+        except Exception as e:
+            raise SnapshotError(f"Failed to list snapshots: {e}") from None
+
+    async def get(self, name: str) -> Snapshot:
+        """
+        Get snapshot by name asynchronously.
+
+        Args:
+            name: Snapshot name
+
+        Returns:
+            Snapshot object
+        """
+        if not self.client._engine:
+            raise ConnectionError("Not connected to database")
+
+        try:
+            result = await self._get_executor().execute(
+                """
+                SELECT sname, ts, level, account_name, database_name, table_name
+                FROM mo_catalog.mo_snapshots
+                WHERE sname = :name
+            """,
+                {"name": name},
+            )
+
+            row = result.fetchone()
+            if not row:
+                raise SnapshotError(f"Snapshot '{name}' not found")
+
+            return self._parse_snapshot_row(row)
+
+        except Exception as e:
+            if "not found" in str(e):
+                raise e
+            raise SnapshotError(f"Failed to get snapshot: {e}")
+
+    async def delete(self, name: str) -> None:
+        """
+        Delete snapshot asynchronously.
+
+        Args:
+            name: Snapshot name
+        """
+        if not self.client._engine:
+            raise ConnectionError("Not connected to database")
+
+        try:
+            await self._get_executor().execute(f"DROP SNAPSHOT {name}")
+        except Exception as e:
+            raise SnapshotError(f"Failed to delete snapshot: {e}") from None
+
+    async def exists(self, name: str) -> bool:
+        """
+        Check if snapshot exists asynchronously.
+
+        Args:
+            name: Snapshot name
+
+        Returns:
+            True if snapshot exists, False otherwise
+        """
+        try:
+            await self.get(name)
             return True
         except SnapshotError:
             return False

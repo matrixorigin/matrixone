@@ -3005,33 +3005,6 @@ except ImportError:
     SQLAlchemyAsyncSession = None
 
 
-class AsyncTransactionSnapshotManager(AsyncSnapshotManager):
-    """Async snapshot manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def create(
-        self,
-        name: str,
-        level: Union[str, SnapshotLevel],
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> Snapshot:
-        """Create snapshot within transaction asynchronously"""
-        return await super().create(name, level, database, table, description)
-
-    async def get(self, name: str) -> Snapshot:
-        """Get snapshot within transaction asynchronously"""
-        return await super().get(name)
-
-    async def delete(self, name: str) -> None:
-        """Delete snapshot within transaction asynchronously"""
-        return await super().delete(name)
-
-
 class AsyncTransactionPubSubManager(AsyncPubSubManager):
     """Async publish-subscribe manager for use within transactions"""
 
@@ -3500,40 +3473,6 @@ class AsyncTransactionRestoreManager(AsyncRestoreManager):
             return result is not None
         except Exception as e:
             raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}")
-
-
-class AsyncTransactionCloneManager(AsyncCloneManager):
-    """Async clone manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def clone_database(
-        self,
-        target_db: str,
-        source_db: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone database within transaction asynchronously"""
-        return await super().clone_database(target_db, source_db, snapshot_name, if_not_exists)
-
-    async def clone_table(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone table within transaction asynchronously"""
-        return await super().clone_table(target_table, source_table, snapshot_name, if_not_exists)
-
-    async def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone table with snapshot within transaction asynchronously"""
-        return await super().clone_table_with_snapshot(target_table, source_table, snapshot_name, if_not_exists)
 
 
 class AsyncTransactionAccountManager:
