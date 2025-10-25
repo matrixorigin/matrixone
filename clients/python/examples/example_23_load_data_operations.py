@@ -528,6 +528,158 @@ class LoadDataOperationsDemo:
             self.results['tests_failed'] += 1
             self.results['unexpected_results'].append({'test': 'large_data_load', 'error': str(e)})
 
+    def test_jsonline_object_format(self, client):
+        """Test JSONLINE format with object structure"""
+        print("\n=== JSONLINE Object Format Test ===")
+        self.results['tests_run'] += 1
+
+        try:
+            # Create table
+            client.drop_table('jsonline_users')
+            client.create_table_orm('jsonline_users',
+                Column('id', Integer, primary_key=True),
+                Column('name', String(100)),
+                Column('email', String(255)),
+                Column('age', Integer)
+            )
+            self.results['tables_created'].append('jsonline_users')
+            self.logger.info("✅ Created table 'jsonline_users'")
+            
+            # Create JSONLINE file with JSON objects
+            jl_content = '''{"id":1,"name":"Alice","email":"alice@example.com","age":30}
+{"id":2,"name":"Bob","email":"bob@example.com","age":25}
+{"id":3,"name":"Charlie","email":"charlie@example.com","age":35}'''
+            
+            jl_file = os.path.join(TMPFILES_DIR, "jsonline_users.jl")
+            with open(jl_file, 'w') as f:
+                f.write(jl_content)
+            self.results['files_created'].append(jl_file)
+            self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
+            
+            # Load JSONLINE data
+            result = client.load_data.from_file(
+                jl_file,
+                'jsonline_users',
+                format='jsonline',
+                jsondata='object'
+            )
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (object format)")
+            
+            # Verify data
+            count = client.query('jsonline_users').count()
+            assert count == 3
+            self.logger.info("✅ Data verification successful")
+            
+            self.results['tests_passed'] += 1
+
+        except Exception as e:
+            self.logger.error(f"❌ JSONLINE object format test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'jsonline_object_format', 'error': str(e)})
+
+    def test_jsonline_array_format(self, client):
+        """Test JSONLINE format with array structure"""
+        print("\n=== JSONLINE Array Format Test ===")
+        self.results['tests_run'] += 1
+
+        try:
+            # Create table
+            client.drop_table('jsonline_products')
+            client.create_table_orm('jsonline_products',
+                Column('id', Integer, primary_key=True),
+                Column('name', String(100)),
+                Column('price', DECIMAL(10, 2)),
+                Column('stock', Integer)
+            )
+            self.results['tables_created'].append('jsonline_products')
+            self.logger.info("✅ Created table 'jsonline_products'")
+            
+            # Create JSONLINE file with JSON arrays
+            jl_content = '''[1,"Laptop",999.99,50]
+[2,"Mouse",29.99,200]
+[3,"Keyboard",79.99,150]'''
+            
+            jl_file = os.path.join(TMPFILES_DIR, "jsonline_products.jl")
+            with open(jl_file, 'w') as f:
+                f.write(jl_content)
+            self.results['files_created'].append(jl_file)
+            self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
+            
+            # Load JSONLINE data
+            result = client.load_data.from_file(
+                jl_file,
+                'jsonline_products',
+                format='jsonline',
+                jsondata='array'
+            )
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (array format)")
+            
+            # Verify data
+            count = client.query('jsonline_products').count()
+            assert count == 3
+            self.logger.info("✅ Data verification successful")
+            
+            self.results['tests_passed'] += 1
+
+        except Exception as e:
+            self.logger.error(f"❌ JSONLINE array format test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'jsonline_array_format', 'error': str(e)})
+
+    def test_set_clause_with_nullif(self, client):
+        """Test SET clause with NULLIF function"""
+        print("\n=== SET Clause with NULLIF Test ===")
+        self.results['tests_run'] += 1
+
+        try:
+            # Create table
+            client.drop_table('cleaned_data')
+            client.create_table_orm('cleaned_data',
+                Column('id', Integer, primary_key=True),
+                Column('name', String(100)),
+                Column('status', String(50))
+            )
+            self.results['tables_created'].append('cleaned_data')
+            self.logger.info("✅ Created table 'cleaned_data'")
+            
+            # Create CSV with "null" strings that need to be converted to NULL
+            csv_content = '''1,Alice,active
+2,Bob,null
+3,Charlie,active
+4,Diana,null'''
+            
+            csv_file = os.path.join(TMPFILES_DIR, "data_with_nulls.csv")
+            with open(csv_file, 'w') as f:
+                f.write(csv_content)
+            self.results['files_created'].append(csv_file)
+            self.logger.info(f"✅ Created CSV file with 'null' strings: {csv_file}")
+            
+            # Load data with SET clause to convert "null" to NULL
+            result = client.load_data.from_file(
+                csv_file,
+                'cleaned_data',
+                set_clause={
+                    'status': 'NULLIF(status, "null")'
+                }
+            )
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows with SET clause")
+            
+            # Verify NULL conversion
+            result = client.query('cleaned_data').select('status').where('id = ?', 2).first()
+            assert result.status is None
+            self.logger.info("✅ NULLIF conversion verified (row 2 status is NULL)")
+            
+            result = client.query('cleaned_data').select('status').where('id = ?', 4).first()
+            assert result.status is None
+            self.logger.info("✅ NULLIF conversion verified (row 4 status is NULL)")
+            
+            self.results['tests_passed'] += 1
+
+        except Exception as e:
+            self.logger.error(f"❌ SET clause with NULLIF test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'set_clause_nullif', 'error': str(e)})
+
     def test_load_data_manager_instance(self, client):
         """Test that load_data property returns LoadDataManager instance"""
         print("\n=== LoadDataManager Instance Test ===")
@@ -556,7 +708,8 @@ class LoadDataOperationsDemo:
         
         # Clean up tables
         tables = ['users', 'products', 'orders', 'addresses', 'logs', 
-                  'employees', 'accounts', 'transactions', 'strict_data', 'large_data']
+                  'employees', 'accounts', 'transactions', 'strict_data', 'large_data',
+                  'jsonline_users', 'jsonline_products', 'cleaned_data']
         for table in tables:
             try:
                 client.drop_table(table)
@@ -597,6 +750,9 @@ class LoadDataOperationsDemo:
             self.test_transaction_load(client)
             self.test_error_handling(client)
             self.test_large_data_load(client)
+            self.test_jsonline_object_format(client)
+            self.test_jsonline_array_format(client)
+            self.test_set_clause_with_nullif(client)
             self.test_load_data_manager_instance(client)
             
             # Print results

@@ -80,6 +80,10 @@ class LoadDataManager:
         character_set: Optional[str] = None,
         parallel: bool = False,
         columns: Optional[List[str]] = None,
+        format: Optional[str] = None,
+        jsondata: Optional[str] = None,
+        compression: Optional[str] = None,
+        set_clause: Optional[Dict[str, str]] = None,
         **kwargs
     ):
         """
@@ -127,6 +131,27 @@ class LoadDataManager:
             columns (list, optional): List of column names to load data into.
                 When specified, only these columns are populated. Example:
                 ['col1', 'col2', 'col3']
+            
+            format (str, optional): File format. Supported values:
+                - 'csv' (default, no need to specify)
+                - 'jsonline' for JSONLINE format
+                - 'parquet' for Parquet format
+            
+            jsondata (str, optional): JSON data structure (for JSONLINE format).
+                - 'object': JSON objects (one per line)
+                - 'array': JSON arrays (one per line)
+                Required when format='jsonline'
+            
+            compression (str, optional): Compression format.
+                - 'none': No compression (default)
+                - 'gzip' or 'gz': Gzip compression
+                - 'bzip2' or 'bz2': Bzip2 compression
+                - 'lz4': LZ4 compression
+                Can be auto-detected from file extension
+            
+            set_clause (dict, optional): Column transformations.
+                Dictionary of column transformations, e.g.:
+                {'col1': 'NULLIF(col1, "null")', 'col2': 'NULLIF(col2, 1)'}
                 
             **kwargs: Additional options for future extensions
         
@@ -193,6 +218,40 @@ class LoadDataManager:
             ...     'filtered_data',
             ...     lines_starting_by='DATA:'
             ... )
+            
+            # Load JSONLINE format (object)
+            >>> result = client.load_data.from_file(
+            ...     '/path/to/data.jl',
+            ...     'users',
+            ...     format='jsonline',
+            ...     jsondata='object'
+            ... )
+            
+            # Load JSONLINE format (array) with compression
+            >>> result = client.load_data.from_file(
+            ...     '/path/to/data.jl.gz',
+            ...     'users',
+            ...     format='jsonline',
+            ...     jsondata='array',
+            ...     compression='gzip'
+            ... )
+            
+            # Load Parquet format
+            >>> result = client.load_data.from_file(
+            ...     '/path/to/data.parq',
+            ...     'users',
+            ...     format='parquet'
+            ... )
+            
+            # Load with SET clause (NULLIF)
+            >>> result = client.load_data.from_file(
+            ...     '/path/to/data.csv',
+            ...     'users',
+            ...     set_clause={
+            ...         'col1': 'NULLIF(col1, "null")',
+            ...         'col2': 'NULLIF(col2, 1)'
+            ...     }
+            ... )
         """
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
@@ -222,7 +281,11 @@ class LoadDataManager:
             ignore_lines=ignore_lines,
             character_set=character_set,
             parallel=parallel,
-            columns=columns
+            columns=columns,
+            format=format,
+            jsondata=jsondata,
+            compression=compression,
+            set_clause=set_clause
         )
         
         # Execute the LOAD DATA statement
@@ -286,7 +349,11 @@ class LoadDataManager:
         character_set: Optional[str] = None,
         parallel: bool = False,
         columns: Optional[List[str]] = None,
-        local: bool = False
+        local: bool = False,
+        format: Optional[str] = None,
+        jsondata: Optional[str] = None,
+        compression: Optional[str] = None,
+        set_clause: Optional[Dict[str, str]] = None
     ) -> str:
         """
         Build the LOAD DATA SQL statement.
@@ -298,6 +365,52 @@ class LoadDataManager:
         Returns:
             str: Complete LOAD DATA SQL statement
         """
+        # Check if we need to use brace syntax for JSONLINE or Parquet
+        use_brace_syntax = format in ('jsonline', 'parquet')
+        
+        if use_brace_syntax:
+            return self._build_load_data_sql_with_braces(
+                file_path=file_path,
+                table_name=table_name,
+                format=format,
+                jsondata=jsondata,
+                compression=compression,
+                local=local
+            )
+        else:
+            return self._build_load_data_sql_standard(
+                file_path=file_path,
+                table_name=table_name,
+                fields_terminated_by=fields_terminated_by,
+                fields_enclosed_by=fields_enclosed_by,
+                fields_escaped_by=fields_escaped_by,
+                lines_terminated_by=lines_terminated_by,
+                lines_starting_by=lines_starting_by,
+                ignore_lines=ignore_lines,
+                character_set=character_set,
+                parallel=parallel,
+                columns=columns,
+                local=local,
+                set_clause=set_clause
+            )
+    
+    def _build_load_data_sql_standard(
+        self,
+        file_path: str,
+        table_name: str,
+        fields_terminated_by: str = ",",
+        fields_enclosed_by: Optional[str] = None,
+        fields_escaped_by: Optional[str] = None,
+        lines_terminated_by: Optional[str] = None,
+        lines_starting_by: Optional[str] = None,
+        ignore_lines: int = 0,
+        character_set: Optional[str] = None,
+        parallel: bool = False,
+        columns: Optional[List[str]] = None,
+        local: bool = False,
+        set_clause: Optional[Dict[str, str]] = None
+    ) -> str:
+        """Build standard LOAD DATA SQL statement (CSV format)."""
         sql_parts = []
         
         # LOAD DATA [LOCAL] INFILE
@@ -347,9 +460,50 @@ class LoadDataManager:
             column_list = ", ".join(columns)
             sql_parts.append(f"({column_list})")
         
+        # SET clause
+        if set_clause:
+            set_parts = [f"{col}={expr}" for col, expr in set_clause.items()]
+            sql_parts.append("SET " + ", ".join(set_parts))
+        
         # PARALLEL option
         if parallel:
             sql_parts.append("PARALLEL 'true'")
+        
+        return " ".join(sql_parts)
+    
+    def _build_load_data_sql_with_braces(
+        self,
+        file_path: str,
+        table_name: str,
+        format: str,
+        jsondata: Optional[str] = None,
+        compression: Optional[str] = None,
+        local: bool = False
+    ) -> str:
+        """Build LOAD DATA SQL with brace syntax for JSONLINE/Parquet."""
+        sql_parts = []
+        
+        # LOAD DATA [LOCAL] INFILE
+        if local:
+            sql_parts.append("LOAD DATA LOCAL INFILE")
+        else:
+            sql_parts.append("LOAD DATA INFILE")
+        
+        # Build brace parameters
+        brace_params = [f"'filepath'='{file_path}'"]
+        brace_params.append(f"'format'='{format}'")
+        
+        if jsondata:
+            brace_params.append(f"'jsondata'='{jsondata}'")
+        
+        if compression:
+            brace_params.append(f"'compression'='{compression}'")
+        
+        # Combine into brace syntax
+        sql_parts.append("{" + ", ".join(brace_params) + "}")
+        
+        # INTO TABLE
+        sql_parts.append(f"INTO TABLE {table_name}")
         
         return " ".join(sql_parts)
 

@@ -401,4 +401,115 @@ class TestLoadDataErrorHandling:
         # Test negative ignore_lines
         with pytest.raises(ValueError):
             test_client.load_data.from_file('/tmp/test.csv', 'test_table', ignore_lines=-1)
+    
+    def test_jsonline_object_format(self, test_client):
+        """Test JSONLINE format with object structure"""
+        test_client.drop_table('test_load_jsonline_obj')
+        test_client.create_table_orm('test_load_jsonline_obj',
+            Column('id', Integer, primary_key=True),
+            Column('name', String(100)),
+            Column('email', String(255)),
+            Column('age', Integer)
+        )
+        
+        # Create JSONLINE file with objects
+        jl_content = '''{"id":1,"name":"Alice","email":"alice@example.com","age":30}
+{"id":2,"name":"Bob","email":"bob@example.com","age":25}
+{"id":3,"name":"Charlie","email":"charlie@example.com","age":35}'''
+        
+        jl_file = os.path.join(TMPFILES_DIR, f"test_jsonline_obj_{id(self)}.jl")
+        with open(jl_file, 'w') as f:
+            f.write(jl_content)
+        
+        try:
+            # Load JSONLINE data
+            result = test_client.load_data.from_file(
+                jl_file,
+                'test_load_jsonline_obj',
+                format='jsonline',
+                jsondata='object'
+            )
+            assert result.affected_rows == 3
+            
+            # Verify data using query builder
+            count = test_client.query('test_load_jsonline_obj').count()
+            assert count == 3
+            
+        finally:
+            os.unlink(jl_file)
+            test_client.drop_table('test_load_jsonline_obj')
+    
+    def test_jsonline_array_format(self, test_client):
+        """Test JSONLINE format with array structure"""
+        test_client.drop_table('test_load_jsonline_arr')
+        test_client.create_table_orm('test_load_jsonline_arr',
+            Column('id', Integer, primary_key=True),
+            Column('name', String(100)),
+            Column('email', String(255)),
+            Column('age', Integer)
+        )
+        
+        # Create JSONLINE file with arrays
+        jl_content = '''[1,"Alice","alice@example.com",30]
+[2,"Bob","bob@example.com",25]
+[3,"Charlie","charlie@example.com",35]'''
+        
+        jl_file = os.path.join(TMPFILES_DIR, f"test_jsonline_arr_{id(self)}.jl")
+        with open(jl_file, 'w') as f:
+            f.write(jl_content)
+        
+        try:
+            # Load JSONLINE data
+            result = test_client.load_data.from_file(
+                jl_file,
+                'test_load_jsonline_arr',
+                format='jsonline',
+                jsondata='array'
+            )
+            assert result.affected_rows == 3
+            
+            # Verify data using query builder
+            count = test_client.query('test_load_jsonline_arr').count()
+            assert count == 3
+            
+        finally:
+            os.unlink(jl_file)
+            test_client.drop_table('test_load_jsonline_arr')
+    
+    def test_set_clause_nullif(self, test_client):
+        """Test SET clause with NULLIF function"""
+        test_client.drop_table('test_load_set_nullif')
+        test_client.create_table_orm('test_load_set_nullif',
+            Column('id', Integer, primary_key=True),
+            Column('name', String(100)),
+            Column('status', String(50))
+        )
+        
+        # Create CSV with "null" strings
+        csv_content = '''1,Alice,active
+2,Bob,null
+3,Charlie,active'''
+        
+        csv_file = os.path.join(TMPFILES_DIR, f"test_set_nullif_{id(self)}.csv")
+        with open(csv_file, 'w') as f:
+            f.write(csv_content)
+        
+        try:
+            # Load data with SET clause to convert "null" to NULL
+            result = test_client.load_data.from_file(
+                csv_file,
+                'test_load_set_nullif',
+                set_clause={
+                    'status': 'NULLIF(status, "null")'
+                }
+            )
+            assert result.affected_rows == 3
+            
+            # Verify NULL conversion using query builder
+            result = test_client.query('test_load_set_nullif').select('status').where('id = ?', 2).first()
+            assert result.status is None
+            
+        finally:
+            os.unlink(csv_file)
+            test_client.drop_table('test_load_set_nullif')
 
