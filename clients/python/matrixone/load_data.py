@@ -113,7 +113,24 @@ class LoadDataManager:
         **kwargs,
     ):
         """
-        Load CSV data from a file into a table.
+        Load CSV (Comma-Separated Values) data from a file into a table.
+        
+        This is the most commonly used data loading interface, providing a simplified
+        API for CSV files with sensible defaults and the most frequently used options.
+        
+        CSV Format:
+        -----------
+        CSV is a plain text format where:
+        - Each line represents one row
+        - Fields are separated by a delimiter (default: comma)
+        - Fields may be enclosed in quotes to handle special characters
+        
+        Common Use Cases:
+        -----------------
+        - **Data imports**: Import data from Excel, databases, or other sources
+        - **Bulk loading**: Load large datasets efficiently
+        - **ETL pipelines**: Extract-Transform-Load workflows
+        - **Data migration**: Move data between systems
 
         Simplified interface for CSV files with commonly used options.
 
@@ -171,20 +188,42 @@ class LoadDataManager:
     ):
         """
         Load TSV (Tab-Separated Values) data from a file.
+        
+        TSV Format:
+        -----------
+        TSV is similar to CSV but uses tab characters ('\\t') as delimiters.
+        It's commonly used for:
+        - **Log files**: Application logs, server logs
+        - **Data exports**: Database exports, system reports
+        - **Scientific data**: Research data, measurements
+        - **Text processing**: NLP datasets, corpus files
+        
+        Advantages over CSV:
+        - No need for quoting (tabs rarely appear in data)
+        - Better readability in text editors with tab stops
+        - Standard format for many Unix tools (cut, awk, etc.)
 
         Args:
             file_path (str): Path to the TSV file
             table_name_or_model: Table name (str) or SQLAlchemy model class
             ignore_lines (int): Number of header lines to skip. Default: 0
-            columns (list, optional): List of column names to load
+            columns (list, optional): List of column names to load into
+            **kwargs: Additional options
 
         Returns:
             ResultSet: Load results with affected_rows
 
         Examples::
 
-            >>> client.load_data.from_tsv('data.tsv', 'logs')
-            >>> client.load_data.from_tsv('data.tsv', 'logs', ignore_lines=1)
+            >>> # Basic TSV loading
+            >>> client.load_data.from_tsv('logs.tsv', Log)
+            
+            >>> # TSV with header row
+            >>> client.load_data.from_tsv('data.tsv', User, ignore_lines=1)
+            
+            >>> # Load into specific columns
+            >>> client.load_data.from_tsv('data.tsv', User, 
+            ...     columns=['id', 'name', 'email'])
         """
         return self.from_csv(
             file_path=file_path,
@@ -204,30 +243,58 @@ class LoadDataManager:
         **kwargs,
     ):
         """
-        Load JSONLINE data from a file.
+        Load JSONLINE (JSON Lines, also called NDJSON) data from a file.
+        
+        JSONLINE Format:
+        ----------------
+        JSONLINE is a format where each line is a valid JSON value (usually an object).
+        Unlike regular JSON arrays, JSONLINE is:
+        - **Streamable**: Process one line at a time, no need to load entire file
+        - **Appendable**: Add new records by appending lines
+        - **Fault-tolerant**: One corrupted line doesn't break the entire file
+        - **Efficient**: Suitable for very large datasets
+        
+        Common Use Cases:
+        -----------------
+        - **Log aggregation**: Application logs, access logs, event streams
+        - **API responses**: RESTful API data exports
+        - **Big data**: Large datasets from Hadoop, Spark, etc.
+        - **Event sourcing**: Event streams, message queues
+        - **Machine learning**: Training datasets, feature stores
+        
+        Two Structure Types:
+        --------------------
+        1. **OBJECT** (default): {"id":1,"name":"Alice","age":30}
+           - Most common and readable
+           - Field names included in each line
+        
+        2. **ARRAY**: [1,"Alice",30]
+           - More compact (no field names)
+           - Column order must match table
 
         Args:
-            file_path (str): Path to the JSONLINE file
+            file_path (str): Path to the JSONLINE file (.jsonl, .ndjson)
             table_name_or_model: Table name (str) or SQLAlchemy model class
-            structure (str or JsonDataStructure): JSON structure. Default: JsonDataStructure.OBJECT
-                - JsonDataStructure.OBJECT or 'object': JSON objects
+            structure (str or JsonDataStructure): JSON structure format
+                - JsonDataStructure.OBJECT or 'object': JSON objects (default)
                 - JsonDataStructure.ARRAY or 'array': JSON arrays
             compression (str or CompressionFormat, optional): Compression format
+            **kwargs: Additional options
 
         Returns:
             ResultSet: Load results with affected_rows
 
         Examples::
 
-            # JSONLINE with objects
-            >>> client.load_data.from_jsonline('data.jl', 'users')
-
-            # JSONLINE with arrays
-            >>> client.load_data.from_jsonline('data.jl', 'users',
+            # Object structure (most common)
+            >>> client.load_data.from_jsonline('events.jsonl', Event)
+            
+            # Array structure
+            >>> client.load_data.from_jsonline('data.jsonl', User,
             ...     structure=JsonDataStructure.ARRAY)
 
-            # Compressed JSONLINE
-            >>> client.load_data.from_jsonline('data.jl.gz', 'users',
+            # Compressed file
+            >>> client.load_data.from_jsonline('events.jsonl.gz', Event,
             ...     compression=CompressionFormat.GZIP)
         """
         # Convert enum to string if needed
@@ -539,24 +606,59 @@ class LoadDataManager:
     ):
         """
         Load CSV data from a stage file.
+        
+        This is a simplified interface for loading CSV files from an external stage.
+        A stage is a named external storage location (filesystem, S3, etc.) that you
+        create once and can reuse for multiple load operations.
+        
+        Why use stages?
+        ---------------
+        - **Centralized storage**: Keep all data files in one location
+        - **Access control**: Manage permissions at the stage level
+        - **Reusability**: Load multiple files from the same stage
+        - **Performance**: Direct loading from cloud storage (S3, etc.)
 
         Args:
             stage_name (str): Stage name (without 'stage://' prefix)
-            filepath (str): File path within the stage
+                Example: 'my_data_stage', 's3_stage'
+            filepath (str): File path within the stage (relative to stage URL)
+                Example: 'users.csv', 'data/2024/users.csv'
             table_name_or_model: Table name (str) or SQLAlchemy model class
             delimiter (str): Field delimiter. Default: ','
-            enclosed_by (str, optional): Field enclosure character
+            enclosed_by (str, optional): Field enclosure character (e.g., '"')
             compression (str or CompressionFormat, optional): Compression format
-            **kwargs: Additional options
+                Supported: GZIP, BZIP2, LZ4, etc.
+            **kwargs: Additional options (ignore_lines, columns, set_clause, etc.)
 
         Returns:
             ResultSet: Load results with affected_rows
 
-        Example:
+        Prerequisites:
+            You must create the stage first:
+            >>> client.execute("CREATE STAGE my_stage URL='file:///path/to/data/'")
+
+        Examples:
+            >>> # Basic CSV from stage
             >>> result = client.load_data.from_stage_csv(
             ...     'mystage',
             ...     'users.csv',
             ...     User
+            ... )
+            
+            >>> # CSV with custom delimiter
+            >>> result = client.load_data.from_stage_csv(
+            ...     'mystage',
+            ...     'data.txt',
+            ...     User,
+            ...     delimiter='|'
+            ... )
+            
+            >>> # Skip header row
+            >>> result = client.load_data.from_stage_csv(
+            ...     'mystage',
+            ...     'users.csv',
+            ...     User,
+            ...     ignore_lines=1
             ... )
         """
         return self.from_stage(
@@ -580,22 +682,44 @@ class LoadDataManager:
     ):
         """
         Load TSV (Tab-Separated Values) data from a stage file.
+        
+        TSV is a common format for data interchange, especially for log files
+        and data exports. This method automatically uses tab ('\\t') as the delimiter.
+        
+        A stage is a named external storage location that you create once and 
+        reuse for loading multiple files.
 
         Args:
             stage_name (str): Stage name (without 'stage://' prefix)
-            filepath (str): File path within the stage
+                Example: 'log_stage', 'export_stage'
+            filepath (str): File path within the stage (relative to stage URL)
+                Example: 'logs.tsv', 'exports/2024-01/data.tsv'
             table_name_or_model: Table name (str) or SQLAlchemy model class
             compression (str or CompressionFormat, optional): Compression format
-            **kwargs: Additional options
+                Useful for compressed TSV files (.tsv.gz, .tsv.bz2)
+            **kwargs: Additional options (ignore_lines, columns, set_clause, etc.)
 
         Returns:
             ResultSet: Load results with affected_rows
 
-        Example:
+        Prerequisites:
+            Create the stage first:
+            >>> client.execute("CREATE STAGE log_stage URL='file:///var/logs/'")
+
+        Examples:
+            >>> # Basic TSV from stage
             >>> result = client.load_data.from_stage_tsv(
-            ...     'mystage',
-            ...     'data.tsv',
-            ...     User
+            ...     'log_stage',
+            ...     'app.tsv',
+            ...     Log
+            ... )
+            
+            >>> # Compressed TSV
+            >>> result = client.load_data.from_stage_tsv(
+            ...     'log_stage',
+            ...     'app.tsv.gz',
+            ...     Log,
+            ...     compression=CompressionFormat.GZIP
             ... )
         """
         return self.from_stage(
@@ -618,25 +742,59 @@ class LoadDataManager:
         **kwargs,
     ):
         """
-        Load JSONLINE data from a stage file.
+        Load JSONLINE (JSON Lines) data from a stage file.
+        
+        JSONLINE format stores one JSON object per line, making it ideal for:
+        - Streaming data (logs, events, metrics)
+        - Large datasets that don't fit in memory
+        - Append-only data collections
+        
+        A stage is a named external storage location (filesystem, S3, etc.) that 
+        provides centralized, reusable access to data files.
 
         Args:
             stage_name (str): Stage name (without 'stage://' prefix)
-            filepath (str): File path within the stage
+                Example: 'event_stage', 's3_logs'
+            filepath (str): File path within the stage (relative to stage URL)
+                Example: 'events.jsonl', 'logs/2024-10/events.jsonl'
             table_name_or_model: Table name (str) or SQLAlchemy model class
-            structure (str or JsonDataStructure): JSON structure. Default: JsonDataStructure.OBJECT
+            structure (str or JsonDataStructure): JSON structure format
+                - JsonDataStructure.OBJECT: {"id":1,"name":"Alice"} (default)
+                - JsonDataStructure.ARRAY: [1,"Alice",30]
             compression (str or CompressionFormat, optional): Compression format
-            **kwargs: Additional options
+                Useful for .jsonl.gz, .jsonl.bz2 files
+            **kwargs: Additional options (columns, set_clause, etc.)
 
         Returns:
             ResultSet: Load results with affected_rows
 
-        Example:
+        Prerequisites:
+            Create the stage first:
+            >>> client.execute("CREATE STAGE event_stage URL='s3://my-bucket/events/'")
+
+        Examples:
+            >>> # Load JSONLINE with object structure
             >>> result = client.load_data.from_stage_jsonline(
-            ...     'mystage',
-            ...     'data.jsonl',
-            ...     User,
+            ...     'event_stage',
+            ...     'user_events.jsonl',
+            ...     Event,
             ...     structure=JsonDataStructure.OBJECT
+            ... )
+            
+            >>> # Load JSONLINE with array structure
+            >>> result = client.load_data.from_stage_jsonline(
+            ...     'event_stage',
+            ...     'metrics.jsonl',
+            ...     Metric,
+            ...     structure=JsonDataStructure.ARRAY
+            ... )
+            
+            >>> # Load compressed JSONLINE
+            >>> result = client.load_data.from_stage_jsonline(
+            ...     'event_stage',
+            ...     'events.jsonl.gz',
+            ...     Event,
+            ...     compression=CompressionFormat.GZIP
             ... )
         """
         return self.from_stage(
