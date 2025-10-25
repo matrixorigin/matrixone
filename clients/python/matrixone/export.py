@@ -20,7 +20,65 @@ using MatrixOne's SELECT ... INTO OUTFILE and SELECT ... INTO STAGE commands.
 """
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
+
+
+def _query_to_sql(query: Union[str, Any]) -> str:
+    """
+    Convert various query types to SQL string.
+    
+    Args:
+        query: Can be:
+            - String: Returned as-is  
+            - SQLAlchemy select() statement: Compiled to SQL
+            - MatrixOneQuery object: Compiled via _build_sql()
+            
+    Returns:
+        SQL string
+        
+    Examples::
+    
+        # String query
+        sql = _query_to_sql("SELECT * FROM users")
+        
+        # SQLAlchemy select()
+        from sqlalchemy import select
+        stmt = select(User).where(User.age > 25)
+        sql = _query_to_sql(stmt)
+        
+        # MatrixOneQuery
+        query = client.query(User).filter(User.age > 25)
+        sql = _query_to_sql(query)
+    """
+    # If it's already a string, return it
+    if isinstance(query, str):
+        return query.rstrip(';').strip()
+    
+    # If it has _build_sql method (MatrixOneQuery)
+    if hasattr(query, '_build_sql'):
+        sql, params = query._build_sql()
+        # Replace parameters in the SQL
+        if params:
+            for param in params:
+                if isinstance(param, str):
+                    sql = sql.replace("?", f"'{param}'", 1)
+                else:
+                    sql = sql.replace("?", str(param), 1)
+        return sql.rstrip(';').strip()
+    
+    # If it's a SQLAlchemy statement (has compile method)
+    if hasattr(query, 'compile'):
+        try:
+            compiled = query.compile(compile_kwargs={"literal_binds": True})
+            return str(compiled).rstrip(';').strip()
+        except Exception as e:
+            raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
+    
+    # Unsupported type
+    raise TypeError(
+        f"Unsupported query type: {type(query)}. "
+        "Expected str, SQLAlchemy select(), or MatrixOneQuery object."
+    )
 
 
 class ExportFormat(Enum):
@@ -31,7 +89,7 @@ class ExportFormat(Enum):
 
 
 def _build_export_sql(
-    query: str,
+    query: Union[str, Any],
     output_path: str,
     format: ExportFormat = ExportFormat.CSV,
     fields_terminated_by: Optional[str] = None,
@@ -46,7 +104,10 @@ def _build_export_sql(
     Build export SQL statement (shared logic for sync and async).
 
     Args:
-        query: SELECT query to execute (without INTO clause)
+        query: SELECT query to execute (without INTO clause). Can be:
+            - String: Raw SQL
+            - SQLAlchemy select() statement
+            - MatrixOneQuery object
         output_path: Output file path or stage path (e.g., '/tmp/file.csv' or 'stage://stage_name/file.csv')
         format: Export file format
         fields_terminated_by: Field delimiter
@@ -60,6 +121,9 @@ def _build_export_sql(
     Returns:
         Complete export SQL statement
     """
+    # Convert query to SQL string
+    query_sql = _query_to_sql(query)
+    
     # Determine quote style for output path based on fields_enclosed_by
     # If fields_enclosed_by contains a quote character, use double quotes for the path
     # to avoid quote conflicts in the SQL statement
@@ -69,7 +133,7 @@ def _build_export_sql(
         path_quoted = f"'{output_path}'"
 
     # Build the export SQL
-    sql_parts = [query.rstrip(';').strip(), "INTO OUTFILE", path_quoted]
+    sql_parts = [query_sql, "INTO OUTFILE", path_quoted]
 
     # Add format-specific options
     if format == ExportFormat.CSV:
@@ -131,7 +195,7 @@ class ExportManager:
 
     def to_file(
         self,
-        query: str,
+        query: Union[str, Any],
         filepath: str,
         format: ExportFormat = ExportFormat.CSV,
         fields_terminated_by: Optional[str] = None,
@@ -148,7 +212,10 @@ class ExportManager:
         on the MatrixOne server's filesystem.
 
         Args:
-            query: SELECT query to execute (without INTO clause)
+            query: SELECT query to execute. Can be:
+                - String: Raw SQL (e.g., "SELECT * FROM users")
+                - SQLAlchemy select(): stmt = select(User).where(User.age > 25)
+                - MatrixOneQuery: query = client.query(User).filter(User.age > 25)
             filepath: Absolute path on server filesystem where file will be created
             format: Export file format (CSV or JSONLINE)
             fields_terminated_by: Field delimiter (default: ',' for CSV)
@@ -162,7 +229,7 @@ class ExportManager:
             ResultSet with export operation results
 
         Examples:
-            >>> # Export to CSV file with headers
+            >>> # Export with raw SQL
             >>> client.export.to_file(
             ...     query="SELECT * FROM orders WHERE order_date > '2025-01-01'",
             ...     filepath="/tmp/orders_export.csv",
@@ -170,12 +237,23 @@ class ExportManager:
             ...     header=True
             ... )
 
-            >>> # Export to JSONLINE format
+            >>> # Export with SQLAlchemy select()
+            >>> from sqlalchemy import select
+            >>> stmt = select(Order).where(Order.order_date > '2025-01-01')
             >>> client.export.to_file(
-            ...     query="SELECT * FROM users",
-            ...     filepath="/tmp/users.jsonl",
-            ...     format=ExportFormat.JSONLINE
+            ...     query=stmt,
+            ...     filepath="/tmp/orders_export.csv",
+            ...     format=ExportFormat.CSV,
+            ...     header=True
             ... )
+            
+            >>> # Export with MatrixOne fulltext search
+            >>> from sqlalchemy import select
+            >>> from matrixone.sqlalchemy_ext import boolean_match
+            >>> stmt = select(Article).where(
+            ...     boolean_match("title", "content").must("python")
+            ... )
+            >>> client.export.to_file(query=stmt, filepath="/tmp/articles.csv")
 
         Note:
             - The filepath must be on the MatrixOne server's filesystem
@@ -201,7 +279,7 @@ class ExportManager:
 
     def to_stage(
         self,
-        query: str,
+        query: Union[str, Any],
         stage_name: str,
         filename: str,
         format: ExportFormat = ExportFormat.CSV,
@@ -220,7 +298,10 @@ class ExportManager:
         external stage (S3, local filesystem, etc.).
 
         Args:
-            query: SELECT query to execute (without INTO clause)
+            query: SELECT query to execute. Can be:
+                - String: Raw SQL (e.g., "SELECT * FROM users")
+                - SQLAlchemy select(): stmt = select(User).where(User.age > 25)
+                - MatrixOneQuery: query = client.query(User).filter(User.age > 25)
             stage_name: Name of the target stage
             filename: Filename to create in the stage
             format: Export file format (CSV or JSONLINE)
@@ -236,7 +317,7 @@ class ExportManager:
             ResultSet with export operation results
 
         Examples:
-            >>> # Export to stage as CSV
+            >>> # Export to stage with raw SQL
             >>> client.export.to_stage(
             ...     query="SELECT * FROM orders",
             ...     stage_name="s3_stage",
@@ -246,13 +327,23 @@ class ExportManager:
             ...     compression="gzip"
             ... )
 
-            >>> # Export aggregated results
+            >>> # Export with SQLAlchemy select()
+            >>> from sqlalchemy import select, func
+            >>> stmt = select(Sale.product_id, func.sum(Sale.quantity).label('total')).group_by(Sale.product_id)
             >>> client.export.to_stage(
-            ...     query="SELECT product_id, SUM(quantity) as total FROM sales GROUP BY product_id",
+            ...     query=stmt,
             ...     stage_name="local_stage",
             ...     filename="sales_summary.jsonl",
             ...     format=ExportFormat.JSONLINE
             ... )
+            
+            >>> # Export with MatrixOne vector search
+            >>> from sqlalchemy import select
+            >>> query_vector = [0.1, 0.2, 0.3, ...]
+            >>> stmt = (select(Document, Document.embedding.l2_distance(query_vector).label('distance'))
+            ...        .order_by(Document.embedding.l2_distance(query_vector))
+            ...        .limit(100))
+            >>> client.export.to_stage(query=stmt, stage_name="results", filename="similar_docs.csv")
 
         Note:
             - The stage must exist before exporting
@@ -301,7 +392,7 @@ class AsyncExportManager:
 
     async def to_file(
         self,
-        query: str,
+        query: Union[str, Any],
         filepath: str,
         format: ExportFormat = ExportFormat.CSV,
         fields_terminated_by: Optional[str] = None,
@@ -330,7 +421,7 @@ class AsyncExportManager:
 
     async def to_stage(
         self,
-        query: str,
+        query: Union[str, Any],
         stage_name: str,
         filename: str,
         format: ExportFormat = ExportFormat.CSV,

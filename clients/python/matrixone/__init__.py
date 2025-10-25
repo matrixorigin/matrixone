@@ -97,6 +97,9 @@ from .sqlalchemy_ext import (
 from .sqlalchemy_ext.adapters import logical_and, logical_not, logical_or
 from .version import FeatureRequirement, VersionInfo, VersionManager, requires_version
 
+# Import SQLAlchemy 2.0 select support
+from .sqlalchemy_select import select, compile_select_to_sql
+
 __version__ = "1.0.0"
 __all__ = [
     "Client",
@@ -186,4 +189,7 @@ __all__ = [
     "logical_and",
     "logical_or",
     "logical_not",
+    # SQLAlchemy 2.0 select support
+    "select",
+    "compile_select_to_sql",
 ]

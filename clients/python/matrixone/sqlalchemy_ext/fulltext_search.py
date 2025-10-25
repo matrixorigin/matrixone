@@ -80,9 +80,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean
-from sqlalchemy.sql import and_, not_, or_, text
-from sqlalchemy.sql.elements import ClauseElement
+from sqlalchemy import Boolean, true
+from sqlalchemy.sql import and_, not_, or_, text, literal_column
+from sqlalchemy.sql.elements import ClauseElement, ColumnElement, BinaryExpression
+from sqlalchemy.ext.compiler import compiles
 
 if TYPE_CHECKING:
     from ..client import Client
@@ -685,7 +686,7 @@ class FulltextQueryBuilder:
         return self.as_sql(table, columns, mode, include_score=True)
 
 
-class FulltextFilter(ClauseElement):
+class FulltextFilter(ColumnElement):
     """Advanced fulltext filter for integrating fulltext search with ORM queries.
 
     This class wraps FulltextQueryBuilder to provide seamless integration
@@ -752,6 +753,13 @@ class FulltextFilter(ClauseElement):
         - Complex nested groups may have syntax restrictions
         - Use fulltext_and/fulltext_or for combining with other conditions
     """
+    
+    # Disable SQL compilation caching for this class
+    # We set this to False because FulltextFilter has complex internal state
+    # (query_builder, columns, mode) that affects SQL generation, and we haven't
+    # implemented the cache key generation methods (__visit_name__, _cache_key_traversal)
+    # Setting to False is the safe choice - it disables caching but ensures correctness
+    inherit_cache = False
 
     def __init__(self, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN):
         super().__init__()
@@ -759,8 +767,21 @@ class FulltextFilter(ClauseElement):
         self.mode = mode
         self.query_builder = FulltextQueryBuilder()
         self._natural_query = None  # Store natural language query separately
-        # Set SQLAlchemy type info for compatibility
         self.type = Boolean()
+    
+    def __bool__(self):
+        """
+        Override bool to prevent SQLAlchemy from treating this as a boolean value.
+        This is important for proper WHERE clause generation.
+        """
+        raise NotImplementedError(
+            "FulltextFilter cannot be used as a boolean value directly. "
+            "Use it within SQLAlchemy expressions like select().where()"
+        )
+    
+    def self_group(self, against=None):
+        """Override self_group to return self without wrapping."""
+        return self
 
     def columns(self, *columns: str) -> "FulltextFilter":
         """Set the columns to search in."""
@@ -852,13 +873,6 @@ class FulltextFilter(ClauseElement):
             return f"MATCH({columns_str}) AGAINST('{query_string}' WITH QUERY EXPANSION)"
         else:
             return f"MATCH({columns_str}) AGAINST('{query_string}')"
-
-    def _compiler_dispatch(self, visitor, **kw):
-        """SQLAlchemy compiler dispatch method for complete compatibility."""
-        # Generate the MATCH() AGAINST() SQL
-        sql_text = self.compile()
-        # Return a text clause that SQLAlchemy can handle
-        return visitor.process(text(sql_text), **kw)
 
     def label(self, name: str):
         """Create a labeled version for use in SELECT clauses.
@@ -954,6 +968,30 @@ class FulltextFilter(ClauseElement):
             else:
                 processed_conditions.append(condition)
         return or_(*processed_conditions)
+
+
+# Custom compiler for FulltextFilter to prevent "= 1" wrapping
+@compiles(FulltextFilter)
+def visit_fulltext_filter(element, compiler, **kw):
+    """
+    Custom compiler for FulltextFilter that generates MATCH() AGAINST() SQL.
+    
+    This ensures that in WHERE clauses, we get:
+        WHERE MATCH(...) AGAINST(...)
+    
+    Instead of:
+        WHERE MATCH(...) AGAINST(...) = 1
+    """
+    # Get the MATCH() AGAINST() SQL
+    match_sql = element.compile()
+    
+    # In WHERE context, SQLAlchemy expects a boolean comparison
+    # For MATCH() AGAINST(), the expression itself returns a boolean/score
+    # We need to return it without the "= 1" wrapper
+    # 
+    # The trick is to check if we're in a boolean context
+    # If we are, return the expression as-is (it's already a valid boolean expression)
+    return match_sql
 
 
 # Convenience functions for common use cases
