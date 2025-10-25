@@ -225,6 +225,7 @@ class Client(BaseMatrixOneClient):
         self._metadata = None
         self._load_data = None
         self._stage = None
+        self._export = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -1360,6 +1361,15 @@ class Client(BaseMatrixOneClient):
         if self._stage is None:
             self._stage = StageManager(self)
         return self._stage
+
+    @property
+    def export(self):
+        """Get export manager for data export operations (INTO OUTFILE, INTO STAGE)"""
+        if self._export is None:
+            from .export import ExportManager
+
+            self._export = ExportManager(self)
+        return self._export
 
     @property
     def vector_ops(self) -> Optional["VectorManager"]:

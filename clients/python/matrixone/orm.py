@@ -2122,6 +2122,225 @@ class MatrixOneQuery(BaseMatrixOneQuery):
 
         return self._execute(explain_sql, params)
 
+    def _get_export_manager(self):
+        """Get the appropriate export manager for current context (sync/async, transaction/non-transaction)"""
+        from .export import ExportManager
+
+        return ExportManager(self.client if not self.transaction_wrapper else self.transaction_wrapper)
+
+    def _parse_export_format(self, format: str):
+        """Parse format string to ExportFormat enum"""
+        from .export import ExportFormat
+
+        return ExportFormat.CSV if format.lower() == 'csv' else ExportFormat.JSONLINE
+
+    def export_to_file(
+        self,
+        filepath: str,
+        format: str = 'csv',
+        fields_terminated_by: Optional[str] = None,
+        fields_enclosed_by: Optional[str] = None,
+        lines_terminated_by: Optional[str] = None,
+        header: bool = False,
+        max_file_size: Optional[int] = None,
+        force_quote: Optional[list] = None,
+    ) -> Any:
+        """
+        Export query results to a file using SELECT ... INTO OUTFILE.
+
+        This is a convenience method that builds the SELECT query and exports it
+        to a file on the MatrixOne server's filesystem.
+
+        Args:
+            filepath: Absolute path on server filesystem where file will be created
+            format: Export file format ('csv' or 'jsonline')
+            fields_terminated_by: Field delimiter (default: ',' for CSV)
+            fields_enclosed_by: Field enclosure character (default: '"' for CSV)
+            lines_terminated_by: Line terminator (default: '\\n')
+            header: Whether to include column headers (default: False)
+            max_file_size: Maximum size per file in bytes (for splitting large exports)
+            force_quote: List of column names/indices to always quote
+
+        Returns:
+            ResultSet with export operation results
+
+        Examples:
+            >>> # Export filtered users to CSV with headers
+            >>> client.query(User).filter(User.age > 25).export_to_file(
+            ...     filepath="/tmp/users_over_25.csv",
+            ...     format='csv',
+            ...     header=True
+            ... )
+
+            >>> # Export aggregated data
+            >>> from sqlalchemy import func
+            >>> client.query(Order, func.sum(Order.amount).label('total')) \\
+            ...     .group_by(Order.customer_id) \\
+            ...     .export_to_file("/tmp/customer_totals.csv", format='csv', header=True)
+
+        Note:
+            - The filepath must be on the MatrixOne server's filesystem
+            - The MatrixOne server process must have write permissions
+            - For more control, use client.export.to_file() with the query's SQL
+        """
+        # Build the SELECT query SQL
+        sql, params = self._build_sql()
+
+        # Use the export manager to export
+        export_manager = self._get_export_manager()
+        export_format = self._parse_export_format(format)
+
+        return export_manager.to_file(
+            query=sql,
+            filepath=filepath,
+            format=export_format,
+            fields_terminated_by=fields_terminated_by,
+            fields_enclosed_by=fields_enclosed_by,
+            lines_terminated_by=lines_terminated_by,
+            header=header,
+            max_file_size=max_file_size,
+            force_quote=force_quote,
+        )
+
+    def export_to_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        format: str = 'csv',
+        fields_terminated_by: Optional[str] = None,
+        fields_enclosed_by: Optional[str] = None,
+        lines_terminated_by: Optional[str] = None,
+        header: bool = False,
+        max_file_size: Optional[int] = None,
+        force_quote: Optional[list] = None,
+        compression: Optional[str] = None,
+    ) -> Any:
+        """
+        Export query results to a stage using SELECT ... INTO STAGE (Recommended).
+
+        This is the recommended way to export query results. It builds the SELECT query
+        and exports it to an external stage (S3, local filesystem, etc.).
+
+        Args:
+            stage_name: Name of the target stage
+            filename: Filename to create in the stage
+            format: Export file format ('csv' or 'jsonline')
+            fields_terminated_by: Field delimiter (default: ',' for CSV)
+            fields_enclosed_by: Field enclosure character (default: '"' for CSV)
+            lines_terminated_by: Line terminator (default: '\\n')
+            header: Whether to include column headers (default: False)
+            max_file_size: Maximum size per file in bytes (for splitting large exports)
+            force_quote: List of column names/indices to always quote
+            compression: Compression format (e.g., 'gzip', 'bzip2')
+
+        Returns:
+            ResultSet with export operation results
+
+        Examples:
+            >>> # Export users to S3 stage with compression
+            >>> client.query(User).filter(User.active == True).export_to_stage(
+            ...     stage_name='s3_backup',
+            ...     filename='active_users.csv',
+            ...     format='csv',
+            ...     header=True,
+            ...     compression='gzip'
+            ... )
+
+            >>> # Export aggregated sales data
+            >>> from sqlalchemy import func
+            >>> client.query(Sale) \\
+            ...     .select(Sale.product_id, func.sum(Sale.quantity).label('total_sold')) \\
+            ...     .group_by(Sale.product_id) \\
+            ...     .having(func.sum(Sale.quantity) > 100) \\
+            ...     .export_to_stage('data_warehouse', 'sales_summary.csv', header=True)
+
+            >>> # Export to JSONLINE format
+            >>> client.query(Event).filter(Event.timestamp > '2025-01-01').export_to_stage(
+            ...     stage_name='event_archive',
+            ...     filename='events_2025.jsonl',
+            ...     format='jsonline'
+            ... )
+
+        Note:
+            - The stage must exist before exporting
+            - The stage must have appropriate write permissions
+            - Use compression for large exports to save storage and transfer costs
+            - This is more flexible than export_to_file() as it supports cloud storage
+        """
+        # Build the SELECT query SQL
+        sql, params = self._build_sql()
+
+        # Use the export manager to export
+        export_manager = self._get_export_manager()
+        export_format = self._parse_export_format(format)
+
+        return export_manager.to_stage(
+            query=sql,
+            stage_name=stage_name,
+            filename=filename,
+            format=export_format,
+            fields_terminated_by=fields_terminated_by,
+            fields_enclosed_by=fields_enclosed_by,
+            lines_terminated_by=lines_terminated_by,
+            header=header,
+            max_file_size=max_file_size,
+            force_quote=force_quote,
+            compression=compression,
+        )
+
+    def export_to(self, stage_or_filepath: str, filename: Optional[str] = None, **kwargs) -> Any:
+        """
+        Smart export method that automatically chooses between file or stage export.
+
+        This is a convenience method that determines whether to export to a file or stage
+        based on the arguments provided. If filename is provided, it exports to a stage.
+        Otherwise, it exports to a file.
+
+        Args:
+            stage_or_filepath: Stage name (if filename provided) or file path (if filename not provided)
+            filename: Optional filename for stage export. If provided, exports to stage.
+            **kwargs: Additional export options (format, header, compression, etc.)
+
+        Returns:
+            ResultSet with export operation results
+
+        Examples:
+            >>> # Export to stage (recommended)
+            >>> client.query(User).filter(User.age > 25).export_to(
+            ...     'my_stage',
+            ...     'users_over_25.csv',
+            ...     format='csv',
+            ...     header=True
+            ... )
+
+            >>> # Export to file
+            >>> client.query(Order).filter(Order.status == 'completed').export_to(
+            ...     '/tmp/completed_orders.csv',
+            ...     format='csv',
+            ...     header=True
+            ... )
+
+            >>> # Export with compression
+            >>> client.query(Event).export_to(
+            ...     'event_archive',
+            ...     'events_2025.csv',
+            ...     format='csv',
+            ...     header=True,
+            ...     compression='gzip'
+            ... )
+
+        Note:
+            - If filename is provided, exports to stage (more flexible, supports cloud storage)
+            - If filename is not provided, exports to local file on server
+            - For better clarity, consider using export_to_stage() or export_to_file() directly
+        """
+        if filename:
+            # Export to stage
+            return self.export_to_stage(stage_or_filepath, filename, **kwargs)
+        else:
+            # Export to file
+            return self.export_to_file(stage_or_filepath, **kwargs)
+
 
 # Helper functions for ORDER BY
 def desc(column: str) -> str:

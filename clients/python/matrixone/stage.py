@@ -147,6 +147,65 @@ class Stage:
 
         return results
 
+    def export_to(self, query: str, filename: str, **kwargs) -> Any:
+        """
+        Export query results to this stage using SELECT ... INTO STAGE.
+
+        This is a convenience method that exports data directly to the stage.
+        It internally calls ExportManager.to_stage with this stage's name.
+
+        Args:
+            query: SELECT query to execute (without INTO clause)
+            filename: Filename to create in the stage
+            **kwargs: Additional export options (see ExportManager.to_stage for full list)
+                format: Export file format (ExportFormat.CSV or ExportFormat.JSONLINE)
+                fields_terminated_by: Field delimiter
+                fields_enclosed_by: Field enclosure character
+                lines_terminated_by: Line terminator
+                header: Whether to include column headers (default: False)
+                max_file_size: Maximum size per file in bytes
+                force_quote: List of column names/indices to always quote
+                compression: Compression format (e.g., 'gzip', 'bzip2')
+
+        Returns:
+            ResultSet with export operation results
+
+        Examples:
+            >>> # Get or create a stage
+            >>> stage = client.stage.get('s3_backup_stage')
+
+            >>> # Export orders to CSV with headers and gzip compression
+            >>> stage.export_to(
+            ...     query="SELECT * FROM orders WHERE order_date > '2025-01-01'",
+            ...     filename="orders_2025_q1.csv",
+            ...     format=ExportFormat.CSV,
+            ...     header=True,
+            ...     compression="gzip"
+            ... )
+
+            >>> # Export aggregated data to JSONLINE
+            >>> stage.export_to(
+            ...     query='''
+            ...         SELECT product_id, SUM(quantity) as total_sold
+            ...         FROM sales
+            ...         GROUP BY product_id
+            ...     ''',
+            ...     filename="product_summary.jsonl",
+            ...     format=ExportFormat.JSONLINE
+            ... )
+
+        Note:
+            - The stage must exist and have write permissions
+            - For large exports, consider using max_file_size to split output
+            - Use compression to save storage and transfer costs
+        """
+        if self._client is None:
+            raise ValueError("Stage object must be associated with a client to export data")
+
+        from .export import ExportManager
+
+        return ExportManager(self._client).to_stage(query, self.name, filename, **kwargs)
+
 
 class StageManager:
     """

@@ -46,6 +46,13 @@ from .load_data import (
     CompressionFormat,
     JsonDataStructure,
 )
+from .export import (
+    ExportManager,
+    TransactionExportManager,
+    AsyncExportManager,
+    AsyncTransactionExportManager,
+    ExportFormat,
+)
 from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
@@ -130,6 +137,11 @@ __all__ = [
     "LoadDataFormat",
     "CompressionFormat",
     "JsonDataStructure",
+    "ExportManager",
+    "TransactionExportManager",
+    "AsyncExportManager",
+    "AsyncTransactionExportManager",
+    "ExportFormat",
     "VersionError",
     "VersionManager",
     "VersionInfo",
