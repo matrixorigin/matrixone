@@ -716,6 +716,63 @@ class LoadDataOperationsDemo:
             self.results['tests_failed'] += 1
             self.results['unexpected_results'].append({'test': 'set_clause_nullif', 'error': str(e)})
 
+    def test_optionally_enclosed_fields(self, client):
+        """Test OPTIONALLY ENCLOSED BY for mixed quoted/unquoted fields"""
+        print("\n=== OPTIONALLY ENCLOSED BY Test ===")
+        self.results['tests_run'] += 1
+
+        try:
+            # Define table model
+            class MixedData(Base):
+                __tablename__ = 'mixed_data'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                description = Column(String(255))
+            
+            # Create table using model
+            client.drop_table('mixed_data')
+            client.create_table(MixedData)
+            self.results['tables_created'].append('mixed_data')
+            self.logger.info("✅ Created table 'mixed_data'")
+            
+            # Create CSV with mixed quoted/unquoted fields
+            csv_content = '''1,Alice,Simple description
+2,"Bob Smith","Description with, comma"
+3,Charlie,Another simple one
+4,"Diana Jones","Multi, part, description"'''
+            
+            csv_file = os.path.join(TMPFILES_DIR, "mixed_data.csv")
+            with open(csv_file, 'w') as f:
+                f.write(csv_content)
+            self.results['files_created'].append(csv_file)
+            self.logger.info(f"✅ Created CSV with mixed quoted/unquoted fields: {csv_file}")
+            
+            # Load data with OPTIONALLY ENCLOSED BY
+            result = client.load_data.from_csv(
+                csv_file,
+                MixedData,
+                enclosed_by='"',
+                optionally_enclosed=True
+            )
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows with OPTIONALLY ENCLOSED BY")
+            
+            # Verify data
+            count = client.query('mixed_data').count()
+            assert count == 4
+            self.logger.info("✅ Data verification successful")
+            
+            # Verify fields with commas were preserved
+            result = client.query('mixed_data').select('description').where('id = ?', 2).first()
+            assert ',' in result.description
+            self.logger.info("✅ Comma preservation verified in quoted fields")
+            
+            self.results['tests_passed'] += 1
+
+        except Exception as e:
+            self.logger.error(f"❌ OPTIONALLY ENCLOSED BY test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'optionally_enclosed_fields', 'error': str(e)})
+
     def test_load_data_manager_instance(self, client):
         """Test that load_data property returns LoadDataManager instance"""
         print("\n=== LoadDataManager Instance Test ===")
@@ -729,6 +786,10 @@ class LoadDataOperationsDemo:
             assert isinstance(client.load_data, LoadDataManager)
             assert hasattr(client.load_data, 'from_file')
             assert hasattr(client.load_data, 'from_local_file')
+            assert hasattr(client.load_data, 'from_csv')
+            assert hasattr(client.load_data, 'from_tsv')
+            assert hasattr(client.load_data, 'from_jsonline')
+            assert hasattr(client.load_data, 'from_parquet')
             
             self.logger.info("✅ LoadDataManager instance verification successful")
             self.results['tests_passed'] += 1
@@ -745,7 +806,7 @@ class LoadDataOperationsDemo:
         # Clean up tables
         tables = ['users', 'products', 'orders', 'addresses', 'logs', 
                   'employees', 'accounts', 'transactions', 'strict_data', 'large_data',
-                  'jsonline_users', 'jsonline_products', 'cleaned_data']
+                  'jsonline_users', 'jsonline_products', 'cleaned_data', 'mixed_data']
         for table in tables:
             try:
                 client.drop_table(table)
@@ -789,6 +850,7 @@ class LoadDataOperationsDemo:
             self.test_jsonline_object_format(client)
             self.test_jsonline_array_format(client)
             self.test_set_clause_with_nullif(client)
+            self.test_optionally_enclosed_fields(client)
             self.test_load_data_manager_instance(client)
             
             # Print results

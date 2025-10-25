@@ -73,6 +73,7 @@ class LoadDataManager:
         table_name_or_model,
         delimiter: str = ",",
         enclosed_by: Optional[str] = None,
+        optionally_enclosed: bool = False,
         escaped_by: Optional[str] = None,
         ignore_lines: int = 0,
         columns: Optional[List[str]] = None,
@@ -91,6 +92,7 @@ class LoadDataManager:
             table_name_or_model: Table name (str) or SQLAlchemy model class
             delimiter (str): Field delimiter. Default: ','
             enclosed_by (str, optional): Character enclosing field values (e.g. '"')
+            optionally_enclosed (bool): If True, use OPTIONALLY ENCLOSED BY. Default: False
             escaped_by (str, optional): Escape character
             ignore_lines (int): Number of header lines to skip. Default: 0
             columns (list, optional): List of column names to load
@@ -104,20 +106,25 @@ class LoadDataManager:
         Examples::
         
             # Basic CSV
-            >>> client.load_data.from_csv('data.csv', 'users')
+            >>> client.load_data.from_csv('data.csv', User)
             
             # CSV with header
-            >>> client.load_data.from_csv('data.csv', 'users', ignore_lines=1)
+            >>> client.load_data.from_csv('data.csv', User, ignore_lines=1)
             
             # Custom delimiter with quotes
-            >>> client.load_data.from_csv('data.txt', 'users', 
+            >>> client.load_data.from_csv('data.txt', User, 
             ...     delimiter='|', enclosed_by='"')
+            
+            # Optionally enclosed fields (some fields quoted, some not)
+            >>> client.load_data.from_csv('data.csv', User,
+            ...     enclosed_by='"', optionally_enclosed=True)
         """
         return self.from_file(
             file_path=file_path,
             table_name_or_model=table_name_or_model,
             fields_terminated_by=delimiter,
             fields_enclosed_by=enclosed_by,
+            fields_optionally_enclosed=optionally_enclosed,
             fields_escaped_by=escaped_by,
             ignore_lines=ignore_lines,
             columns=columns,
@@ -236,6 +243,7 @@ class LoadDataManager:
         table_name_or_model,
         fields_terminated_by: str = ",",
         fields_enclosed_by: Optional[str] = None,
+        fields_optionally_enclosed: bool = False,
         fields_escaped_by: Optional[str] = None,
         lines_terminated_by: Optional[str] = None,
         lines_starting_by: Optional[str] = None,
@@ -272,6 +280,10 @@ class LoadDataManager:
             fields_enclosed_by (str, optional): Character that encloses field values.
                 Used when fields contain the delimiter character.
                 Common values: '"' or "'"
+            
+            fields_optionally_enclosed (bool): If True, use OPTIONALLY ENCLOSED BY.
+                This means only some fields may be enclosed, not all.
+                Default: False
                 
             fields_escaped_by (str, optional): Escape character for special characters.
                 Default: '\\' (backslash) when enclosed_by is specified.
@@ -438,6 +450,7 @@ class LoadDataManager:
             table_name=table_name,
             fields_terminated_by=fields_terminated_by,
             fields_enclosed_by=fields_enclosed_by,
+            fields_optionally_enclosed=fields_optionally_enclosed,
             fields_escaped_by=fields_escaped_by,
             lines_terminated_by=lines_terminated_by,
             lines_starting_by=lines_starting_by,
@@ -505,6 +518,7 @@ class LoadDataManager:
         table_name: str,
         fields_terminated_by: str = ",",
         fields_enclosed_by: Optional[str] = None,
+        fields_optionally_enclosed: bool = False,
         fields_escaped_by: Optional[str] = None,
         lines_terminated_by: Optional[str] = None,
         lines_starting_by: Optional[str] = None,
@@ -546,6 +560,7 @@ class LoadDataManager:
                 table_name=table_name,
                 fields_terminated_by=fields_terminated_by,
                 fields_enclosed_by=fields_enclosed_by,
+                fields_optionally_enclosed=fields_optionally_enclosed,
                 fields_escaped_by=fields_escaped_by,
                 lines_terminated_by=lines_terminated_by,
                 lines_starting_by=lines_starting_by,
@@ -563,6 +578,7 @@ class LoadDataManager:
         table_name: str,
         fields_terminated_by: str = ",",
         fields_enclosed_by: Optional[str] = None,
+        fields_optionally_enclosed: bool = False,
         fields_escaped_by: Optional[str] = None,
         lines_terminated_by: Optional[str] = None,
         lines_starting_by: Optional[str] = None,
@@ -597,7 +613,10 @@ class LoadDataManager:
         if fields_terminated_by:
             fields_options.append(f"TERMINATED BY '{fields_terminated_by}'")
         if fields_enclosed_by:
-            fields_options.append(f"ENCLOSED BY '{fields_enclosed_by}'")
+            if fields_optionally_enclosed:
+                fields_options.append(f"OPTIONALLY ENCLOSED BY '{fields_enclosed_by}'")
+            else:
+                fields_options.append(f"ENCLOSED BY '{fields_enclosed_by}'")
         if fields_escaped_by:
             fields_options.append(f"ESCAPED BY '{fields_escaped_by}'")
         

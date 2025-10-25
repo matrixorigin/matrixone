@@ -433,6 +433,51 @@ class TestLoadDataErrorHandling:
         with pytest.raises(ValueError):
             test_client.load_data.from_file('/tmp/test.csv', 'test_table', ignore_lines=-1)
     
+    def test_optionally_enclosed_by(self, test_client):
+        """Test OPTIONALLY ENCLOSED BY for mixed quoted/unquoted fields"""
+        # Define table model
+        class MixedData(Base):
+            __tablename__ = 'test_load_optional_enclosed'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            description = Column(String(255))
+        
+        # Create table using model
+        test_client.drop_table('test_load_optional_enclosed')
+        test_client.create_table(MixedData)
+        
+        # Create CSV with mixed quoted/unquoted fields
+        csv_content = '''1,Alice,Simple description
+2,"Bob Smith","Description with, comma"
+3,Charlie,Another simple one
+4,"Diana Jones","Multi, part, description"'''
+        
+        csv_file = os.path.join(TMPFILES_DIR, f"test_optional_{id(self)}.csv")
+        with open(csv_file, 'w') as f:
+            f.write(csv_content)
+        
+        try:
+            # Load data with OPTIONALLY ENCLOSED BY
+            result = test_client.load_data.from_csv(
+                csv_file,
+                MixedData,
+                enclosed_by='"',
+                optionally_enclosed=True
+            )
+            assert result.affected_rows == 4
+            
+            # Verify data loaded correctly
+            count = test_client.query('test_load_optional_enclosed').count()
+            assert count == 4
+            
+            # Verify fields with commas were preserved
+            result = test_client.query('test_load_optional_enclosed').select('description').where('id = ?', 2).first()
+            assert ',' in result.description
+            
+        finally:
+            os.unlink(csv_file)
+            test_client.drop_table('test_load_optional_enclosed')
+    
     def test_jsonline_object_format(self, test_client):
         """Test JSONLINE format with object structure"""
         # Define table model
