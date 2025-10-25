@@ -419,3 +419,15 @@ func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (
 
 	return
 }
+
+func (ht *Int64HashMap) AllGroupHash() []uint64 {
+	ret := make([]uint64, ht.elemCnt)
+	for i := range ht.cells {
+		for _, c := range ht.cells[i] {
+			if c.Mapped != 0 {
+				ret[c.Mapped-1] = c.Key
+			}
+		}
+	}
+	return ret
+}

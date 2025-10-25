@@ -157,6 +157,7 @@ func (d *distinctHash) free() {
 			m.Free()
 		}
 	}
+
 }
 
 func (d *distinctHash) Size() int64 {
@@ -202,12 +203,26 @@ func (d *distinctHash) marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error {
+	for i := range d.maps {
+		if flags != nil && flags[i] != 0 {
+			if _, err := d.maps[i].WriteTo(buf); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (d *distinctHash) unmarshal(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
 	buf := bytes.NewBuffer(data)
+	return d.unmarshalFromReader(buf)
+}
 
+func (d *distinctHash) unmarshalFromReader(buf io.Reader) error {
 	var n uint64
 	if _, err := buf.Read(types.EncodeUint64(&n)); err != nil {
 		return err
