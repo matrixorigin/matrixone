@@ -32,6 +32,7 @@ from .account import AccountManager, TransactionAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
+from .load_data import LoadDataManager, TransactionLoadDataManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager, TransactionMetadataManager
 from .moctl import MoCtlManager
@@ -221,6 +222,7 @@ class Client(BaseMatrixOneClient):
         self._vector_data = None
         self._fulltext_index = None
         self._metadata = None
+        self._load_data = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -1342,6 +1344,13 @@ class Client(BaseMatrixOneClient):
     def account(self) -> Optional[AccountManager]:
         """Get account manager"""
         return self._account
+
+    @property
+    def load_data(self) -> Optional[LoadDataManager]:
+        """Get load data manager"""
+        if self._load_data is None:
+            self._load_data = LoadDataManager(self)
+        return self._load_data
 
     @property
     def vector_ops(self) -> Optional["VectorManager"]:
@@ -3023,6 +3032,7 @@ class TransactionWrapper:
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         self.metadata = TransactionMetadataManager(client, self)
+        self.load_data = TransactionLoadDataManager(self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
 

@@ -37,6 +37,7 @@ from .exceptions import (
     SnapshotError,
     VersionError,
 )
+from .load_data import LoadDataManager, TransactionLoadDataManager
 from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
@@ -113,6 +114,8 @@ __all__ = [
     "Role",
     "Grant",
     "TransactionAccountManager",
+    "LoadDataManager",
+    "TransactionLoadDataManager",
     "VersionError",
     "VersionManager",
     "VersionInfo",
