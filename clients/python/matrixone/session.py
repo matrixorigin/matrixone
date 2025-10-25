@@ -120,14 +120,14 @@ class Session(SQLAlchemySession):
         from .stage import TransactionStageManager
         from .pitr import TransactionPitrManager
         from .pubsub import TransactionPubSubManager
-        from .restore import TransactionRestoreManager
+        from .restore import RestoreManager
         from .account import TransactionAccountManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
-        self.restore = TransactionRestoreManager(client, self)
+        self.restore = RestoreManager(client, executor=self)
         self.pitr = TransactionPitrManager(client, self)
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
@@ -508,12 +508,12 @@ class AsyncSession(SQLAlchemyAsyncSession):
             AsyncTransactionFulltextIndexManager = getattr(async_client_module, 'AsyncTransactionFulltextIndexManager')
             AsyncTransactionPitrManager = getattr(async_client_module, 'AsyncTransactionPitrManager')
             AsyncTransactionPubSubManager = getattr(async_client_module, 'AsyncTransactionPubSubManager')
-            AsyncTransactionRestoreManager = getattr(async_client_module, 'AsyncTransactionRestoreManager')
             AsyncTransactionAccountManager = getattr(async_client_module, 'AsyncTransactionAccountManager')
 
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
         from .clone import AsyncCloneManager
+        from .restore import AsyncRestoreManager
         from .load_data import AsyncTransactionLoadDataManager
         from .stage import AsyncTransactionStageManager
 
@@ -521,7 +521,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # The executor pattern allows managers to work in both client and session contexts
         self.snapshots = AsyncSnapshotManager(client, executor=self)
         self.clone = AsyncCloneManager(client, executor=self)
-        self.restore = AsyncTransactionRestoreManager(client, self)
+        self.restore = AsyncRestoreManager(client, executor=self)
         self.pitr = AsyncTransactionPitrManager(client, self)
         self.pubsub = AsyncTransactionPubSubManager(client, self)
         self.account = AsyncTransactionAccountManager(self)

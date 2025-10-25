@@ -40,7 +40,7 @@ from .metadata import MetadataManager, TransactionMetadataManager
 from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
-from .restore import RestoreManager, TransactionRestoreManager
+from .restore import RestoreManager
 from .snapshot import SnapshotManager
 from .clone import CloneManager
 from .sqlalchemy_ext import MatrixOneDialect
@@ -3006,9 +3006,9 @@ class Session(SQLAlchemySession):
     - Automatic commit/rollback handling
 
     Available Managers:
-    - snapshots: SessionSnapshotManager for snapshot operations
-    - clone: SessionCloneManager for clone operations
-    - restore: TransactionRestoreManager for restore operations
+    - snapshots: SnapshotManager for snapshot operations
+    - clone: CloneManager for clone operations
+    - restore: RestoreManager for restore operations
     - pitr: TransactionPitrManager for point-in-time recovery
     - pubsub: TransactionPubSubManager for pub/sub operations
     - account: TransactionAccountManager for account operations
@@ -3055,7 +3055,7 @@ class Session(SQLAlchemySession):
         # Use executor pattern: managers use this session as executor
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
-        self.restore = TransactionRestoreManager(client, self)
+        self.restore = RestoreManager(client, executor=self)
         self.pitr = TransactionPitrManager(client, self)
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)

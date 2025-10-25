@@ -972,8 +972,8 @@ class TestAsyncTransactionManagerConsistency:
             # Test that managers are the correct types
             from matrixone.snapshot import SnapshotManager
             from matrixone.clone import CloneManager
+            from matrixone.restore import RestoreManager
             from matrixone.client import (
-                TransactionRestoreManager,
                 TransactionPitrManager,
                 TransactionPubSubManager,
                 TransactionAccountManager,
@@ -983,7 +983,7 @@ class TestAsyncTransactionManagerConsistency:
 
             assert isinstance(tx.snapshots, SnapshotManager)
             assert isinstance(tx.clone, CloneManager)
-            assert isinstance(tx.restore, TransactionRestoreManager)
+            assert isinstance(tx.restore, RestoreManager)
             assert isinstance(tx.pitr, TransactionPitrManager)
             assert isinstance(tx.pubsub, TransactionPubSubManager)
             assert isinstance(tx.account, TransactionAccountManager)
@@ -1010,8 +1010,8 @@ class TestAsyncTransactionManagerConsistency:
             # Test that managers are the correct types
             from matrixone.snapshot import AsyncSnapshotManager
             from matrixone.clone import AsyncCloneManager
+            from matrixone.restore import AsyncRestoreManager
             from matrixone.async_client import (
-                AsyncTransactionRestoreManager,
                 AsyncTransactionPitrManager,
                 AsyncTransactionPubSubManager,
                 AsyncTransactionAccountManager,
@@ -1021,7 +1021,7 @@ class TestAsyncTransactionManagerConsistency:
 
             assert isinstance(tx.snapshots, AsyncSnapshotManager)
             assert isinstance(tx.clone, AsyncCloneManager)
-            assert isinstance(tx.restore, AsyncTransactionRestoreManager)
+            assert isinstance(tx.restore, AsyncRestoreManager)
             assert isinstance(tx.pitr, AsyncTransactionPitrManager)
             assert isinstance(tx.pubsub, AsyncTransactionPubSubManager)
             assert isinstance(tx.account, AsyncTransactionAccountManager)
