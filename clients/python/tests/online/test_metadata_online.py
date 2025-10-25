@@ -286,7 +286,7 @@ class TestMetadataOnline(unittest.TestCase):
 
     def test_transaction_metadata_operations(self):
         """Test metadata operations within transactions"""
-        with self.client.transaction() as tx:
+        with self.client.session() as tx:
             # Metadata scan within transaction
             result = tx.metadata.scan("test_metadata_db", "test_users", columns="*")
             rows = list(result)

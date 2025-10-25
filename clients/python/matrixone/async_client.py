@@ -1919,7 +1919,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         Note:
 
-            This method is used internally by AsyncVectorManager, AsyncTransactionWrapper,
+            This method is used internally by AsyncVectorManager, AsyncSession,
             and other SDK components. External users should use execute() instead.
         """
         import time
@@ -2374,7 +2374,7 @@ class AsyncClient(BaseMatrixOneClient):
         return await executor.batch_insert(table_name, data_list)
 
     @asynccontextmanager
-    async def transaction(self):
+    async def session(self):
         """
         Async transaction context manager
 
@@ -2394,16 +2394,16 @@ class AsyncClient(BaseMatrixOneClient):
         try:
             # Use SQLAlchemy async engine for transaction
             async with self._engine.begin() as conn:
-                tx_wrapper = AsyncTransactionWrapper(conn, self)
+                tx_wrapper = AsyncSession(conn, self)
                 yield tx_wrapper
 
         except Exception as e:
             # Transaction will be automatically rolled back by SQLAlchemy
             raise e
         finally:
-            # Clean up transaction wrapper
+            # Clean up session - close is inherited from SQLAlchemy AsyncSession
             if tx_wrapper:
-                await tx_wrapper.close_sqlalchemy()
+                await tx_wrapper.close()
 
     @property
     def snapshots(self) -> AsyncSnapshotManager:
@@ -2950,11 +2950,22 @@ class AsyncTransactionVectorIndexManager(AsyncVectorManager):
                     f"Please specify the column_name parameter."
                 )
 
-        # Get connection from transaction wrapper
-        connection = self.transaction_wrapper.connection
+        # For transaction context, we need to execute queries using transaction_wrapper.execute()
+        # instead of using the connection directly with _execute_with_logging
 
         # Get IVF index table names
-        index_tables = await self._get_ivf_index_table_names(database, table_name, column_name, connection)
+        sql = (
+            f"SELECT i.algo_table_type, i.index_table_name "
+            f"FROM `mo_catalog`.`mo_indexes` AS i "
+            f"JOIN `mo_catalog`.`mo_tables` AS t ON i.table_id = t.rel_id "
+            f"AND i.column_name = '{column_name}' "
+            f"AND t.relname = '{table_name}' "
+            f"AND t.reldatabase = '{database}' "
+            f"AND i.algo='ivfflat'"
+        )
+        result = await self.transaction_wrapper.execute(sql)
+        rows = result.fetchall()
+        index_tables = {row[0]: row[1] for row in rows}
 
         if not index_tables:
             raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
@@ -2965,7 +2976,18 @@ class AsyncTransactionVectorIndexManager(AsyncVectorManager):
             raise Exception("No entries table found in IVF index")
 
         # Get bucket distribution
-        distribution = await self._get_ivf_buckets_distribution(database, entries_table, connection)
+        sql = (
+            f"SELECT `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`, COUNT(*) AS bucket_size "
+            f"FROM `{database}`.`{entries_table}` "
+            f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
+        )
+        result = await self.transaction_wrapper.execute(sql)
+        rows = result.fetchall()
+        distribution = {
+            'buckets': [{'centroid_id': row[0], 'centroid_version': row[1], 'size': row[2]} for row in rows],
+            'total_buckets': len(rows),
+            'total_vectors': sum(row[2] for row in rows),
+        }
 
         return {
             'index_tables': index_tables,
@@ -2976,13 +2998,32 @@ class AsyncTransactionVectorIndexManager(AsyncVectorManager):
         }
 
 
-class AsyncTransactionWrapper:
-    """Async transaction wrapper for executing queries within a transaction"""
+try:
+    from sqlalchemy.ext.asyncio import AsyncSession as SQLAlchemyAsyncSession
+except ImportError:
+    SQLAlchemyAsyncSession = None
+
+
+class AsyncSession(SQLAlchemyAsyncSession):
+    """
+    MatrixOne Async Session - extends SQLAlchemy AsyncSession with MatrixOne features.
+
+    This class inherits from SQLAlchemy AsyncSession and provides:
+    - Full SQLAlchemy AsyncSession API
+    - MatrixOne-specific managers (snapshots, clone, vector_ops, etc.)
+    - Enhanced execute() with MatrixOne parameter substitution
+    """
 
     def __init__(self, connection, client):
-        self.connection = connection
+        # Store references before calling super().__init__
         self.client = client
-        # Create snapshot, clone, restore, PITR, pubsub, account, and fulltext managers that use this transaction
+        self._connection = connection
+
+        # Initialize parent SQLAlchemy AsyncSession with sync_session_class to avoid issues
+        # We pass the connection as bind
+        super().__init__(bind=connection, expire_on_commit=False)
+
+        # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this session
         self.snapshots = AsyncTransactionSnapshotManager(client, self)
         self.clone = AsyncTransactionCloneManager(client, self)
         self.restore = AsyncTransactionRestoreManager(client, self)
@@ -2993,46 +3034,70 @@ class AsyncTransactionWrapper:
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         self.load_data = AsyncTransactionLoadDataManager(self)
         self.stage = AsyncTransactionStageManager(self)
-        # SQLAlchemy integration
-        self._sqlalchemy_session = None
-        self._sqlalchemy_engine = None
 
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """Execute SQL within transaction asynchronously"""
+    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
+        """
+        Execute SQL or SQLAlchemy statement within async session.
+
+        Supports:
+        - String SQL with MatrixOne parameter substitution
+        - SQLAlchemy statements (select, update, delete, insert, text)
+        - Query logging
+
+        Args:
+            sql_or_stmt: SQL string or SQLAlchemy statement
+            params: Query parameters (only used for string SQL with '?' placeholders)
+            **kwargs: Additional execution options
+
+        Returns:
+            SQLAlchemy async result object
+        """
         import time
 
         start_time = time.time()
 
         try:
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self.client._substitute_parameters(sql, params)
-            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-            # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-            if hasattr(self.connection, 'exec_driver_sql'):
-                # Escape % to %% for pymysql's format string handling
-                escaped_sql = final_sql.replace('%', '%%')
-                result = await self.connection.exec_driver_sql(escaped_sql)
-            else:
-                # Fallback for testing or older SQLAlchemy versions
+            # Check if this is a string SQL
+            if isinstance(sql_or_stmt, str):
+                # String SQL - apply MatrixOne parameter substitution and execute directly
+                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
+                original_sql = sql_or_stmt
+
                 from sqlalchemy import text
 
-                result = await self.connection.execute(text(final_sql))
-            execution_time = time.time() - start_time
+                # Execute using the connection directly (use stored _connection to avoid greenlet issues)
+                result = await self._connection.execute(text(final_sql))
 
-            if result.returns_rows:
-                rows = result.fetchall()
-                columns = list(result.keys()) if hasattr(result, "keys") else []
-                self.client.logger.log_query(sql, execution_time, len(rows), success=True)
-                return AsyncResultSet(columns, rows)
+                execution_time = time.time() - start_time
+
+                if result.returns_rows:
+                    self.client.logger.log_query(original_sql, execution_time, None, success=True)
+                else:
+                    self.client.logger.log_query(original_sql, execution_time, getattr(result, 'rowcount', 0), success=True)
+
+                return result
             else:
-                self.client.logger.log_query(sql, execution_time, result.rowcount, success=True)
-                return AsyncResultSet([], [], affected_rows=result.rowcount)
+                # SQLAlchemy statement - execute using connection directly
+                result = await self.connection.execute(sql_or_stmt, **kwargs)
+                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+
+                execution_time = time.time() - start_time
+
+                # Log query
+                if hasattr(result, 'returns_rows') and result.returns_rows:
+                    self.client.logger.log_query(original_sql, execution_time, None, success=True)
+                else:
+                    self.client.logger.log_query(original_sql, execution_time, getattr(result, 'rowcount', 0), success=True)
+
+                return result
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(sql, execution_time, success=False)
-            self.client.logger.log_error(e, context="Async transaction query execution")
-            raise QueryError(f"Transaction query execution failed: {e}")
+            self.client.logger.log_query(
+                original_sql if 'original_sql' in locals() else str(sql_or_stmt), execution_time, success=False
+            )
+            self.client.logger.log_error(e, context="Async session query execution")
+            raise QueryError(f"Async session query execution failed: {e}")
 
     def get_connection(self):
         """
@@ -3040,82 +3105,13 @@ class AsyncTransactionWrapper:
 
         Returns::
 
-            SQLAlchemy AsyncConnection instance bound to this transaction
+            SQLAlchemy AsyncConnection instance bound to this session
         """
-        return self.connection
+        return self._connection
 
-    async def get_sqlalchemy_session(self):
+    async def insert(self, table_name_or_model, data: dict):
         """
-        Get async SQLAlchemy session that uses the same transaction asynchronously
-
-        Returns::
-
-            Async SQLAlchemy Session instance bound to this transaction
-        """
-        if self._sqlalchemy_session is None:
-            try:
-                from sqlalchemy.ext.asyncio import (
-                    AsyncSession,
-                    async_sessionmaker,
-                    create_async_engine,
-                )
-            except ImportError:
-                # Fallback for older SQLAlchemy versions
-                from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-                from sqlalchemy.orm import sessionmaker as sync_sessionmaker
-
-                # Create a simple async sessionmaker equivalent
-                def async_sessionmaker(bind=None, **kwargs):
-                    # Remove class_ from kwargs if present to avoid conflicts
-                    kwargs.pop('class_', None)
-                    return sync_sessionmaker(bind=bind, class_=AsyncSession, **kwargs)
-
-            # Create engine using the same connection parameters
-            if not self.client._connection_params:
-                raise ConnectionError("Not connected to database")
-
-            connection_string = (
-                f"mysql+aiomysql://{self.client._connection_params['user']}:"
-                f"{self.client._connection_params['password']}@"
-                f"{self.client._connection_params['host']}:"
-                f"{self.client._connection_params['port']}/"
-                f"{self.client._connection_params['database']}"
-            )
-
-            # Create async engine that will use the same connection
-            self._sqlalchemy_engine = create_async_engine(connection_string, pool_pre_ping=True, pool_recycle=300)
-
-            # Create async session factory
-            AsyncSessionLocal = async_sessionmaker(bind=self._sqlalchemy_engine, class_=AsyncSession, expire_on_commit=False)
-            self._sqlalchemy_session = AsyncSessionLocal()
-
-            # Begin async SQLAlchemy transaction
-            await self._sqlalchemy_session.begin()
-
-        return self._sqlalchemy_session
-
-    async def commit_sqlalchemy(self):
-        """Commit async SQLAlchemy session asynchronously"""
-        if self._sqlalchemy_session:
-            await self._sqlalchemy_session.commit()
-
-    async def rollback_sqlalchemy(self):
-        """Rollback async SQLAlchemy session asynchronously"""
-        if self._sqlalchemy_session:
-            await self._sqlalchemy_session.rollback()
-
-    async def close_sqlalchemy(self):
-        """Close async SQLAlchemy session asynchronously"""
-        if self._sqlalchemy_session:
-            await self._sqlalchemy_session.close()
-            self._sqlalchemy_session = None
-        if self._sqlalchemy_engine:
-            await self._sqlalchemy_engine.dispose()
-            self._sqlalchemy_engine = None
-
-    async def insert(self, table_name_or_model, data: dict) -> AsyncResultSet:
-        """
-        Insert data into a table within transaction asynchronously.
+        Insert data into a table within session asynchronously.
 
         Args::
 
@@ -3124,7 +3120,7 @@ class AsyncTransactionWrapper:
 
         Returns::
 
-            AsyncResultSet object
+            SQLAlchemy async result object
         """
         # Handle model class input
         if hasattr(table_name_or_model, '__tablename__'):
@@ -3137,9 +3133,9 @@ class AsyncTransactionWrapper:
         sql = self.client._build_insert_sql(table_name, data)
         return await self.execute(sql)
 
-    async def batch_insert(self, table_name_or_model, data_list: list) -> AsyncResultSet:
+    async def batch_insert(self, table_name_or_model, data_list: list):
         """
-        Batch insert data into a table within transaction asynchronously.
+        Batch insert data into a table within session asynchronously.
 
         Args::
 
@@ -3148,9 +3144,10 @@ class AsyncTransactionWrapper:
 
         Returns::
 
-            AsyncResultSet object
+            SQLAlchemy async result object
         """
         if not data_list:
+            # Return empty AsyncResultSet for consistency with client behavior
             return AsyncResultSet([], [], affected_rows=0)
 
         # Handle model class input
@@ -3249,6 +3246,151 @@ class AsyncTransactionWrapper:
                             break
 
                 return query
+
+    async def create_table(self, table_name: str, columns: dict, **kwargs):
+        """
+        Create a table within MatrixOne async session.
+
+        Args::
+
+            table_name: Name of the table
+            columns: Dictionary mapping column names to their types (same format as client.create_table)
+            **kwargs: Additional table parameters
+
+        Returns::
+
+            AsyncSession: Self for chaining
+        """
+        from sqlalchemy.schema import CreateTable
+
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Parse primary key from kwargs
+        primary_key = kwargs.get("primary_key", None)
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on simplified format (same logic as client.create_table)
+        for column_name, column_def in columns.items():
+            is_primary = primary_key == column_name
+
+            if column_def.startswith("vector("):
+                # Parse vector type: vector(128,f32) or vector(128)
+                import re
+
+                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                if match:
+                    dimension = int(match.group(1))
+                    precision = match.group(2) or "f32"
+                    builder.add_vector_column(column_name, dimension, precision)
+                else:
+                    raise ValueError(f"Invalid vector format: {column_def}")
+
+            elif column_def.startswith("varchar("):
+                # Parse varchar type: varchar(100)
+                import re
+
+                match = re.match(r"varchar\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid varchar format: {column_def}")
+
+            elif column_def.startswith("char("):
+                # Parse char type: char(10)
+                import re
+
+                match = re.match(r"char\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid char format: {column_def}")
+
+            elif column_def.startswith("decimal("):
+                # Parse decimal type: decimal(10,2)
+                import re
+
+                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    scale = int(match.group(2))
+                    builder.add_numeric_column(column_name, "decimal", precision, scale)
+                else:
+                    raise ValueError(f"Invalid decimal format: {column_def}")
+
+            elif column_def.startswith("float("):
+                # Parse float type: float(10)
+                import re
+
+                match = re.match(r"float\((\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    builder.add_numeric_column(column_name, "float", precision)
+                else:
+                    raise ValueError(f"Invalid float format: {column_def}")
+
+            elif column_def in ("int", "integer"):
+                builder.add_int_column(column_name, primary_key=is_primary)
+            elif column_def in ("bigint", "bigint unsigned"):
+                builder.add_bigint_column(column_name, primary_key=is_primary)
+            elif column_def in ("smallint", "tinyint"):
+                if column_def == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=is_primary)
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=is_primary)
+            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
+                builder.add_text_column(column_name)
+            elif column_def in ("float", "double"):
+                builder.add_numeric_column(column_name, column_def)
+            elif column_def in ("date", "datetime", "timestamp", "time"):
+                builder.add_datetime_column(column_name, column_def)
+            elif column_def in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_def in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_def in (
+                "blob",
+                "longblob",
+                "mediumblob",
+                "tinyblob",
+                "binary",
+                "varbinary",
+            ):
+                builder.add_binary_column(column_name, column_def)
+            else:
+                raise ValueError(
+                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
+                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
+                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
+                    f"boolean, json, blob, vecf32(n), vecf64(n)"
+                )
+
+        # Create table using session's execute method
+        table = builder.build()
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        await self.execute(sql)
+
+        return self
+
+    async def drop_table(self, table_name: str):
+        """
+        Drop a table within MatrixOne async session.
+
+        Args::
+
+            table_name: Name of the table to drop
+
+        Returns::
+
+            AsyncSession: Self for chaining
+        """
+        sql = f"DROP TABLE IF EXISTS {table_name}"
+        await self.execute(sql)
+        return self
 
 
 class AsyncTransactionSnapshotManager(AsyncSnapshotManager):

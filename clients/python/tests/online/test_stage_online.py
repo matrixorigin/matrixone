@@ -287,9 +287,9 @@ class TestStageOperations:
 
             try:
                 # Load data from stage in transaction
-                with test_client.transaction() as tx:
+                with test_client.session() as tx:
                     result = tx.load_data.from_stage_csv('pytest_tx_stage', 'pytest_tx_data.csv', TxStageData)
-                    assert result.affected_rows == 2
+                    assert result.rowcount == 2
 
                 # Verify
                 count = test_client.query('pytest_tx_stage_data').count()

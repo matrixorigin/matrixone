@@ -126,7 +126,7 @@ class TestClientOnline(unittest.TestCase):
 
     def test_transaction_operations(self):
         """Test transaction operations"""
-        with self.client.transaction() as tx:
+        with self.client.session() as tx:
             # Insert within transaction
             tx.execute(f"INSERT INTO {self.test_table} VALUES (5, 'test5', 500, NOW())")
 
@@ -142,7 +142,7 @@ class TestClientOnline(unittest.TestCase):
 
         # Test transaction rollback
         try:
-            with self.client.transaction() as tx:
+            with self.client.session() as tx:
                 tx.execute(f"INSERT INTO {self.test_table} VALUES (6, 'test6', 600, NOW())")
                 # Force rollback by raising exception
                 raise Exception("Test rollback")

@@ -135,7 +135,7 @@ class TestAccountManagement:
             assert user is not None
 
             # Test transaction with regular SQL operations only
-            with test_client.transaction():
+            with test_client.session():
                 # Only regular SQL operations are allowed in transactions
                 result = test_client.execute("SELECT 1 as test_value")
                 assert result is not None
@@ -164,7 +164,7 @@ class TestAccountManagement:
         assert result.rows[0][0] == 1  # test_value should be 1
 
         # Test async transaction
-        async with test_async_client.transaction():
+        async with test_async_client.session():
             result = await test_async_client.execute("SELECT 2 as test_value")
             assert result is not None
             assert len(result.rows) > 0

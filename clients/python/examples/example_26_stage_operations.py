@@ -389,16 +389,18 @@ class StageOperationsDemo:
                 f.write('1,value1\n2,value2\n3,value3\n')
             self.results['files_created'].append(csv_file)
 
-            # Load data from stage within transaction
-            with client.transaction() as tx:
-                # Load data from pre-existing stage in transaction
+            # Load data from stage within session
+            with client.session() as tx:
+                # Load data from pre-existing stage in session
                 result = tx.load_data.from_stage_csv('tx_temp_stage', 'tx_data.csv', TxStageData)
-                self.logger.info(f"✅ Loaded {result.affected_rows} rows in transaction")
+                # Check for both ResultSet and SQLAlchemy Result
+                affected = result.affected_rows if hasattr(result, 'affected_rows') else result.rowcount
+                self.logger.info(f"✅ Loaded {affected} rows in session")
 
-            # Verify transaction committed
+            # Verify session committed
             count = client.query('tx_stage_demo').count()
             assert count == 3
-            self.logger.info(f"✅ Transaction committed: {count} rows in table")
+            self.logger.info(f"✅ Session committed: {count} rows in table")
 
             self.results['tests_passed'] += 1
 

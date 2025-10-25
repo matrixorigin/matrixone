@@ -21,8 +21,8 @@ table cloning, and mo-ctl integration.
 """
 
 from .account import Account, AccountManager, Grant, Role, TransactionAccountManager, User
-from .async_client import AsyncClient, AsyncResultSet
-from .client import Client
+from .async_client import AsyncClient, AsyncResultSet, AsyncSession
+from .client import Client, Session
 from .exceptions import (
     AccountError,
     CloneError,
@@ -101,7 +101,9 @@ from .sqlalchemy_select import select, compile_select_to_sql
 __version__ = "1.0.0"
 __all__ = [
     "Client",
+    "Session",
     "AsyncClient",
+    "AsyncSession",
     "AsyncResultSet",
     "MatrixOneError",
     "ConnectionError",

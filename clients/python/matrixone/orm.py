@@ -1770,8 +1770,16 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         sql, params = self._build_sql()
         result = self._execute(sql, params)
 
+        # Handle both ResultSet and SQLAlchemy Result
+        if hasattr(result, 'rows'):
+            # ResultSet from client.execute()
+            rows = result.rows
+        else:
+            # SQLAlchemy Result from session.execute()
+            rows = result.fetchall()
+
         models = []
-        for row in result.rows:
+        for row in rows:
             # Check if this is an aggregate query (has custom select columns)
             if self._select_columns:
                 # For aggregate queries, return raw row data as a simple object
@@ -1965,7 +1973,15 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         sql = sql.replace("SELECT *", "SELECT COUNT(*)")
 
         result = self._execute(sql, params)
-        return result.rows[0][0] if result.rows else 0
+
+        # Handle both ResultSet and SQLAlchemy Result
+        if hasattr(result, 'rows'):
+            # ResultSet from client.execute()
+            return result.rows[0][0] if result.rows else 0
+        else:
+            # SQLAlchemy Result from session.execute()
+            rows = result.fetchall()
+            return rows[0][0] if rows else 0
 
     def execute(self) -> Any:
         """Execute the query based on its type"""

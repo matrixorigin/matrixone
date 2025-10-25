@@ -289,13 +289,13 @@ class TestLoadDataOperations:
 
         try:
             # Load data within transaction
-            with test_client.transaction() as tx:
+            with test_client.session() as tx:
                 # Load data using simplified CSV interface within transaction with models
                 result1 = tx.load_data.from_csv(accounts_file, Account)
                 result2 = tx.load_data.from_csv(transactions_file, Transaction)
 
-                assert result1.affected_rows == 2
-                assert result2.affected_rows == 2
+                assert result1.rowcount == 2
+                assert result2.rowcount == 2
 
             # Verify data is committed
             accounts_count = test_client.query('test_load_accounts').count()
@@ -836,12 +836,12 @@ class TestAsyncLoadDataOperations:
 
             try:
                 # Load data within async transaction
-                async with client.transaction() as tx:
+                async with client.session() as tx:
                     result1 = await tx.load_data.from_csv(accounts_file, AsyncAccount)
                     result2 = await tx.load_data.from_csv(transactions_file, AsyncTransaction)
 
-                    assert result1.affected_rows == 2
-                    assert result2.affected_rows == 2
+                    assert result1.rowcount == 2
+                    assert result2.rowcount == 2
 
                 # Verify data is committed
                 accounts_result = await client.execute('SELECT COUNT(*) FROM test_async_accounts')

@@ -191,7 +191,7 @@ class TestORMCTEIntegration:
 
     def test_cte_in_transaction(self):
         """Test CTE usage within a transaction"""
-        with self.client.transaction() as tx:
+        with self.client.session() as tx:
             # Create CTE within transaction
             tx_users = tx.query(User).filter(User.department == "Marketing").cte("tx_users")
 

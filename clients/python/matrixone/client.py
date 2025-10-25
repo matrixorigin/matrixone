@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session as SQLAlchemySession
 
 from .account import AccountManager, TransactionAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
@@ -730,7 +731,7 @@ class Client(BaseMatrixOneClient):
 
         Note:
 
-            This method is used internally by VectorManager, TransactionWrapper,
+            This method is used internally by VectorManager, Session,
             and other SDK components. External users should use execute() instead.
         """
         import time
@@ -1270,48 +1271,54 @@ class Client(BaseMatrixOneClient):
         yield snapshot_client
 
     @contextmanager
-    def transaction(self) -> Generator[TransactionWrapper, None, None]:
+    def session(self) -> Generator[Session, None, None]:
         """
-        Transaction context manager
+        Create a MatrixOne session for database operations.
 
-        Usage
+        This provides a SQLAlchemy Session with full ORM support plus MatrixOne features.
 
-            with client.transaction() as tx:
-            # MatrixOne operations
-            tx.execute("INSERT INTO users ...")
-            tx.execute("UPDATE users ...")
+        Usage::
 
-            # Snapshot and clone operations within transaction
-            tx.snapshots.create("snap1", "table", database="db1", table="t1")
-            tx.clone.clone_database("target_db", "source_db")
+            # Standard SQLAlchemy usage
+            from sqlalchemy import select
+            with client.session() as session:
+                # Execute SQLAlchemy statements
+                stmt = select(User).where(User.age > 25)
+                result = session.execute(stmt)
+                users = result.scalars().all()
 
-            # SQLAlchemy operations in the same transaction
-            session = tx.get_sqlalchemy_session()
-            session.add(user)
-            session.commit()
+                # ORM operations
+                user = User(name="Alice", age=30)
+                session.add(user)
+                session.commit()
+
+            # MatrixOne features
+            with client.session() as session:
+                # Snapshot and clone operations
+                session.snapshots.create("snap1", "table", database="db1", table="t1")
+                session.clone.clone_database("target_db", "source_db")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
-        tx_wrapper = None
+        session_wrapper = None
         try:
             # Use engine's connection pool for transaction
             with self._engine.begin() as conn:
-                tx_wrapper = TransactionWrapper(conn, self)
-                yield tx_wrapper
+                session_wrapper = Session(conn, self)
+                yield session_wrapper
 
-                # Commit SQLAlchemy session first
-                tx_wrapper.commit_sqlalchemy()
+                # Commit the session
+                session_wrapper.commit()
 
-        except Exception as e:
-            # Rollback SQLAlchemy session first
-            if tx_wrapper:
-                tx_wrapper.rollback_sqlalchemy()
-            raise e
+        except Exception:
+            # engine.begin() automatically rolls back on exception
+            # No need to explicitly call rollback() here
+            raise
         finally:
-            # Clean up SQLAlchemy resources
-            if tx_wrapper:
-                tx_wrapper.close_sqlalchemy()
+            # Clean up session resources
+            if session_wrapper:
+                session_wrapper.close()
 
     @property
     def snapshots(self) -> Optional[SnapshotManager]:
@@ -2981,22 +2988,21 @@ class SnapshotClient:
         return self.client.execute(final_sql)
 
 
-class TransactionWrapper:
+class Session(SQLAlchemySession):
     """
-    Transaction wrapper for executing queries within a MatrixOne transaction.
+    MatrixOne Session - extends SQLAlchemy Session with MatrixOne features.
 
-    This class provides a transaction context for executing multiple database
-    operations atomically. It wraps a SQLAlchemy connection and provides
-    access to all MatrixOne managers (snapshots, clone, restore, PITR, etc.)
-    within the transaction context.
+    This class inherits from SQLAlchemy Session and provides a transaction context
+    for executing multiple database operations atomically, while adding MatrixOne-specific
+    capabilities like snapshots, clones, vector operations, and fulltext search.
 
     Key Features:
 
+    - **Full SQLAlchemy Session API** - All inherited methods work as expected
     - Atomic transaction execution with automatic rollback on errors
-    - Access to all MatrixOne managers within transaction context
-    - SQLAlchemy session integration
+    - Access to all MatrixOne managers within session context
+    - Support for both SQLAlchemy statements and string SQL
     - Automatic commit/rollback handling
-    - Support for nested transactions
 
     Available Managers:
     - snapshots: TransactionSnapshotManager for snapshot operations
@@ -3005,45 +3011,46 @@ class TransactionWrapper:
     - pitr: TransactionPitrManager for point-in-time recovery
     - pubsub: TransactionPubSubManager for pub/sub operations
     - account: TransactionAccountManager for account operations
-    - vector: TransactionVectorManager for vector operations
+    - vector_ops: TransactionVectorIndexManager for vector operations
     - fulltext_index: TransactionFulltextIndexManager for fulltext operations
 
     Usage Examples
 
     .. code-block:: python
 
-            # Basic transaction usage
-            with client.transaction() as tx:
-                tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
-                tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
-                # Transaction commits automatically on success
+            # Standard SQLAlchemy usage
+            from sqlalchemy import select
+            with client.session() as session:
+                # Execute SQLAlchemy statements
+                stmt = select(User).where(User.age > 25)
+                result = session.execute(stmt)
+                users = result.scalars().all()  # Returns ORM objects
 
-            # Using managers within transaction
-            with client.transaction() as tx:
-                # Create snapshot within transaction
-                tx.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
-
-                # Clone database within transaction
-                tx.clone.clone_database("new_db", "source_db")
-
-                # Vector operations within transaction
-                tx.vector.create_table("vectors", {"id": "int", "embedding": "vector(384,f32)"})
-
-            # SQLAlchemy session integration
-            with client.transaction() as tx:
-                session = tx.get_sqlalchemy_session()
-                user = User(name="John")
+                # ORM operations
+                user = User(name="John", age=30)
                 session.add(user)
                 session.commit()
 
-    Note: This class is automatically created by the Client's transaction()
+            # MatrixOne features
+            with client.session() as session:
+                # Snapshot operations
+                session.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
+
+                # Clone operations
+                session.clone.clone_database("new_db", "source_db")
+
+    Note: This class is automatically created by the Client's session()
     context manager and should not be instantiated directly.
     """
 
     def __init__(self, connection, client):
-        self.connection = connection
+        # Initialize parent SQLAlchemy Session
+        super().__init__(bind=connection, expire_on_commit=False)
+
+        # Store MatrixOne client reference
         self.client = client
-        # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this transaction
+
+        # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this session
         self.snapshots = TransactionSnapshotManager(client, self)
         self.clone = TransactionCloneManager(client, self)
         self.restore = TransactionRestoreManager(client, self)
@@ -3055,43 +3062,74 @@ class TransactionWrapper:
         self.metadata = TransactionMetadataManager(client, self)
         self.load_data = TransactionLoadDataManager(self)
         self.stage = TransactionStageManager(self)
-        # SQLAlchemy integration
-        self._sqlalchemy_session = None
 
-    def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
-        """Execute SQL within transaction"""
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
+        """
+        Execute SQL or SQLAlchemy statement within session.
+
+        Overrides SQLAlchemy Session.execute() to add:
+        - Support for string SQL with MatrixOne parameter substitution
+        - Query logging
+
+        Args:
+            sql_or_stmt: SQL string or SQLAlchemy statement (select, update, delete, insert, text)
+            params: Query parameters (only used for string SQL with '?' placeholders)
+            **kwargs: Additional arguments passed to parent execute()
+
+        Returns:
+            sqlalchemy.engine.Result: SQLAlchemy Result object
+
+        Examples::
+
+            # SQLAlchemy statements
+            from sqlalchemy import select, update
+            with client.session() as session:
+                stmt = select(User).where(User.age > 25)
+                result = session.execute(stmt)
+                users = result.scalars().all()
+
+            # String SQL (MatrixOne extension)
+            with client.session() as session:
+                result = session.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+                print(f"Inserted {result.rowcount} rows")
+        """
         import time
 
         start_time = time.time()
 
         try:
-            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-            # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-            if hasattr(self.connection, 'exec_driver_sql'):
-                # Escape % to %% for pymysql's format string handling
-                escaped_sql = sql.replace('%', '%%')
-                result = self.connection.exec_driver_sql(escaped_sql)
-            else:
-                # Fallback for testing or older SQLAlchemy versions
+            # Check if this is a string SQL
+            if isinstance(sql_or_stmt, str):
+                # String SQL - apply MatrixOne parameter substitution
+                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
+                original_sql = sql_or_stmt
+
                 from sqlalchemy import text
 
-                result = self.connection.execute(text(sql), params or {})
+                # Call parent's execute() with text()
+                result = super().execute(text(final_sql), **kwargs)
+            else:
+                # SQLAlchemy statement - call parent's execute() directly
+                result = super().execute(sql_or_stmt, params, **kwargs)
+                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+
             execution_time = time.time() - start_time
 
-            if result.returns_rows:
-                columns = list(result.keys())
-                rows = result.fetchall()
-                self.client.logger.log_query(sql, execution_time, len(rows), success=True)
-                return ResultSet(columns, rows)
+            # Log query
+            if hasattr(result, 'returns_rows') and result.returns_rows:
+                self.client.logger.log_query(original_sql, execution_time, None, success=True)
             else:
-                self.client.logger.log_query(sql, execution_time, result.rowcount, success=True)
-                return ResultSet([], [], affected_rows=result.rowcount)
+                self.client.logger.log_query(original_sql, execution_time, getattr(result, 'rowcount', 0), success=True)
+
+            return result
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(sql, execution_time, success=False)
-            self.client.logger.log_error(e, context="Transaction query execution")
-            raise QueryError(f"Transaction query execution failed: {e}")
+            self.client.logger.log_query(
+                original_sql if 'original_sql' in locals() else str(sql_or_stmt), execution_time, success=False
+            )
+            self.client.logger.log_error(e, context="Session query execution")
+            raise QueryError(f"Session query execution failed: {e}")
 
     def get_connection(self):
         """
@@ -3099,42 +3137,9 @@ class TransactionWrapper:
 
         Returns::
 
-            SQLAlchemy Connection instance bound to this transaction
+            SQLAlchemy Connection instance bound to this session
         """
-        return self.connection
-
-    def get_sqlalchemy_session(self):
-        """
-        Get SQLAlchemy session that uses the same transaction
-
-        Returns::
-
-            SQLAlchemy Session instance bound to this transaction
-        """
-        if self._sqlalchemy_session is None:
-            from sqlalchemy.orm import sessionmaker
-
-            # Create session factory using the client's engine
-            Session = sessionmaker(bind=self.client._engine)
-            self._sqlalchemy_session = Session(bind=self.connection)
-
-        return self._sqlalchemy_session
-
-    def commit_sqlalchemy(self) -> None:
-        """Commit SQLAlchemy session"""
-        if self._sqlalchemy_session:
-            self._sqlalchemy_session.commit()
-
-    def rollback_sqlalchemy(self) -> None:
-        """Rollback SQLAlchemy session"""
-        if self._sqlalchemy_session:
-            self._sqlalchemy_session.rollback()
-
-    def close_sqlalchemy(self) -> None:
-        """Close SQLAlchemy session"""
-        if self._sqlalchemy_session:
-            self._sqlalchemy_session.close()
-            self._sqlalchemy_session = None
+        return self.get_bind()
 
     def insert(self, table_name: str, data: dict[str, Any]) -> ResultSet:
         """
@@ -3256,9 +3261,9 @@ class TransactionWrapper:
 
                 return query
 
-    def create_table(self, table_name: str, columns: dict, **kwargs) -> "TransactionWrapper":
+    def create_table(self, table_name: str, columns: dict, **kwargs) -> "Session":
         """
-        Create a table within MatrixOne transaction.
+        Create a table within MatrixOne session.
 
         Args::
 
@@ -3268,7 +3273,7 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
 
@@ -3385,9 +3390,9 @@ class TransactionWrapper:
 
         return self
 
-    def drop_table(self, table_name: str) -> "TransactionWrapper":
+    def drop_table(self, table_name: str) -> "Session":
         """
-        Drop a table within MatrixOne transaction.
+        Drop a table within MatrixOne session.
 
         Args::
 
@@ -3395,17 +3400,15 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         sql = f"DROP TABLE IF EXISTS {table_name}"
         self.execute(sql)
         return self
 
-    def create_table_with_index(
-        self, table_name: str, columns: dict, indexes: list = None, **kwargs
-    ) -> "TransactionWrapper":
+    def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "Session":
         """
-        Create a table with vector indexes within MatrixOne transaction.
+        Create a table with vector indexes within MatrixOne session.
 
         Args::
 
@@ -3416,7 +3419,7 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
 
@@ -3549,9 +3552,9 @@ class TransactionWrapper:
 
         return self
 
-    def create_table_orm(self, table_name: str, *columns, **kwargs) -> "TransactionWrapper":
+    def create_table_orm(self, table_name: str, *columns, **kwargs) -> "Session":
         """
-        Create a table using SQLAlchemy ORM-style definitions within MatrixOne transaction.
+        Create a table using SQLAlchemy ORM-style definitions within MatrixOne session.
 
         Args::
 
@@ -3561,7 +3564,7 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         from sqlalchemy import MetaData, Table
         from sqlalchemy.schema import CreateTable

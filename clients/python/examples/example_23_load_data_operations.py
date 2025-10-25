@@ -422,17 +422,20 @@ class LoadDataOperationsDemo:
 
             self.logger.info("✅ Created sample data files")
 
-            # Load data within a transaction using simplified CSV interface with models
-            with client.transaction() as tx:
+            # Load data within a session using simplified CSV interface with models
+            with client.session() as tx:
                 result1 = tx.load_data.from_csv(accounts_file, Account)
-                self.logger.info(f"  ✅ Loaded {result1.affected_rows} rows into 'accounts' (in transaction)")
+                # Check for both ResultSet and SQLAlchemy Result
+                affected1 = result1.affected_rows if hasattr(result1, 'affected_rows') else result1.rowcount
+                self.logger.info(f"  ✅ Loaded {affected1} rows into 'accounts' (in session)")
 
                 result2 = tx.load_data.from_csv(transactions_file, Transaction)
-                self.logger.info(f"  ✅ Loaded {result2.affected_rows} rows into 'transactions' (in transaction)")
+                affected2 = result2.affected_rows if hasattr(result2, 'affected_rows') else result2.rowcount
+                self.logger.info(f"  ✅ Loaded {affected2} rows into 'transactions' (in session)")
 
-                # Transaction will commit automatically on success
+                # Session will commit automatically on success
 
-            self.logger.info("✅ Transaction committed successfully")
+            self.logger.info("✅ Session committed successfully")
 
             # Verify data using query builder
             accounts_count = client.query('accounts').count()

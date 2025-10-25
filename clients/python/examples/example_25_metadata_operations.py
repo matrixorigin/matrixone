@@ -340,12 +340,12 @@ class MetadataOperationsDemo:
         self.logger.info("\n=== Transaction-Based Metadata Operations ===")
 
         try:
-            with self.client.transaction() as tx:
-                # Metadata operations within transaction
-                self.logger.info("1. Metadata scan within transaction:")
+            with self.client.session() as tx:
+                # Metadata operations within session
+                self.logger.info("1. Metadata scan within session:")
                 result = tx.metadata.scan("metadata_demo", "users", columns="*")
 
-                self.logger.info(f"  Found {len(result)} metadata entries in transaction")
+                self.logger.info(f"  Found {len(result)} metadata entries in session")
                 for row in result[:2]:
                     self.logger.info(f"    {row.col_name}: {row.rows_cnt} rows")
 

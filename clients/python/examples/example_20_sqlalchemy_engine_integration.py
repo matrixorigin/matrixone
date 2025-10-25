@@ -277,15 +277,15 @@ class SQLAlchemyEngineIntegrationDemo:
                 client.execute("DROP TABLE IF EXISTS transaction_test")
                 client.execute("CREATE TABLE transaction_test (id INT PRIMARY KEY, value VARCHAR(100))")
 
-                # Test transaction
-                with client.transaction() as tx:
-                    tx.execute("INSERT INTO transaction_test VALUES (1, 'Transaction Test')")
+                # Test session
+                with client.session() as tx:
+                    tx.execute("INSERT INTO transaction_test VALUES (1, 'Session Test')")
                     tx.execute("INSERT INTO transaction_test VALUES (2, 'Another Test')")
 
-                # Verify transaction committed
+                # Verify session committed
                 result = client.execute("SELECT COUNT(*) FROM transaction_test")
                 count = result.fetchone()[0]
-                self.logger.info(f"📊 Transaction test table has {count} records")
+                self.logger.info(f"📊 Session test table has {count} records")
 
                 # Cleanup
                 client.execute(f"DROP DATABASE IF EXISTS {test_db}")

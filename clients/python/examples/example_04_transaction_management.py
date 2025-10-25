@@ -65,7 +65,7 @@ class TransactionManagementDemo:
             self.logger.info("Test 1: Simple Transaction with Commit")
             self.results['tests_run'] += 1
             try:
-                with client.transaction() as tx:
+                with client.session() as tx:
                     # Create test table
                     tx.execute(
                         "CREATE TABLE IF NOT EXISTS transaction_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)"
@@ -77,7 +77,8 @@ class TransactionManagementDemo:
 
                     # Query data within transaction
                     result = tx.execute("SELECT COUNT(*) FROM transaction_test")
-                    self.logger.info(f"   Records in transaction: {result.rows[0][0]}")
+                    rows = result.fetchall()
+                    self.logger.info(f"   Records in transaction: {rows[0][0]}")
 
                 # Verify data after commit
                 result = client.execute("SELECT COUNT(*) FROM transaction_test")
@@ -100,14 +101,15 @@ class TransactionManagementDemo:
 
                 # Test rollback by raising an exception within transaction
                 try:
-                    with client.transaction() as tx:
+                    with client.session() as tx:
                         # Insert data that will be rolled back
                         tx.execute("INSERT INTO transaction_test VALUES (3, 'rollback_test', 300)")
                         tx.execute("INSERT INTO transaction_test VALUES (4, 'rollback_test2', 400)")
 
                         # Query data within transaction
                         result = tx.execute("SELECT COUNT(*) FROM transaction_test")
-                        self.logger.info(f"   Records in transaction: {result.rows[0][0]}")
+                        rows = result.fetchall()
+                        self.logger.info(f"   Records in transaction: {rows[0][0]}")
 
                         # Force rollback by raising an exception
                         raise Exception("Intentional rollback")
@@ -170,7 +172,7 @@ class TransactionManagementDemo:
             try:
                 # Test 1: Error within transaction should rollback everything
                 try:
-                    with client.transaction() as tx:
+                    with client.session() as tx:
                         # Create test table
                         tx.execute("CREATE TABLE IF NOT EXISTS error_test (id INT PRIMARY KEY, name VARCHAR(50))")
 
@@ -241,7 +243,7 @@ class TransactionManagementDemo:
             # Test async transaction
             self.logger.info("Test: Async Transaction Management")
             try:
-                async with client.transaction() as tx:
+                async with client.session() as tx:
                     # Create test table
                     await tx.execute(
                         "CREATE TABLE IF NOT EXISTS async_transaction_test (id INT PRIMARY KEY, name VARCHAR(50))"
@@ -253,7 +255,8 @@ class TransactionManagementDemo:
 
                     # Query data within transaction
                     result = await tx.execute("SELECT COUNT(*) FROM async_transaction_test")
-                    self.logger.info(f"   Records in async transaction: {result.rows[0][0]}")
+                    rows = result.fetchall()
+                    self.logger.info(f"   Records in async transaction: {rows[0][0]}")
 
                 # Verify data after commit
                 result = await client.execute("SELECT COUNT(*) FROM async_transaction_test")
