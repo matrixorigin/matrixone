@@ -31,7 +31,7 @@ import os
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
-from matrixone import Client, AsyncClient, RestoreError
+from matrixone import Client, AsyncClient
 from matrixone.exceptions import RestoreError as RestoreErrorClass
 from matrixone.restore import RestoreManager, AsyncRestoreManager
 
