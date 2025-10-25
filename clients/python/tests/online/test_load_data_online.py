@@ -24,6 +24,10 @@ import tempfile
 from matrixone import Client
 from matrixone.load_data import LoadDataManager
 from sqlalchemy import Column, Integer, String, DECIMAL, Text
+from sqlalchemy.orm import declarative_base
+
+# Create Base for model definitions
+Base = declarative_base()
 
 # Create tmpfiles directory if it doesn't exist
 TMPFILES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'tmpfiles')
@@ -36,14 +40,17 @@ class TestLoadDataOperations:
 
     def test_basic_csv_load(self, test_client):
         """Test basic CSV file loading with comma delimiter"""
-        # Create table using ORM style
+        # Define table model
+        class User(Base):
+            __tablename__ = 'test_load_users'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            email = Column(String(255))
+            age = Column(Integer)
+        
+        # Create table using model
         test_client.drop_table('test_load_users')
-        test_client.create_table_orm('test_load_users',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('email', String(255)),
-            Column('age', Integer)
-        )
+        test_client.create_table(User)
         
         # Create sample CSV file
         csv_content = """1,Alice,alice@example.com,30
@@ -55,8 +62,8 @@ class TestLoadDataOperations:
             f.write(csv_content)
         
         try:
-            # Load data
-            result = test_client.load_data.from_file(csv_file, 'test_load_users')
+            # Load data using simplified CSV interface with model
+            result = test_client.load_data.from_csv(csv_file, User)
             assert result.affected_rows == 3
             
             # Verify data using query builder
@@ -69,13 +76,16 @@ class TestLoadDataOperations:
 
     def test_csv_with_header(self, test_client):
         """Test CSV file with header row (ignore first line)"""
-        # Create table
+        # Define table model
+        class Product(Base):
+            __tablename__ = 'test_load_products'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            price = Column(DECIMAL(10, 2))
+        
+        # Create table using model
         test_client.drop_table('test_load_products')
-        test_client.create_table_orm('test_load_products',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('price', DECIMAL(10, 2))
-        )
+        test_client.create_table(Product)
         
         # Create sample CSV with header
         csv_content = """id,name,price
@@ -88,10 +98,10 @@ class TestLoadDataOperations:
             f.write(csv_content)
         
         try:
-            # Load data with ignore_lines=1
-            result = test_client.load_data.from_file(
+            # Load data with header using simplified CSV interface with model
+            result = test_client.load_data.from_csv(
                 csv_file,
-                'test_load_products',
+                Product,
                 ignore_lines=1
             )
             assert result.affected_rows == 3
@@ -110,13 +120,16 @@ class TestLoadDataOperations:
 
     def test_custom_delimiter(self, test_client):
         """Test pipe-delimited file"""
-        # Create table
+        # Define table model
+        class Order(Base):
+            __tablename__ = 'test_load_orders'
+            order_id = Column(Integer, primary_key=True)
+            customer = Column(String(100))
+            amount = Column(DECIMAL(10, 2))
+        
+        # Create table using model
         test_client.drop_table('test_load_orders')
-        test_client.create_table_orm('test_load_orders',
-            Column('order_id', Integer, primary_key=True),
-            Column('customer', String(100)),
-            Column('amount', DECIMAL(10, 2))
-        )
+        test_client.create_table(Order)
         
         # Create pipe-delimited file
         pipe_content = """1001|John Smith|1500.00
@@ -127,11 +140,11 @@ class TestLoadDataOperations:
             f.write(pipe_content)
         
         try:
-            # Load data with pipe delimiter
-            result = test_client.load_data.from_file(
+            # Load data with pipe delimiter using simplified CSV interface with model
+            result = test_client.load_data.from_csv(
                 pipe_file,
-                'test_load_orders',
-                fields_terminated_by='|'
+                Order,
+                delimiter='|'
             )
             assert result.affected_rows == 2
             
@@ -145,13 +158,16 @@ class TestLoadDataOperations:
 
     def test_quoted_fields(self, test_client):
         """Test CSV with quoted fields containing commas"""
-        # Create table using ORM style
+        # Define table model
+        class Address(Base):
+            __tablename__ = 'test_load_addresses'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            address = Column(String(255))
+        
+        # Create table using model
         test_client.drop_table('test_load_addresses')
-        test_client.create_table_orm('test_load_addresses',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('address', String(255))
-        )
+        test_client.create_table(Address)
         
         # Create CSV with quoted fields
         csv_content = '''1,"Alice Smith","123 Main St, Apt 4"
@@ -162,12 +178,12 @@ class TestLoadDataOperations:
             f.write(csv_content)
         
         try:
-            # Load data with quoted fields
-            result = test_client.load_data.from_file(
+            # Load data with quoted fields using simplified CSV interface with model
+            result = test_client.load_data.from_csv(
                 csv_file,
-                'test_load_addresses',
-                fields_terminated_by=',',
-                fields_enclosed_by='"'
+                Address,
+                delimiter=',',
+                enclosed_by='"'
             )
             assert result.affected_rows == 2
             
@@ -181,13 +197,16 @@ class TestLoadDataOperations:
 
     def test_tab_separated(self, test_client):
         """Test tab-separated values (TSV) file"""
-        # Create table using ORM style
+        # Define table model  
+        class Log(Base):
+            __tablename__ = 'test_load_logs'
+            id = Column(Integer, primary_key=True)
+            level = Column(String(20))
+            message = Column(Text)
+        
+        # Create table using model
         test_client.drop_table('test_load_logs')
-        test_client.create_table_orm('test_load_logs',
-            Column('id', Integer, primary_key=True),
-            Column('level', String(20)),
-            Column('message', Text)
-        )
+        test_client.create_table(Log)
         
         # Create TSV file
         tsv_content = """1\tINFO\tApplication started
@@ -198,11 +217,10 @@ class TestLoadDataOperations:
             f.write(tsv_content)
         
         try:
-            # Load data with tab delimiter
-            result = test_client.load_data.from_file(
+            # Load tab-separated data using simplified TSV interface with model
+            result = test_client.load_data.from_tsv(
                 tsv_file,
-                'test_load_logs',
-                fields_terminated_by='\\t'
+                Log
             )
             assert result.affected_rows == 2
             
@@ -212,14 +230,17 @@ class TestLoadDataOperations:
 
     def test_column_mapping(self, test_client):
         """Test loading data into specific columns"""
-        # Create table with more columns than data file using ORM style
+        # Define table model with more columns
+        class Employee(Base):
+            __tablename__ = 'test_load_employees'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            email = Column(String(255))
+            department = Column(String(50))
+        
+        # Create table using model
         test_client.drop_table('test_load_employees')
-        test_client.create_table_orm('test_load_employees',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('email', String(255)),
-            Column('department', String(50))
-        )
+        test_client.create_table(Employee)
         
         # Create CSV with only 3 columns
         csv_content = """1,Alice,alice@example.com
@@ -230,10 +251,10 @@ class TestLoadDataOperations:
             f.write(csv_content)
         
         try:
-            # Load data into specific columns
-            result = test_client.load_data.from_file(
+            # Load data into specific columns using simplified CSV interface with model
+            result = test_client.load_data.from_csv(
                 csv_file,
-                'test_load_employees',
+                Employee,
                 columns=['id', 'name', 'email']
             )
             assert result.affected_rows == 2
@@ -248,20 +269,23 @@ class TestLoadDataOperations:
 
     def test_transaction_load(self, test_client):
         """Test loading data within a transaction"""
-        # Create tables using ORM style
+        # Define table models
+        class Account(Base):
+            __tablename__ = 'test_load_accounts'
+            account_id = Column(Integer, primary_key=True)
+            balance = Column(DECIMAL(10, 2))
+        
+        class Transaction(Base):
+            __tablename__ = 'test_load_transactions'
+            trans_id = Column(Integer, primary_key=True)
+            account_id = Column(Integer)
+            amount = Column(DECIMAL(10, 2))
+        
+        # Create tables using models
         test_client.drop_table('test_load_accounts')
         test_client.drop_table('test_load_transactions')
-        
-        test_client.create_table_orm('test_load_accounts',
-            Column('account_id', Integer, primary_key=True),
-            Column('balance', DECIMAL(10, 2))
-        )
-        
-        test_client.create_table_orm('test_load_transactions',
-            Column('trans_id', Integer, primary_key=True),
-            Column('account_id', Integer),
-            Column('amount', DECIMAL(10, 2))
-        )
+        test_client.create_table(Account)
+        test_client.create_table(Transaction)
         
         # Create data files
         accounts_content = """1,1000.00
@@ -280,8 +304,9 @@ class TestLoadDataOperations:
         try:
             # Load data within transaction
             with test_client.transaction() as tx:
-                result1 = tx.load_data.from_file(accounts_file, 'test_load_accounts')
-                result2 = tx.load_data.from_file(transactions_file, 'test_load_transactions')
+                # Load data using simplified CSV interface within transaction with models
+                result1 = tx.load_data.from_csv(accounts_file, Account)
+                result2 = tx.load_data.from_csv(transactions_file, Transaction)
                 
                 assert result1.affected_rows == 2
                 assert result2.affected_rows == 2
@@ -301,12 +326,15 @@ class TestLoadDataOperations:
 
     def test_empty_file(self, test_client):
         """Test loading from an empty file"""
-        # Create table using ORM style
+        # Define table model
+        class EmptyTest(Base):
+            __tablename__ = 'test_load_empty'
+            id = Column(Integer, primary_key=True)
+            value = Column(String(50))
+        
+        # Create table using model
         test_client.drop_table('test_load_empty')
-        test_client.create_table_orm('test_load_empty',
-            Column('id', Integer, primary_key=True),
-            Column('value', String(50))
-        )
+        test_client.create_table(EmptyTest)
         
         # Create empty file
         empty_file = os.path.join(TMPFILES_DIR, f"test_empty_{id(self)}.csv")
@@ -315,8 +343,8 @@ class TestLoadDataOperations:
             pass
         
         try:
-            # Load data from empty file
-            result = test_client.load_data.from_file(empty_file, 'test_load_empty')
+            # Load data from empty file using simplified CSV interface with model
+            result = test_client.load_data.from_csv(empty_file, EmptyTest)
             assert result.affected_rows == 0
             
             # Verify table is empty
@@ -329,12 +357,15 @@ class TestLoadDataOperations:
 
     def test_large_data_load(self, test_client):
         """Test loading a larger dataset"""
-        # Create table using ORM style
+        # Define table model
+        class LargeData(Base):
+            __tablename__ = 'test_load_large'
+            id = Column(Integer, primary_key=True)
+            value = Column(String(50))
+        
+        # Create table using model
         test_client.drop_table('test_load_large')
-        test_client.create_table_orm('test_load_large',
-            Column('id', Integer, primary_key=True),
-            Column('value', String(50))
-        )
+        test_client.create_table(LargeData)
         
         # Create file with 1000 rows
         large_file = os.path.join(TMPFILES_DIR, f"test_large_{id(self)}.csv")
@@ -343,8 +374,8 @@ class TestLoadDataOperations:
                 f.write(f"{i},value_{i}\n")
         
         try:
-            # Load data
-            result = test_client.load_data.from_file(large_file, 'test_load_large')
+            # Load data using simplified CSV interface with model
+            result = test_client.load_data.from_csv(large_file, LargeData)
             assert result.affected_rows == 1000
             
             # Verify count
@@ -404,13 +435,17 @@ class TestLoadDataErrorHandling:
     
     def test_jsonline_object_format(self, test_client):
         """Test JSONLINE format with object structure"""
+        # Define table model
+        class JsonlineUser(Base):
+            __tablename__ = 'test_load_jsonline_obj'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            email = Column(String(255))
+            age = Column(Integer)
+        
+        # Create table using model
         test_client.drop_table('test_load_jsonline_obj')
-        test_client.create_table_orm('test_load_jsonline_obj',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('email', String(255)),
-            Column('age', Integer)
-        )
+        test_client.create_table(JsonlineUser)
         
         # Create JSONLINE file with objects
         jl_content = '''{"id":1,"name":"Alice","email":"alice@example.com","age":30}
@@ -422,12 +457,10 @@ class TestLoadDataErrorHandling:
             f.write(jl_content)
         
         try:
-            # Load JSONLINE data
-            result = test_client.load_data.from_file(
+            # Load JSONLINE data using simplified interface with model
+            result = test_client.load_data.from_jsonline(
                 jl_file,
-                'test_load_jsonline_obj',
-                format='jsonline',
-                jsondata='object'
+                JsonlineUser
             )
             assert result.affected_rows == 3
             
@@ -441,13 +474,17 @@ class TestLoadDataErrorHandling:
     
     def test_jsonline_array_format(self, test_client):
         """Test JSONLINE format with array structure"""
+        # Define table model
+        class JsonlineProduct(Base):
+            __tablename__ = 'test_load_jsonline_arr'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            email = Column(String(255))
+            age = Column(Integer)
+        
+        # Create table using model
         test_client.drop_table('test_load_jsonline_arr')
-        test_client.create_table_orm('test_load_jsonline_arr',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('email', String(255)),
-            Column('age', Integer)
-        )
+        test_client.create_table(JsonlineProduct)
         
         # Create JSONLINE file with arrays
         jl_content = '''[1,"Alice","alice@example.com",30]
@@ -459,12 +496,11 @@ class TestLoadDataErrorHandling:
             f.write(jl_content)
         
         try:
-            # Load JSONLINE data
-            result = test_client.load_data.from_file(
+            # Load JSONLINE data using simplified interface with model
+            result = test_client.load_data.from_jsonline(
                 jl_file,
-                'test_load_jsonline_arr',
-                format='jsonline',
-                jsondata='array'
+                JsonlineProduct,
+                structure='array'
             )
             assert result.affected_rows == 3
             
@@ -478,12 +514,16 @@ class TestLoadDataErrorHandling:
     
     def test_set_clause_nullif(self, test_client):
         """Test SET clause with NULLIF function"""
+        # Define table model
+        class CleanedData(Base):
+            __tablename__ = 'test_load_set_nullif'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            status = Column(String(50))
+        
+        # Create table using model
         test_client.drop_table('test_load_set_nullif')
-        test_client.create_table_orm('test_load_set_nullif',
-            Column('id', Integer, primary_key=True),
-            Column('name', String(100)),
-            Column('status', String(50))
-        )
+        test_client.create_table(CleanedData)
         
         # Create CSV with "null" strings
         csv_content = '''1,Alice,active
@@ -495,10 +535,10 @@ class TestLoadDataErrorHandling:
             f.write(csv_content)
         
         try:
-            # Load data with SET clause to convert "null" to NULL
-            result = test_client.load_data.from_file(
+            # Load data with SET clause using simplified CSV interface with model
+            result = test_client.load_data.from_csv(
                 csv_file,
-                'test_load_set_nullif',
+                CleanedData,
                 set_clause={
                     'status': 'NULLIF(status, "null")'
                 }

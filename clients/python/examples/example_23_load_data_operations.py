@@ -92,8 +92,8 @@ class LoadDataOperationsDemo:
             
             self.logger.info(f"✅ Created sample CSV file: {csv_file}")
             
-            # Load data using LoadDataManager
-            result = client.load_data.from_file(csv_file, 'users')
+            # Load data using simplified CSV interface
+            result = client.load_data.from_csv(csv_file, 'users')
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'users' table")
             
             # Verify data using query builder
@@ -140,7 +140,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample CSV file with header: {csv_file}")
             
             # Load data, skipping the first line (header)
-            result = client.load_data.from_file(
+            result = client.load_data.from_csv(
                 csv_file,
                 'products',
                 ignore_lines=1  # Skip header row
@@ -189,11 +189,11 @@ class LoadDataOperationsDemo:
             
             self.logger.info(f"✅ Created sample pipe-delimited file: {pipe_file}")
             
-            # Load data with pipe delimiter
-            result = client.load_data.from_file(
+            # Load data with pipe delimiter using simplified CSV interface
+            result = client.load_data.from_csv(
                 pipe_file,
                 'orders',
-                fields_terminated_by='|'  # Use pipe as delimiter
+                delimiter='|'  # Use pipe as delimiter
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'orders' table")
             
@@ -239,12 +239,12 @@ class LoadDataOperationsDemo:
             
             self.logger.info(f"✅ Created sample CSV with quoted fields: {csv_file}")
             
-            # Load data with quoted fields
-            result = client.load_data.from_file(
+            # Load data with quoted fields using simplified CSV interface
+            result = client.load_data.from_csv(
                 csv_file,
                 'addresses',
-                fields_terminated_by=',',
-                fields_enclosed_by='"'  # Fields are enclosed in quotes
+                delimiter=',',
+                enclosed_by='"'  # Fields are enclosed in quotes
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'addresses' table")
             
@@ -292,10 +292,9 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample TSV file: {tsv_file}")
             
             # Load data with tab delimiter
-            result = client.load_data.from_file(
+            result = client.load_data.from_tsv(
                 tsv_file,
-                'logs',
-                fields_terminated_by='\\t'  # Tab character
+                'logs'  # Tab delimiter is automatic
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'logs' table")
             
@@ -342,7 +341,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample CSV with 3 columns: {csv_file}")
             
             # Load data into specific columns
-            result = client.load_data.from_file(
+            result = client.load_data.from_csv(
                 csv_file,
                 'employees',
                 columns=['id', 'name', 'email']  # Only load into these columns
@@ -412,12 +411,12 @@ class LoadDataOperationsDemo:
             
             self.logger.info("✅ Created sample data files")
             
-            # Load data within a transaction
+            # Load data within a transaction using simplified CSV interface
             with client.transaction() as tx:
-                result1 = tx.load_data.from_file(accounts_file, 'accounts')
+                result1 = tx.load_data.from_csv(accounts_file, 'accounts')
                 self.logger.info(f"  ✅ Loaded {result1.affected_rows} rows into 'accounts' (in transaction)")
                 
-                result2 = tx.load_data.from_file(transactions_file, 'transactions')
+                result2 = tx.load_data.from_csv(transactions_file, 'transactions')
                 self.logger.info(f"  ✅ Loaded {result2.affected_rows} rows into 'transactions' (in transaction)")
                 
                 # Transaction will commit automatically on success
@@ -468,7 +467,7 @@ class LoadDataOperationsDemo:
             
             # Try to load data (may fail depending on MatrixOne's handling of empty strings)
             try:
-                result = client.load_data.from_file(csv_file, 'strict_data')
+                result = client.load_data.from_csv(csv_file, 'strict_data')
                 self.logger.info(f"✅ Loaded {result.affected_rows} rows")
                 
                 # Verify what was loaded using query builder
@@ -512,8 +511,8 @@ class LoadDataOperationsDemo:
             
             self.logger.info(f"✅ Created file with 1000 rows: {large_file}")
             
-            # Load data
-            result = client.load_data.from_file(large_file, 'large_data')
+            # Load data using simplified CSV interface
+            result = client.load_data.from_csv(large_file, 'large_data')
             self.logger.info(f"✅ Loaded {result.affected_rows} rows")
             
             # Verify count using query builder
@@ -556,12 +555,10 @@ class LoadDataOperationsDemo:
             self.results['files_created'].append(jl_file)
             self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
             
-            # Load JSONLINE data
-            result = client.load_data.from_file(
+            # Load JSONLINE data using simplified interface
+            result = client.load_data.from_jsonline(
                 jl_file,
-                'jsonline_users',
-                format='jsonline',
-                jsondata='object'
+                'jsonline_users'
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (object format)")
             
@@ -605,12 +602,11 @@ class LoadDataOperationsDemo:
             self.results['files_created'].append(jl_file)
             self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
             
-            # Load JSONLINE data
-            result = client.load_data.from_file(
+            # Load JSONLINE data using simplified interface
+            result = client.load_data.from_jsonline(
                 jl_file,
                 'jsonline_products',
-                format='jsonline',
-                jsondata='array'
+                structure='array'
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (array format)")
             
@@ -654,8 +650,8 @@ class LoadDataOperationsDemo:
             self.results['files_created'].append(csv_file)
             self.logger.info(f"✅ Created CSV file with 'null' strings: {csv_file}")
             
-            # Load data with SET clause to convert "null" to NULL
-            result = client.load_data.from_file(
+            # Load data with SET clause using simplified CSV interface
+            result = client.load_data.from_csv(
                 csv_file,
                 'cleaned_data',
                 set_clause={

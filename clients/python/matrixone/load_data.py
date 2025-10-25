@@ -67,6 +67,169 @@ class LoadDataManager:
         """
         self.client = client
     
+    def from_csv(
+        self,
+        file_path: str,
+        table_name_or_model,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        escaped_by: Optional[str] = None,
+        ignore_lines: int = 0,
+        columns: Optional[List[str]] = None,
+        character_set: Optional[str] = None,
+        parallel: bool = False,
+        set_clause: Optional[Dict[str, str]] = None,
+        **kwargs
+    ):
+        """
+        Load CSV data from a file into a table.
+        
+        Simplified interface for CSV files with commonly used options.
+        
+        Args:
+            file_path (str): Path to the CSV file
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            delimiter (str): Field delimiter. Default: ','
+            enclosed_by (str, optional): Character enclosing field values (e.g. '"')
+            escaped_by (str, optional): Escape character
+            ignore_lines (int): Number of header lines to skip. Default: 0
+            columns (list, optional): List of column names to load
+            character_set (str, optional): Character set (e.g. 'utf8')
+            parallel (bool): Enable parallel loading. Default: False
+            set_clause (dict, optional): Column transformations
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            # Basic CSV
+            >>> client.load_data.from_csv('data.csv', 'users')
+            
+            # CSV with header
+            >>> client.load_data.from_csv('data.csv', 'users', ignore_lines=1)
+            
+            # Custom delimiter with quotes
+            >>> client.load_data.from_csv('data.txt', 'users', 
+            ...     delimiter='|', enclosed_by='"')
+        """
+        return self.from_file(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            fields_terminated_by=delimiter,
+            fields_enclosed_by=enclosed_by,
+            fields_escaped_by=escaped_by,
+            ignore_lines=ignore_lines,
+            columns=columns,
+            character_set=character_set,
+            parallel=parallel,
+            set_clause=set_clause,
+            **kwargs
+        )
+    
+    def from_tsv(
+        self,
+        file_path: str,
+        table_name_or_model,
+        ignore_lines: int = 0,
+        columns: Optional[List[str]] = None,
+        **kwargs
+    ):
+        """
+        Load TSV (Tab-Separated Values) data from a file.
+        
+        Args:
+            file_path (str): Path to the TSV file
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            ignore_lines (int): Number of header lines to skip. Default: 0
+            columns (list, optional): List of column names to load
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            >>> client.load_data.from_tsv('data.tsv', 'logs')
+            >>> client.load_data.from_tsv('data.tsv', 'logs', ignore_lines=1)
+        """
+        return self.from_csv(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            delimiter='\\t',
+            ignore_lines=ignore_lines,
+            columns=columns,
+            **kwargs
+        )
+    
+    def from_jsonline(
+        self,
+        file_path: str,
+        table_name_or_model,
+        structure: str = 'object',
+        compression: Optional[str] = None,
+        **kwargs
+    ):
+        """
+        Load JSONLINE data from a file.
+        
+        Args:
+            file_path (str): Path to the JSONLINE file
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            structure (str): JSON structure - 'object' or 'array'. Default: 'object'
+            compression (str, optional): Compression format ('gzip', 'bzip2', 'lz4')
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            # JSONLINE with objects
+            >>> client.load_data.from_jsonline('data.jl', 'users')
+            
+            # JSONLINE with arrays
+            >>> client.load_data.from_jsonline('data.jl', 'users', structure='array')
+            
+            # Compressed JSONLINE
+            >>> client.load_data.from_jsonline('data.jl.gz', 'users', 
+            ...     compression='gzip')
+        """
+        return self.from_file(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            format='jsonline',
+            jsondata=structure,
+            compression=compression,
+            **kwargs
+        )
+    
+    def from_parquet(
+        self,
+        file_path: str,
+        table_name_or_model,
+        **kwargs
+    ):
+        """
+        Load Parquet data from a file.
+        
+        Args:
+            file_path (str): Path to the Parquet file
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            >>> client.load_data.from_parquet('data.parq', 'users')
+            >>> client.load_data.from_parquet('data.parquet', 'sales')
+        """
+        return self.from_file(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            format='parquet',
+            **kwargs
+        )
+    
     def from_file(
         self,
         file_path: str,
