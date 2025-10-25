@@ -110,14 +110,10 @@ class TestSyncTransactionContexts:
             session = tx
             assert session is not None
 
-            # Test get_connection for direct connection access
-            conn = tx.get_connection()
-            assert conn is not None
-
-            # Test direct connection usage
+            # Test direct SQL execution via session
             from sqlalchemy import text
 
-            result = conn.execute(text("SELECT COUNT(*) FROM sync_tx_docs"))
+            result = tx.execute(text("SELECT COUNT(*) FROM sync_tx_docs"))
             rows = result.fetchall()
             assert rows[0][0] == 5
 
@@ -248,13 +244,11 @@ class TestAsyncTransactionContexts:
             assert session is not None
 
             # Test get_connection for direct connection access
-            conn = tx.get_connection()
-            assert conn is not None
 
             # Test direct connection usage
             from sqlalchemy import text
 
-            result = await conn.execute(text("SELECT COUNT(*) FROM async_tx_docs"))
+            result = await tx.execute(text("SELECT COUNT(*) FROM async_tx_docs"))
             rows = result.fetchall()
             assert rows[0][0] == 5
 
@@ -699,18 +693,16 @@ class TestGetConnectionInterface:
 
         with client.session() as tx:
             # Get connection
-            conn = tx.get_connection()
-            assert conn is not None
 
             # Test basic query execution
             from sqlalchemy import text
 
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             rows = result.fetchall()
             assert rows[0][0] == 3
 
             # Test parameterized query
-            result = conn.execute(
+            result = tx.execute(
                 text(f"SELECT * FROM {test_db}.get_conn_docs WHERE title LIKE :pattern"),
                 {"pattern": "%Test 1%"},
             )
@@ -727,19 +719,18 @@ class TestGetConnectionInterface:
         initial_count = result.fetchall()[0][0]
 
         with client.session() as tx:
-            conn = tx.get_connection()
 
             # Insert a new record within transaction
             from sqlalchemy import text
 
-            conn.execute(
+            tx.execute(
                 text(
                     f"INSERT INTO {test_db}.get_conn_docs (title, content) VALUES ('Transaction Test', 'Content in transaction')"
                 )
             )
 
             # Verify record exists within transaction
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             count_in_tx = result.scalar()
             assert count_in_tx == initial_count + 1
 
@@ -795,18 +786,16 @@ class TestGetConnectionInterface:
 
             async with client.session() as tx:
                 # Get connection
-                conn = tx.get_connection()
-                assert conn is not None
 
                 # Test basic query execution
                 from sqlalchemy import text
 
-                result = await conn.execute(text("SELECT COUNT(*) FROM async_get_conn_docs"))
+                result = await tx.execute(text("SELECT COUNT(*) FROM async_get_conn_docs"))
                 rows = result.fetchall()
                 assert rows[0][0] == 3
 
                 # Test parameterized query
-                result = await conn.execute(
+                result = await tx.execute(
                     text("SELECT * FROM async_get_conn_docs WHERE title LIKE :pattern"),
                     {"pattern": "%Test 1%"},
                 )
@@ -830,12 +819,11 @@ class TestGetConnectionInterface:
 
         with client.session() as tx:
             # Test that we can use both get_connection and other managers
-            conn = tx.get_connection()
 
             # Use connection directly
             from sqlalchemy import text
 
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             direct_count = result.scalar()
 
             # Use transaction wrapper execute
@@ -846,7 +834,7 @@ class TestGetConnectionInterface:
             assert direct_count == wrapper_count
 
             # Test that both are in the same transaction
-            conn.execute(
+            tx.execute(
                 text(
                     f"INSERT INTO {test_db}.get_conn_docs (title, content) VALUES ('Direct Insert', 'Using connection directly')"
                 )
@@ -856,7 +844,7 @@ class TestGetConnectionInterface:
             )
 
             # Both inserts should be visible within the transaction
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             final_count = result.scalar()
             assert final_count == direct_count + 2
 
@@ -980,7 +968,6 @@ class TestAsyncTransactionManagerConsistency:
             assert hasattr(tx, 'account')
             assert hasattr(tx, 'vector_ops')
             assert hasattr(tx, 'fulltext_index')
-            assert hasattr(tx, 'get_connection')
             # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that managers are the correct types
@@ -1019,7 +1006,6 @@ class TestAsyncTransactionManagerConsistency:
             assert hasattr(tx, 'account')
             assert hasattr(tx, 'vector_ops')
             assert hasattr(tx, 'fulltext_index')
-            assert hasattr(tx, 'get_connection')
             # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that managers are the correct types

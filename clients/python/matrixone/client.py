@@ -41,7 +41,8 @@ from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
 from .restore import RestoreManager, TransactionRestoreManager
-from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
+from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
+from .clone import CloneManager
 from .sqlalchemy_ext import MatrixOneDialect
 from .version import get_version_manager
 
@@ -3759,10 +3760,19 @@ class VectorManager:
         database: str,
         table_name: str,
         column_name: str,
-        connection: Connection,
+        executor,
     ) -> Dict[str, str]:
         """
         Get the table names of the IVF index tables.
+
+        Args:
+            database: Database name
+            table_name: Table name
+            column_name: Vector column name
+            executor: Executor to use (client or session)
+
+        Returns:
+            Dictionary mapping table types to table names
         """
         sql = (
             f"SELECT i.algo_table_type, i.index_table_name "
@@ -3773,7 +3783,7 @@ class VectorManager:
             f"AND t.reldatabase = '{database}' "
             f"AND i.algo='ivfflat'"
         )
-        result = self.client._execute_with_logging(connection, sql, context="Get IVF index table names")
+        result = executor.execute(sql)
         # +-----------------+-----------------------------------------------------------+
         # | algo_table_type | index_table_name                                          |
         # +-----------------+-----------------------------------------------------------+
@@ -3781,16 +3791,24 @@ class VectorManager:
         # | centroids       | __mo_index_secondary_01999b6b-414c-7311-98d2-9de6a0f591ee |
         # | entries         | __mo_index_secondary_01999b6b-414c-7324-90f0-695d791d574f |
         # +-----------------+-----------------------------------------------------------+
-        return {row[0]: row[1] for row in result}
+        return {row[0]: row[1] for row in result.fetchall()}
 
     def _get_ivf_buckets_distribution(
         self,
         database: str,
         table_name: str,
-        connection: Connection,
+        executor,
     ) -> Dict[str, List[int]]:
         """
         Get the buckets distribution of the IVF index tables.
+
+        Args:
+            database: Database name
+            table_name: Entries table name
+            executor: Executor to use (client or session)
+
+        Returns:
+            Dictionary containing bucket distribution data
         """
         sql = (
             f"SELECT "
@@ -3800,7 +3818,7 @@ class VectorManager:
             f"FROM `{database}`.`{table_name}` "
             f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
         )
-        result = self.client._execute_with_logging(connection, sql, context="Get IVF buckets distribution")
+        result = executor.execute(sql)
         rows = result.fetchall()
         # +----------------+-------------+------------------+
         # | centroid_count | centroid_id | centroid_version |
@@ -4514,43 +4532,41 @@ class VectorManager:
         # If column_name is not provided, try to infer it
         if not column_name:
             # Query the table schema to find vector columns
-            with self.client.get_sqlalchemy_engine().begin() as conn:
-                schema_sql = (
-                    f"SELECT column_name, data_type "
-                    f"FROM information_schema.columns "
-                    f"WHERE table_schema = '{database}' "
-                    f"AND table_name = '{table_name}' "
-                    f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
-                )
-                result = self.client._execute_with_logging(conn, schema_sql, context="Auto-detect vector column")
-                vector_columns = result.fetchall()
+            schema_sql = (
+                f"SELECT column_name, data_type "
+                f"FROM information_schema.columns "
+                f"WHERE table_schema = '{database}' "
+                f"AND table_name = '{table_name}' "
+                f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
+            )
+            result = self.client.execute(schema_sql)
+            vector_columns = result.fetchall()
 
-                if not vector_columns:
-                    raise Exception(f"No vector columns found in table {table_name}")
-                elif len(vector_columns) == 1:
-                    column_name = vector_columns[0][0]
-                else:
-                    # Multiple vector columns found, raise error asking user to specify
-                    column_names = [col[0] for col in vector_columns]
-                    raise Exception(
-                        f"Multiple vector columns found in table {table_name}: {column_names}. "
-                        f"Please specify the column_name parameter."
-                    )
+            if not vector_columns:
+                raise Exception(f"No vector columns found in table {table_name}")
+            elif len(vector_columns) == 1:
+                column_name = vector_columns[0][0]
+            else:
+                # Multiple vector columns found, raise error asking user to specify
+                column_names = [col[0] for col in vector_columns]
+                raise Exception(
+                    f"Multiple vector columns found in table {table_name}: {column_names}. "
+                    f"Please specify the column_name parameter."
+                )
 
         # Get IVF index table names
-        with self.client.get_sqlalchemy_engine().begin() as conn:
-            index_tables = self._get_ivf_index_table_names(database, table_name, column_name, conn)
+        index_tables = self._get_ivf_index_table_names(database, table_name, column_name, self.client)
 
-            if not index_tables:
-                raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+        if not index_tables:
+            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
 
-            # Get the entries table name for distribution analysis
-            entries_table = index_tables.get('entries')
-            if not entries_table:
-                raise Exception("No entries table found in IVF index")
+        # Get the entries table name for distribution analysis
+        entries_table = index_tables.get('entries')
+        if not entries_table:
+            raise Exception("No entries table found in IVF index")
 
-            # Get bucket distribution
-            distribution = self._get_ivf_buckets_distribution(database, entries_table, conn)
+        # Get bucket distribution
+        distribution = self._get_ivf_buckets_distribution(database, entries_table, self.client)
 
         return {
             'index_tables': index_tables,
@@ -4714,11 +4730,8 @@ class TransactionVectorIndexManager(VectorManager):
                     f"Please specify the column_name parameter."
                 )
 
-        # Get connection from transaction wrapper
-        connection = self.transaction_wrapper.get_connection()
-
-        # Get IVF index table names
-        index_tables = self._get_ivf_index_table_names(database, table_name, column_name, connection)
+        # Get IVF index table names using session execute
+        index_tables = self._get_ivf_index_table_names(database, table_name, column_name, self.transaction_wrapper)
 
         if not index_tables:
             raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
@@ -4728,8 +4741,8 @@ class TransactionVectorIndexManager(VectorManager):
         if not entries_table:
             raise Exception("No entries table found in IVF index")
 
-        # Get bucket distribution
-        distribution = self._get_ivf_buckets_distribution(database, entries_table, connection)
+        # Get bucket distribution using session execute
+        distribution = self._get_ivf_buckets_distribution(database, entries_table, self.transaction_wrapper)
 
         return {
             'index_tables': index_tables,

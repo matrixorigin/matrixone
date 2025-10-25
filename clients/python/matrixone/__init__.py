@@ -58,7 +58,8 @@ from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
-from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
+from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
+from .clone import CloneManager
 from .stage import Stage, StageManager, TransactionStageManager, AsyncStageManager, AsyncTransactionStageManager
 
 # Import SQLAlchemy extensions

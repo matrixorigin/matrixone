@@ -66,7 +66,8 @@ def teardown_sqlalchemy_mocks():
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
-from matrixone.snapshot import SnapshotLevel, Snapshot, SnapshotManager, CloneManager
+from matrixone.snapshot import SnapshotLevel, Snapshot, SnapshotManager
+from matrixone.clone import CloneManager
 from matrixone.client import (
     Client,
     Session,

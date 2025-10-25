@@ -202,16 +202,6 @@ class Session(SQLAlchemySession):
             self.client.logger.log_error(e, context="Session query execution")
             raise QueryError(f"Session query execution failed: {e}")
 
-    def get_connection(self):
-        """
-        Get the underlying SQLAlchemy connection for direct use
-
-        Returns::
-
-            SQLAlchemy Connection instance bound to this session
-        """
-        return self.get_bind()
-
     def insert(self, table_name: str, data: dict[str, Any]) -> "ResultSet":
         """
         Insert data into a table within session.
@@ -590,16 +580,6 @@ class AsyncSession(SQLAlchemyAsyncSession):
             )
             self.client.logger.log_error(e, context="Async session query execution")
             raise QueryError(f"Async session query execution failed: {e}")
-
-    def get_connection(self):
-        """
-        Get the underlying SQLAlchemy async connection for direct use
-
-        Returns::
-
-            SQLAlchemy AsyncConnection instance bound to this session
-        """
-        return self._connection
 
     async def insert(self, table_name_or_model, data: dict):
         """
