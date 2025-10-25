@@ -44,6 +44,10 @@ try:
     PROMPT_TOOLKIT_AVAILABLE = True
 except ImportError:
     PROMPT_TOOLKIT_AVAILABLE = False
+    # Provide stub classes for documentation generation
+    class Completer:
+        """Stub Completer class when prompt_toolkit is not available"""
+        pass
 
 
 # Custom completer for mo-diag commands
@@ -160,6 +164,13 @@ if PROMPT_TOOLKIT_AVAILABLE:
                 return [row[0] for row in result.fetchall()]
             except Exception:
                 return []
+
+else:
+    # Stub class for documentation generation when prompt_toolkit is not available
+    class MODiagCompleter:
+        """Smart completer for mo-diag commands (stub when prompt_toolkit unavailable)"""
+        def __init__(self, cli_instance):
+            self.cli = cli_instance
 
 
 # ANSI Color codes for terminal output

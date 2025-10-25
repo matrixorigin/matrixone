@@ -27,6 +27,7 @@ type SelectStatement interface {
 type Select struct {
 	statementImpl
 	Select         SelectStatement
+	RewriteOption  *RewriteOption
 	TimeWindow     *TimeWindow
 	OrderBy        OrderBy
 	Limit          *Limit
@@ -72,6 +73,17 @@ func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 		OrderBy: o,
 		Limit:   l,
 	}
+}
+
+type RewriteOption struct {
+	// key: db.table or table
+	Rewrites map[string]*Rewrite
+}
+
+type Rewrite struct {
+	TableName string
+	DbName    string
+	Stmt      Statement
 }
 
 type TimeWindow struct {

@@ -103,6 +103,7 @@ const (
 var (
 	unsubscribeProcessTicker = 20 * time.Minute
 	gcPartitionStateTicker   = 20 * time.Minute
+	gcSnapshotTicker         = 20 * time.Minute // snapshot GC interval
 
 	defaultGetLogTailAddrTimeoutDuration = time.Minute * 10
 	defaultServerTimeout                 = time.Minute * 10
@@ -1077,6 +1078,18 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 	}
 }
 
+// TryGC checks if ready and runs GC for PushClient resources (unused tables)
+func (c *PushClient) TryGC(ctx context.Context) {
+	if c.subscriber == nil {
+		return
+	}
+	if !c.subscriber.ready() {
+		return
+	}
+	logutil.Debugf("%s Running unused table GC", logTag)
+	c.doGCUnusedTable(ctx)
+}
+
 // subscribedTable used to record table subscribed status.
 // only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
@@ -1701,8 +1714,6 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 	// Start a goroutine that never stops to receive logtail from TN logtail server.
 	go e.pClient.run(ctx, e)
 
-	go e.pClient.unusedTableGCTicker(ctx)
-	go e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
 }
 

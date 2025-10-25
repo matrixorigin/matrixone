@@ -100,6 +100,9 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
+	// Start unified GC scheduler
+	go cnEngine.RunGCScheduler(ctx)
+
 	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		statusServer := ss.(*status.Server)

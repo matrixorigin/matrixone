@@ -86,6 +86,7 @@ type PartitionService interface {
 		ctx context.Context,
 		tableID uint64,
 		partitions []*tree.Partition,
+		partitionDefs []*plan.PartitionDef,
 		txnOp client.TxnOperator,
 	) error
 

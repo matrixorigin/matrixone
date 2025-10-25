@@ -150,32 +150,53 @@ func loadCheckpointMeta(
 	metaFiles []ioutil.TSRangeFile,
 	fs fileservice.FileService,
 ) (entries []*CheckpointEntry, err error) {
-	// Collect all meta file names
-	fileNames := make([]string, len(metaFiles))
-	for i, metaFile := range metaFiles {
-		fileNames[i] = metaFile.GetCKPFullName()
-	}
-
-	// Create reader using NewCKPMetaReader
-	reader := NewCKPMetaReader(sid, "", fileNames, 0, fs)
-	getter := MetadataEntryGetter{reader: reader}
-	defer getter.Close()
-
-	// Read all entries
 	allEntries := make([]*CheckpointEntry, 0)
-	for {
-		batchEntries, err := getter.NextBatch(ctx, nil, common.DebugAllocator)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				break
+
+	// Process each meta file individually to apply the filtering logic
+	for _, metaFile := range metaFiles {
+
+		// Create reader for this specific file
+		reader := NewCKPMetaReader(sid, "", []string{metaFile.GetCKPFullName()}, 0, fs)
+		getter := MetadataEntryGetter{reader: reader}
+
+		// Read entries from this file
+		fileEntries := make([]*CheckpointEntry, 0)
+		for {
+			batchEntries, err := getter.NextBatch(ctx, nil, common.DebugAllocator)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+					break
+				}
+				getter.Close() // Close immediately on error
+				return nil, err
 			}
-			return nil, err
+			fileEntries = append(fileEntries, batchEntries...)
 		}
-		allEntries = append(allEntries, batchEntries...)
+		getter.Close() // Close after successful reading
+
+		// Filter entries that match the file's start and end timestamps
+		// This replicates the logic from appendCheckpointToBatch
+		fileStart := metaFile.GetStart()
+		fileEnd := metaFile.GetEnd()
+		filteredEntries := filterEntriesByTimestamp(fileEntries, fileStart, fileEnd)
+		allEntries = append(allEntries, filteredEntries...)
 	}
 
 	// Apply the same logic as ListSnapshotCheckpointWithMeta
 	return filterSnapshotEntries(allEntries), nil
+}
+
+// filterEntriesByTimestamp filters checkpoint entries that match the given start and end timestamps
+// This function replicates the filtering logic from the original appendCheckpointToBatch function
+func filterEntriesByTimestamp(entries []*CheckpointEntry, fileStart, fileEnd *types.TS) []*CheckpointEntry {
+	filteredEntries := make([]*CheckpointEntry, 0)
+	for _, entry := range entries {
+		if entry != nil && fileStart != nil && fileEnd != nil &&
+			entry.start.EQ(fileStart) && entry.end.EQ(fileEnd) {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+	return filteredEntries
 }
 
 // filterSnapshotEntries implements the same logic as ListSnapshotCheckpointWithMeta
@@ -187,7 +208,7 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 	// Find the maximum global end timestamp
 	var maxGlobalEnd types.TS
 	for _, entry := range entries {
-		if entry.entryType == ET_Global {
+		if entry != nil && entry.entryType == ET_Global {
 			if entry.end.GT(&maxGlobalEnd) {
 				maxGlobalEnd = entry.end
 			}
@@ -196,11 +217,17 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 
 	// Sort by end timestamp
 	sort.Slice(entries, func(i, j int) bool {
+		if entries[i] == nil || entries[j] == nil {
+			return false
+		}
 		return entries[i].end.LT(&entries[j].end)
 	})
 
 	// Find the appropriate truncation point
 	for i := range entries {
+		if entries[i] == nil {
+			continue
+		}
 		p := maxGlobalEnd.Prev()
 		if entries[i].end.Equal(&p) || (entries[i].end.Equal(&maxGlobalEnd) &&
 			entries[i].entryType == ET_Global) {

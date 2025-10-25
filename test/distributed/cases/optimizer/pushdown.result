@@ -43,7 +43,7 @@ Project
               Limit: 10
               Send Message: [tag 1 , type MsgTopValue]
               ->  Table Scan on d1.t1
-                    Sort Key: c1 DESC
+                    Sort Key: t1.c1 DESC
                     Filter Cond: ((cast(t1.c1 AS BIGINT) % 3) = 0)
                     Recv Message: [tag 1 , type MsgTopValue]
 explain select * from (select v2.c1 as c1, v2.c2 as c2, v2.c3 as c3 from (select * from t1 where c1!=0 limit 10) v1 join (select * from t2 where c1!=1 limit 10) v2 on v1.c1=v2.c1 where v2.c2>0 limit 10) v3 join (select * from t3 where c1!=2 limit 10) v4 on v3.c3=v4.c3 where v4.c2>0 limit 10;
@@ -88,7 +88,7 @@ Project
                     Limit: 10
                     Send Message: [tag 2 , type MsgTopValue]
                     ->  Table Scan on d1.t1 [ForceOneCN]
-                          Sort Key: c1 INTERNAL
+                          Sort Key: t1.c1 INTERNAL
                           Recv Message: [tag 2 , type MsgTopValue]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
 c1    c1    c2    c3
@@ -119,7 +119,7 @@ Project
                     Limit: 30
                     Send Message: [tag 2 , type MsgTopValue]
                     ->  Table Scan on d1.t1 [ForceOneCN]
-                          Sort Key: c1 INTERNAL
+                          Sort Key: t1.c1 INTERNAL
                           Recv Message: [tag 2 , type MsgTopValue]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
 c1    c1    c2    c3

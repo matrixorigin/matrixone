@@ -186,6 +186,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 				s.DataSource.R = readers[0]
 				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+				s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 			}
 
 			var tag int32
@@ -531,6 +532,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+		s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 		return s, nil
 	}
 
@@ -542,6 +544,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 				recvMsgList[j].MsgTag += int32(i) << 16
 			}
 		}
+
+		readers[i].SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 
 		ss[i].DataSource = &Source{
 			R:            readers[i],

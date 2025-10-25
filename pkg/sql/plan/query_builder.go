@@ -324,6 +324,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		for _, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+		}
+
+		for _, blockOrderBy := range node.BlockOrderBy {
+			increaseRefCnt(blockOrderBy.Expr, 1, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 			localToGlobal: make([][2]int32, 0),
@@ -391,6 +399,26 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if len(col.Name) == 0 {
 					col.Name = node.TableDef.Cols[col.ColPos].Name
 				}
+			}
+		}
+
+		remapInfo.tip = "OrderBy"
+		for idx, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(orderBy.Expr, colMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		remapInfo.tip = "BlockOrderBy"
+		for idx, blockOrderBy := range node.BlockOrderBy {
+			increaseRefCnt(blockOrderBy.Expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(blockOrderBy.Expr, colMap, &remapInfo)
+			if err != nil {
+				return nil, err
 			}
 		}
 
@@ -1934,6 +1962,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
+		builder.pushdownVectorIndexTopToTableScan(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -2701,6 +2730,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
 		return
+	}
+
+	if stmt.RewriteOption != nil {
+		ctx.remapOption = stmt.RewriteOption
 	}
 
 	var projectionBinder *ProjectionBinder
@@ -4408,6 +4441,38 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				break
 			}
 			schema = ctx.defaultDatabase
+		}
+
+		if ctx.remapOption != nil {
+			// The map key must contain a database to prevent the following situation
+			// /*+ { “rewrites” : {
+			// “t1”: “select a, b, c from db2.t1”,
+			// }} */
+			// Select * from t1; // current database is db1
+			// /*+ { “rewrites” : {
+			// “t1”: “select a, b, c from db2.t1”,
+			// }} */
+			// Select * from db1.t1; // db2.t1?
+			if len(schema) == 0 {
+				schema = builder.compCtx.DefaultDatabase()
+			}
+			key := schema + "." + table
+			if rewrite, ok := ctx.remapOption.Rewrites[key]; ok {
+				// prevent recursion from occurring
+				m := ctx.remapOption
+				ctx.remapOption = nil
+				nodeID, err = builder.buildTable(rewrite.Stmt, ctx, preNodeId, leftCtx)
+				if err != nil {
+					return
+				}
+				// Do not bind here to avoid double-binding. Instead, set the
+				// subquery context name so the outer AliasedTableExpr binds once.
+				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
+					builder.ctxByNode[nodeID].cteName = key
+				}
+				ctx.remapOption = m
+				return
+			}
 		}
 
 		if tbl.AtTsExpr != nil {

@@ -289,6 +289,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	col := astExpr.ColName()
 	table := astExpr.TblName()
+	db := astExpr.DbName()
 	name := tree.String(astExpr, dialect.MYSQL)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
@@ -327,7 +328,19 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		}
 	} else {
-		if binding, ok := b.ctx.bindingByTable[table]; ok {
+		var binding *Binding
+		var ok bool
+		// try resolve table in current context
+		if binding, ok = b.ctx.bindingByTable[table]; !ok {
+			// if remap option exists, try with db-qualified name
+			if b.ctx.remapOption != nil {
+				if len(db) == 0 {
+					db = b.builder.compCtx.DefaultDatabase()
+				}
+				binding, ok = b.ctx.bindingByTable[db+"."+table]
+			}
+		}
+		if ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)

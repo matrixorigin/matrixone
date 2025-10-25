@@ -22,8 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,10 +37,12 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -166,6 +166,9 @@ func (r *EmptyReader) GetOrderBy() []*plan.OrderBySpec {
 func (r *EmptyReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
+func (r *EmptyReader) SetBlockTop([]*plan.OrderBySpec, uint64) {
+}
+
 func (r *EmptyReader) Close() error {
 	return nil
 }
@@ -230,6 +233,8 @@ type withFilterMixin struct {
 		pkSeqNum  int32
 		colTypes  []types.Type
 	}
+
+	orderByLimit *objectio.BlockReadTopOp
 }
 
 type reader struct {
@@ -275,6 +280,12 @@ func (r *mergeReader) GetOrderBy() []*plan.OrderBySpec {
 func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	for i := range r.rds {
 		r.rds[i].SetOrderBy(orderby)
+	}
+}
+
+func (r *mergeReader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
+	for i := range r.rds {
+		r.rds[i].SetBlockTop(orderby, limit)
 	}
 }
 
@@ -389,6 +400,42 @@ func (r *reader) Close() error {
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
+}
+
+func (r *reader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
+	if len(orderby) == 0 || limit == 0 {
+		return
+	}
+
+	orderFunc := orderby[0].Expr.GetF()
+	if orderFunc == nil {
+		panic("order function is nil")
+	}
+
+	col := orderFunc.Args[0].GetCol()
+	if col == nil {
+		panic("column is nil")
+	}
+
+	numVec := orderFunc.Args[1].GetLit().GetVecVal()
+	if len(numVec) == 0 {
+		return
+	}
+
+	metric, ok := metric.DistFuncNameToMetricType[orderFunc.Func.ObjName]
+	if !ok {
+		panic("unsupported order function")
+	}
+
+	if r.orderByLimit == nil {
+		r.orderByLimit = &objectio.BlockReadTopOp{}
+	}
+
+	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
+	r.orderByLimit.Metric = metric
+	r.orderByLimit.ColPos = col.ColPos
+	r.orderByLimit.NumVec = []byte(numVec)
+	r.orderByLimit.Limit = limit
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {
@@ -535,6 +582,7 @@ func (r *reader) Read(
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
+		r.orderByLimit,
 		policy,
 		r.name,
 		outBatch,

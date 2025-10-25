@@ -17,9 +17,10 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -674,5 +675,126 @@ func TestBuildCreatePitr(t *testing.T) {
 		plan, err := buildCreatePitr(stmt, ctx)
 		assert.Error(t, err)
 		assert.Nil(t, plan)
+	})
+}
+
+func TestConstructAddedPartitionDefsErrors(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	ctx.SetContext(context.Background())
+
+	makeTableDef := func() *plan.TableDef {
+		return &plan.TableDef{
+			Name: "t1",
+			Cols: []*plan.ColDef{
+				{
+					Name: "a",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{
+						NullAbility: true,
+					},
+				},
+			},
+		}
+	}
+
+	newClause := func(parts ...*tree.Partition) *tree.AlterPartitionAddPartitionClause {
+		return tree.NewAlterPartitionAddPartitionClause(tree.AlterPartitionAddPartition, parts)
+	}
+
+	t.Run("parse error on invalid createsql", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "$$$"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+	})
+
+	t.Run("not a create table in createsql", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "create view v as select 1"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported ADD PARTITION not in create table")
+	})
+
+	t.Run("table without partition option", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "create table t1 (a int)"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Partition management on a not partitioned table is not possible")
+	})
+
+	t.Run("unsupported method: HASH", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "create table t1 (a int) partition by hash(a) partitions 2"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported partition method in ADD PARTITION")
+	})
+
+	// RANGE cases (create table has existing one partition p0 < 10)
+	rangeCreate := "create table t1 (a int) partition by range (a) (partition p0 values less than (10))"
+
+	t.Run("RANGE: more than one value in values less than", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = rangeCreate
+		v1 := tree.NewNumVal[int64](20, "20", false, tree.P_int64)
+		v2 := tree.NewNumVal[int64](30, "30", false, tree.P_int64)
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesLessThan(tree.Exprs{v1, v2})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "RANGE PARTITIONING can only have one parameter")
+	})
+
+	t.Run("RANGE: MAXVALUE must be last", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = rangeCreate
+		max := tree.NewMaxValue()
+		pMax := &tree.Partition{Name: tree.Identifier("pmax"), Values: tree.NewValuesLessThan(tree.Exprs{max})}
+		p2 := &tree.Partition{Name: tree.Identifier("p2"), Values: tree.NewValuesLessThan(tree.Exprs{tree.NewNumVal[int64](20, "20", false, tree.P_int64)})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(pMax, p2))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "MAXVALUE must be the last RANGE partition")
+	})
+
+	t.Run("RANGE: values less than must be strictly increasing", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = rangeCreate
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesLessThan(tree.Exprs{tree.NewNumVal[int64](5, "5", false, tree.P_int64)})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "VALUES LESS THAN value must be strictly increasing")
+	})
+
+	// LIST cases
+	listCreate := "create table t1 (a int) partition by list (a) (partition p0 values in (1))"
+
+	t.Run("LIST: empty values", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = listCreate
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesIn(tree.Exprs{})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "LIST PARTITIONING must have at least one value")
+	})
+
+	t.Run("LIST: duplicate within same partition", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = listCreate
+		v := tree.NewNumVal[int64](2, "2", false, tree.P_int64)
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesIn(tree.Exprs{v, v})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate values within the same LIST partition are not allowed")
+	})
+
+	t.Run("LIST: duplicate across partitions", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = listCreate
+		v := tree.NewNumVal[int64](1, "1", false, tree.P_int64)
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesIn(tree.Exprs{v})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "LIST PARTITIONING values must be unique across partitions")
 	})
 }

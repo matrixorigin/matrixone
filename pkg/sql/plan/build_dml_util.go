@@ -182,7 +182,7 @@ func buildInsertPlans(
 	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
-		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
+		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil)
 }
 
 // buildUpdatePlans  build update plan.
@@ -266,7 +266,8 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	var fuzzymessage *OriginTableMessageForFuzzy
 	return buildInsertPlansWithRelatedHiddenTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
-		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil)
+		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
+		updatePlanCtx.updateColPosMap)
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -854,6 +855,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
+	updateColPosMap map[string]int,
 ) error {
 	//var lastNodeId int32
 	var err error
@@ -912,7 +914,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 		// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
 		if !postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-			err = buildPreInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
+			err = buildPreInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx, updateColPosMap)
 			if err != nil {
 				return err
 			}
@@ -4297,10 +4299,36 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 // For INSERT, create INSERT plan with prePreInsertFullTextIndex()
 // For UPDATE, create DELETE plan with prePreDeleteFullTextIndex() and then create INSERT plan with preInsertFullTextIndex().
 // i.e. delete old rows and then insert new values
-func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
-	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
+func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef,
+	tableDef *TableDef, updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef,
+	idx int, updateColPosMap map[string]int) error {
+
+	// Check if secondary key is being updated.
+	isSecondaryKeyUpdated := func() bool {
+		posMap := make(map[string]int)
+		for idx, col := range tableDef.Cols {
+			posMap[col.Name] = idx
+		}
+
+		for _, colName := range indexdef.Parts {
+			resolvedColName := catalog.ResolveAlias(colName)
+			if colIdx, ok := posMap[resolvedColName]; ok {
+				col := tableDef.Cols[colIdx]
+				if _, exists := updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
+					return true
+				}
+			}
+		}
+		return false
+	}
 
 	isUpdate := (updateColLength > 0)
+	if isUpdate {
+		if updateColPosMap != nil && !isSecondaryKeyUpdated() {
+			// index parts not updated and skip
+			return nil
+		}
+	}
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 

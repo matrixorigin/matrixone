@@ -91,7 +91,7 @@ func TestAddPartitions(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			require.Error(t, s.AddPartitions(ctx, 1, nil, txnOp))
+			require.Error(t, s.AddPartitions(ctx, 1, nil, nil, txnOp))
 
 			tableID := uint64(1)
 			num := uint64(2)
@@ -104,7 +104,7 @@ func TestAddPartitions(t *testing.T) {
 			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 
-			require.Error(t, s.AddPartitions(ctx, tableID, nil, txnOp))
+			require.NoError(t, s.AddPartitions(ctx, tableID, nil, nil, txnOp))
 		},
 	)
 }

@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -4187,9 +4189,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	if stmt.PartitionOption != nil {
 		alterTable.AlterPartition = &plan.AlterPartitionOption{}
 
-		switch stmt.PartitionOption.(type) {
+		switch p := stmt.PartitionOption.(type) {
 		case *tree.AlterPartitionAddPartitionClause:
 			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_AddPartitionTables
+			defs, err := constructAddedPartitionDefs(ctx, tableDef, p)
+			if err != nil {
+				return nil, err
+			}
+			alterTable.AlterPartition.PartitionDefs = defs
 		case *tree.AlterPartitionDropPartitionClause:
 			alterTable.AlterPartition.AlterType = plan.AlterPartitionType_DropPartitionTables
 		case *tree.AlterPartitionTruncatePartitionClause:
@@ -4813,4 +4820,72 @@ func buildDropCDC(stmt *tree.DropCDC, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+func constructAddedPartitionDefs(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	clause *tree.AlterPartitionAddPartitionClause,
+) ([]*plan.PartitionDef, error) {
+	originTableStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		tableDef.Createsql,
+		ctx.GetLowerCaseTableNames(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	ct, ok := originTableStmt.(*tree.CreateTable)
+	if !ok {
+		return nil, moerr.NewNotSupportedNoCtx("unsupported ADD PARTITION not in create table")
+	}
+	if ct == nil || ct.PartitionOption == nil || ct.PartitionOption.PartBy == nil {
+		return nil, moerr.NewNotSupportedNoCtx("Partition management on a not partitioned table is not possible")
+	}
+
+	switch ct.PartitionOption.PartBy.PType.(type) {
+	case *tree.RangeType, *tree.ListType:
+		originParts := ct.PartitionOption.Partitions
+		newParts := clause.Partitions
+		if len(newParts) == 0 {
+			return nil, nil
+		}
+
+		merged := make([]*tree.Partition, 0, len(originParts)+len(newParts))
+		merged = append(merged, originParts...)
+		merged = append(merged, newParts...)
+
+		combined := tree.NewPartitionOption(
+			ct.PartitionOption.PartBy,
+			ct.PartitionOption.SubPartBy,
+			merged,
+		)
+
+		partBuilder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		partBindCtx := NewBindContext(partBuilder, nil)
+		nodeID := partBuilder.appendNode(&plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			Stats:       nil,
+			ObjRef:      nil,
+			TableDef:    tableDef,
+			BindingTags: []int32{partBuilder.genNewTag()},
+		}, partBindCtx)
+		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx); err != nil {
+			return nil, err
+		}
+		partitionBinder := NewPartitionBinder(partBuilder, partBindCtx)
+		allDefs, err := partitionBinder.buildPartitionDefs(ctx.GetContext(), combined)
+		if err != nil {
+			return nil, err
+		}
+		originCnt := len(originParts)
+		if originCnt > len(allDefs.PartitionDefs) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "invalid partition definition state")
+		}
+		return allDefs.PartitionDefs[originCnt:], nil
+	default:
+		return nil, moerr.NewNotSupportedNoCtx("unsupported partition method in ADD PARTITION")
+	}
 }

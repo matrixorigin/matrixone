@@ -481,6 +481,13 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 func (task *flushTableTailTask) prepareAObjSortedData(
 	ctx context.Context, objIdx int, idxs []int, sortKeyPos int, isTombstone bool,
 ) (bat *containers.Batch, empty bool, err error) {
+	defer func() {
+		if err != nil && bat != nil {
+			bat.Close()
+			bat = nil
+		}
+	}()
+
 	if len(idxs) <= 0 {
 		logutil.Info(
 			"NO-MERGEABLE-COLUMNS",

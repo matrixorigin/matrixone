@@ -159,6 +159,7 @@ func (s *Service) AddPartitions(
 	ctx context.Context,
 	tableID uint64,
 	partitions []*tree.Partition,
+	partitionDefs []*plan.PartitionDef,
 	txnOp client.TxnOperator,
 ) error {
 	metadata, ok, err := s.store.GetMetadata(
@@ -182,19 +183,6 @@ func (s *Service) AddPartitions(
 		return err
 	}
 
-	switch metadata.Method {
-	case partition.PartitionMethod_Hash,
-		partition.PartitionMethod_Key,
-		partition.PartitionMethod_LinearHash,
-		partition.PartitionMethod_LinearKey:
-		return moerr.NewNotSupportedNoCtx("add partition is not supported for hash/key partitioned table")
-	case partition.PartitionMethod_Range:
-		// TODO: check overlapping range
-
-	case partition.PartitionMethod_List:
-		// TODO: check overlapping list values
-	}
-
 	values := make([]partition.Partition, 0, len(partitions))
 	n := len(metadata.Partitions)
 	for i, p := range partitions {
@@ -204,7 +192,7 @@ func (s *Service) AddPartitions(
 				PartitionTableName: GetPartitionTableName(def.Name, p.Name.String()),
 				Position:           uint32(i + n),
 				ExprStr:            getExpr(p),
-				Expr:               newTestValuesInExpr2(p.Name.String()),
+				Expr:               partitionDefs[i].Def,
 			},
 		)
 	}
@@ -455,82 +443,4 @@ func getExpr(p *tree.Partition) string {
 	)
 	p.Values.Format(ctx)
 	return ctx.String()
-}
-
-func newTestValuesInExpr2(col string) *plan.Expr {
-	return &plan.Expr{
-		Typ: plan.Type{Id: 10},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					ObjName: "in",
-					Obj:     506806140934,
-				},
-				Args: []*plan.Expr{
-					{
-						Typ: plan.Type{Id: 22},
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: col},
-						},
-					},
-					{
-						Typ: plan.Type{Id: 202},
-						Expr: &plan.Expr_List{
-							List: &plan.ExprList{
-								List: []*plan.Expr{
-									{
-										Typ: plan.Type{Id: 22},
-										Expr: &plan.Expr_F{
-											F: &plan.Function{
-												Func: &plan.ObjectRef{
-													Obj:     90194313216,
-													ObjName: "cast",
-												},
-												Args: []*plan.Expr{
-													{
-														Typ: plan.Type{Id: 23},
-														Expr: &plan.Expr_Lit{
-															Lit: &plan.Literal{
-																Value: &plan.Literal_I64Val{I64Val: 1},
-															},
-														},
-													},
-													{
-														Typ:  plan.Type{Id: 23},
-														Expr: &plan.Expr_T{T: &plan.TargetType{}},
-													},
-												},
-											},
-										},
-									},
-									{
-										Typ: plan.Type{Id: 22},
-										Expr: &plan.Expr_F{
-											F: &plan.Function{
-												Func: &plan.ObjectRef{ObjName: "cast", Obj: 90194313216},
-												Args: []*plan.Expr{
-													{
-														Typ: plan.Type{Id: 23},
-														Expr: &plan.Expr_Lit{
-															Lit: &plan.Literal{
-																Value: &plan.Literal_I64Val{I64Val: 2},
-															},
-														},
-													},
-													{
-														Typ:  plan.Type{Id: 22},
-														Expr: &plan.Expr_T{T: &plan.TargetType{}},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
 }

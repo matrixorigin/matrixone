@@ -27,6 +27,10 @@ import (
 
 const eofChar = 0x100
 
+// maxPoolSQLSize is the size threshold beyond which a scanner will not be kept
+// in the pool and large fields will be cleared to release memory.
+const maxPoolSQLSize = 1 << 20 // 1 MiB
+
 var scannerPool = sync.Pool{
 	New: func() any {
 		return &Scanner{}
@@ -50,18 +54,35 @@ type Scanner struct {
 	strBuilder bytes.Buffer
 }
 
-func (s *Scanner) setSql(sql string) {
-	// This is a mysql scanner, so we set the dialect type to mysql
-	s.dialectType = dialect.MYSQL
+func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
+	// Reset light-weight state shared by both setSql and PutScanner
 	s.LastToken = ""
 	s.LastError = nil
 	s.posVarIndex = 0
 	s.MysqlSpecialComment = nil
+	s.CommentFlag = false
 	s.Pos = 0
 	s.Line = 0
 	s.Col = 0
 	s.PrePos = 0
+
+	if clearLargeOnly {
+		if oversized {
+			// Oversized by SQL size: drop both to avoid retaining huge memory.
+			s.buf = ""
+			s.strBuilder = bytes.Buffer{}
+		}
+	}
+}
+
+func (s *Scanner) setSql(sql string) {
+	// This is a mysql scanner, so we set the dialect type to mysql
+	s.dialectType = dialect.MYSQL
+	// Reset transient fields but do not aggressively clear buffers here so that
+	// small capacities can be reused.
+	s.reset(false, false)
 	s.buf = sql
+	// Reset length to 0; this keeps capacity for small cases.
 	s.strBuilder.Reset()
 }
 
@@ -72,6 +93,12 @@ func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 }
 
 func PutScanner(scanner *Scanner) {
+	oversized := len(scanner.buf) > maxPoolSQLSize
+	// Reset shared state. Only clear buffers/strings when oversized.
+	scanner.reset(true, oversized)
+	if oversized {
+		return
+	}
 	scannerPool.Put(scanner)
 }
 
