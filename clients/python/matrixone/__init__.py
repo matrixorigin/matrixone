@@ -37,7 +37,15 @@ from .exceptions import (
     SnapshotError,
     VersionError,
 )
-from .load_data import LoadDataManager, TransactionLoadDataManager, LoadDataFormat, CompressionFormat, JsonDataStructure
+from .load_data import (
+    LoadDataManager,
+    TransactionLoadDataManager,
+    AsyncLoadDataManager,
+    AsyncTransactionLoadDataManager,
+    LoadDataFormat,
+    CompressionFormat,
+    JsonDataStructure,
+)
 from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
@@ -116,6 +124,8 @@ __all__ = [
     "TransactionAccountManager",
     "LoadDataManager",
     "TransactionLoadDataManager",
+    "AsyncLoadDataManager",
+    "AsyncTransactionLoadDataManager",
     "LoadDataFormat",
     "CompressionFormat",
     "JsonDataStructure",

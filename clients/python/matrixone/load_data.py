@@ -254,6 +254,62 @@ class LoadDataManager:
         Returns:
             ResultSet: Load results with affected_rows
 
+        Important - MatrixOne Parquet Requirements:
+            MatrixOne currently has specific requirements for Parquet files.
+            
+            Currently NOT Supported (as of this version):
+                ❌ Nullable columns (INT64(optional), STRING(optional), etc.)
+                ❌ Dictionary encoding (indexed pages)
+                ❌ Parquet 2.0 features
+                ❌ Column statistics metadata
+                ❌ Compressed Parquet files (GZIP, SNAPPY, etc.)
+            
+            If you encounter errors like:
+                - "indexed INT64 page is not yet implemented"
+                - "load INT64(optional) to BIGINT NULL is not yet implemented"
+            
+            You must generate Parquet files with the following PyArrow settings:
+            
+            Required Settings (Mandatory):
+                1. Schema columns must be non-nullable: nullable=False
+                2. Disable dictionary encoding: use_dictionary=False
+                3. Disable compression: compression='none'
+                4. Disable statistics: write_statistics=False
+                5. Use Parquet 1.0 format: data_page_version='1.0'
+            
+            Note: These limitations are temporary. Support for nullable columns, dictionary 
+            encoding, compression, and Parquet 2.0 features is planned for future releases.
+            Stay tuned for updates!
+            
+            Example::
+            
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+                
+                # Define non-nullable schema (REQUIRED)
+                schema = pa.schema([
+                    pa.field('id', pa.int64(), nullable=False),
+                    pa.field('name', pa.string(), nullable=False)
+                ])
+                
+                # Create table
+                table = pa.table({
+                    'id': pa.array([1, 2, 3], type=pa.int64()),
+                    'name': pa.array(['Alice', 'Bob', 'Charlie'], type=pa.string())
+                }, schema=schema)
+                
+                # Write with MatrixOne-compatible options (REQUIRED)
+                pq.write_table(
+                    table, 'data.parq',
+                    compression='none',          # REQUIRED
+                    use_dictionary=False,        # REQUIRED
+                    write_statistics=False,      # REQUIRED
+                    data_page_version='1.0'      # REQUIRED
+                )
+                
+                # Now load the file
+                client.load_data.from_parquet('data.parq', User)
+
         Examples::
 
             >>> client.load_data.from_parquet('data.parq', 'users')
@@ -605,6 +661,54 @@ class LoadDataManager:
 
         Returns:
             ResultSet: Load results with affected_rows
+
+        Important - MatrixOne Parquet Requirements:
+            MatrixOne currently has specific requirements for Parquet files.
+            
+            Currently NOT Supported (as of this version):
+                ❌ Nullable columns (INT64(optional), STRING(optional), etc.)
+                ❌ Dictionary encoding (indexed pages)
+                ❌ Parquet 2.0 features
+                ❌ Column statistics metadata
+                ❌ Compressed Parquet files (GZIP, SNAPPY, etc.)
+            
+            If you encounter errors like:
+                - "indexed INT64 page is not yet implemented"
+                - "load INT64(optional) to BIGINT NULL is not yet implemented"
+            
+            You must generate Parquet files with the following PyArrow settings:
+            
+            Required Settings (Mandatory):
+                1. Schema columns must be non-nullable: nullable=False
+                2. Disable dictionary encoding: use_dictionary=False
+                3. Disable compression: compression='none'
+                4. Disable statistics: write_statistics=False
+                5. Use Parquet 1.0 format: data_page_version='1.0'
+            
+            Note: These limitations are temporary. Support for nullable columns, dictionary 
+            encoding, compression, and Parquet 2.0 features is planned for future releases.
+            Stay tuned for updates!
+            
+            Example::
+            
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+                
+                # Define non-nullable schema (REQUIRED)
+                schema = pa.schema([
+                    pa.field('id', pa.int64(), nullable=False),
+                    pa.field('name', pa.string(), nullable=False)
+                ])
+                
+                # Create and write table with MatrixOne-compatible options
+                table = pa.table({'id': [1, 2], 'name': ['A', 'B']}, schema=schema)
+                pq.write_table(
+                    table, 'data.parq',
+                    compression='none',          # REQUIRED
+                    use_dictionary=False,        # REQUIRED
+                    write_statistics=False,      # REQUIRED
+                    data_page_version='1.0'      # REQUIRED
+                )
 
         Example:
             >>> result = client.load_data.from_stage_parquet(
@@ -1136,3 +1240,68 @@ class TransactionLoadDataManager(LoadDataManager):
         """
         self.transaction_wrapper = transaction_wrapper
         super().__init__(transaction_wrapper)
+
+
+class AsyncLoadDataManager(LoadDataManager):
+    """
+    Async manager for LOAD DATA operations in MatrixOne.
+    
+    This class extends LoadDataManager to provide async/await support.
+    All SQL building logic is inherited - only execute() calls are async.
+    
+    Examples::
+    
+        # Basic async CSV loading
+        await client.load_data.from_csv('/path/to/data.csv', User)
+        
+        # Load from stage
+        await client.load_data.from_stage_csv('mystage', 'data.csv', Product)
+    """
+    
+    async def from_file(self, *args, **kwargs):
+        """Async version - builds SQL via parent, executes asynchronously"""
+        # Temporarily replace client.execute with a SQL capturer
+        sql = self._capture_sql(super().from_file, *args, **kwargs)
+        return await self.client.execute(sql)
+    
+    async def from_inline(self, *args, **kwargs):
+        """Async version - builds SQL via parent, executes asynchronously"""
+        sql = self._capture_sql(super().from_inline, *args, **kwargs)
+        return await self.client.execute(sql)
+    
+    def _capture_sql(self, method, *args, **kwargs):
+        """Helper to capture SQL from parent method without executing"""
+        captured_sql = None
+        original_execute = self.client.execute
+        
+        def capture(sql):
+            nonlocal captured_sql
+            captured_sql = sql
+            # Return mock result
+            class MockResult:
+                affected_rows = 0
+            return MockResult()
+        
+        self.client.execute = capture
+        try:
+            method(*args, **kwargs)
+        finally:
+            self.client.execute = original_execute
+        
+        return captured_sql
+
+
+class AsyncTransactionLoadDataManager(AsyncLoadDataManager):
+    """
+    Async Load Data Manager for transaction context.
+    
+    Executes LOAD DATA within an async transaction for atomicity.
+    
+    Examples::
+    
+        async with client.transaction() as tx:
+            await tx.load_data.from_csv('/path/to/data1.csv', User)
+            await tx.load_data.from_csv('/path/to/data2.csv', Product)
+    """
+    
+    pass  # Inherits all async methods

@@ -38,6 +38,7 @@ from .async_metadata_manager import AsyncMetadataManager
 from .async_vector_index_manager import AsyncVectorManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
+from .load_data import AsyncLoadDataManager, AsyncTransactionLoadDataManager
 from .exceptions import (
     AccountError,
     ConnectionError,
@@ -1485,6 +1486,7 @@ class AsyncClient(BaseMatrixOneClient):
         self._account = AsyncAccountManager(self)
         self._fulltext_index = None
         self._metadata = None
+        self._load_data = None
 
     async def connect(
         self,
@@ -2849,6 +2851,13 @@ class AsyncClient(BaseMatrixOneClient):
     def metadata(self) -> Optional["AsyncMetadataManager"]:
         """Get metadata manager for table metadata operations"""
         return self._metadata
+    
+    @property
+    def load_data(self) -> Optional["AsyncLoadDataManager"]:
+        """Get async load data manager for bulk data loading operations"""
+        if self._load_data is None:
+            self._load_data = AsyncLoadDataManager(self)
+        return self._load_data
 
 
 class AsyncTransactionVectorIndexManager(AsyncVectorManager):
@@ -2973,6 +2982,7 @@ class AsyncTransactionWrapper:
         self.account = AsyncTransactionAccountManager(self)
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
+        self.load_data = AsyncTransactionLoadDataManager(self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None
