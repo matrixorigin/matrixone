@@ -21,8 +21,13 @@ These tests are inspired by example_23_load_data_operations.py
 import pytest
 import os
 import tempfile
-from matrixone import Client
-from matrixone.load_data import LoadDataManager
+from matrixone import (
+    Client, 
+    LoadDataManager,
+    LoadDataFormat,
+    CompressionFormat,
+    JsonDataStructure
+)
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, Text
 
@@ -502,10 +507,11 @@ class TestLoadDataErrorHandling:
             f.write(jl_content)
         
         try:
-            # Load JSONLINE data using simplified interface with model
+            # Load JSONLINE data using simplified interface with model and enum
             result = test_client.load_data.from_jsonline(
                 jl_file,
-                JsonlineUser
+                JsonlineUser,
+                structure=JsonDataStructure.OBJECT
             )
             assert result.affected_rows == 3
             
@@ -541,11 +547,11 @@ class TestLoadDataErrorHandling:
             f.write(jl_content)
         
         try:
-            # Load JSONLINE data using simplified interface with model
+            # Load JSONLINE data using simplified interface with model and enum
             result = test_client.load_data.from_jsonline(
                 jl_file,
                 JsonlineProduct,
-                structure='array'
+                structure=JsonDataStructure.ARRAY
             )
             assert result.affected_rows == 3
             

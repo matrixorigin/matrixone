@@ -17,6 +17,32 @@ MatrixOne Load Data Manager - Provides high-level LOAD DATA operations
 """
 
 from typing import Optional, List, Dict, Any, Union
+from enum import Enum
+
+
+class LoadDataFormat(str, Enum):
+    """Supported file formats for LOAD DATA"""
+    CSV = 'csv'
+    JSONLINE = 'jsonline'
+    PARQUET = 'parquet'
+
+
+class CompressionFormat(str, Enum):
+    """Supported compression formats"""
+    NONE = 'none'
+    GZIP = 'gzip'
+    GZ = 'gz'
+    BZIP2 = 'bzip2'
+    BZ2 = 'bz2'
+    LZ4 = 'lz4'
+    TAR_GZ = 'tar.gz'
+    TAR_BZ2 = 'tar.bz2'
+
+
+class JsonDataStructure(str, Enum):
+    """JSONLINE data structure types"""
+    OBJECT = 'object'
+    ARRAY = 'array'
 
 
 class LoadDataManager:
@@ -79,6 +105,7 @@ class LoadDataManager:
         columns: Optional[List[str]] = None,
         character_set: Optional[str] = None,
         parallel: bool = False,
+        compression: Optional[Union[str, CompressionFormat]] = None,
         set_clause: Optional[Dict[str, str]] = None,
         **kwargs
     ):
@@ -98,6 +125,7 @@ class LoadDataManager:
             columns (list, optional): List of column names to load
             character_set (str, optional): Character set (e.g. 'utf8')
             parallel (bool): Enable parallel loading. Default: False
+            compression (str or CompressionFormat, optional): Compression format
             set_clause (dict, optional): Column transformations
             
         Returns:
@@ -130,6 +158,7 @@ class LoadDataManager:
             columns=columns,
             character_set=character_set,
             parallel=parallel,
+            compression=compression,
             set_clause=set_clause,
             **kwargs
         )
@@ -172,8 +201,8 @@ class LoadDataManager:
         self,
         file_path: str,
         table_name_or_model,
-        structure: str = 'object',
-        compression: Optional[str] = None,
+        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        compression: Optional[Union[str, CompressionFormat]] = None,
         **kwargs
     ):
         """
@@ -182,8 +211,10 @@ class LoadDataManager:
         Args:
             file_path (str): Path to the JSONLINE file
             table_name_or_model: Table name (str) or SQLAlchemy model class
-            structure (str): JSON structure - 'object' or 'array'. Default: 'object'
-            compression (str, optional): Compression format ('gzip', 'bzip2', 'lz4')
+            structure (str or JsonDataStructure): JSON structure. Default: JsonDataStructure.OBJECT
+                - JsonDataStructure.OBJECT or 'object': JSON objects
+                - JsonDataStructure.ARRAY or 'array': JSON arrays
+            compression (str or CompressionFormat, optional): Compression format
             
         Returns:
             ResultSet: Load results with affected_rows
@@ -194,18 +225,23 @@ class LoadDataManager:
             >>> client.load_data.from_jsonline('data.jl', 'users')
             
             # JSONLINE with arrays
-            >>> client.load_data.from_jsonline('data.jl', 'users', structure='array')
+            >>> client.load_data.from_jsonline('data.jl', 'users', 
+            ...     structure=JsonDataStructure.ARRAY)
             
             # Compressed JSONLINE
             >>> client.load_data.from_jsonline('data.jl.gz', 'users', 
-            ...     compression='gzip')
+            ...     compression=CompressionFormat.GZIP)
         """
+        # Convert enum to string if needed
+        structure_str = structure.value if isinstance(structure, JsonDataStructure) else structure
+        compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
+        
         return self.from_file(
             file_path=file_path,
             table_name_or_model=table_name_or_model,
-            format='jsonline',
-            jsondata=structure,
-            compression=compression,
+            format=LoadDataFormat.JSONLINE.value,
+            jsondata=structure_str,
+            compression=compression_str,
             **kwargs
         )
     
@@ -233,7 +269,7 @@ class LoadDataManager:
         return self.from_file(
             file_path=file_path,
             table_name_or_model=table_name_or_model,
-            format='parquet',
+            format=LoadDataFormat.PARQUET.value,
             **kwargs
         )
     
@@ -251,9 +287,9 @@ class LoadDataManager:
         character_set: Optional[str] = None,
         parallel: bool = False,
         columns: Optional[List[str]] = None,
-        format: Optional[str] = None,
-        jsondata: Optional[str] = None,
-        compression: Optional[str] = None,
+        format: Optional[Union[str, LoadDataFormat]] = None,
+        jsondata: Optional[Union[str, JsonDataStructure]] = None,
+        compression: Optional[Union[str, CompressionFormat]] = None,
         set_clause: Optional[Dict[str, str]] = None,
         **kwargs
     ):
@@ -307,22 +343,23 @@ class LoadDataManager:
                 When specified, only these columns are populated. Example:
                 ['col1', 'col2', 'col3']
             
-            format (str, optional): File format. Supported values:
-                - 'csv' (default, no need to specify)
-                - 'jsonline' for JSONLINE format
-                - 'parquet' for Parquet format
+            format (str or LoadDataFormat, optional): File format. Supported values:
+                - LoadDataFormat.CSV or 'csv' (default)
+                - LoadDataFormat.JSONLINE or 'jsonline'
+                - LoadDataFormat.PARQUET or 'parquet'
             
-            jsondata (str, optional): JSON data structure (for JSONLINE format).
-                - 'object': JSON objects (one per line)
-                - 'array': JSON arrays (one per line)
-                Required when format='jsonline'
+            jsondata (str or JsonDataStructure, optional): JSON data structure (for JSONLINE).
+                - JsonDataStructure.OBJECT or 'object': JSON objects (one per line)
+                - JsonDataStructure.ARRAY or 'array': JSON arrays (one per line)
+                Required when format is JSONLINE
             
-            compression (str, optional): Compression format.
-                - 'none': No compression (default)
-                - 'gzip' or 'gz': Gzip compression
-                - 'bzip2' or 'bz2': Bzip2 compression
-                - 'lz4': LZ4 compression
-                Can be auto-detected from file extension
+            compression (str or CompressionFormat, optional): Compression format.
+                - CompressionFormat.NONE or 'none': No compression (default)
+                - CompressionFormat.GZIP or 'gzip': Gzip compression
+                - CompressionFormat.BZIP2 or 'bzip2': Bzip2 compression
+                - CompressionFormat.LZ4 or 'lz4': LZ4 compression
+                - CompressionFormat.TAR_GZ or 'tar.gz': Tar+Gzip
+                - CompressionFormat.TAR_BZ2 or 'tar.bz2': Tar+Bzip2
             
             set_clause (dict, optional): Column transformations.
                 Dictionary of column transformations, e.g.:
@@ -398,24 +435,24 @@ class LoadDataManager:
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.jl',
             ...     'users',
-            ...     format='jsonline',
-            ...     jsondata='object'
+            ...     format=LoadDataFormat.JSONLINE,
+            ...     jsondata=JsonDataStructure.OBJECT
             ... )
             
             # Load JSONLINE format (array) with compression
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.jl.gz',
             ...     'users',
-            ...     format='jsonline',
-            ...     jsondata='array',
-            ...     compression='gzip'
+            ...     format=LoadDataFormat.JSONLINE,
+            ...     jsondata=JsonDataStructure.ARRAY,
+            ...     compression=CompressionFormat.GZIP
             ... )
             
             # Load Parquet format
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.parq',
             ...     'users',
-            ...     format='parquet'
+            ...     format=LoadDataFormat.PARQUET
             ... )
             
             # Load with SET clause (NULLIF)
@@ -444,6 +481,11 @@ class LoadDataManager:
         if not isinstance(ignore_lines, int) or ignore_lines < 0:
             raise ValueError("ignore_lines must be a non-negative integer")
         
+        # Convert enums to strings if needed
+        format_str = format.value if isinstance(format, LoadDataFormat) else format
+        jsondata_str = jsondata.value if isinstance(jsondata, JsonDataStructure) else jsondata
+        compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
+        
         # Build the LOAD DATA SQL statement
         sql = self._build_load_data_sql(
             file_path=file_path,
@@ -458,9 +500,9 @@ class LoadDataManager:
             character_set=character_set,
             parallel=parallel,
             columns=columns,
-            format=format,
-            jsondata=jsondata,
-            compression=compression,
+            format=format_str,
+            jsondata=jsondata_str,
+            compression=compression_str,
             set_clause=set_clause
         )
         

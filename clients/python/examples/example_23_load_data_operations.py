@@ -36,7 +36,12 @@ bulk data import into MatrixOne tables.
 import logging
 import os
 import tempfile
-from matrixone import Client
+from matrixone import (
+    Client,
+    LoadDataFormat,
+    CompressionFormat,
+    JsonDataStructure
+)
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params, print_config
 from matrixone.orm import declarative_base
@@ -589,10 +594,11 @@ class LoadDataOperationsDemo:
             self.results['files_created'].append(jl_file)
             self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
             
-            # Load JSONLINE data using simplified interface
+            # Load JSONLINE data using simplified interface with enum
             result = client.load_data.from_jsonline(
                 jl_file,
-                JsonlineUser
+                JsonlineUser,
+                structure=JsonDataStructure.OBJECT
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (object format)")
             
@@ -639,11 +645,11 @@ class LoadDataOperationsDemo:
             self.results['files_created'].append(jl_file)
             self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
             
-            # Load JSONLINE data using simplified interface
+            # Load JSONLINE data using simplified interface with enum
             result = client.load_data.from_jsonline(
                 jl_file,
                 JsonlineProduct,
-                structure='array'
+                structure=JsonDataStructure.ARRAY
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (array format)")
             
