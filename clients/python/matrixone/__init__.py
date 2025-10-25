@@ -51,6 +51,7 @@ from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
 from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
+from .stage import Stage, StageManager, TransactionStageManager, AsyncStageManager, AsyncTransactionStageManager
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -134,6 +135,11 @@ __all__ = [
     "VersionInfo",
     "FeatureRequirement",
     "requires_version",
+    "Stage",
+    "StageManager",
+    "TransactionStageManager",
+    "AsyncStageManager",
+    "AsyncTransactionStageManager",
     # SQLAlchemy extensions
     "VectorType",
     "Vectorf32",

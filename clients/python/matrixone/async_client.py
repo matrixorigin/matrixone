@@ -39,6 +39,7 @@ from .async_vector_index_manager import AsyncVectorManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .load_data import AsyncLoadDataManager, AsyncTransactionLoadDataManager
+from .stage import AsyncStageManager, AsyncTransactionStageManager
 from .exceptions import (
     AccountError,
     ConnectionError,
@@ -1487,6 +1488,7 @@ class AsyncClient(BaseMatrixOneClient):
         self._fulltext_index = None
         self._metadata = None
         self._load_data = None
+        self._stage = None
 
     async def connect(
         self,
@@ -2858,6 +2860,13 @@ class AsyncClient(BaseMatrixOneClient):
         if self._load_data is None:
             self._load_data = AsyncLoadDataManager(self)
         return self._load_data
+    
+    @property
+    def stage(self) -> Optional["AsyncStageManager"]:
+        """Get async stage manager for external stage operations"""
+        if self._stage is None:
+            self._stage = AsyncStageManager(self)
+        return self._stage
 
 
 class AsyncTransactionVectorIndexManager(AsyncVectorManager):
@@ -2983,6 +2992,7 @@ class AsyncTransactionWrapper:
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         self.load_data = AsyncTransactionLoadDataManager(self)
+        self.stage = AsyncTransactionStageManager(self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None

@@ -35,6 +35,11 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Get all secondary index table names
   - Get specific index table by index name
   - Verify row counts across main table and all indexes in single query
+- 📂 **Stage Management**: Comprehensive external stage operations for centralized data storage
+  - Create and manage stages (file system, S3, cloud storage)
+  - Load data from stages with automatic path resolution
+  - Stage-scoped load operations for convenience
+  - Transaction support for atomic stage operations
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
@@ -859,6 +864,56 @@ subscription = client.pubsub.create_subscription(
 )
 ```
 
+### Stage Management
+
+```python
+# Create a local file system stage (simplified)
+stage = client.stage.create_local('my_data_stage', './data/', comment='Main data import stage')
+
+# Or use the full method with explicit URL
+stage = client.stage.create('my_data_stage', 'file:///path/to/data/', comment='Main data import stage')
+
+# Create an S3 stage with simplified credentials
+s3_stage = client.stage.create_s3(
+    'production_stage',
+    'my-bucket/data/',
+    aws_key='AKIAIOSFODNN7EXAMPLE',
+    aws_secret='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    aws_region='us-east-1',
+    comment='Production data stage'
+)
+
+# Or use environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+s3_stage = client.stage.create_s3('production_stage', 'my-bucket/data/')
+
+# List all stages
+stages = client.stage.list()
+for stage in stages:
+    print(f"{stage.name}: {stage.url}")
+
+# Load data from stage (Method 1: via client.load_data)
+client.load_data.from_stage_csv('my_data_stage', 'users.csv', User)
+
+# Load data from stage (Method 2: via stage object - simpler!)
+stage = client.stage.get('my_data_stage')
+stage.load_csv('users.csv', User)
+stage.load_json('events.jsonl', Event)
+stage.load_parquet('orders.parq', Order)
+
+# Batch load multiple files
+results = stage.load_files({
+    'users.csv': User,
+    'events.jsonl': Event,
+    'orders.parq': Order
+})
+
+# Modify stage
+client.stage.alter('my_data_stage', comment='Updated comment')
+
+# Drop stage
+client.stage.drop('my_data_stage')
+```
+
 
 ## Advanced Features
 
@@ -953,6 +1008,9 @@ Check out the `examples/` directory for comprehensive usage examples:
 **Load Data Examples:**
 - `example_23_load_data_operations.py` - Comprehensive LOAD DATA operations (CSV, TSV, JSONLINE, Parquet, Inline, Stage)
 
+**Stage Management Examples:**
+- `example_26_stage_operations.py` - External stage management and data loading from stages
+
 **Specialized Examples:**
 - `example_connection_hooks.py` - Connection hooks for custom initialization
 - `example_dynamic_logging.py` - Dynamic logging configuration
@@ -985,6 +1043,9 @@ python examples/example_14_vector_search.py
 
 # Load Data examples
 python examples/example_23_load_data_operations.py
+
+# Stage management examples
+python examples/example_26_stage_operations.py
 
 # Metadata and advanced examples
 python examples/example_25_metadata_operations.py
