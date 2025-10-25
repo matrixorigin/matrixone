@@ -21,8 +21,9 @@ table cloning, and mo-ctl integration.
 """
 
 from .account import Account, AccountManager, Grant, Role, TransactionAccountManager, User
-from .async_client import AsyncClient, AsyncResultSet, AsyncSession
-from .client import Client, Session
+from .async_client import AsyncClient, AsyncResultSet
+from .client import Client
+from .session import Session, AsyncSession
 from .exceptions import (
     AccountError,
     CloneError,

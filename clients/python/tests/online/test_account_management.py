@@ -58,6 +58,12 @@ class TestAccountManagement:
         username = "test_user_001"
         password = "test_password_001"
 
+        # Try to drop user first in case it exists from a previous test
+        try:
+            account_manager.drop_user(username)
+        except Exception:
+            pass  # Ignore if user doesn't exist
+
         user = account_manager.create_user(username, password)
         assert user is not None
         assert user.name == username
