@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"encoding"
 	"fmt"
+	io "io"
 
+	proto "github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -114,6 +116,7 @@ type AggFuncExec interface {
 	// Serialize intermediate result to bytes.
 	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
 	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
+	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error
 
 	Size() int64
 
@@ -312,22 +315,32 @@ func makeWindowExec(
 type dummyBinaryMarshaler struct {
 	encoding.BinaryMarshaler
 }
+type dummyBinaryUnmarshaler struct {
+	encoding.BinaryUnmarshaler
+}
 
 func (d dummyBinaryMarshaler) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
+func (d dummyBinaryUnmarshaler) UnmarshalBinary(data []byte) error {
+	return nil
+}
 
 func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 	cnt int64, flags [][]uint8, buf *bytes.Buffer,
-	ret *optSplitResult, groups []T) error {
-	buf.Write(types.EncodeInt64(&cnt))
+	ret *optSplitResult, groups []T, extra [][]byte) error {
+	types.WriteInt64(buf, cnt)
 	if cnt == 0 {
 		return nil
 	}
 	if err := ret.marshalToBuffers(flags, buf); err != nil {
 		return err
 	}
-	if len(groups) > 0 {
+
+	if len(groups) == 0 {
+		types.WriteInt64(buf, 0)
+	} else {
+		types.WriteInt64(buf, cnt)
 		groupIdx := 0
 		for i := range flags {
 			for j := range flags[i] {
@@ -344,11 +357,19 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 			}
 		}
 	}
+
+	cnt = int64(len(extra))
+	types.WriteInt64(buf, cnt)
+	for i := range extra {
+		if err := types.WriteSizeBytes(extra[i], buf); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buffer,
-	ret *optSplitResult, groups []T) error {
+	ret *optSplitResult, groups []T, extra [][]byte) error {
 	chunkSz := ret.optInformation.chunkSize
 	start := chunkSz * chunk
 	chunkNGroup := ret.getNthChunkSize(chunk)
@@ -363,7 +384,10 @@ func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buff
 		return err
 	}
 
-	if len(groups) > 0 {
+	if len(groups) == 0 {
+		types.WriteInt64(buf, 0)
+	} else {
+		types.WriteInt64(buf, cnt)
 		for i := 0; i < chunkNGroup; i++ {
 			bs, err := groups[start+i].MarshalBinary()
 			if err != nil {
@@ -373,6 +397,121 @@ func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buff
 				return err
 			}
 		}
+	}
+
+	cnt = int64(len(extra))
+	types.WriteInt64(buf, cnt)
+	for i := range extra {
+		if err := types.WriteSizeBytes(extra[i], buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func unmarshalFromReaderNoGroup(reader io.Reader, ret *optSplitResult) error {
+	var err error
+
+	cnt, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	ret.optInformation.chunkSize = int(cnt)
+	if err := ret.unmarshalFromReader(reader); err != nil {
+		return err
+	}
+	return nil
+}
+
+func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *optSplitResult) ([]T, [][]byte, error) {
+	err := unmarshalFromReaderNoGroup(reader, ret)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var res []T
+	var extra [][]byte
+	// read groups
+	cnt, err := types.ReadInt64(reader)
+	if cnt != 0 {
+		res = make([]T, cnt)
+		for i := range res {
+			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			if err = res[i].UnmarshalBinary(bs); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	cnt, err = types.ReadInt64(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cnt > 0 {
+		extra = make([][]byte, cnt)
+		for i := range extra {
+			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			if err != nil {
+				return nil, nil, err
+			}
+			extra[i] = bs
+		}
+	}
+
+	return res, extra, nil
+}
+
+func (ag *AggFuncExecExpression) MarshalToBuffer(buf *bytes.Buffer) error {
+	buf.Write(types.EncodeInt64(&ag.aggID))
+	buf.Write(types.EncodeBool(&ag.isDistinct))
+	argLen := int32(len(ag.argExpressions))
+	buf.Write(types.EncodeInt32(&argLen))
+	for _, expr := range ag.argExpressions {
+		bs, err := proto.Marshal(expr)
+		if err != nil {
+			return err
+		}
+		bsLen := int32(len(bs))
+		buf.Write(types.EncodeInt32(&bsLen))
+		buf.Write(bs)
+	}
+	exLen := int32(len(ag.extraConfig))
+	buf.Write(types.EncodeInt32(&exLen))
+	buf.Write(ag.extraConfig)
+	return nil
+}
+
+func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
+	var err error
+	if ag.aggID, err = types.ReadInt64(r); err != nil {
+		return err
+	}
+	if ag.isDistinct, err = types.ReadBool(r); err != nil {
+		return err
+	}
+	argLen, err := types.ReadInt32(r)
+	if err != nil {
+		return err
+	}
+	for i := int32(0); i < argLen; i++ {
+		_, bs, err := types.ReadSizeBytes(r, nil, false)
+		if err != nil {
+			return err
+		}
+		expr := &plan.Expr{}
+		if err := proto.Unmarshal(bs, expr); err != nil {
+			return err
+		}
+		ag.argExpressions = append(ag.argExpressions, expr)
+	}
+	exLen, err := types.ReadInt32(r)
+	if err != nil {
+		return err
+	}
+	ag.extraConfig = make([]byte, exLen)
+	if _, err := io.ReadFull(r, ag.extraConfig); err != nil {
+		return err
 	}
 	return nil
 }

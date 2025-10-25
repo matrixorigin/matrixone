@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -86,13 +87,39 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer(
 		chunk, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp != 0 {
+		exec.groups = make([]*Vectors[T], ngrp)
+		for i := range exec.groups {
+			exec.groups[i] = NewEmptyVectors[T]()
+			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			if err != nil {
+				return err
+			}
+			if err = exec.groups[i].Unmarshal(bs, exec.singleAggInfo.argType, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {

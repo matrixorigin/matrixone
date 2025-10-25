@@ -60,7 +60,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
@@ -2234,7 +2233,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			} else {
 				c.setProjection(n, ss[i])
 			}
-		case *mergegroup.MergeGroup:
+		case *group.MergeGroup:
 			if op.ProjectList == nil {
 				op.ProjectList = n.ProjectList
 			} else {

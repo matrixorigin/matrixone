@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -375,6 +376,47 @@ func (r *optSplitResult) marshalChunkToBuffer(chunk int, buf *bytes.Buffer) erro
 		buf.Write(types.EncodeInt64(&cnt))
 		if err := r.distinct[chunk].marshalToBuffers(nil, buf); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
+	var err error
+	r.free()
+	defer func() {
+		if err != nil {
+			r.free()
+		}
+	}()
+
+	r.resultList = make([]*vector.Vector, 1)
+	r.emptyList = make([]*vector.Vector, 1)
+	r.bsFromEmptyList = make([][]bool, 1)
+	r.nowIdx1 = 0
+
+	r.resultList[0] = vector.NewOffHeapVecWithType(r.resultType)
+	if err = r.resultList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+		return err
+	}
+
+	r.emptyList[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+	if err = r.emptyList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+		return err
+	}
+	r.bsFromEmptyList[0] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[0])
+
+	var cnt int64
+	cnt, err = types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if cnt > 0 {
+		r.distinct = make([]distinctHash, cnt)
+		for i := range r.distinct {
+			if err = r.distinct[i].unmarshalFromReader(reader); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

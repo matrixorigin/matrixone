@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -60,13 +61,21 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 func (exec *countColumnExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, nil)
+		&exec.ret.optSplitResult, nil, nil)
 }
 
 func (exec *countColumnExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
-		&exec.ret.optSplitResult, nil)
+		&exec.ret.optSplitResult, nil, nil)
+}
+
+func (exec *countColumnExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, _, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
@@ -303,12 +312,19 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 func (exec *countStarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, nil)
+		&exec.ret.optSplitResult, nil, nil)
 }
 func (exec *countStarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
-		&exec.ret.optSplitResult, nil)
+		&exec.ret.optSplitResult, nil, nil)
+}
+func (exec *countStarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, _, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {

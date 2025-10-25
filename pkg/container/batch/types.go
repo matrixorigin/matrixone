@@ -16,7 +16,6 @@ package batch
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 // special batch that will never been free.
@@ -52,12 +51,6 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 
-	// We really want to put all data through vectors, but, the
-	// Aggs is so f**king insane, so keep it, and add two extra
-	// buffers for sane persons to use.
-	//
-	// XXX MUST REMOVE THIS
-	Aggs      []aggexec.AggFuncExec
 	ExtraBuf1 []byte
 	ExtraBuf2 []byte
 

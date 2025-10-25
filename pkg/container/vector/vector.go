@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"time"
@@ -817,6 +818,61 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 
 	v.sorted = types.DecodeBool(data[:1])
 	//data = data[1:]
+
+	return nil
+}
+
+func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+	var err error
+
+	if v.class, err = types.ReadByteAsInt(r); err != nil {
+		return err
+	}
+
+	if v.typ, err = types.ReadType(r); err != nil {
+		return err
+	}
+
+	if v.length, err = types.ReadInt32AsInt(r); err != nil {
+		return err
+	}
+
+	// read data
+	dataLen, dataBuf, err := types.ReadSizeBytes(r, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if dataLen > 0 {
+		v.data = dataBuf
+		v.setupFromData()
+	}
+
+	// read area
+	areaLen, areaBuf, err := types.ReadSizeBytes(r, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if areaLen > 0 {
+		v.area = areaBuf
+	}
+
+	// read nsp, do not use mpool.  nspBuf is different because
+	// it is not managed by vector.  In the following, it will
+	// be unmarshalled into v.nsp
+	nspLen, nspBuf, err := types.ReadSizeBytes(r, nil, false)
+	if err != nil {
+		return err
+	}
+	if nspLen > 0 {
+		v.nsp.Read(nspBuf)
+	} else {
+		v.nsp.Reset()
+	}
+
+	v.sorted, err = types.ReadBool(r)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

@@ -39,7 +39,8 @@ const (
 type container struct {
 	status int
 
-	bat *batch.Batch
+	bat     *batch.Batch
+	batAggs []aggexec.AggFuncExec
 
 	desc      []bool
 	nullsLast []bool
@@ -152,12 +153,12 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 
 func (ctr *container) freeAggFun() {
 	if ctr.bat != nil {
-		for _, a := range ctr.bat.Aggs {
+		for _, a := range ctr.batAggs {
 			if a != nil {
 				a.Free()
 			}
 		}
-		ctr.bat.Aggs = nil
+		ctr.batAggs = nil
 	}
 }
 

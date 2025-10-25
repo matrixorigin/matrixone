@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"fmt"
+	io "io"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,7 +68,7 @@ func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [
 func (exec *groupConcatExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	err := marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, nil)
+		&exec.ret.optSplitResult, nil, [][]byte{exec.separator})
 	if err != nil {
 		return err
 	}
@@ -80,7 +81,7 @@ func (exec *groupConcatExec) SaveIntermediateResult(cnt int64, flags [][]uint8, 
 
 func (exec *groupConcatExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	err := marshalChunkToBuffer[dummyBinaryMarshaler](chunk, buf,
-		&exec.ret.optSplitResult, nil)
+		&exec.ret.optSplitResult, nil, [][]byte{exec.separator})
 	if err != nil {
 		return err
 	}
@@ -88,6 +89,15 @@ func (exec *groupConcatExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes
 	if err = types.WriteSizeBytes(exec.separator, buf); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, sep, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.separator = sep[0]
 	return nil
 }
 

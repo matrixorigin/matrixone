@@ -157,6 +157,7 @@ func (d *distinctHash) free() {
 			m.Free()
 		}
 	}
+
 }
 
 func (d *distinctHash) Size() int64 {
@@ -218,7 +219,10 @@ func (d *distinctHash) unmarshal(data []byte) error {
 		return nil
 	}
 	buf := bytes.NewBuffer(data)
+	return d.unmarshalFromReader(buf)
+}
 
+func (d *distinctHash) unmarshalFromReader(buf io.Reader) error {
 	var n uint64
 	if _, err := buf.Read(types.EncodeUint64(&n)); err != nil {
 		return err

@@ -49,7 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -695,7 +694,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			EndIdx:   t.EndIDX,
 		}
 	case *mergerecursive.MergeRecursive:
-	case *mergegroup.MergeGroup:
+	case *group.MergeGroup:
 		in.Agg = &pipeline.Group{}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -1233,10 +1232,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.MergeRecursive:
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
-		arg := mergegroup.NewArgument()
+		arg := group.NewArgumentMergeGroup()
 		arg.ProjectList = opr.ProjectList
 		op = arg
-		DecodeMergeGroup(op.(*mergegroup.MergeGroup), opr.Agg)
+		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
 	case vm.MergeTop:
 		op = mergetop.NewArgument().
 			WithLimit(opr.Limit).
@@ -1557,7 +1556,7 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 	return -1, nil
 }
 
-func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
+func EncodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 	if merge.PartialResults == nil {
 		return
 	}
@@ -1662,7 +1661,7 @@ func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
 	}
 }
 
-func DecodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
+func DecodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 	if pipe.PartialResults == nil {
 		return
 	}

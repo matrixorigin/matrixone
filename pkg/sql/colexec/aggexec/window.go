@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -96,13 +97,36 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer(
 		chunk, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp != 0 {
+		exec.groups = make([]i64Slice, ngrp)
+		for i := range exec.groups {
+			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			if err != nil {
+				return err
+			}
+			exec.groups[i] = types.DecodeSlice[int64](bs)
+		}
+	}
+	return nil
 }
 
 func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
