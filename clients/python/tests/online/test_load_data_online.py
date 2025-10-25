@@ -483,6 +483,61 @@ class TestLoadDataErrorHandling:
             os.unlink(csv_file)
             test_client.drop_table('test_load_optional_enclosed')
     
+    def test_csv_inline(self, test_client):
+        """Test LOAD DATA INLINE with CSV format"""
+        # Define table model
+        class InlineData(Base):
+            __tablename__ = 'test_inline_csv'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            value = Column(String(100))
+        
+        # Create table using model
+        test_client.drop_table('test_inline_csv')
+        test_client.create_table(InlineData)
+        
+        try:
+            # Load data from inline CSV string
+            csv_data = "1,Alice,value1\n2,Bob,value2\n3,Charlie,value3\n"
+            result = test_client.load_data.from_csv_inline(csv_data, InlineData)
+            assert result.affected_rows == 3
+            
+            # Verify data
+            count = test_client.query('test_inline_csv').count()
+            assert count == 3
+            
+        finally:
+            test_client.drop_table('test_inline_csv')
+    
+    def test_jsonline_inline(self, test_client):
+        """Test LOAD DATA INLINE with JSONLINE format"""
+        # Define table model
+        class InlineJsonData(Base):
+            __tablename__ = 'test_inline_jsonline'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+        
+        # Create table using model
+        test_client.drop_table('test_inline_jsonline')
+        test_client.create_table(InlineJsonData)
+        
+        try:
+            # Load data from inline JSONLINE string
+            jsonline_data = '{"id":1,"name":"Alice"}\n{"id":2,"name":"Bob"}\n'
+            result = test_client.load_data.from_jsonline_inline(
+                jsonline_data,
+                InlineJsonData,
+                structure=JsonDataStructure.OBJECT
+            )
+            assert result.affected_rows == 2
+            
+            # Verify data
+            count = test_client.query('test_inline_jsonline').count()
+            assert count == 2
+            
+        finally:
+            test_client.drop_table('test_inline_jsonline')
+    
     def test_jsonline_object_format(self, test_client):
         """Test JSONLINE format with object structure"""
         # Define table model

@@ -273,6 +273,156 @@ class LoadDataManager:
             **kwargs
         )
     
+    def from_inline(
+        self,
+        data: str,
+        table_name_or_model,
+        format: Union[str, LoadDataFormat] = LoadDataFormat.CSV,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        jsontype: Optional[Union[str, JsonDataStructure]] = None,
+        **kwargs
+    ):
+        """
+        Load data from an inline string directly into a table.
+        
+        This method uses LOAD DATA INLINE to load data from a string without
+        needing to create a temporary file.
+        
+        Args:
+            data (str): The data string to load
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            format (str or LoadDataFormat): Data format. Default: LoadDataFormat.CSV
+            delimiter (str): Field delimiter (for CSV). Default: ','
+            enclosed_by (str, optional): Character enclosing fields (for CSV)
+            jsontype (str or JsonDataStructure, optional): JSON structure (for JSONLINE)
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            # Basic CSV inline
+            >>> result = client.load_data.from_inline(
+            ...     "1,Alice\\n2,Bob\\n",
+            ...     User
+            ... )
+            
+            # CSV with custom delimiter
+            >>> result = client.load_data.from_inline(
+            ...     "1|Alice\\n2|Bob\\n",
+            ...     User,
+            ...     delimiter='|'
+            ... )
+            
+            # JSONLINE inline
+            >>> result = client.load_data.from_inline(
+            ...     '{"id":1,"name":"Alice"}',
+            ...     User,
+            ...     format=LoadDataFormat.JSONLINE,
+            ...     jsontype=JsonDataStructure.OBJECT
+            ... )
+        """
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+        
+        # Validate parameters
+        if not data or not isinstance(data, str):
+            raise ValueError("data must be a non-empty string")
+        
+        if not table_name or not isinstance(table_name, str):
+            raise ValueError("table_name must be a non-empty string")
+        
+        # Convert enums to strings
+        format_str = format.value if isinstance(format, LoadDataFormat) else format
+        jsontype_str = jsontype.value if isinstance(jsontype, JsonDataStructure) else jsontype
+        
+        # Build SQL
+        sql = self._build_load_data_inline_sql(
+            data=data,
+            table_name=table_name,
+            format=format_str,
+            delimiter=delimiter,
+            enclosed_by=enclosed_by,
+            jsontype=jsontype_str
+        )
+        
+        return self.client.execute(sql)
+    
+    def from_csv_inline(
+        self,
+        data: str,
+        table_name_or_model,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        **kwargs
+    ):
+        """
+        Load CSV data from an inline string.
+        
+        Simplified interface for inline CSV data.
+        
+        Args:
+            data (str): CSV data string
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            delimiter (str): Field delimiter. Default: ','
+            enclosed_by (str, optional): Character enclosing fields
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            >>> result = client.load_data.from_csv_inline(
+            ...     "1,Alice,alice@example.com\\n2,Bob,bob@example.com\\n",
+            ...     User
+            ... )
+        """
+        return self.from_inline(
+            data=data,
+            table_name_or_model=table_name_or_model,
+            format=LoadDataFormat.CSV,
+            delimiter=delimiter,
+            enclosed_by=enclosed_by,
+            **kwargs
+        )
+    
+    def from_jsonline_inline(
+        self,
+        data: str,
+        table_name_or_model,
+        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        **kwargs
+    ):
+        """
+        Load JSONLINE data from an inline string.
+        
+        Args:
+            data (str): JSONLINE data string
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            structure (str or JsonDataStructure): JSON structure. Default: JsonDataStructure.OBJECT
+            
+        Returns:
+            ResultSet: Load results with affected_rows
+            
+        Examples::
+        
+            >>> result = client.load_data.from_jsonline_inline(
+            ...     '{"id":1,"name":"Alice"}',
+            ...     User
+            ... )
+        """
+        return self.from_inline(
+            data=data,
+            table_name_or_model=table_name_or_model,
+            format=LoadDataFormat.JSONLINE,
+            jsontype=structure,
+            **kwargs
+        )
+    
     def from_file(
         self,
         file_path: str,
@@ -728,6 +878,53 @@ class LoadDataManager:
         
         # INTO TABLE
         sql_parts.append(f"INTO TABLE {table_name}")
+        
+        return " ".join(sql_parts)
+    
+    def _build_load_data_inline_sql(
+        self,
+        data: str,
+        table_name: str,
+        format: str = 'csv',
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        jsontype: Optional[str] = None
+    ) -> str:
+        """Build LOAD DATA INLINE SQL statement."""
+        # 正确的语法：LOAD DATA INLINE FORMAT='csv', DATA='...' INTO TABLE xxx
+        sql_parts = []
+        
+        # LOAD DATA INLINE
+        sql_parts.append("LOAD DATA INLINE")
+        
+        # FORMAT and DATA (comma-separated)
+        inline_params = []
+        inline_params.append(f"FORMAT='{format}'")
+        
+        # DATA - escape single quotes in data
+        escaped_data = data.replace("'", "''")
+        inline_params.append(f"DATA='{escaped_data}'")
+        
+        # JSONTYPE (for JSONLINE format)
+        if jsontype and format == 'jsonline':
+            inline_params.append(f"JSONTYPE='{jsontype}'")
+        
+        # Combine FORMAT, DATA, JSONTYPE with commas
+        sql_parts.append(", ".join(inline_params))
+        
+        # INTO TABLE
+        sql_parts.append(f"INTO TABLE {table_name}")
+        
+        # FIELDS options (for CSV)
+        if format == 'csv':
+            fields_options = []
+            if delimiter:
+                fields_options.append(f"TERMINATED BY '{delimiter}'")
+            if enclosed_by:
+                fields_options.append(f"ENCLOSED BY '{enclosed_by}'")
+            
+            if fields_options:
+                sql_parts.append("FIELDS " + " ".join(fields_options))
         
         return " ".join(sql_parts)
 

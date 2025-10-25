@@ -777,7 +777,125 @@ class LoadDataOperationsDemo:
         except Exception as e:
             self.logger.error(f"❌ OPTIONALLY ENCLOSED BY test failed: {e}")
             self.results['tests_failed'] += 1
-            self.results['unexpected_results'].append({'test': 'optionally_enclosed_fields', 'error': str(e)})
+    
+    def test_csv_inline_loading(self, client):
+        """Test LOAD DATA INLINE with CSV format"""
+        print("\n=== CSV INLINE Loading Test ===")
+        self.results['tests_run'] += 1
+        
+        try:
+            # Define table model
+            class InlineData(Base):
+                __tablename__ = 'test_inline_csv'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                value = Column(String(100))
+            
+            # Create table
+            client.drop_table('test_inline_csv')
+            client.create_table(InlineData)
+            
+            # Prepare inline CSV data
+            csv_data = "1,Alice,value1\n2,Bob,value2\n3,Charlie,value3\n"
+            
+            # Load data using from_csv_inline
+            result = client.load_data.from_csv_inline(csv_data, InlineData)
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows from inline CSV")
+            
+            # Verify data
+            count = client.query('test_inline_csv').count()
+            assert count == 3
+            self.logger.info("✅ CSV INLINE data verification successful")
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            self.logger.error(f"❌ CSV INLINE test failed: {e}")
+            self.results['tests_failed'] += 1
+        finally:
+            client.drop_table('test_inline_csv')
+    
+    def test_jsonline_inline_loading(self, client):
+        """Test LOAD DATA INLINE with JSONLINE format"""
+        print("\n=== JSONLINE INLINE Loading Test ===")
+        self.results['tests_run'] += 1
+        
+        try:
+            # Define table model
+            class InlineJsonData(Base):
+                __tablename__ = 'test_inline_jsonline'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                age = Column(Integer)
+            
+            # Create table
+            client.drop_table('test_inline_jsonline')
+            client.create_table(InlineJsonData)
+            
+            # Prepare inline JSONLINE data
+            jsonline_data = '{"id":1,"name":"Alice","age":25}\n{"id":2,"name":"Bob","age":30}\n'
+            
+            # Load data using from_jsonline_inline
+            result = client.load_data.from_jsonline_inline(
+                jsonline_data,
+                InlineJsonData,
+                structure=JsonDataStructure.OBJECT
+            )
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows from inline JSONLINE")
+            
+            # Verify data
+            count = client.query('test_inline_jsonline').count()
+            assert count == 2
+            self.logger.info("✅ JSONLINE INLINE data verification successful")
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            self.logger.error(f"❌ JSONLINE INLINE test failed: {e}")
+            self.results['tests_failed'] += 1
+        finally:
+            client.drop_table('test_inline_jsonline')
+    
+    def test_generic_inline_loading(self, client):
+        """Test generic LOAD DATA INLINE interface"""
+        print("\n=== Generic INLINE Loading Test ===")
+        self.results['tests_run'] += 1
+        
+        try:
+            # Define table model
+            class GenericInlineData(Base):
+                __tablename__ = 'test_generic_inline'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                score = Column(Integer)
+            
+            # Create table
+            client.drop_table('test_generic_inline')
+            client.create_table(GenericInlineData)
+            
+            # Prepare inline data
+            inline_data = "1,Eve,95\n2,Frank,87\n"
+            
+            # Load data using generic from_inline
+            result = client.load_data.from_inline(
+                inline_data,
+                GenericInlineData,
+                format=LoadDataFormat.CSV
+            )
+            self.logger.info(f"✅ Loaded {result.affected_rows} rows from generic inline interface")
+            
+            # Verify data
+            count = client.query('test_generic_inline').count()
+            assert count == 2
+            self.logger.info("✅ Generic INLINE data verification successful")
+            
+            self.results['tests_passed'] += 1
+            
+        except Exception as e:
+            self.logger.error(f"❌ Generic INLINE test failed: {e}")
+            self.results['tests_failed'] += 1
+        finally:
+            client.drop_table('test_generic_inline')
 
     def test_load_data_manager_instance(self, client):
         """Test that load_data property returns LoadDataManager instance"""
@@ -857,6 +975,9 @@ class LoadDataOperationsDemo:
             self.test_jsonline_array_format(client)
             self.test_set_clause_with_nullif(client)
             self.test_optionally_enclosed_fields(client)
+            self.test_csv_inline_loading(client)
+            self.test_jsonline_inline_loading(client)
+            self.test_generic_inline_loading(client)
             self.test_load_data_manager_instance(client)
             
             # Print results
