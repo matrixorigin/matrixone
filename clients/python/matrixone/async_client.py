@@ -2853,14 +2853,14 @@ class AsyncClient(BaseMatrixOneClient):
     def metadata(self) -> Optional["AsyncMetadataManager"]:
         """Get metadata manager for table metadata operations"""
         return self._metadata
-    
+
     @property
     def load_data(self) -> Optional["AsyncLoadDataManager"]:
         """Get async load data manager for bulk data loading operations"""
         if self._load_data is None:
             self._load_data = AsyncLoadDataManager(self)
         return self._load_data
-    
+
     @property
     def stage(self) -> Optional["AsyncStageManager"]:
         """Get async stage manager for external stage operations"""

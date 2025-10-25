@@ -1353,7 +1353,7 @@ class Client(BaseMatrixOneClient):
         if self._load_data is None:
             self._load_data = LoadDataManager(self)
         return self._load_data
-    
+
     @property
     def stage(self) -> Optional[StageManager]:
         """Get stage manager for external stage operations"""
@@ -1808,9 +1808,11 @@ class Client(BaseMatrixOneClient):
                         except Exception as e:
                             self.logger.warning(f"Failed to create vector index {index.name}: {e}")
                     else:
-                        # Create regular index
+                        # Create regular index using manual SQL to avoid dialect issues
                         try:
-                            index_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
+                            columns_str = ', '.join([str(col.name) for col in index.columns])
+                            unique_str = 'UNIQUE ' if index.unique else ''
+                            index_sql = f"CREATE {unique_str}INDEX {index.name} ON {table_name} ({columns_str})"
                             _exec_sql(index_sql)
                             self.logger.info(f"✓ Created index '{index.name}'")
                         except Exception as e:

@@ -749,13 +749,13 @@ class TestLoadDataErrorHandling:
 @pytest.mark.asyncio
 class TestAsyncLoadDataOperations:
     """Async tests for LoadDataManager - sample coverage"""
-    
+
     @pytest.mark.asyncio
     async def test_async_basic_csv_load(self):
         """Test basic async CSV file loading"""
         client = AsyncClient()
         await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
-        
+
         try:
             # Define table model
             class AsyncUser(Base):
@@ -764,107 +764,107 @@ class TestAsyncLoadDataOperations:
                 name = Column(String(100))
                 email = Column(String(255))
                 age = Column(Integer)
-            
+
             # Create table
             await client.drop_table('test_async_load_users')
             await client.create_table(AsyncUser)
-            
+
             # Create sample CSV file
             csv_content = """1,Alice,alice@example.com,30
 2,Bob,bob@example.com,25
 3,Charlie,charlie@example.com,35"""
-            
+
             csv_file = os.path.join(TMPFILES_DIR, f"test_async_csv_{id(self)}.csv")
             with open(csv_file, 'w') as f:
                 f.write(csv_content)
-            
+
             try:
                 # Load data using async interface
                 result = await client.load_data.from_csv(csv_file, AsyncUser)
                 assert result.affected_rows == 3
-                
+
                 # Verify data
                 count_result = await client.execute('SELECT COUNT(*) FROM test_async_load_users')
                 count = count_result.rows[0][0]
                 assert count == 3
-                
+
             finally:
                 os.unlink(csv_file)
                 await client.drop_table('test_async_load_users')
-        
+
         finally:
             await client.disconnect()
-    
+
     @pytest.mark.asyncio
     async def test_async_transaction_load(self):
         """Test async loading data within transaction"""
         client = AsyncClient()
         await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
-        
+
         try:
             # Define table models
             class AsyncAccount(Base):
                 __tablename__ = 'test_async_accounts'
                 account_id = Column(Integer, primary_key=True)
                 balance = Column(DECIMAL(10, 2))
-            
+
             class AsyncTransaction(Base):
                 __tablename__ = 'test_async_transactions'
                 trans_id = Column(Integer, primary_key=True)
                 account_id = Column(Integer)
                 amount = Column(DECIMAL(10, 2))
-            
+
             # Create tables
             await client.drop_table('test_async_accounts')
             await client.drop_table('test_async_transactions')
             await client.create_table(AsyncAccount)
             await client.create_table(AsyncTransaction)
-            
+
             # Create data files
             accounts_content = """1,1000.00
 2,2000.00"""
             transactions_content = """101,1,100.00
 102,2,200.00"""
-            
+
             accounts_file = os.path.join(TMPFILES_DIR, f"test_async_accounts_{id(self)}.csv")
             with open(accounts_file, 'w') as f:
                 f.write(accounts_content)
-            
+
             transactions_file = os.path.join(TMPFILES_DIR, f"test_async_transactions_{id(self)}.csv")
             with open(transactions_file, 'w') as f:
                 f.write(transactions_content)
-            
+
             try:
                 # Load data within async transaction
                 async with client.transaction() as tx:
                     result1 = await tx.load_data.from_csv(accounts_file, AsyncAccount)
                     result2 = await tx.load_data.from_csv(transactions_file, AsyncTransaction)
-                    
+
                     assert result1.affected_rows == 2
                     assert result2.affected_rows == 2
-                
+
                 # Verify data is committed
                 accounts_result = await client.execute('SELECT COUNT(*) FROM test_async_accounts')
                 transactions_result = await client.execute('SELECT COUNT(*) FROM test_async_transactions')
-                
+
                 assert accounts_result.rows[0][0] == 2
                 assert transactions_result.rows[0][0] == 2
-                
+
             finally:
                 os.unlink(accounts_file)
                 os.unlink(transactions_file)
                 await client.drop_table('test_async_accounts')
                 await client.drop_table('test_async_transactions')
-        
+
         finally:
             await client.disconnect()
-    
+
     @pytest.mark.asyncio
     async def test_async_jsonline_load(self):
         """Test async JSONLINE file loading"""
         client = AsyncClient()
         await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
-        
+
         try:
             # Define table model
             class AsyncJsonData(Base):
@@ -872,115 +872,114 @@ class TestAsyncLoadDataOperations:
                 id = Column(Integer, primary_key=True)
                 name = Column(String(100))
                 email = Column(String(255))
-            
+
             # Create table
             await client.drop_table('test_async_jsonline')
             await client.create_table(AsyncJsonData)
-            
+
             # Create JSONLINE file
             jl_content = '''{"id":1,"name":"Alice","email":"alice@example.com"}
 {"id":2,"name":"Bob","email":"bob@example.com"}
 {"id":3,"name":"Charlie","email":"charlie@example.com"}'''
-            
+
             jl_file = os.path.join(TMPFILES_DIR, f"test_async_jsonline_{id(self)}.jl")
             with open(jl_file, 'w') as f:
                 f.write(jl_content)
-            
+
             try:
                 # Load JSONLINE data using async interface
                 result = await client.load_data.from_jsonline(jl_file, AsyncJsonData, structure=JsonDataStructure.OBJECT)
                 assert result.affected_rows == 3
-                
+
                 # Verify data
                 count_result = await client.execute('SELECT COUNT(*) FROM test_async_jsonline')
                 count = count_result.rows[0][0]
                 assert count == 3
-                
+
             finally:
                 os.unlink(jl_file)
                 await client.drop_table('test_async_jsonline')
-        
+
         finally:
             await client.disconnect()
-    
+
     @pytest.mark.asyncio
     async def test_async_stage_load(self):
         """Test async loading from stage"""
         client = AsyncClient()
         await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
-        
+
         try:
             # Define table model
             class AsyncStageData(Base):
                 __tablename__ = 'test_async_stage'
                 id = Column(Integer, primary_key=True)
                 name = Column(String(100))
-            
+
             # Create table
             await client.drop_table('test_async_stage')
             await client.create_table(AsyncStageData)
-            
+
             # Create temp files
             tmpdir = tempfile.mkdtemp()
             csv_file = os.path.join(tmpdir, 'async_test.csv')
-            
+
             with open(csv_file, 'w') as f:
                 f.write('1,Alice\n2,Bob\n3,Charlie\n')
-            
+
             try:
                 # Create stage
                 await client.execute(f'CREATE STAGE IF NOT EXISTS async_stage URL="file://{tmpdir}/"')
-                
+
                 # Load from stage using async interface
                 result = await client.load_data.from_stage_csv('async_stage', 'async_test.csv', AsyncStageData)
                 assert result.affected_rows == 3
-                
+
                 # Verify data
                 count_result = await client.execute('SELECT COUNT(*) FROM test_async_stage')
                 count = count_result.rows[0][0]
                 assert count == 3
-                
+
             finally:
                 # Cleanup
                 await client.execute('DROP STAGE IF EXISTS async_stage')
                 os.unlink(csv_file)
                 os.rmdir(tmpdir)
                 await client.drop_table('test_async_stage')
-        
+
         finally:
             await client.disconnect()
-    
+
     @pytest.mark.asyncio
     async def test_async_inline_load(self):
         """Test async inline data loading"""
         client = AsyncClient()
         await client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
-        
+
         try:
             # Define table model
             class AsyncInlineData(Base):
                 __tablename__ = 'test_async_inline'
                 id = Column(Integer, primary_key=True)
                 name = Column(String(100))
-            
+
             # Create table
             await client.drop_table('test_async_inline')
             await client.create_table(AsyncInlineData)
-            
+
             try:
                 # Load inline CSV data using async interface
                 csv_data = "1,Alice\n2,Bob\n3,Charlie\n"
                 result = await client.load_data.from_csv_inline(csv_data, AsyncInlineData)
                 assert result.affected_rows == 3
-                
+
                 # Verify data
                 count_result = await client.execute('SELECT COUNT(*) FROM test_async_inline')
                 count = count_result.rows[0][0]
                 assert count == 3
-                
+
             finally:
                 await client.drop_table('test_async_inline')
-        
+
         finally:
             await client.disconnect()
-

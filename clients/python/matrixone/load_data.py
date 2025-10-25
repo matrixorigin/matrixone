@@ -114,17 +114,17 @@ class LoadDataManager:
     ):
         """
         Load CSV (Comma-Separated Values) data from a file into a table.
-        
+
         This is the most commonly used data loading interface, providing a simplified
         API for CSV files with sensible defaults and the most frequently used options.
-        
+
         CSV Format:
         -----------
         CSV is a plain text format where:
         - Each line represents one row
         - Fields are separated by a delimiter (default: comma)
         - Fields may be enclosed in quotes to handle special characters
-        
+
         Common Use Cases:
         -----------------
         - **Data imports**: Import data from Excel, databases, or other sources
@@ -188,7 +188,7 @@ class LoadDataManager:
     ):
         """
         Load TSV (Tab-Separated Values) data from a file.
-        
+
         TSV Format:
         -----------
         TSV is similar to CSV but uses tab characters ('\\t') as delimiters.
@@ -197,7 +197,7 @@ class LoadDataManager:
         - **Data exports**: Database exports, system reports
         - **Scientific data**: Research data, measurements
         - **Text processing**: NLP datasets, corpus files
-        
+
         Advantages over CSV:
         - No need for quoting (tabs rarely appear in data)
         - Better readability in text editors with tab stops
@@ -217,12 +217,12 @@ class LoadDataManager:
 
             >>> # Basic TSV loading
             >>> client.load_data.from_tsv('logs.tsv', Log)
-            
+
             >>> # TSV with header row
             >>> client.load_data.from_tsv('data.tsv', User, ignore_lines=1)
-            
+
             >>> # Load into specific columns
-            >>> client.load_data.from_tsv('data.tsv', User, 
+            >>> client.load_data.from_tsv('data.tsv', User,
             ...     columns=['id', 'name', 'email'])
         """
         return self.from_csv(
@@ -244,7 +244,7 @@ class LoadDataManager:
     ):
         """
         Load JSONLINE (JSON Lines, also called NDJSON) data from a file.
-        
+
         JSONLINE Format:
         ----------------
         JSONLINE is a format where each line is a valid JSON value (usually an object).
@@ -253,7 +253,7 @@ class LoadDataManager:
         - **Appendable**: Add new records by appending lines
         - **Fault-tolerant**: One corrupted line doesn't break the entire file
         - **Efficient**: Suitable for very large datasets
-        
+
         Common Use Cases:
         -----------------
         - **Log aggregation**: Application logs, access logs, event streams
@@ -261,13 +261,13 @@ class LoadDataManager:
         - **Big data**: Large datasets from Hadoop, Spark, etc.
         - **Event sourcing**: Event streams, message queues
         - **Machine learning**: Training datasets, feature stores
-        
+
         Two Structure Types:
         --------------------
         1. **OBJECT** (default): {"id":1,"name":"Alice","age":30}
            - Most common and readable
            - Field names included in each line
-        
+
         2. **ARRAY**: [1,"Alice",30]
            - More compact (no field names)
            - Column order must match table
@@ -288,7 +288,7 @@ class LoadDataManager:
 
             # Object structure (most common)
             >>> client.load_data.from_jsonline('events.jsonl', Event)
-            
+
             # Array structure
             >>> client.load_data.from_jsonline('data.jsonl', User,
             ...     structure=JsonDataStructure.ARRAY)
@@ -323,48 +323,48 @@ class LoadDataManager:
 
         Important - MatrixOne Parquet Requirements:
             MatrixOne currently has specific requirements for Parquet files.
-            
+
             Currently NOT Supported (as of this version):
                 ❌ Nullable columns (INT64(optional), STRING(optional), etc.)
                 ❌ Dictionary encoding (indexed pages)
                 ❌ Parquet 2.0 features
                 ❌ Column statistics metadata
                 ❌ Compressed Parquet files (GZIP, SNAPPY, etc.)
-            
+
             If you encounter errors like:
                 - "indexed INT64 page is not yet implemented"
                 - "load INT64(optional) to BIGINT NULL is not yet implemented"
-            
+
             You must generate Parquet files with the following PyArrow settings:
-            
+
             Required Settings (Mandatory):
                 1. Schema columns must be non-nullable: nullable=False
                 2. Disable dictionary encoding: use_dictionary=False
                 3. Disable compression: compression='none'
                 4. Disable statistics: write_statistics=False
                 5. Use Parquet 1.0 format: data_page_version='1.0'
-            
-            Note: These limitations are temporary. Support for nullable columns, dictionary 
+
+            Note: These limitations are temporary. Support for nullable columns, dictionary
             encoding, compression, and Parquet 2.0 features is planned for future releases.
             Stay tuned for updates!
-            
+
             Example::
-            
+
                 import pyarrow as pa
                 import pyarrow.parquet as pq
-                
+
                 # Define non-nullable schema (REQUIRED)
                 schema = pa.schema([
                     pa.field('id', pa.int64(), nullable=False),
                     pa.field('name', pa.string(), nullable=False)
                 ])
-                
+
                 # Create table
                 table = pa.table({
                     'id': pa.array([1, 2, 3], type=pa.int64()),
                     'name': pa.array(['Alice', 'Bob', 'Charlie'], type=pa.string())
                 }, schema=schema)
-                
+
                 # Write with MatrixOne-compatible options (REQUIRED)
                 pq.write_table(
                     table, 'data.parq',
@@ -373,7 +373,7 @@ class LoadDataManager:
                     write_statistics=False,      # REQUIRED
                     data_page_version='1.0'      # REQUIRED
                 )
-                
+
                 # Now load the file
                 client.load_data.from_parquet('data.parq', User)
 
@@ -606,11 +606,11 @@ class LoadDataManager:
     ):
         """
         Load CSV data from a stage file.
-        
+
         This is a simplified interface for loading CSV files from an external stage.
         A stage is a named external storage location (filesystem, S3, etc.) that you
         create once and can reuse for multiple load operations.
-        
+
         Why use stages?
         ---------------
         - **Centralized storage**: Keep all data files in one location
@@ -644,7 +644,7 @@ class LoadDataManager:
             ...     'users.csv',
             ...     User
             ... )
-            
+
             >>> # CSV with custom delimiter
             >>> result = client.load_data.from_stage_csv(
             ...     'mystage',
@@ -652,7 +652,7 @@ class LoadDataManager:
             ...     User,
             ...     delimiter='|'
             ... )
-            
+
             >>> # Skip header row
             >>> result = client.load_data.from_stage_csv(
             ...     'mystage',
@@ -682,11 +682,11 @@ class LoadDataManager:
     ):
         """
         Load TSV (Tab-Separated Values) data from a stage file.
-        
+
         TSV is a common format for data interchange, especially for log files
         and data exports. This method automatically uses tab ('\\t') as the delimiter.
-        
-        A stage is a named external storage location that you create once and 
+
+        A stage is a named external storage location that you create once and
         reuse for loading multiple files.
 
         Args:
@@ -713,7 +713,7 @@ class LoadDataManager:
             ...     'app.tsv',
             ...     Log
             ... )
-            
+
             >>> # Compressed TSV
             >>> result = client.load_data.from_stage_tsv(
             ...     'log_stage',
@@ -743,13 +743,13 @@ class LoadDataManager:
     ):
         """
         Load JSONLINE (JSON Lines) data from a stage file.
-        
+
         JSONLINE format stores one JSON object per line, making it ideal for:
         - Streaming data (logs, events, metrics)
         - Large datasets that don't fit in memory
         - Append-only data collections
-        
-        A stage is a named external storage location (filesystem, S3, etc.) that 
+
+        A stage is a named external storage location (filesystem, S3, etc.) that
         provides centralized, reusable access to data files.
 
         Args:
@@ -780,7 +780,7 @@ class LoadDataManager:
             ...     Event,
             ...     structure=JsonDataStructure.OBJECT
             ... )
-            
+
             >>> # Load JSONLINE with array structure
             >>> result = client.load_data.from_stage_jsonline(
             ...     'event_stage',
@@ -788,7 +788,7 @@ class LoadDataManager:
             ...     Metric,
             ...     structure=JsonDataStructure.ARRAY
             ... )
-            
+
             >>> # Load compressed JSONLINE
             >>> result = client.load_data.from_stage_jsonline(
             ...     'event_stage',
@@ -822,42 +822,42 @@ class LoadDataManager:
 
         Important - MatrixOne Parquet Requirements:
             MatrixOne currently has specific requirements for Parquet files.
-            
+
             Currently NOT Supported (as of this version):
                 ❌ Nullable columns (INT64(optional), STRING(optional), etc.)
                 ❌ Dictionary encoding (indexed pages)
                 ❌ Parquet 2.0 features
                 ❌ Column statistics metadata
                 ❌ Compressed Parquet files (GZIP, SNAPPY, etc.)
-            
+
             If you encounter errors like:
                 - "indexed INT64 page is not yet implemented"
                 - "load INT64(optional) to BIGINT NULL is not yet implemented"
-            
+
             You must generate Parquet files with the following PyArrow settings:
-            
+
             Required Settings (Mandatory):
                 1. Schema columns must be non-nullable: nullable=False
                 2. Disable dictionary encoding: use_dictionary=False
                 3. Disable compression: compression='none'
                 4. Disable statistics: write_statistics=False
                 5. Use Parquet 1.0 format: data_page_version='1.0'
-            
-            Note: These limitations are temporary. Support for nullable columns, dictionary 
+
+            Note: These limitations are temporary. Support for nullable columns, dictionary
             encoding, compression, and Parquet 2.0 features is planned for future releases.
             Stay tuned for updates!
-            
+
             Example::
-            
+
                 import pyarrow as pa
                 import pyarrow.parquet as pq
-                
+
                 # Define non-nullable schema (REQUIRED)
                 schema = pa.schema([
                     pa.field('id', pa.int64(), nullable=False),
                     pa.field('name', pa.string(), nullable=False)
                 ])
-                
+
                 # Create and write table with MatrixOne-compatible options
                 table = pa.table({'id': [1, 2], 'name': ['A', 'B']}, schema=schema)
                 pq.write_table(
@@ -1403,63 +1403,65 @@ class TransactionLoadDataManager(LoadDataManager):
 class AsyncLoadDataManager(LoadDataManager):
     """
     Async manager for LOAD DATA operations in MatrixOne.
-    
+
     This class extends LoadDataManager to provide async/await support.
     All SQL building logic is inherited - only execute() calls are async.
-    
+
     Examples::
-    
+
         # Basic async CSV loading
         await client.load_data.from_csv('/path/to/data.csv', User)
-        
+
         # Load from stage
         await client.load_data.from_stage_csv('mystage', 'data.csv', Product)
     """
-    
+
     async def from_file(self, *args, **kwargs):
         """Async version - builds SQL via parent, executes asynchronously"""
         # Temporarily replace client.execute with a SQL capturer
         sql = self._capture_sql(super().from_file, *args, **kwargs)
         return await self.client.execute(sql)
-    
+
     async def from_inline(self, *args, **kwargs):
         """Async version - builds SQL via parent, executes asynchronously"""
         sql = self._capture_sql(super().from_inline, *args, **kwargs)
         return await self.client.execute(sql)
-    
+
     def _capture_sql(self, method, *args, **kwargs):
         """Helper to capture SQL from parent method without executing"""
         captured_sql = None
         original_execute = self.client.execute
-        
+
         def capture(sql):
             nonlocal captured_sql
             captured_sql = sql
+
             # Return mock result
             class MockResult:
                 affected_rows = 0
+
             return MockResult()
-        
+
         self.client.execute = capture
         try:
             method(*args, **kwargs)
         finally:
             self.client.execute = original_execute
-        
+
         return captured_sql
 
 
 class AsyncTransactionLoadDataManager(AsyncLoadDataManager):
     """
     Async Load Data Manager for transaction context.
-    
+
     Executes LOAD DATA within an async transaction for atomicity.
-    
+
     Examples::
-    
+
         async with client.transaction() as tx:
             await tx.load_data.from_csv('/path/to/data1.csv', User)
             await tx.load_data.from_csv('/path/to/data2.csv', Product)
     """
-    
+
     pass  # Inherits all async methods

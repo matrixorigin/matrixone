@@ -1571,20 +1571,22 @@ class MatrixOneCLI(cmd.Cmd):
                 # Show main table stats
                 if table_name in stats:
                     table_stats = stats[table_name]
-                    print(
-                        f"{table_name:<30} | {table_stats['total_objects']:<10} | "
-                        f"{table_stats['row_cnt']:<15,} | {table_stats['null_cnt']:<12,} | "
-                        f"{table_stats['original_size']:<15} | {table_stats['compress_size']:<15}"  # type: ignore
-                    )
+                    if isinstance(table_stats, dict):  # Type guard for mypy
+                        print(
+                            f"{table_name:<30} | {table_stats['total_objects']:<10} | "
+                            f"{table_stats['row_cnt']:<15,} | {table_stats['null_cnt']:<12,} | "
+                            f"{table_stats['original_size']:<15} | {table_stats['compress_size']:<15}"
+                        )
 
                 # Show tombstone stats
                 if 'tombstone' in stats:
                     tomb_stats = stats['tombstone']
-                    print(
-                        f"{'  └─ tombstone':<30} | {tomb_stats['total_objects']:<10} | "
-                        f"{tomb_stats['row_cnt']:<15,} | {tomb_stats['null_cnt']:<12,} | "
-                        f"{tomb_stats['original_size']:<15} | {tomb_stats['compress_size']:<15}"  # type: ignore
-                    )
+                    if isinstance(tomb_stats, dict):  # Type guard for mypy
+                        print(
+                            f"{'  └─ tombstone':<30} | {tomb_stats['total_objects']:<10} | "
+                            f"{tomb_stats['row_cnt']:<15,} | {tomb_stats['null_cnt']:<12,} | "
+                            f"{tomb_stats['original_size']:<15} | {tomb_stats['compress_size']:<15}"
+                        )
 
                 # Show index stats - use get_table_indexes_detail to get all physical tables
                 if include_indexes:
