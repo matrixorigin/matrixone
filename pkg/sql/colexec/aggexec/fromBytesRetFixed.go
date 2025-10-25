@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"fmt"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -219,15 +220,24 @@ func (exec *aggregatorFromBytesToFixed[to]) marshal() ([]byte, error) {
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffer(
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkToBuffer(
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
-		&exec.ret.optSplitResult, exec.execContext.getGroupContextBinaryMarshaller())
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+}
+
+func (exec *aggregatorFromBytesToFixed[to]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, bs, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.execContext.decodeGroupContexts(bs, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
+	return nil
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {

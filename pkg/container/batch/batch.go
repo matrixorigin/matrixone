@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 func New(attrs []string) *Batch {
@@ -145,37 +145,9 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
 		}
 	}
 
-	// ExtraBuf1
-	size := int32(len(bat.ExtraBuf1))
-	w.Write(types.EncodeInt32(&size))
-	if size > 0 {
-		w.Write(bat.ExtraBuf1)
-	}
-
-	// ExtraBuf2
-	size = int32(len(bat.ExtraBuf2))
-	w.Write(types.EncodeInt32(&size))
-	if size > 0 {
-		w.Write(bat.ExtraBuf2)
-	}
-
-	// AggInfos
-	aggInfos := make([][]byte, len(bat.Aggs))
-	for i, exec := range bat.Aggs {
-		data, err := aggexec.MarshalAggFuncExec(exec)
-		if err != nil {
-			return nil, err
-		}
-		aggInfos[i] = data
-	}
-
-	l = int32(len(aggInfos))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		size := int32(len(aggInfos[i]))
-		w.Write(types.EncodeInt32(&size))
-		w.Write(aggInfos[i])
-	}
+	// ExtraBuf1 and ExtraBuf2
+	types.WriteSizeBytes(bat.ExtraBuf1, w)
+	types.WriteSizeBytes(bat.ExtraBuf2, w)
 
 	w.Write(types.EncodeInt32(&bat.Recursive))
 	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
@@ -247,32 +219,74 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	bat.ExtraBuf2 = append(bat.ExtraBuf2, data[:l]...)
 	data = data[l:]
 
-	l = types.DecodeInt32(data[:4])
-	aggs := make([][]byte, l)
-
-	data = data[4:]
-	for i := 0; i < int(l); i++ {
-		size := types.DecodeInt32(data[:4])
-		data = data[4:]
-		aggs[i] = data[:size]
-		data = data[size:]
-	}
-
 	bat.Recursive = types.DecodeInt32(data[:4])
 	data = data[4:]
 	bat.ShuffleIDX = types.DecodeInt32(data[:4])
+	return nil
+}
 
-	if len(aggs) > 0 {
-		bat.Aggs = make([]aggexec.AggFuncExec, len(aggs))
-		var aggMemoryManager aggexec.AggMemoryManager = nil
-		if mp != nil {
-			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
+func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {
+	i64, err := types.ReadInt64(r)
+	if err != nil {
+		return err
+	}
+	bat.rowCount = int(i64)
+
+	l, err := types.ReadInt32AsInt(r)
+	if l != len(bat.Vecs) {
+		if len(bat.Vecs) > 0 {
+			bat.Clean(mp)
 		}
-		for i, info := range aggs {
-			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
-				return err
+		bat.Vecs = make([]*vector.Vector, l)
+		for i := range bat.Vecs {
+			if bat.offHeap {
+				bat.Vecs[i] = vector.NewOffHeapVec()
+			} else {
+				bat.Vecs[i] = vector.NewVecFromReuse()
 			}
 		}
+	}
+	vecs := bat.Vecs
+
+	for i := 0; i < l; i++ {
+		_, bs, err := types.ReadSizeBytes(r, nil, false)
+		if err != nil {
+			return err
+		}
+		if err := vecs[i].UnmarshalWithReader(bytes.NewReader(bs), nil); err != nil {
+			return err
+		}
+	}
+
+	l, err = types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
+	if l != len(bat.Attrs) {
+		bat.Attrs = make([]string, l)
+	}
+
+	for i := 0; i < int(l); i++ {
+		_, bs, err := types.ReadSizeBytes(r, nil, false)
+		if err != nil {
+			return err
+		}
+		bat.Attrs[i] = string(bs)
+	}
+
+	// ExtraBuf1
+	if _, bat.ExtraBuf1, err = types.ReadSizeBytes(r, nil, false); err != nil {
+		return err
+	}
+	if _, bat.ExtraBuf2, err = types.ReadSizeBytes(r, nil, false); err != nil {
+		return err
+	}
+
+	if bat.Recursive, err = types.ReadInt32(r); err != nil {
+		return err
+	}
+	if bat.ShuffleIDX, err = types.ReadInt32(r); err != nil {
+		return err
 	}
 	return nil
 }
@@ -437,14 +451,11 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			vec.Free(m)
 		}
 	}
-	for _, agg := range bat.Aggs {
-		if agg != nil {
-			agg.Free()
-		}
-	}
-	bat.Aggs = nil
+
 	bat.Vecs = nil
 	bat.Attrs = nil
+	bat.ExtraBuf1 = nil
+	bat.ExtraBuf2 = nil
 	bat.SetRowCount(0)
 }
 
@@ -639,7 +650,7 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, st
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && len(bat.Aggs) == 0
+	return bat.rowCount == 0
 }
 
 func (bat *Batch) IsDone() bool {

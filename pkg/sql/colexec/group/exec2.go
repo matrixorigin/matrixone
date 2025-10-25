@@ -16,16 +16,12 @@ package group
 
 import (
 	"bytes"
-	"fmt"
 
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -64,20 +60,11 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	// setup spill parameters.
-	if group.SpillMem == 0 {
-		// TODO: should auto tune this number with available memory.
-		group.SpillMem = common.GiB
+	if group.NeedEval {
+		group.ctr.setSpillMem(group.SpillMem)
+	} else {
+		group.ctr.setSpillMem(group.SpillMem / 8)
 	}
-
-	// streaming mode usually need less memory -- we would rather give
-	// the memory to later merge node.
-	if !group.NeedEval {
-		group.SpillMem /= 8
-	}
-
-	// but be sane, at least use 1MB, and at most 16GB.
-	group.SpillMem = min(max(group.SpillMem, common.MiB), common.GiB*16)
 	return nil
 }
 
@@ -90,7 +77,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		for _, expr := range group.Exprs {
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
-			group.ctr.keyWidth += width
+			group.ctr.keyWidth += int32(width)
 		}
 
 		if group.ctr.keyWidth == 0 {
@@ -206,6 +193,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	group.OpAnalyzer.Start()
+	defer group.OpAnalyzer.Stop()
+
 	switch group.ctr.state {
 	case vm.Build:
 		// receive all data, loop till exhuasted.
@@ -237,7 +227,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.spillDataToDisk(proc, &group.ctr.spillBkt)
+					group.ctr.spillDataToDisk(proc, nil, false)
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
@@ -248,10 +238,10 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if err := group.spillDataToDisk(proc, &group.ctr.spillBkt); err != nil {
+			if err := group.ctr.spillDataToDisk(proc, nil, true); err != nil {
 				return vm.CancelResult, err
 			}
-			if _, err := group.loadSpilledData(proc); err != nil {
+			if _, err := group.ctr.loadSpilledData(proc); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -265,23 +255,6 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, nil
 	}
 	return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "bug: unknown group state")
-}
-
-func (group *Group) memUsed() int64 {
-	var memUsed int64
-
-	// group by
-	for _, b := range group.ctr.groupByBatches {
-		memUsed += int64(b.Size())
-	}
-	// times 2, so that roughly we have the hashtable size.
-	memUsed *= 2
-
-	// aggs
-	for _, ag := range group.ctr.aggList {
-		memUsed += ag.Size()
-	}
-	return memUsed
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
@@ -351,7 +324,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		} // end of mini batch for loop
 
 		// check size
-		return group.memUsed() > group.SpillMem, nil
+		return group.ctr.needSpill(), nil
 	}
 }
 
@@ -429,117 +402,9 @@ func (ctr *container) appendGroupByBatch(
 	return toIncrease, nil
 }
 
-func (group *Group) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) error {
-	// we only allow to spill up to spillMaxPass passes.
-	// each pass we take spillMaskBits bits from the hashCode, and use them as the index
-	// to select the spill bucket.  Default params, 32^3 = 32768 spill buckets -- if this
-	// is still not enough, probably we cannot do much anyway, just fail the query.
-	if parentBkt.lv >= spillMaxPass {
-		return moerr.NewInternalError(proc.Ctx, "spill level too deep")
-	}
-
-	lv := parentBkt.lv + 1
-
-	// initialing spill structure.
-	if len(parentBkt.again) == 0 {
-		parentBkt.again = make([]spillBucket, spillNumBuckets)
-		fnuuid, _ := uuid.NewV7()
-
-		// log the spill file name.
-		logutil.Infof("spilling data to disk, level %d, file %s", parentBkt.lv, fnuuid.String())
-
-		spillfs, err := proc.GetSpillFileService()
-		if err != nil {
-			return err
-		}
-
-		for i := range parentBkt.again {
-			parentBkt.again[i].lv = lv
-			group.ctr.createNewGroupByBatch(proc, group.ctr.groupByBatches[0].Vecs, aggBatchSize)
-			fn := fnuuid.String() + fmt.Sprintf("_%d.spill", i)
-			if parentBkt.again[i].file, err = spillfs.CreateAndRemoveFile(proc.Ctx, fn); err != nil {
-				return err
-			}
-		}
-	}
-
-	// compute spill bucket.
-	hashCodes := group.ctr.hr.Hash.AllGroupHash()
-	for i, hashCode := range hashCodes {
-		hashCodes[i] = (hashCode >> (64 - spillMaskBits*lv)) & (spillMaskBits - 1)
-	}
-
-	if parentBkt.gbBatch == nil {
-		parentBkt.gbBatch = group.ctr.createNewGroupByBatch(
-			proc, group.ctr.groupByBatches[0].Vecs, aggBatchSize)
-	}
-
-	// each bucket,
-	buf := bytes.NewBuffer(make([]byte, 0, 1024))
-	for i := 0; i < spillNumBuckets; i++ {
-		buf.Reset()
-		cnt, flags := computeChunkFlags(hashCodes, uint64(i), aggBatchSize)
-		buf.Write(types.EncodeInt64(&cnt))
-		if cnt == 0 {
-			continue
-		}
-
-		// extend the group by batch to the new size, set row count to 0, then we union
-		// group by batches to the parent batch.
-		parentBkt.gbBatch.PreExtend(proc.Mp(), int(cnt))
-		parentBkt.gbBatch.SetRowCount(0)
-		for nthBatch, gb := range group.ctr.groupByBatches {
-			for j := range gb.Vecs {
-				err := parentBkt.gbBatch.Vecs[j].UnionBatch(
-					gb.Vecs[j], 0, len(flags[nthBatch]), flags[nthBatch], proc.Mp())
-				if err != nil {
-					return err
-				}
-			}
-		}
-		// write batch to buf
-		parentBkt.gbBatch.MarshalBinaryWithBuffer(buf)
-
-		// save aggs to buf
-		for _, ag := range group.ctr.aggList {
-			ag.SaveIntermediateResult(cnt, flags, buf)
-		}
-
-		parentBkt.again[i].file.Write(buf.Bytes())
-	}
-
-	return nil
-}
-
-func (group *Group) loadSpilledData(proc *process.Process) (bool, error) {
-	return false, moerr.NewInternalError(proc.Ctx, "not implemented")
-}
-
-func (ctr *container) isSpilling() bool {
-	return len(ctr.spillBkt.again) != 0
-}
-
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
 	if group.NeedEval {
-		// read next result batch
-		res, hasMore, err := group.getNextFinalResult(proc)
-		if err != nil {
-			return vm.CancelResult, err
-		}
-
-		// no more data, but we are spilling so we need to load next spilled part.
-		if !hasMore && group.ctr.isSpilling() {
-			hasMore, err = group.loadSpilledData(proc)
-			if err != nil {
-				return vm.CancelResult, err
-			}
-		}
-
-		// really no more data
-		if !hasMore {
-			group.ctr.state = vm.End
-		}
-		return res, nil
+		return group.ctr.outputOneBatchFinal(proc)
 	} else {
 		// no need to eval, we are in streaming mode.  spill never happen
 		// here.
@@ -561,39 +426,6 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	}
 }
 
-func (group *Group) getNextFinalResult(proc *process.Process) (vm.CallResult, bool, error) {
-	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
-	// now we need to flush the final result of agg to output batches.
-	if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
-		// exhaust batches, done.
-		return vm.CancelResult, false, nil
-	}
-	curr := group.ctr.currBatchIdx
-	group.ctr.currBatchIdx += 1
-	hasMore := group.ctr.currBatchIdx < len(group.ctr.groupByBatches)
-
-	if curr == 0 {
-		// flush aggs.   this api is insane
-		group.ctr.flushed = nil
-		for _, ag := range group.ctr.aggList {
-			vecs, err := ag.Flush()
-			if err != nil {
-				return vm.CancelResult, false, err
-			}
-			for j := range vecs {
-				group.ctr.groupByBatches[j].Vecs = append(
-					group.ctr.groupByBatches[j].Vecs, vecs[j])
-			}
-		}
-	}
-
-	// get the groupby batch
-	batch := group.ctr.groupByBatches[curr]
-	res := vm.NewCallResult()
-	res.Batch = batch
-	return res, hasMore, nil
-}
-
 func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallResult, bool, error) {
 	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
 	// now, we need to stream the partial results in the group by batch as aggs.
@@ -606,8 +438,26 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	hasMore := group.ctr.currBatchIdx < len(group.ctr.groupByBatches)
 
 	batch := group.ctr.groupByBatches[curr]
-	// serialize curr chunk of aggList entries to batch
+
 	var buf bytes.Buffer
+	// serialize aggs to ExtraBuf1.
+	if curr == 0 {
+		buf.Write(types.EncodeInt32(&group.ctr.mtyp))
+		nAggs := int32(len(group.Aggs))
+		buf.Write(types.EncodeInt32(&nAggs))
+		if nAggs > 0 {
+			buf.Write(types.EncodeInt32(&nAggs))
+			for _, agExpr := range group.Aggs {
+				agExpr.MarshalToBuffer(&buf)
+			}
+			batch.ExtraBuf1 = buf.Bytes()
+		}
+		buf.Reset()
+	}
+
+	// serialize curr chunk of aggList entries to batch
+	nAggs := int32(len(group.ctr.aggList))
+	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {
 		ag.SaveIntermediateResultOfChunk(curr, &buf)
 	}

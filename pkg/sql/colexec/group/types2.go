@@ -19,14 +19,17 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -64,11 +67,16 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv      int           // spill level
-	reading int           // current reading bucket index
-	again   []spillBucket // spill buckets
-	gbBatch *batch.Batch  // group by batch
-	file    *os.File      // spill file
+	lv   int      // spill level
+	name string   // spill bucket name
+	file *os.File // spill file
+}
+
+func (bkt *spillBucket) free(proc *process.Process) {
+	if bkt.file != nil {
+		bkt.file.Close()
+		bkt.file = nil
+	}
 }
 
 // container running context.
@@ -79,8 +87,8 @@ type container struct {
 
 	// hash.
 	hr          ResHashRelated
-	mtyp        int
-	keyWidth    int
+	mtyp        int32
+	keyWidth    int32
 	keyNullable bool
 
 	// x, y of `group by x, y`.
@@ -95,8 +103,98 @@ type container struct {
 	aggList []aggexec.AggFuncExec
 	flushed [][]*vector.Vector
 
-	// spill
-	spillBkt spillBucket
+	// spill, agglist to load spilled data.
+	spillMem        int64
+	spillAggList    []aggexec.AggFuncExec
+	spillBkts       list.Deque[*spillBucket]
+	currentSpillBkt []*spillBucket
+}
+
+func (ctr *container) isSpilling() bool {
+	return len(ctr.currentSpillBkt) > 0
+}
+
+func (ctr *container) setSpillMem(m int64) {
+	if m == 0 {
+		ctr.spillMem = common.GiB
+	}
+	ctr.spillMem = min(max(m, common.MiB), common.GiB*16)
+}
+
+func (ctr *container) freeAggList(proc *process.Process) {
+	for i := range ctr.aggList {
+		if ctr.aggList[i] != nil {
+			ctr.aggList[i].Free()
+			ctr.aggList[i] = nil
+		}
+	}
+	ctr.aggList = nil
+
+	for i := range ctr.spillAggList {
+		if ctr.spillAggList[i] != nil {
+			ctr.spillAggList[i].Free()
+			ctr.spillAggList[i] = nil
+		}
+	}
+	ctr.spillAggList = nil
+}
+
+func (ctr *container) freeSpillBkts(proc *process.Process) {
+	// free all spill buckets.
+	ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
+		bkt.free(proc)
+		return true
+	})
+	ctr.spillBkts.Clear()
+	for _, bkt := range ctr.currentSpillBkt {
+		bkt.free(proc)
+	}
+	ctr.currentSpillBkt = nil
+}
+
+func (ctr *container) freeGroupByBatches(proc *process.Process) {
+	for i := range ctr.groupByBatches {
+		if ctr.groupByBatches[i] != nil {
+			ctr.groupByBatches[i].Clean(proc.Mp())
+			ctr.groupByBatches[i] = nil
+		}
+	}
+	ctr.groupByBatches = nil
+	ctr.currBatchIdx = 0
+}
+
+func (ctr *container) free(proc *process.Process) {
+	// free container stuff, WTH is the Free0?
+	ctr.hr.Free0()
+
+	ctr.groupByEvaluate.Free()
+
+	for i := range ctr.aggArgEvaluate {
+		ctr.aggArgEvaluate[i].Free()
+	}
+	ctr.aggArgEvaluate = nil
+
+	ctr.freeGroupByBatches(proc)
+	ctr.freeAggList(proc)
+	ctr.freeSpillBkts(proc)
+}
+
+func (ctr *container) reset(proc *process.Process) {
+	ctr.state = vm.Build
+
+	// Reset also frees the hash related stuff.
+	ctr.hr.Free0()
+
+	ctr.groupByEvaluate.ResetForNextQuery()
+
+	for i := range ctr.aggArgEvaluate {
+		ctr.aggArgEvaluate[i].ResetForNextQuery()
+	}
+
+	// free group by batches, agg list and spill buckets, do not reuse for now.
+	ctr.freeGroupByBatches(proc)
+	ctr.freeAggList(proc)
+	ctr.freeSpillBkts(proc)
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
@@ -158,71 +256,6 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 	group.ResetProjection(proc)
 }
 
-func (ctr *container) freeAggList(proc *process.Process) {
-	for i := range ctr.aggList {
-		if ctr.aggList[i] != nil {
-			ctr.aggList[i].Free()
-			ctr.aggList[i] = nil
-		}
-	}
-	ctr.aggList = nil
-}
-
-func (ctr *container) free(proc *process.Process) {
-	// free container stuff, WTH is the Free0?
-	ctr.hr.Free0()
-
-	ctr.groupByEvaluate.Free()
-
-	for i := range ctr.aggArgEvaluate {
-		ctr.aggArgEvaluate[i].Free()
-	}
-	ctr.aggArgEvaluate = nil
-
-	for i := range ctr.groupByBatches {
-		if ctr.groupByBatches[i] != nil {
-			ctr.groupByBatches[i].Clean(proc.Mp())
-			ctr.groupByBatches[i] = nil
-		}
-	}
-	ctr.groupByBatches = nil
-
-	ctr.freeAggList(proc)
-}
-
-func (ctr *container) reset(proc *process.Process) {
-	ctr.state = vm.Build
-
-	// Reset also frees the hash related stuff.
-	ctr.hr.Free0()
-
-	ctr.groupByEvaluate.ResetForNextQuery()
-
-	for i := range ctr.aggArgEvaluate {
-		ctr.aggArgEvaluate[i].ResetForNextQuery()
-	}
-
-	// still, free all groupByBatches and aggList,
-	for i := range ctr.groupByBatches {
-		if ctr.groupByBatches[i] != nil {
-			ctr.groupByBatches[i].Clean(proc.Mp())
-			ctr.groupByBatches[i] = nil
-		}
-	}
-	ctr.groupByBatches = nil
-	ctr.currBatchIdx = 0
-
-	// OK, we just call Free on ag and it suppose will
-	// reset ag state and ready to accept next batch.
-	// no idea if this is true.
-	for _, ag := range ctr.aggList {
-		ag.Free()
-		if ctr.mtyp == H0 {
-			ag.GroupGrow(1)
-		}
-	}
-}
-
 func (group *Group) OpType() vm.OpType {
 	return vm.Group
 }
@@ -233,19 +266,6 @@ func (group Group) TypeName() string {
 
 func (group *Group) GetOperatorBase() *vm.OperatorBase {
 	return &group.OperatorBase
-}
-
-func init() {
-	reuse.CreatePool[Group](
-		func() *Group {
-			return &Group{}
-		},
-		func(a *Group) {
-			*a = Group{}
-		},
-		reuse.DefaultOptions[Group]().
-			WithEnableChecker(),
-	)
 }
 
 func NewArgument() *Group {
@@ -275,4 +295,88 @@ func (group *Group) String(buf *bytes.Buffer) {
 		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.GetAggID()), ag.GetArgExpressions()))
 	}
 	buf.WriteString("])")
+}
+
+const (
+	mergeGroupOperatorName = "merge_group"
+)
+
+type MergeGroup struct {
+	vm.OperatorBase
+	colexec.Projection
+
+	ctr      container
+	SpillMem int64
+
+	Aggs []aggexec.AggFuncExecExpression
+
+	PartialResults     []any
+	PartialResultTypes []types.T
+}
+
+func (mergeGroup *MergeGroup) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	if mergeGroup.ProjectList == nil {
+		return input, nil
+	}
+	return mergeGroup.EvalProjection(input, proc)
+}
+
+func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
+	mergeGroup.ctr.reset(proc)
+	mergeGroup.ResetProjection(proc)
+}
+
+func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
+	mergeGroup.ctr.free(proc)
+	mergeGroup.FreeProjection(proc)
+}
+
+func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
+	return &mergeGroup.OperatorBase
+}
+
+func (mergeGroup *MergeGroup) OpType() vm.OpType {
+	return vm.MergeGroup
+}
+
+func (mergeGroup MergeGroup) TypeName() string {
+	return mergeGroupOperatorName
+}
+
+func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
+	buf.WriteString(mergeGroupOperatorName)
+}
+
+func NewArgumentMergeGroup() *MergeGroup {
+	return reuse.Alloc[MergeGroup](nil)
+}
+
+func (mergeGroup *MergeGroup) Release() {
+	if mergeGroup != nil {
+		reuse.Free(mergeGroup, nil)
+	}
+}
+
+func init() {
+	reuse.CreatePool(
+		func() *Group {
+			return &Group{}
+		},
+		func(a *Group) {
+			*a = Group{}
+		},
+		reuse.DefaultOptions[Group]().
+			WithEnableChecker(),
+	)
+
+	reuse.CreatePool(
+		func() *MergeGroup {
+			return &MergeGroup{}
+		},
+		func(a *MergeGroup) {
+			*a = MergeGroup{}
+		},
+		reuse.DefaultOptions[MergeGroup]().
+			WithEnableChecker(),
+	)
 }
