@@ -180,19 +180,19 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("First argument (source table name) must be string, but got %s", v.GetType().String()))
 	}
-	source_table := v.UnsafeGetStringAt(0)
+	source_table := v.GetStringAt(0)
 
 	v = tf.ctr.argVecs[1]
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Second argument (index table name) must be string, but got %s", v.GetType().String()))
 	}
-	index_table := v.UnsafeGetStringAt(0)
+	index_table := v.GetStringAt(0)
 
 	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
-	pattern := v.UnsafeGetStringAt(0)
+	pattern := v.GetStringAt(0)
 
 	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {
