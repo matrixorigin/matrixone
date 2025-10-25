@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	io "io"
 
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -69,13 +70,22 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 func (exec *approxCountFixedExec[T]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *approxCountFixedExec[T]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer(
 		chunk, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *approxCountFixedExec[T]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	groups, _, err := unmarshalFromReader[*hll.Sketch](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.groups = groups
+	return nil
 }
 
 func (exec *approxCountFixedExec[T]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
@@ -140,12 +150,21 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 func (exec *approxCountVarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *approxCountVarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	return marshalChunkToBuffer(chunk, buf,
-		&exec.ret.optSplitResult, exec.groups)
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *approxCountVarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	groups, _, err := unmarshalFromReader[*hll.Sketch](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.groups = groups
+	return nil
 }
 
 func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {

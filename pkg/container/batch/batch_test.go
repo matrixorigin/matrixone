@@ -149,8 +149,6 @@ func newBatch(ts []types.Type, rows int) *Batch {
 	bat.ExtraBuf2 = []byte("extra buf 2")
 
 	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0, _ := aggexec.MakeAgg(aggexec.NewSimpleAggMemoryManager(mp), 0, false, []types.Type{types.T_varchar.ToType()}...)
-	bat.Aggs = []aggexec.AggFuncExec{agg0}
 	bat.Attrs = []string{"1"}
 	return bat
 }
