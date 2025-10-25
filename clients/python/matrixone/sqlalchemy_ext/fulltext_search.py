@@ -80,9 +80,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean, true
-from sqlalchemy.sql import and_, not_, or_, text, literal_column
-from sqlalchemy.sql.elements import ClauseElement, ColumnElement, BinaryExpression
+from sqlalchemy import Boolean
+from sqlalchemy.sql import and_, or_, text
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.compiler import compiles
 
 if TYPE_CHECKING:
@@ -753,7 +753,7 @@ class FulltextFilter(ColumnElement):
         - Complex nested groups may have syntax restrictions
         - Use fulltext_and/fulltext_or for combining with other conditions
     """
-    
+
     # Disable SQL compilation caching for this class
     # We set this to False because FulltextFilter has complex internal state
     # (query_builder, columns, mode) that affects SQL generation, and we haven't
@@ -768,7 +768,7 @@ class FulltextFilter(ColumnElement):
         self.query_builder = FulltextQueryBuilder()
         self._natural_query = None  # Store natural language query separately
         self.type = Boolean()
-    
+
     def __bool__(self):
         """
         Override bool to prevent SQLAlchemy from treating this as a boolean value.
@@ -778,7 +778,7 @@ class FulltextFilter(ColumnElement):
             "FulltextFilter cannot be used as a boolean value directly. "
             "Use it within SQLAlchemy expressions like select().where()"
         )
-    
+
     def self_group(self, against=None):
         """Override self_group to return self without wrapping."""
         return self
@@ -975,20 +975,20 @@ class FulltextFilter(ColumnElement):
 def visit_fulltext_filter(element, compiler, **kw):
     """
     Custom compiler for FulltextFilter that generates MATCH() AGAINST() SQL.
-    
+
     This ensures that in WHERE clauses, we get:
         WHERE MATCH(...) AGAINST(...)
-    
+
     Instead of:
         WHERE MATCH(...) AGAINST(...) = 1
     """
     # Get the MATCH() AGAINST() SQL
     match_sql = element.compile()
-    
+
     # In WHERE context, SQLAlchemy expects a boolean comparison
     # For MATCH() AGAINST(), the expression itself returns a boolean/score
     # We need to return it without the "= 1" wrapper
-    # 
+    #
     # The trick is to check if we're in a boolean context
     # If we are, return the expression as-is (it's already a valid boolean expression)
     return match_sql
@@ -1185,34 +1185,9 @@ def group() -> FulltextGroup:
     return FulltextGroup("or")
 
 
-# Import generic logical adapters at the end to avoid circular imports
-try:
-    from .adapters import logical_and, logical_not, logical_or
-except ImportError:
-    # Fallback implementations if adapters module is not available
-    def logical_and(*conditions):
-        processed_conditions = []
-        for condition in conditions:
-            if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
-                processed_conditions.append(text(f"({condition.compile()})"))
-            else:
-                processed_conditions.append(condition)
-        return and_(*processed_conditions)
-
-    def logical_or(*conditions):
-        processed_conditions = []
-        for condition in conditions:
-            if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
-                processed_conditions.append(text(f"({condition.compile()})"))
-            else:
-                processed_conditions.append(condition)
-        return or_(*processed_conditions)
-
-    def logical_not(condition):
-        if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
-            return text(f"NOT ({condition.compile()})")
-        else:
-            return not_(condition)
+# Note: logical_and, logical_or, logical_not are no longer needed.
+# Since FulltextFilter now inherits from ColumnElement, you can use
+# SQLAlchemy's and_(), or_(), not_() directly with FulltextFilter objects.
 
 
 # Remove old FulltextTerm and FulltextQuery classes as they are replaced by FulltextQueryBuilder

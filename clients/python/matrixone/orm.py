@@ -1150,13 +1150,14 @@ class BaseMatrixOneQuery:
     def _process_fulltext_expression(self, condition) -> str:
         """Process SQLAlchemy expressions that contain FulltextFilter objects."""
         import re
+        from sqlalchemy.sql import operators
 
         from .sqlalchemy_ext.fulltext_search import FulltextFilter
 
         if isinstance(condition, FulltextFilter):
             return condition.compile()
 
-        # Handle and_() expressions
+        # Handle and_() / or_() / not_() expressions
         if hasattr(condition, 'clauses') and hasattr(condition, 'operator'):
             parts = []
             for clause in condition.clauses:
@@ -1173,13 +1174,15 @@ class BaseMatrixOneQuery:
                 else:
                     parts.append(str(clause))
 
-            # Determine operator
-            if str(condition.operator).upper() == 'AND':
+            # Determine operator - check against SQLAlchemy operator objects
+            if condition.operator is operators.and_:
                 return f"({' AND '.join(parts)})"
-            elif str(condition.operator).upper() == 'OR':
+            elif condition.operator is operators.or_:
                 return f"({' OR '.join(parts)})"
             else:
-                return f"({f' {condition.operator} '.join(parts)})"
+                # Fallback: try to get operator name
+                op_name = getattr(condition.operator, '__name__', str(condition.operator))
+                return f"({f' {op_name} '.join(parts)})"
 
         # Fallback for other types
         return str(condition)

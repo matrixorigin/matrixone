@@ -26,26 +26,26 @@ from typing import Any, Optional, Union
 def _query_to_sql(query: Union[str, Any]) -> str:
     """
     Convert various query types to SQL string.
-    
+
     Args:
         query: Can be:
-            - String: Returned as-is  
+            - String: Returned as-is
             - SQLAlchemy select() statement: Compiled to SQL
             - MatrixOneQuery object: Compiled via _build_sql()
-            
+
     Returns:
         SQL string
-        
+
     Examples::
-    
+
         # String query
         sql = _query_to_sql("SELECT * FROM users")
-        
+
         # SQLAlchemy select()
         from sqlalchemy import select
         stmt = select(User).where(User.age > 25)
         sql = _query_to_sql(stmt)
-        
+
         # MatrixOneQuery
         query = client.query(User).filter(User.age > 25)
         sql = _query_to_sql(query)
@@ -53,7 +53,7 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     # If it's already a string, return it
     if isinstance(query, str):
         return query.rstrip(';').strip()
-    
+
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
@@ -65,7 +65,7 @@ def _query_to_sql(query: Union[str, Any]) -> str:
                 else:
                     sql = sql.replace("?", str(param), 1)
         return sql.rstrip(';').strip()
-    
+
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
@@ -73,11 +73,10 @@ def _query_to_sql(query: Union[str, Any]) -> str:
             return str(compiled).rstrip(';').strip()
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
-    
+
     # Unsupported type
     raise TypeError(
-        f"Unsupported query type: {type(query)}. "
-        "Expected str, SQLAlchemy select(), or MatrixOneQuery object."
+        f"Unsupported query type: {type(query)}. " "Expected str, SQLAlchemy select(), or MatrixOneQuery object."
     )
 
 
@@ -123,7 +122,7 @@ def _build_export_sql(
     """
     # Convert query to SQL string
     query_sql = _query_to_sql(query)
-    
+
     # Determine quote style for output path based on fields_enclosed_by
     # If fields_enclosed_by contains a quote character, use double quotes for the path
     # to avoid quote conflicts in the SQL statement
@@ -246,7 +245,7 @@ class ExportManager:
             ...     format=ExportFormat.CSV,
             ...     header=True
             ... )
-            
+
             >>> # Export with MatrixOne fulltext search
             >>> from sqlalchemy import select
             >>> from matrixone.sqlalchemy_ext import boolean_match
@@ -336,7 +335,7 @@ class ExportManager:
             ...     filename="sales_summary.jsonl",
             ...     format=ExportFormat.JSONLINE
             ... )
-            
+
             >>> # Export with MatrixOne vector search
             >>> from sqlalchemy import select
             >>> query_vector = [0.1, 0.2, 0.3, ...]

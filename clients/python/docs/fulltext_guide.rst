@@ -765,8 +765,8 @@ You can combine fulltext search with regular SQL filters in several ways:
        "articles.id > 1"
    ).limit(5).execute()
 
-   # Method 6: Using logical_and, logical_or, and logical_in for complex conditions
-   from matrixone.sqlalchemy_ext.adapters import logical_and, logical_or, logical_in
+   # Method 6: Using SQLAlchemy and_/or_ for complex conditions
+   from sqlalchemy import and_, or_
    
    # Logical AND: Combine fulltext search with category filter
    fulltext_condition = boolean_match("title", "content").must("python")
@@ -777,7 +777,7 @@ You can combine fulltext search with regular SQL filters in several ways:
        "articles.title",
        "articles.content",
        "articles.category"
-   ).filter(logical_and(fulltext_condition, category_condition)).execute()
+   ).filter(and_(fulltext_condition, category_condition)).execute()
    
    # Logical OR: Combine different category conditions
    programming_condition = "articles.category = 'Programming'"
@@ -788,18 +788,18 @@ You can combine fulltext search with regular SQL filters in several ways:
        "articles.title",
        "articles.content",
        "articles.category"
-   ).filter(logical_or(programming_condition, ai_condition)).execute()
+   ).filter(or_(programming_condition, ai_condition)).execute()
    
-   # Logical IN: Filter by multiple values
+   # Filter by multiple values using SQL IN
    result = client.query(
        "articles.id",
        "articles.title",
        "articles.content",
        "articles.category",
        "articles.author"
-   ).filter(logical_in("articles.category", ["Programming", "AI", "Technology"])).execute()
+   ).filter("articles.category IN ('Programming', 'AI', 'Technology')").execute()
    
-   # Logical IN with fulltext search
+   # SQL IN with fulltext search
    result = client.query(
        "articles.id",
        "articles.title",
@@ -807,10 +807,10 @@ You can combine fulltext search with regular SQL filters in several ways:
        "articles.author"
    ).filter(
        boolean_match("title", "content").encourage("python"),
-       logical_in("articles.author", ["John Doe", "Jane Smith", "Bob Wilson"])
+       "articles.author IN ('John Doe', 'Jane Smith', 'Bob Wilson')"
    ).execute()
    
-   # Complex nested logical conditions with logical_in
+   # Complex nested logical conditions
    result = client.query(
        "articles.id",
        "articles.title",
@@ -818,13 +818,13 @@ You can combine fulltext search with regular SQL filters in several ways:
        "articles.category",
        "articles.author"
    ).filter(
-       logical_and(
+       and_(
            boolean_match("title", "content").encourage("programming"),
-           logical_or(
-               logical_in("articles.category", ["Programming", "AI"]),
+           or_(
+               "articles.category IN ('Programming', 'AI')",
                "articles.category = 'Technology'"
            ),
-           logical_in("articles.author", ["John Doe", "Jane Smith"]),
+           "articles.author IN ('John Doe', 'Jane Smith')",
            "articles.id > 1"
        )
    ).execute()
@@ -1478,9 +1478,7 @@ Here are comprehensive examples showing all available operators in action:
        for row in result.fetchall():
            print(f"  {row[1]}")
 
-       # 11f. Using logical_in for multiple value filtering
-       from matrixone.sqlalchemy_ext.adapters import logical_in
-       
+       # 11f. Using SQL IN for multiple value filtering
        result = client.query(
            "complete_articles.id",
            "complete_articles.title",
@@ -1488,14 +1486,14 @@ Here are comprehensive examples showing all available operators in action:
            "complete_articles.category"
        ).filter(
            boolean_match("title", "content").encourage("python"),
-           logical_in("complete_articles.category", ["Programming", "AI", "Technology"])
+           "complete_articles.category IN ('Programming', 'AI', 'Technology')"
        ).execute()
-       print("\nFiltering with logical_in:")
+       print("\nFiltering with SQL IN:")
        for row in result.fetchall():
            print(f"  {row[1]} - {row[3]}")
 
-       # 11g. Complex logical conditions with logical_and, logical_or, logical_in
-       from matrixone.sqlalchemy_ext.adapters import logical_and, logical_or
+       # 11g. Complex logical conditions with and_/or_
+       from sqlalchemy import and_, or_
        
        result = client.query(
            "complete_articles.id",
@@ -1504,10 +1502,10 @@ Here are comprehensive examples showing all available operators in action:
            "complete_articles.category",
            "complete_articles.tags"
        ).filter(
-           logical_and(
+           and_(
                boolean_match("title", "content").must("python"),
-               logical_or(
-                   logical_in("complete_articles.category", ["Programming", "AI"]),
+               or_(
+                   "complete_articles.category IN ('Programming', 'AI')",
                    "complete_articles.category = 'Technology'"
                ),
                "complete_articles.id > 1"
@@ -1559,15 +1557,17 @@ Here are comprehensive examples showing all available operators in action:
        for row in result.fetchall():
            print(f"  {row[1]} (Score: {row[3]:.4f})")
        
-       # Using model with logical operators
+       # Using model with SQLAlchemy and_
+       from sqlalchemy import and_
+       
        result = client.query(ArticleModel).filter(
-           logical_and(
+           and_(
                boolean_match(ArticleModel.content).must("python"),
                ArticleModel.category.in_(["Programming", "AI"]),
                ArticleModel.id > 1
            )
        ).execute()
-       print("\nUsing ORM model with logical operators:")
+       print("\nUsing ORM model with and_:")
        for row in result.fetchall():
            print(f"  {row[1]} - {row[4]}")
 
@@ -1781,12 +1781,13 @@ Best Practices
    - **Combine with scoring**: Use .label() for ranked results
    - **Performance consideration**: More filters = more precise results but potentially slower queries
 
-7. **Logical operators for complex conditions**:
-   - **logical_and()**: Combine multiple conditions with AND logic
-   - **logical_or()**: Combine multiple conditions with OR logic
-   - **logical_in()**: Filter by multiple values in a list
-   - **Nested combinations**: Use logical operators for complex nested conditions
-   - **Fulltext + logical operators**: Combine fulltext search with logical conditions
+7. **SQLAlchemy logical operators for complex conditions**:
+   - **and_()**: Combine multiple conditions with AND logic (from sqlalchemy)
+   - **or_()**: Combine multiple conditions with OR logic (from sqlalchemy)
+   - **not_()**: Negate conditions (from sqlalchemy)
+   - **SQL IN**: Filter by multiple values using SQL IN clause
+   - **Nested combinations**: Use SQLAlchemy operators for complex nested conditions
+   - **Fulltext + logical operators**: Combine fulltext search with SQLAlchemy expressions
    - **Performance**: Logical operators provide more control but may impact query performance
 
 8. **Handle errors gracefully**:

@@ -93,8 +93,6 @@ from .sqlalchemy_ext import (
     natural_match,
 )
 
-# Import generic logical adapters
-from .sqlalchemy_ext.adapters import logical_and, logical_not, logical_or
 from .version import FeatureRequirement, VersionInfo, VersionManager, requires_version
 
 # Import SQLAlchemy 2.0 select support
@@ -185,10 +183,6 @@ __all__ = [
     "group",
     "create_fulltext_index",
     "fulltext_search_builder",
-    # Generic logical adapters
-    "logical_and",
-    "logical_or",
-    "logical_not",
     # SQLAlchemy 2.0 select support
     "select",
     "compile_select_to_sql",
