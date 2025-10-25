@@ -16,12 +16,13 @@
 MatrixOne Load Data Manager - Provides high-level LOAD DATA operations
 """
 
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Union
 from enum import Enum
 
 
 class LoadDataFormat(str, Enum):
     """Supported file formats for LOAD DATA"""
+
     CSV = 'csv'
     JSONLINE = 'jsonline'
     PARQUET = 'parquet'
@@ -29,6 +30,7 @@ class LoadDataFormat(str, Enum):
 
 class CompressionFormat(str, Enum):
     """Supported compression formats"""
+
     NONE = 'none'
     GZIP = 'gzip'
     GZ = 'gz'
@@ -41,6 +43,7 @@ class CompressionFormat(str, Enum):
 
 class JsonDataStructure(str, Enum):
     """JSONLINE data structure types"""
+
     OBJECT = 'object'
     ARRAY = 'array'
 
@@ -48,13 +51,13 @@ class JsonDataStructure(str, Enum):
 class LoadDataManager:
     """
     Manager for LOAD DATA operations in MatrixOne.
-    
+
     This class provides a flexible and user-friendly interface for loading data
     from files into MatrixOne tables. It supports various data formats (CSV, JSON,
     Parquet), compression formats, and advanced options like parallel loading.
-    
+
     Key Features:
-    
+
     - Load data from local files or stage files
     - Support for various delimiters and enclosures
     - Character set conversion
@@ -62,37 +65,37 @@ class LoadDataManager:
     - Compression support (gzip, tar.gz, tar.bz2)
     - Column mapping and transformations
     - Transaction support
-    
+
     This class is typically accessed through the Client's `load_data` property:
-    
+
     Examples::
-    
+
         # Basic CSV loading
         client.load_data.from_file('/path/to/data.csv', 'users')
-        
+
         # Load with custom delimiter
         client.load_data.from_file('/path/to/data.txt', 'users',
                                      fields_terminated_by='|')
-        
+
         # Load with header row (skip first line)
         client.load_data.from_file('/path/to/data.csv', 'users',
                                      ignore_lines=1)
-        
+
         # Load pipe-delimited with quoted fields
         client.load_data.from_file('/path/to/data.txt', 'orders',
                                      fields_terminated_by='|',
                                      fields_enclosed_by='"')
     """
-    
+
     def __init__(self, client):
         """
         Initialize LoadDataManager.
-        
+
         Args:
             client: Client object that provides execute() method
         """
         self.client = client
-    
+
     def from_csv(
         self,
         file_path: str,
@@ -107,13 +110,13 @@ class LoadDataManager:
         parallel: bool = False,
         compression: Optional[Union[str, CompressionFormat]] = None,
         set_clause: Optional[Dict[str, str]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Load CSV data from a file into a table.
-        
+
         Simplified interface for CSV files with commonly used options.
-        
+
         Args:
             file_path (str): Path to the CSV file
             table_name_or_model: Table name (str) or SQLAlchemy model class
@@ -127,22 +130,22 @@ class LoadDataManager:
             parallel (bool): Enable parallel loading. Default: False
             compression (str or CompressionFormat, optional): Compression format
             set_clause (dict, optional): Column transformations
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             # Basic CSV
             >>> client.load_data.from_csv('data.csv', User)
-            
+
             # CSV with header
             >>> client.load_data.from_csv('data.csv', User, ignore_lines=1)
-            
+
             # Custom delimiter with quotes
-            >>> client.load_data.from_csv('data.txt', User, 
+            >>> client.load_data.from_csv('data.txt', User,
             ...     delimiter='|', enclosed_by='"')
-            
+
             # Optionally enclosed fields (some fields quoted, some not)
             >>> client.load_data.from_csv('data.csv', User,
             ...     enclosed_by='"', optionally_enclosed=True)
@@ -160,31 +163,26 @@ class LoadDataManager:
             parallel=parallel,
             compression=compression,
             set_clause=set_clause,
-            **kwargs
+            **kwargs,
         )
-    
+
     def from_tsv(
-        self,
-        file_path: str,
-        table_name_or_model,
-        ignore_lines: int = 0,
-        columns: Optional[List[str]] = None,
-        **kwargs
+        self, file_path: str, table_name_or_model, ignore_lines: int = 0, columns: Optional[List[str]] = None, **kwargs
     ):
         """
         Load TSV (Tab-Separated Values) data from a file.
-        
+
         Args:
             file_path (str): Path to the TSV file
             table_name_or_model: Table name (str) or SQLAlchemy model class
             ignore_lines (int): Number of header lines to skip. Default: 0
             columns (list, optional): List of column names to load
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             >>> client.load_data.from_tsv('data.tsv', 'logs')
             >>> client.load_data.from_tsv('data.tsv', 'logs', ignore_lines=1)
         """
@@ -194,20 +192,20 @@ class LoadDataManager:
             delimiter='\\t',
             ignore_lines=ignore_lines,
             columns=columns,
-            **kwargs
+            **kwargs,
         )
-    
+
     def from_jsonline(
         self,
         file_path: str,
         table_name_or_model,
         structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
         compression: Optional[Union[str, CompressionFormat]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Load JSONLINE data from a file.
-        
+
         Args:
             file_path (str): Path to the JSONLINE file
             table_name_or_model: Table name (str) or SQLAlchemy model class
@@ -215,64 +213,56 @@ class LoadDataManager:
                 - JsonDataStructure.OBJECT or 'object': JSON objects
                 - JsonDataStructure.ARRAY or 'array': JSON arrays
             compression (str or CompressionFormat, optional): Compression format
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             # JSONLINE with objects
             >>> client.load_data.from_jsonline('data.jl', 'users')
-            
+
             # JSONLINE with arrays
-            >>> client.load_data.from_jsonline('data.jl', 'users', 
+            >>> client.load_data.from_jsonline('data.jl', 'users',
             ...     structure=JsonDataStructure.ARRAY)
-            
+
             # Compressed JSONLINE
-            >>> client.load_data.from_jsonline('data.jl.gz', 'users', 
+            >>> client.load_data.from_jsonline('data.jl.gz', 'users',
             ...     compression=CompressionFormat.GZIP)
         """
         # Convert enum to string if needed
         structure_str = structure.value if isinstance(structure, JsonDataStructure) else structure
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
-        
+
         return self.from_file(
             file_path=file_path,
             table_name_or_model=table_name_or_model,
             format=LoadDataFormat.JSONLINE.value,
             jsondata=structure_str,
             compression=compression_str,
-            **kwargs
+            **kwargs,
         )
-    
-    def from_parquet(
-        self,
-        file_path: str,
-        table_name_or_model,
-        **kwargs
-    ):
+
+    def from_parquet(self, file_path: str, table_name_or_model, **kwargs):
         """
         Load Parquet data from a file.
-        
+
         Args:
             file_path (str): Path to the Parquet file
             table_name_or_model: Table name (str) or SQLAlchemy model class
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             >>> client.load_data.from_parquet('data.parq', 'users')
             >>> client.load_data.from_parquet('data.parquet', 'sales')
         """
         return self.from_file(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
-            format=LoadDataFormat.PARQUET.value,
-            **kwargs
+            file_path=file_path, table_name_or_model=table_name_or_model, format=LoadDataFormat.PARQUET.value, **kwargs
         )
-    
+
     def from_inline(
         self,
         data: str,
@@ -281,14 +271,14 @@ class LoadDataManager:
         delimiter: str = ",",
         enclosed_by: Optional[str] = None,
         jsontype: Optional[Union[str, JsonDataStructure]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Load data from an inline string directly into a table.
-        
+
         This method uses LOAD DATA INLINE to load data from a string without
         needing to create a temporary file.
-        
+
         Args:
             data (str): The data string to load
             table_name_or_model: Table name (str) or SQLAlchemy model class
@@ -296,25 +286,25 @@ class LoadDataManager:
             delimiter (str): Field delimiter (for CSV). Default: ','
             enclosed_by (str, optional): Character enclosing fields (for CSV)
             jsontype (str or JsonDataStructure, optional): JSON structure (for JSONLINE)
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             # Basic CSV inline
             >>> result = client.load_data.from_inline(
             ...     "1,Alice\\n2,Bob\\n",
             ...     User
             ... )
-            
+
             # CSV with custom delimiter
             >>> result = client.load_data.from_inline(
             ...     "1|Alice\\n2|Bob\\n",
             ...     User,
             ...     delimiter='|'
             ... )
-            
+
             # JSONLINE inline
             >>> result = client.load_data.from_inline(
             ...     '{"id":1,"name":"Alice"}',
@@ -328,18 +318,18 @@ class LoadDataManager:
             table_name = table_name_or_model.__tablename__
         else:
             table_name = table_name_or_model
-        
+
         # Validate parameters
         if not data or not isinstance(data, str):
             raise ValueError("data must be a non-empty string")
-        
+
         if not table_name or not isinstance(table_name, str):
             raise ValueError("table_name must be a non-empty string")
-        
+
         # Convert enums to strings
         format_str = format.value if isinstance(format, LoadDataFormat) else format
         jsontype_str = jsontype.value if isinstance(jsontype, JsonDataStructure) else jsontype
-        
+
         # Build SQL
         sql = self._build_load_data_inline_sql(
             data=data,
@@ -347,35 +337,30 @@ class LoadDataManager:
             format=format_str,
             delimiter=delimiter,
             enclosed_by=enclosed_by,
-            jsontype=jsontype_str
+            jsontype=jsontype_str,
         )
-        
+
         return self.client.execute(sql)
-    
+
     def from_csv_inline(
-        self,
-        data: str,
-        table_name_or_model,
-        delimiter: str = ",",
-        enclosed_by: Optional[str] = None,
-        **kwargs
+        self, data: str, table_name_or_model, delimiter: str = ",", enclosed_by: Optional[str] = None, **kwargs
     ):
         """
         Load CSV data from an inline string.
-        
+
         Simplified interface for inline CSV data.
-        
+
         Args:
             data (str): CSV data string
             table_name_or_model: Table name (str) or SQLAlchemy model class
             delimiter (str): Field delimiter. Default: ','
             enclosed_by (str, optional): Character enclosing fields
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             >>> result = client.load_data.from_csv_inline(
             ...     "1,Alice,alice@example.com\\n2,Bob,bob@example.com\\n",
             ...     User
@@ -387,42 +372,249 @@ class LoadDataManager:
             format=LoadDataFormat.CSV,
             delimiter=delimiter,
             enclosed_by=enclosed_by,
-            **kwargs
+            **kwargs,
         )
-    
+
     def from_jsonline_inline(
-        self,
-        data: str,
-        table_name_or_model,
-        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
-        **kwargs
+        self, data: str, table_name_or_model, structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT, **kwargs
     ):
         """
         Load JSONLINE data from an inline string.
-        
+
         Args:
             data (str): JSONLINE data string
             table_name_or_model: Table name (str) or SQLAlchemy model class
             structure (str or JsonDataStructure): JSON structure. Default: JsonDataStructure.OBJECT
-            
+
         Returns:
             ResultSet: Load results with affected_rows
-            
+
         Examples::
-        
+
             >>> result = client.load_data.from_jsonline_inline(
             ...     '{"id":1,"name":"Alice"}',
             ...     User
             ... )
         """
         return self.from_inline(
-            data=data,
-            table_name_or_model=table_name_or_model,
-            format=LoadDataFormat.JSONLINE,
-            jsontype=structure,
-            **kwargs
+            data=data, table_name_or_model=table_name_or_model, format=LoadDataFormat.JSONLINE, jsontype=structure, **kwargs
         )
-    
+
+    def from_stage(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        format: Union[str, LoadDataFormat] = LoadDataFormat.CSV,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        jsondata: Optional[Union[str, JsonDataStructure]] = None,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """
+        Load data from a stage file.
+
+        Stage is a named external location that references external cloud storage (S3, OSS) or
+        local file system paths. This method provides a convenient way to load data from stages.
+
+        Args:
+            stage_name (str): Stage name (without 'stage://' prefix)
+            filepath (str): File path within the stage (e.g., 'data.csv', 'folder/file.parq')
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            format (str or LoadDataFormat): Data format. Default: LoadDataFormat.CSV
+            delimiter (str): Field delimiter for CSV/TSV. Default: ','
+            enclosed_by (str, optional): Field enclosure character
+            jsondata (str or JsonDataStructure, optional): JSON structure for JSONLINE
+            compression (str or CompressionFormat, optional): Compression format
+            **kwargs: Additional options (lines_starting_by, lines_terminated_by, etc.)
+
+        Returns:
+            ResultSet: Load results with affected_rows
+
+        Example:
+            >>> # Load CSV from stage
+            >>> result = client.load_data.from_stage(
+            ...     'mystage',
+            ...     'users.csv',
+            ...     User,
+            ...     format=LoadDataFormat.CSV
+            ... )
+
+            >>> # Load Parquet from stage
+            >>> result = client.load_data.from_stage(
+            ...     'parqstage',
+            ...     'data/users.parq',
+            ...     User,
+            ...     format=LoadDataFormat.PARQUET
+            ... )
+
+            >>> # Load compressed CSV from stage
+            >>> result = client.load_data.from_stage(
+            ...     'mystage',
+            ...     'data.csv.gz',
+            ...     User,
+            ...     compression=CompressionFormat.GZIP
+            ... )
+        """
+        # Construct stage URL
+        stage_url = f"stage://{stage_name}/{filepath}"
+
+        # Convert delimiter to fields_terminated_by for from_file
+        if delimiter and 'fields_terminated_by' not in kwargs:
+            kwargs['fields_terminated_by'] = delimiter
+        if enclosed_by and 'fields_enclosed_by' not in kwargs:
+            kwargs['fields_enclosed_by'] = enclosed_by
+
+        # Use from_file with the stage URL
+        return self.from_file(
+            stage_url, table_name_or_model, format=format, jsondata=jsondata, compression=compression, **kwargs
+        )
+
+    def from_stage_csv(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """
+        Load CSV data from a stage file.
+
+        Args:
+            stage_name (str): Stage name (without 'stage://' prefix)
+            filepath (str): File path within the stage
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            delimiter (str): Field delimiter. Default: ','
+            enclosed_by (str, optional): Field enclosure character
+            compression (str or CompressionFormat, optional): Compression format
+            **kwargs: Additional options
+
+        Returns:
+            ResultSet: Load results with affected_rows
+
+        Example:
+            >>> result = client.load_data.from_stage_csv(
+            ...     'mystage',
+            ...     'users.csv',
+            ...     User
+            ... )
+        """
+        return self.from_stage(
+            stage_name,
+            filepath,
+            table_name_or_model,
+            format=LoadDataFormat.CSV,
+            delimiter=delimiter,
+            enclosed_by=enclosed_by,
+            compression=compression,
+            **kwargs,
+        )
+
+    def from_stage_tsv(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """
+        Load TSV (Tab-Separated Values) data from a stage file.
+
+        Args:
+            stage_name (str): Stage name (without 'stage://' prefix)
+            filepath (str): File path within the stage
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            compression (str or CompressionFormat, optional): Compression format
+            **kwargs: Additional options
+
+        Returns:
+            ResultSet: Load results with affected_rows
+
+        Example:
+            >>> result = client.load_data.from_stage_tsv(
+            ...     'mystage',
+            ...     'data.tsv',
+            ...     User
+            ... )
+        """
+        return self.from_stage(
+            stage_name,
+            filepath,
+            table_name_or_model,
+            format=LoadDataFormat.CSV,
+            delimiter='\t',
+            compression=compression,
+            **kwargs,
+        )
+
+    def from_stage_jsonline(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """
+        Load JSONLINE data from a stage file.
+
+        Args:
+            stage_name (str): Stage name (without 'stage://' prefix)
+            filepath (str): File path within the stage
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            structure (str or JsonDataStructure): JSON structure. Default: JsonDataStructure.OBJECT
+            compression (str or CompressionFormat, optional): Compression format
+            **kwargs: Additional options
+
+        Returns:
+            ResultSet: Load results with affected_rows
+
+        Example:
+            >>> result = client.load_data.from_stage_jsonline(
+            ...     'mystage',
+            ...     'data.jsonl',
+            ...     User,
+            ...     structure=JsonDataStructure.OBJECT
+            ... )
+        """
+        return self.from_stage(
+            stage_name,
+            filepath,
+            table_name_or_model,
+            format=LoadDataFormat.JSONLINE,
+            jsondata=structure,
+            compression=compression,
+            **kwargs,
+        )
+
+    def from_stage_parquet(self, stage_name: str, filepath: str, table_name_or_model, **kwargs):
+        """
+        Load Parquet data from a stage file.
+
+        Args:
+            stage_name (str): Stage name (without 'stage://' prefix)
+            filepath (str): File path within the stage
+            table_name_or_model: Table name (str) or SQLAlchemy model class
+            **kwargs: Additional options
+
+        Returns:
+            ResultSet: Load results with affected_rows
+
+        Example:
+            >>> result = client.load_data.from_stage_parquet(
+            ...     'parqstage',
+            ...     'data.parq',
+            ...     User
+            ... )
+        """
+        return self.from_stage(stage_name, filepath, table_name_or_model, format=LoadDataFormat.PARQUET, **kwargs)
+
     def from_file(
         self,
         file_path: str,
@@ -441,68 +633,68 @@ class LoadDataManager:
         jsondata: Optional[Union[str, JsonDataStructure]] = None,
         compression: Optional[Union[str, CompressionFormat]] = None,
         set_clause: Optional[Dict[str, str]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Load data from a file into a table.
-        
+
         This is the main method for loading data from files. It supports all
         standard LOAD DATA INFILE options and provides a clean Python interface.
-        
+
         Args:
             file_path (str): Path to the file to load. Can be:
                 - Local file path: '/path/to/data.csv'
                 - Stage file: 'stage://stage_name/path/to/file'
-                
+
             table_name_or_model: Either a table name (str) or SQLAlchemy model class
-            
+
             fields_terminated_by (str): Character(s) that separate fields.
                 Default: ',' (comma). Common values:
                 - ',' for CSV files
                 - '\\t' for TSV files
                 - '|' for pipe-delimited
                 - '*' or any custom delimiter
-                
+
             fields_enclosed_by (str, optional): Character that encloses field values.
                 Used when fields contain the delimiter character.
                 Common values: '"' or "'"
-            
+
             fields_optionally_enclosed (bool): If True, use OPTIONALLY ENCLOSED BY.
                 This means only some fields may be enclosed, not all.
                 Default: False
-                
+
             fields_escaped_by (str, optional): Escape character for special characters.
                 Default: '\\' (backslash) when enclosed_by is specified.
-                
+
             lines_terminated_by (str, optional): Character(s) that terminate lines.
                 Default: '\\n'. For Windows files: '\\r\\n'
-                
+
             lines_starting_by (str, optional): Prefix that identifies lines to load.
                 Lines not starting with this prefix are ignored.
-                
+
             ignore_lines (int): Number of lines to skip at the beginning of the file.
                 Useful for skipping header rows. Default: 0
-                
+
             character_set (str, optional): Character set of the input file.
                 Examples: 'utf8', 'utf-8', 'utf-16', 'gbk'
-                
+
             parallel (bool): Enable parallel loading for large files.
                 Default: False. Set to True for faster loading of large files.
-                
+
             columns (list, optional): List of column names to load data into.
                 When specified, only these columns are populated. Example:
                 ['col1', 'col2', 'col3']
-            
+
             format (str or LoadDataFormat, optional): File format. Supported values:
                 - LoadDataFormat.CSV or 'csv' (default)
                 - LoadDataFormat.JSONLINE or 'jsonline'
                 - LoadDataFormat.PARQUET or 'parquet'
-            
+
             jsondata (str or JsonDataStructure, optional): JSON data structure (for JSONLINE).
                 - JsonDataStructure.OBJECT or 'object': JSON objects (one per line)
                 - JsonDataStructure.ARRAY or 'array': JSON arrays (one per line)
                 Required when format is JSONLINE
-            
+
             compression (str or CompressionFormat, optional): Compression format.
                 - CompressionFormat.NONE or 'none': No compression (default)
                 - CompressionFormat.GZIP or 'gzip': Gzip compression
@@ -510,33 +702,33 @@ class LoadDataManager:
                 - CompressionFormat.LZ4 or 'lz4': LZ4 compression
                 - CompressionFormat.TAR_GZ or 'tar.gz': Tar+Gzip
                 - CompressionFormat.TAR_BZ2 or 'tar.bz2': Tar+Bzip2
-            
+
             set_clause (dict, optional): Column transformations.
                 Dictionary of column transformations, e.g.:
                 {'col1': 'NULLIF(col1, "null")', 'col2': 'NULLIF(col2, 1)'}
-                
+
             **kwargs: Additional options for future extensions
-        
+
         Returns:
             ResultSet: Object containing load results with affected_rows count
-        
+
         Raises:
             ValueError: If parameters are invalid
             QueryError: If file loading fails
-        
+
         Examples::
-        
+
             # Basic CSV loading
             >>> result = client.load_data.from_file('/path/to/users.csv', 'users')
             >>> print(f"Loaded {result.affected_rows} rows")
-            
+
             # CSV with header row
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.csv',
             ...     'products',
             ...     ignore_lines=1
             ... )
-            
+
             # Pipe-delimited with quoted fields
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.txt',
@@ -545,42 +737,42 @@ class LoadDataManager:
             ...     fields_enclosed_by='"',
             ...     fields_escaped_by='\\\\'
             ... )
-            
+
             # Tab-separated values (TSV)
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.tsv',
             ...     'logs',
             ...     fields_terminated_by='\\t'
             ... )
-            
+
             # Load with character set conversion
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.csv',
             ...     'users',
             ...     character_set='utf-8'
             ... )
-            
+
             # Load specific columns only
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.csv',
             ...     'users',
             ...     columns=['name', 'email', 'age']
             ... )
-            
+
             # Parallel loading for large files
             >>> result = client.load_data.from_file(
             ...     '/path/to/large_data.csv',
             ...     'big_table',
             ...     parallel=True
             ... )
-            
+
             # Load with lines starting by filter
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.txt',
             ...     'filtered_data',
             ...     lines_starting_by='DATA:'
             ... )
-            
+
             # Load JSONLINE format (object)
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.jl',
@@ -588,7 +780,7 @@ class LoadDataManager:
             ...     format=LoadDataFormat.JSONLINE,
             ...     jsondata=JsonDataStructure.OBJECT
             ... )
-            
+
             # Load JSONLINE format (array) with compression
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.jl.gz',
@@ -597,14 +789,14 @@ class LoadDataManager:
             ...     jsondata=JsonDataStructure.ARRAY,
             ...     compression=CompressionFormat.GZIP
             ... )
-            
+
             # Load Parquet format
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.parq',
             ...     'users',
             ...     format=LoadDataFormat.PARQUET
             ... )
-            
+
             # Load with SET clause (NULLIF)
             >>> result = client.load_data.from_file(
             ...     '/path/to/data.csv',
@@ -620,22 +812,22 @@ class LoadDataManager:
             table_name = table_name_or_model.__tablename__
         else:
             table_name = table_name_or_model
-        
+
         # Validate required parameters
         if not file_path or not isinstance(file_path, str):
             raise ValueError("file_path must be a non-empty string")
-        
+
         if not table_name or not isinstance(table_name, str):
             raise ValueError("table_name must be a non-empty string")
-        
+
         if not isinstance(ignore_lines, int) or ignore_lines < 0:
             raise ValueError("ignore_lines must be a non-negative integer")
-        
+
         # Convert enums to strings if needed
         format_str = format.value if isinstance(format, LoadDataFormat) else format
         jsondata_str = jsondata.value if isinstance(jsondata, JsonDataStructure) else jsondata
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
-        
+
         # Build the LOAD DATA SQL statement
         sql = self._build_load_data_sql(
             file_path=file_path,
@@ -653,34 +845,29 @@ class LoadDataManager:
             format=format_str,
             jsondata=jsondata_str,
             compression=compression_str,
-            set_clause=set_clause
+            set_clause=set_clause,
         )
-        
+
         # Execute the LOAD DATA statement
         return self.client.execute(sql)
-    
-    def from_local_file(
-        self,
-        file_path: str,
-        table_name_or_model,
-        **kwargs
-    ):
+
+    def from_local_file(self, file_path: str, table_name_or_model, **kwargs):
         """
         Load data from a local file using LOAD DATA LOCAL INFILE.
-        
+
         This method uses the LOCAL keyword, which allows loading files from
         the client machine rather than the server machine.
-        
+
         Args:
             file_path (str): Path to the local file
             table_name_or_model: Either a table name (str) or SQLAlchemy model class
             **kwargs: Same options as from_file()
-        
+
         Returns:
             ResultSet: Object containing load results
-        
+
         Examples::
-        
+
             # Load from client machine
             >>> result = client.load_data.from_local_file(
             ...     '/local/path/to/data.csv',
@@ -693,17 +880,12 @@ class LoadDataManager:
             table_name = table_name_or_model.__tablename__
         else:
             table_name = table_name_or_model
-        
+
         # Build SQL with LOCAL keyword
-        sql = self._build_load_data_sql(
-            file_path=file_path,
-            table_name=table_name,
-            local=True,
-            **kwargs
-        )
-        
+        sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
+
         return self.client.execute(sql)
-    
+
     def _build_load_data_sql(
         self,
         file_path: str,
@@ -722,21 +904,21 @@ class LoadDataManager:
         format: Optional[str] = None,
         jsondata: Optional[str] = None,
         compression: Optional[str] = None,
-        set_clause: Optional[Dict[str, str]] = None
+        set_clause: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         Build the LOAD DATA SQL statement.
-        
+
         Args:
             See from_file() for parameter descriptions
             local (bool): Whether to use LOCAL keyword
-        
+
         Returns:
             str: Complete LOAD DATA SQL statement
         """
         # Check if we need to use brace syntax for JSONLINE or Parquet
         use_brace_syntax = format in ('jsonline', 'parquet')
-        
+
         if use_brace_syntax:
             return self._build_load_data_sql_with_braces(
                 file_path=file_path,
@@ -744,7 +926,7 @@ class LoadDataManager:
                 format=format,
                 jsondata=jsondata,
                 compression=compression,
-                local=local
+                local=local,
             )
         else:
             return self._build_load_data_sql_standard(
@@ -761,9 +943,9 @@ class LoadDataManager:
                 parallel=parallel,
                 columns=columns,
                 local=local,
-                set_clause=set_clause
+                set_clause=set_clause,
             )
-    
+
     def _build_load_data_sql_standard(
         self,
         file_path: str,
@@ -779,27 +961,27 @@ class LoadDataManager:
         parallel: bool = False,
         columns: Optional[List[str]] = None,
         local: bool = False,
-        set_clause: Optional[Dict[str, str]] = None
+        set_clause: Optional[Dict[str, str]] = None,
     ) -> str:
         """Build standard LOAD DATA SQL statement (CSV format)."""
         sql_parts = []
-        
+
         # LOAD DATA [LOCAL] INFILE
         if local:
             sql_parts.append("LOAD DATA LOCAL INFILE")
         else:
             sql_parts.append("LOAD DATA INFILE")
-        
+
         # File path
         sql_parts.append(f"'{file_path}'")
-        
+
         # INTO TABLE
         sql_parts.append(f"INTO TABLE {table_name}")
-        
+
         # CHARACTER SET
         if character_set:
             sql_parts.append(f"CHARACTER SET {character_set}")
-        
+
         # FIELDS options
         fields_options = []
         if fields_terminated_by:
@@ -811,40 +993,40 @@ class LoadDataManager:
                 fields_options.append(f"ENCLOSED BY '{fields_enclosed_by}'")
         if fields_escaped_by:
             fields_options.append(f"ESCAPED BY '{fields_escaped_by}'")
-        
+
         if fields_options:
             sql_parts.append("FIELDS " + " ".join(fields_options))
-        
+
         # LINES options
         lines_options = []
         if lines_starting_by:
             lines_options.append(f"STARTING BY '{lines_starting_by}'")
         if lines_terminated_by:
             lines_options.append(f"TERMINATED BY '{lines_terminated_by}'")
-        
+
         if lines_options:
             sql_parts.append("LINES " + " ".join(lines_options))
-        
+
         # IGNORE LINES
         if ignore_lines > 0:
             sql_parts.append(f"IGNORE {ignore_lines} LINES")
-        
+
         # Column list
         if columns:
             column_list = ", ".join(columns)
             sql_parts.append(f"({column_list})")
-        
+
         # SET clause
         if set_clause:
             set_parts = [f"{col}={expr}" for col, expr in set_clause.items()]
             sql_parts.append("SET " + ", ".join(set_parts))
-        
+
         # PARALLEL option
         if parallel:
             sql_parts.append("PARALLEL 'true'")
-        
+
         return " ".join(sql_parts)
-    
+
     def _build_load_data_sql_with_braces(
         self,
         file_path: str,
@@ -852,35 +1034,35 @@ class LoadDataManager:
         format: str,
         jsondata: Optional[str] = None,
         compression: Optional[str] = None,
-        local: bool = False
+        local: bool = False,
     ) -> str:
         """Build LOAD DATA SQL with brace syntax for JSONLINE/Parquet."""
         sql_parts = []
-        
+
         # LOAD DATA [LOCAL] INFILE
         if local:
             sql_parts.append("LOAD DATA LOCAL INFILE")
         else:
             sql_parts.append("LOAD DATA INFILE")
-        
+
         # Build brace parameters
         brace_params = [f"'filepath'='{file_path}'"]
         brace_params.append(f"'format'='{format}'")
-        
+
         if jsondata:
             brace_params.append(f"'jsondata'='{jsondata}'")
-        
+
         if compression:
             brace_params.append(f"'compression'='{compression}'")
-        
+
         # Combine into brace syntax
         sql_parts.append("{" + ", ".join(brace_params) + "}")
-        
+
         # INTO TABLE
         sql_parts.append(f"INTO TABLE {table_name}")
-        
+
         return " ".join(sql_parts)
-    
+
     def _build_load_data_inline_sql(
         self,
         data: str,
@@ -888,33 +1070,33 @@ class LoadDataManager:
         format: str = 'csv',
         delimiter: str = ",",
         enclosed_by: Optional[str] = None,
-        jsontype: Optional[str] = None
+        jsontype: Optional[str] = None,
     ) -> str:
         """Build LOAD DATA INLINE SQL statement."""
         # 正确的语法：LOAD DATA INLINE FORMAT='csv', DATA='...' INTO TABLE xxx
         sql_parts = []
-        
+
         # LOAD DATA INLINE
         sql_parts.append("LOAD DATA INLINE")
-        
+
         # FORMAT and DATA (comma-separated)
         inline_params = []
         inline_params.append(f"FORMAT='{format}'")
-        
+
         # DATA - escape single quotes in data
         escaped_data = data.replace("'", "''")
         inline_params.append(f"DATA='{escaped_data}'")
-        
+
         # JSONTYPE (for JSONLINE format)
         if jsontype and format == 'jsonline':
             inline_params.append(f"JSONTYPE='{jsontype}'")
-        
+
         # Combine FORMAT, DATA, JSONTYPE with commas
         sql_parts.append(", ".join(inline_params))
-        
+
         # INTO TABLE
         sql_parts.append(f"INTO TABLE {table_name}")
-        
+
         # FIELDS options (for CSV)
         if format == 'csv':
             fields_options = []
@@ -922,36 +1104,35 @@ class LoadDataManager:
                 fields_options.append(f"TERMINATED BY '{delimiter}'")
             if enclosed_by:
                 fields_options.append(f"ENCLOSED BY '{enclosed_by}'")
-            
+
             if fields_options:
                 sql_parts.append("FIELDS " + " ".join(fields_options))
-        
+
         return " ".join(sql_parts)
 
 
 class TransactionLoadDataManager(LoadDataManager):
     """
     Load Data Manager for transaction context.
-    
+
     This manager executes LOAD DATA operations within a transaction,
     providing atomicity for bulk data loading operations.
-    
+
     Examples::
-    
+
         # Load data within transaction
         with client.transaction() as tx:
             tx.load_data.from_file('/path/to/data1.csv', 'table1')
             tx.load_data.from_file('/path/to/data2.csv', 'table2')
             # Both loads succeed or both roll back
     """
-    
+
     def __init__(self, transaction_wrapper):
         """
         Initialize TransactionLoadDataManager.
-        
+
         Args:
             transaction_wrapper: TransactionWrapper instance
         """
         self.transaction_wrapper = transaction_wrapper
         super().__init__(transaction_wrapper)
-

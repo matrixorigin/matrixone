@@ -120,7 +120,7 @@ class TestVersionManagement:
     def test_version_checking_decorators(self, test_client):
         """Test version checking decorators"""
         version_manager = VersionManager()
-        
+
         # Get current backend version
         backend_version_str = test_client.get_backend_version()
         backend_version = version_manager.parse_version(backend_version_str)
@@ -137,7 +137,7 @@ class TestVersionManagement:
         # Test decorator with high version requirement (higher than current backend)
         # Use a version that's definitely higher than current
         high_version = f"{backend_version.major + 100}.0.0"
-        
+
         @requires_version(high_version)
         def test_function_high_version():
             return "success"
@@ -145,10 +145,10 @@ class TestVersionManagement:
         # This should fail because backend version < high_version
         # Import the correct VersionError from version module
         from matrixone.version import VersionError as VersionErr
-        
+
         with pytest.raises(VersionErr) as exc_info:
             test_function_high_version()
-        
+
         # Verify error message contains version information
         error_msg = str(exc_info.value)
         assert "version" in error_msg.lower()

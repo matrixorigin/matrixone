@@ -89,11 +89,11 @@ source venv/bin/activate
 # On Windows:
 # venv\Scripts\activate
 
-# Quick setup with Makefile
+# Quick setup with Makefile (includes all dev dependencies)
 make dev-setup
 
 # Or manual setup
-pip install -e .
+pip install -e '.[dev]'  # Includes pyarrow, Faker, pytest, etc.
 ```
 
 #### Using Conda Environment
@@ -110,7 +110,7 @@ conda activate matrixone-dev
 make dev-setup
 
 # Or manual setup
-pip install -e .
+pip install -e '.[dev]'
 ```
 
 #### Direct Installation (Not Recommended)
@@ -123,7 +123,41 @@ cd matrixone/clients/python
 make dev-setup
 
 # Or manual setup
-pip install -e .
+pip install -e '.[dev]'
+```
+
+### Testing Environment Setup
+
+#### For Testing and Examples
+
+```bash
+# Install test dependencies (includes pyarrow for Parquet support)
+pip install -e '.[test]'
+
+# Or use requirements files
+pip install -r requirements-sqlalchemy20.txt  # SQLAlchemy 2.x
+pip install -r requirements-sqlalchemy14.txt  # SQLAlchemy 1.4.x
+```
+
+#### For Load Data Features
+
+The SDK includes comprehensive `LOAD DATA` functionality with support for:
+- **CSV/TSV files**: Basic delimited file loading
+- **JSONLINE files**: JSON Lines format with object/array structures  
+- **Parquet files**: Columnar format loading (requires `pyarrow`)
+- **Inline data**: Direct string data loading
+- **Stage loading**: Loading from named external stages
+
+**Dependencies for Load Data:**
+```bash
+# Required for Parquet file support
+pip install pyarrow>=10.0.0
+
+# For generating test data
+pip install Faker>=10.0.0
+
+# Or install everything at once
+pip install -e '.[dev]'  # Includes pyarrow, Faker, pytest, etc.
 ```
 
 ## Quick Start
@@ -916,6 +950,9 @@ Check out the `examples/` directory for comprehensive usage examples:
 - `example_24_query_update.py` - Query and update operations
 - `example_25_metadata_operations.py` - Table metadata analysis and statistics
 
+**Load Data Examples:**
+- `example_23_load_data_operations.py` - Comprehensive LOAD DATA operations (CSV, TSV, JSONLINE, Parquet, Inline, Stage)
+
 **Specialized Examples:**
 - `example_connection_hooks.py` - Connection hooks for custom initialization
 - `example_dynamic_logging.py` - Dynamic logging configuration
@@ -945,6 +982,9 @@ python examples/example_03_async_operations.py
 python examples/example_12_vector_basics.py
 python examples/example_13_vector_indexes.py
 python examples/example_14_vector_search.py
+
+# Load Data examples
+python examples/example_23_load_data_operations.py
 
 # Metadata and advanced examples
 python examples/example_25_metadata_operations.py
@@ -1020,8 +1060,14 @@ make test-matrix           # Test both SQLAlchemy versions
 # Check environment requirements
 make check-env
 
-# Setup development environment
+# Setup development environment (includes all dev dependencies)
 make dev-setup
+
+# Install specific dependency sets
+make install-deps-dev      # Install development dependencies
+make install-deps-test     # Install test dependencies  
+make install-sqlalchemy14  # Install SQLAlchemy 1.4.x dependencies
+make install-sqlalchemy20  # Install SQLAlchemy 2.0.x dependencies
 
 # Run all tests
 make test
@@ -1030,6 +1076,12 @@ make test
 make examples
 ```
 
+**Dependency Management:**
+- `make install-deps-dev`: Installs all development dependencies including `pyarrow`, `Faker`, `pytest`, etc.
+- `make install-deps-test`: Installs testing dependencies including `pyarrow` (required for Parquet)
+- `make install-sqlalchemy14/20`: Installs version-specific SQLAlchemy dependencies
+
+**Important**: `pyarrow>=10.0.0` is required for LOAD DATA Parquet functionality. Install via `make dev-setup`, `make install-deps-dev`, or `make install-deps-test`.
 For detailed testing instructions, environment setup, and troubleshooting, see [TESTING.md](TESTING.md).
 
 

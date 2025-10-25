@@ -110,17 +110,17 @@ class MetadataOperationsDemo:
             self.session.execute(text("CREATE DATABASE IF NOT EXISTS metadata_demo"))
             self.session.commit()
             self.session.close()
-            
+
             # Reconnect with the new database
             self.client.disconnect()
             host, port, user, password, _ = self.connection_params
             self.client.connect(host=host, port=port, user=user, password=password, database='metadata_demo')
-            
+
             # Recreate engine and session with new database
             self.engine = self.client.get_sqlalchemy_engine()
             Session = sessionmaker(bind=self.engine)
             self.session = Session()
-            
+
             # Now create tables
             self.Base.metadata.create_all(self.engine)
             self.logger.info("✓ Created User model with indexes")
