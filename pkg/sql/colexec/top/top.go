@@ -131,7 +131,6 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			top.ctr.buildBat.Recursive = bat.Recursive
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
 			top.ctr.buildBat.Attrs = bat.Attrs
-			top.ctr.buildBat.Aggs = bat.Aggs
 			copy(top.ctr.buildBat.Vecs, bat.Vecs)
 			top.ctr.buildBat.SetRowCount(bat.RowCount())
 

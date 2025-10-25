@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -65,7 +66,6 @@ type Group struct {
 
 type spillBucket struct {
 	lv      int           // spill level
-	reading int           // current reading bucket index
 	again   []spillBucket // spill buckets
 	gbBatch *batch.Batch  // group by batch
 	file    *os.File      // spill file
@@ -79,8 +79,8 @@ type container struct {
 
 	// hash.
 	hr          ResHashRelated
-	mtyp        int
-	keyWidth    int
+	mtyp        int32
+	keyWidth    int32
 	keyNullable bool
 
 	// x, y of `group by x, y`.
@@ -95,8 +95,9 @@ type container struct {
 	aggList []aggexec.AggFuncExec
 	flushed [][]*vector.Vector
 
-	// spill
-	spillBkt spillBucket
+	// spill, agglist to load spilled data.
+	spillAggList []aggexec.AggFuncExec
+	spillBkt     spillBucket
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
@@ -166,6 +167,11 @@ func (ctr *container) freeAggList(proc *process.Process) {
 		}
 	}
 	ctr.aggList = nil
+
+	for _, ag := range ctr.spillAggList {
+		ag.Free()
+	}
+	ctr.spillAggList = nil
 }
 
 func (ctr *container) free(proc *process.Process) {
@@ -188,6 +194,8 @@ func (ctr *container) free(proc *process.Process) {
 	ctr.groupByBatches = nil
 
 	ctr.freeAggList(proc)
+
+	ctr.spillBkt.free(proc)
 }
 
 func (ctr *container) reset(proc *process.Process) {
@@ -221,6 +229,12 @@ func (ctr *container) reset(proc *process.Process) {
 			ag.GroupGrow(1)
 		}
 	}
+
+	for _, ag := range ctr.spillAggList {
+		ag.Free()
+	}
+
+	ctr.spillBkt.free(proc)
 }
 
 func (group *Group) OpType() vm.OpType {
@@ -233,19 +247,6 @@ func (group Group) TypeName() string {
 
 func (group *Group) GetOperatorBase() *vm.OperatorBase {
 	return &group.OperatorBase
-}
-
-func init() {
-	reuse.CreatePool[Group](
-		func() *Group {
-			return &Group{}
-		},
-		func(a *Group) {
-			*a = Group{}
-		},
-		reuse.DefaultOptions[Group]().
-			WithEnableChecker(),
-	)
 }
 
 func NewArgument() *Group {
@@ -275,4 +276,88 @@ func (group *Group) String(buf *bytes.Buffer) {
 		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.GetAggID()), ag.GetArgExpressions()))
 	}
 	buf.WriteString("])")
+}
+
+const (
+	mergeGroupOperatorName = "merge_group"
+)
+
+type MergeGroup struct {
+	vm.OperatorBase
+	colexec.Projection
+
+	ctr      container
+	SpillMem int64
+
+	Aggs []aggexec.AggFuncExecExpression
+
+	PartialResults     []any
+	PartialResultTypes []types.T
+}
+
+func (mergeGroup *MergeGroup) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	if mergeGroup.ProjectList == nil {
+		return input, nil
+	}
+	return mergeGroup.EvalProjection(input, proc)
+}
+
+func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
+	mergeGroup.ctr.reset(proc)
+	mergeGroup.ResetProjection(proc)
+}
+
+func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
+	mergeGroup.ctr.free(proc)
+	mergeGroup.FreeProjection(proc)
+}
+
+func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
+	return &mergeGroup.OperatorBase
+}
+
+func (mergeGroup *MergeGroup) OpType() vm.OpType {
+	return vm.MergeGroup
+}
+
+func (mergeGroup MergeGroup) TypeName() string {
+	return mergeGroupOperatorName
+}
+
+func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
+	buf.WriteString(mergeGroupOperatorName)
+}
+
+func NewArgumentMergeGroup() *MergeGroup {
+	return reuse.Alloc[MergeGroup](nil)
+}
+
+func (mergeGroup *MergeGroup) Release() {
+	if mergeGroup != nil {
+		reuse.Free(mergeGroup, nil)
+	}
+}
+
+func init() {
+	reuse.CreatePool(
+		func() *Group {
+			return &Group{}
+		},
+		func(a *Group) {
+			*a = Group{}
+		},
+		reuse.DefaultOptions[Group]().
+			WithEnableChecker(),
+	)
+
+	reuse.CreatePool(
+		func() *MergeGroup {
+			return &MergeGroup{}
+		},
+		func(a *MergeGroup) {
+			*a = MergeGroup{}
+		},
+		reuse.DefaultOptions[MergeGroup]().
+			WithEnableChecker(),
+	)
 }
