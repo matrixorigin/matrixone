@@ -23,8 +23,8 @@ import os
 import tempfile
 from matrixone import Client
 from matrixone.load_data import LoadDataManager
+from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, Text
-from sqlalchemy.orm import declarative_base
 
 # Create Base for model definitions
 Base = declarative_base()

@@ -39,7 +39,11 @@ import tempfile
 from matrixone import Client
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params, print_config
+from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DECIMAL, Text
+
+# Create Base for model definitions
+Base = declarative_base()
 
 # Create tmpfiles directory if it doesn't exist
 TMPFILES_DIR = os.path.join(os.path.dirname(__file__), '..', 'tmpfiles')
@@ -68,14 +72,17 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table using ORM style
+            # Define table model
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+            
+            # Create table using model
             client.drop_table('users')
-            client.create_table_orm('users',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('email', String(255)),
-                Column('age', Integer)
-            )
+            client.create_table(User)
             self.results['tables_created'].append('users')
             self.logger.info("✅ Created table 'users'")
             
@@ -92,8 +99,8 @@ class LoadDataOperationsDemo:
             
             self.logger.info(f"✅ Created sample CSV file: {csv_file}")
             
-            # Load data using simplified CSV interface
-            result = client.load_data.from_csv(csv_file, 'users')
+            # Load data using simplified CSV interface with model
+            result = client.load_data.from_csv(csv_file, User)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'users' table")
             
             # Verify data using query builder
@@ -114,14 +121,17 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table using ORM style
+            # Define table model
+            class Product(Base):
+                __tablename__ = 'products'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                price = Column(DECIMAL(10, 2))
+                stock = Column(Integer)
+            
+            # Create table using model
             client.drop_table('products')
-            client.create_table_orm('products',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('price', DECIMAL(10, 2)),
-                Column('stock', Integer)
-            )
+            client.create_table(Product)
             self.results['tables_created'].append('products')
             self.logger.info("✅ Created table 'products'")
             
@@ -142,7 +152,7 @@ class LoadDataOperationsDemo:
             # Load data, skipping the first line (header)
             result = client.load_data.from_csv(
                 csv_file,
-                'products',
+                Product,
                 ignore_lines=1  # Skip header row
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'products' table (header skipped)")
@@ -165,14 +175,17 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table using ORM style
+            # Define table model
+            class Order(Base):
+                __tablename__ = 'orders'
+                order_id = Column(Integer, primary_key=True)
+                customer_name = Column(String(100))
+                product = Column(String(100))
+                amount = Column(DECIMAL(10, 2))
+            
+            # Create table using model
             client.drop_table('orders')
-            client.create_table_orm('orders',
-                Column('order_id', Integer, primary_key=True),
-                Column('customer_name', String(100)),
-                Column('product', String(100)),
-                Column('amount', DECIMAL(10, 2))
-            )
+            client.create_table(Order)
             self.results['tables_created'].append('orders')
             self.logger.info("✅ Created table 'orders'")
             
@@ -192,7 +205,7 @@ class LoadDataOperationsDemo:
             # Load data with pipe delimiter using simplified CSV interface
             result = client.load_data.from_csv(
                 pipe_file,
-                'orders',
+                Order,
                 delimiter='|'  # Use pipe as delimiter
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'orders' table")
@@ -215,14 +228,17 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table using ORM style
+            # Define table model
+            class Address(Base):
+                __tablename__ = 'addresses'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                address = Column(String(255))
+                city = Column(String(100))
+            
+            # Create table using model
             client.drop_table('addresses')
-            client.create_table_orm('addresses',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('address', String(255)),
-                Column('city', String(100))
-            )
+            client.create_table(Address)
             self.results['tables_created'].append('addresses')
             self.logger.info("✅ Created table 'addresses'")
             
@@ -242,7 +258,7 @@ class LoadDataOperationsDemo:
             # Load data with quoted fields using simplified CSV interface
             result = client.load_data.from_csv(
                 csv_file,
-                'addresses',
+                Address,
                 delimiter=',',
                 enclosed_by='"'  # Fields are enclosed in quotes
             )
@@ -266,15 +282,18 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table using ORM style
+            # Define table model
+            class Log(Base):
+                __tablename__ = 'logs'
+                id = Column(Integer, primary_key=True)
+                timestamp = Column(String(50))
+                level = Column(String(20))
+                message = Column(Text)
+                source = Column(String(100))
+            
+            # Create table using model
             client.drop_table('logs')
-            client.create_table_orm('logs',
-                Column('id', Integer, primary_key=True),
-                Column('timestamp', String(50)),
-                Column('level', String(20)),
-                Column('message', Text),
-                Column('source', String(100))
-            )
+            client.create_table(Log)
             self.results['tables_created'].append('logs')
             self.logger.info("✅ Created table 'logs'")
             
@@ -294,7 +313,7 @@ class LoadDataOperationsDemo:
             # Load data with tab delimiter
             result = client.load_data.from_tsv(
                 tsv_file,
-                'logs'  # Tab delimiter is automatic
+                Log  # Tab delimiter is automatic
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'logs' table")
             
@@ -316,15 +335,18 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table with more columns than data file using ORM style
+            # Define table model with more columns than data file
+            class Employee(Base):
+                __tablename__ = 'employees'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                department = Column(String(50))
+                salary = Column(DECIMAL(10, 2))
+            
+            # Create table using model
             client.drop_table('employees')
-            client.create_table_orm('employees',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('email', String(255)),
-                Column('department', String(50)),
-                Column('salary', DECIMAL(10, 2))
-            )
+            client.create_table(Employee)
             self.results['tables_created'].append('employees')
             self.logger.info("✅ Created table 'employees' with 5 columns")
             
@@ -343,7 +365,7 @@ class LoadDataOperationsDemo:
             # Load data into specific columns
             result = client.load_data.from_csv(
                 csv_file,
-                'employees',
+                Employee,
                 columns=['id', 'name', 'email']  # Only load into these columns
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into specific columns (department and salary will be NULL)")
@@ -370,22 +392,25 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create test tables using ORM style
+            # Define table models
+            class Account(Base):
+                __tablename__ = 'accounts'
+                account_id = Column(Integer, primary_key=True)
+                account_name = Column(String(100))
+                balance = Column(DECIMAL(10, 2))
+            
+            class Transaction(Base):
+                __tablename__ = 'transactions'
+                trans_id = Column(Integer, primary_key=True)
+                account_id = Column(Integer)
+                amount = Column(DECIMAL(10, 2))
+                trans_type = Column(String(20))
+            
+            # Create test tables using models
             client.drop_table('accounts')
             client.drop_table('transactions')
-            
-            client.create_table_orm('accounts',
-                Column('account_id', Integer, primary_key=True),
-                Column('account_name', String(100)),
-                Column('balance', DECIMAL(10, 2))
-            )
-            
-            client.create_table_orm('transactions',
-                Column('trans_id', Integer, primary_key=True),
-                Column('account_id', Integer),
-                Column('amount', DECIMAL(10, 2)),
-                Column('trans_type', String(20))
-            )
+            client.create_table(Account)
+            client.create_table(Transaction)
             self.results['tables_created'].extend(['accounts', 'transactions'])
             self.logger.info("✅ Created tables 'accounts' and 'transactions'")
             
@@ -411,12 +436,12 @@ class LoadDataOperationsDemo:
             
             self.logger.info("✅ Created sample data files")
             
-            # Load data within a transaction using simplified CSV interface
+            # Load data within a transaction using simplified CSV interface with models
             with client.transaction() as tx:
-                result1 = tx.load_data.from_csv(accounts_file, 'accounts')
+                result1 = tx.load_data.from_csv(accounts_file, Account)
                 self.logger.info(f"  ✅ Loaded {result1.affected_rows} rows into 'accounts' (in transaction)")
                 
-                result2 = tx.load_data.from_csv(transactions_file, 'transactions')
+                result2 = tx.load_data.from_csv(transactions_file, Transaction)
                 self.logger.info(f"  ✅ Loaded {result2.affected_rows} rows into 'transactions' (in transaction)")
                 
                 # Transaction will commit automatically on success
@@ -444,12 +469,15 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table with NOT NULL constraints using ORM style
+            # Define table model with NOT NULL constraints
+            class StrictData(Base):
+                __tablename__ = 'strict_data'
+                id = Column(Integer, primary_key=True)
+                value = Column(String(50), nullable=False)
+            
+            # Create table using model
             client.drop_table('strict_data')
-            client.create_table_orm('strict_data',
-                Column('id', Integer, primary_key=True),
-                Column('value', String(50), nullable=False)
-            )
+            client.create_table(StrictData)
             self.results['tables_created'].append('strict_data')
             self.logger.info("✅ Created table 'strict_data' with NOT NULL constraints")
             
@@ -467,7 +495,7 @@ class LoadDataOperationsDemo:
             
             # Try to load data (may fail depending on MatrixOne's handling of empty strings)
             try:
-                result = client.load_data.from_csv(csv_file, 'strict_data')
+                result = client.load_data.from_csv(csv_file, StrictData)
                 self.logger.info(f"✅ Loaded {result.affected_rows} rows")
                 
                 # Verify what was loaded using query builder
@@ -493,12 +521,15 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table using ORM style
+            # Define table model
+            class LargeData(Base):
+                __tablename__ = 'large_data'
+                id = Column(Integer, primary_key=True)
+                value = Column(String(50))
+            
+            # Create table using model
             client.drop_table('large_data')
-            client.create_table_orm('large_data',
-                Column('id', Integer, primary_key=True),
-                Column('value', String(50))
-            )
+            client.create_table(LargeData)
             self.results['tables_created'].append('large_data')
             self.logger.info("✅ Created table 'large_data'")
             
@@ -512,7 +543,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created file with 1000 rows: {large_file}")
             
             # Load data using simplified CSV interface
-            result = client.load_data.from_csv(large_file, 'large_data')
+            result = client.load_data.from_csv(large_file, LargeData)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows")
             
             # Verify count using query builder
@@ -533,14 +564,17 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table
+            # Define table model
+            class JsonlineUser(Base):
+                __tablename__ = 'jsonline_users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+            
+            # Create table using model
             client.drop_table('jsonline_users')
-            client.create_table_orm('jsonline_users',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('email', String(255)),
-                Column('age', Integer)
-            )
+            client.create_table(JsonlineUser)
             self.results['tables_created'].append('jsonline_users')
             self.logger.info("✅ Created table 'jsonline_users'")
             
@@ -558,7 +592,7 @@ class LoadDataOperationsDemo:
             # Load JSONLINE data using simplified interface
             result = client.load_data.from_jsonline(
                 jl_file,
-                'jsonline_users'
+                JsonlineUser
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (object format)")
             
@@ -580,14 +614,17 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table
+            # Define table model
+            class JsonlineProduct(Base):
+                __tablename__ = 'jsonline_products'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                price = Column(DECIMAL(10, 2))
+                stock = Column(Integer)
+            
+            # Create table using model
             client.drop_table('jsonline_products')
-            client.create_table_orm('jsonline_products',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('price', DECIMAL(10, 2)),
-                Column('stock', Integer)
-            )
+            client.create_table(JsonlineProduct)
             self.results['tables_created'].append('jsonline_products')
             self.logger.info("✅ Created table 'jsonline_products'")
             
@@ -605,7 +642,7 @@ class LoadDataOperationsDemo:
             # Load JSONLINE data using simplified interface
             result = client.load_data.from_jsonline(
                 jl_file,
-                'jsonline_products',
+                JsonlineProduct,
                 structure='array'
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (array format)")
@@ -628,13 +665,16 @@ class LoadDataOperationsDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Create table
+            # Define table model
+            class CleanedData(Base):
+                __tablename__ = 'cleaned_data'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                status = Column(String(50))
+            
+            # Create table using model
             client.drop_table('cleaned_data')
-            client.create_table_orm('cleaned_data',
-                Column('id', Integer, primary_key=True),
-                Column('name', String(100)),
-                Column('status', String(50))
-            )
+            client.create_table(CleanedData)
             self.results['tables_created'].append('cleaned_data')
             self.logger.info("✅ Created table 'cleaned_data'")
             
@@ -653,7 +693,7 @@ class LoadDataOperationsDemo:
             # Load data with SET clause using simplified CSV interface
             result = client.load_data.from_csv(
                 csv_file,
-                'cleaned_data',
+                CleanedData,
                 set_clause={
                     'status': 'NULLIF(status, "null")'
                 }
