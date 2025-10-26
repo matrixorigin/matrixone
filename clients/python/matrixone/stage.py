@@ -689,7 +689,12 @@ class StageManager(BaseStageManager):
         """
         sql = self._prepare_list()
         result = self._get_executor().execute(sql)
-        return self._process_list_result(result.rows)
+        # Handle both ResultSet (client) and CursorResult (session)
+        if hasattr(result, 'rows'):
+            rows = result.rows
+        else:
+            rows = result.fetchall() if result else []
+        return self._process_list_result(rows)
 
     def get(self, name: str) -> Stage:
         """
@@ -711,7 +716,12 @@ class StageManager(BaseStageManager):
         """
         sql = self._prepare_get(name)
         result = self._get_executor().execute(sql)
-        return self._process_get_result(result.rows, name)
+        # Handle both ResultSet (client) and CursorResult (session)
+        if hasattr(result, 'rows'):
+            rows = result.rows
+        else:
+            rows = result.fetchall() if result else []
+        return self._process_get_result(rows, name)
 
     def exists(self, name: str) -> bool:
         """
@@ -906,13 +916,23 @@ class AsyncStageManager(BaseStageManager):
         """List all stages asynchronously"""
         sql = self._prepare_list()
         result = await self._get_executor().execute(sql)
-        return self._process_list_result(result.rows if result else [])
+        # Handle both AsyncResultSet (client) and CursorResult (session)
+        if hasattr(result, 'rows'):
+            rows = result.rows
+        else:
+            rows = result.fetchall() if result else []
+        return self._process_list_result(rows)
 
     async def get(self, name: str) -> Stage:
         """Get a specific stage by name asynchronously"""
         sql = self._prepare_get(name)
         result = await self._get_executor().execute(sql)
-        return self._process_get_result(result.rows if result else [], name)
+        # Handle both AsyncResultSet (client) and CursorResult (session)
+        if hasattr(result, 'rows'):
+            rows = result.rows
+        else:
+            rows = result.fetchall() if result else []
+        return self._process_get_result(rows, name)
 
     async def exists(self, name: str) -> bool:
         """Check if a stage exists asynchronously"""
@@ -921,6 +941,55 @@ class AsyncStageManager(BaseStageManager):
             return True
         except ValueError:
             return False
+
+    async def show(self, like_pattern: Optional[str] = None) -> List[Stage]:
+        """Show stages with optional pattern matching (async)"""
+        sql = "SHOW STAGES"
+        if like_pattern:
+            sql += f" LIKE '{like_pattern}'"
+
+        result = await self._get_executor().execute(sql)
+
+        # Handle both AsyncResultSet (client) and CursorResult (session)
+        if hasattr(result, 'rows'):
+            rows = result.rows
+        else:
+            rows = result.fetchall() if result else []
+
+        stages = []
+        for row in rows:
+            stage = Stage(
+                name=row[0],
+                url=row[1] if len(row) > 1 else None,
+                status=row[2] if len(row) > 2 else None,
+                comment=row[3] if len(row) > 3 else None,
+                created_time=row[4] if len(row) > 4 else None,
+                _client=self.client,
+            )
+            stages.append(stage)
+        return stages
+
+    async def create_local(
+        self, name: str, path: str, comment: Optional[str] = None, if_not_exists: bool = False
+    ) -> "Stage":
+        """Create a local file system stage (async)"""
+        import os
+
+        # Expand user home directory
+        if path.startswith('~'):
+            path = os.path.expanduser(path)
+
+        # Convert to absolute path
+        path = os.path.abspath(path)
+
+        # Ensure path ends with /
+        if not path.endswith('/'):
+            path += '/'
+
+        # Add file:// prefix
+        url = f'file://{path}'
+
+        return await self.create(name, url, comment=comment, if_not_exists=if_not_exists)
 
     async def create_s3(
         self,
