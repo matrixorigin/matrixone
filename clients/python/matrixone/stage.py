@@ -211,13 +211,26 @@ class BaseStageManager:
     """
     Base class for Stage management containing shared SQL building logic.
 
-    This class contains all SQL generation methods that are common between
-    synchronous and asynchronous implementations.
+    This class contains all SQL generation methods and business logic that are
+    common between synchronous and asynchronous implementations.
+
+    Subclasses only need to implement the _execute() method.
     """
 
     def __init__(self, client):
         """Initialize base stage manager"""
         self.client = client
+
+    def _execute(self, sql: str):
+        """
+        Execute SQL statement.
+        Subclasses must implement this (sync or async).
+        """
+        raise NotImplementedError("Subclasses must implement _execute()")
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        raise NotImplementedError("Subclasses must implement _get_executor()")
 
     def _build_create_stage_sql(
         self,
@@ -262,9 +275,13 @@ class BaseStageManager:
         set_credentials: Optional[Dict[str, str]] = None,
         set_enable: Optional[bool] = None,
         set_comment: Optional[str] = None,
+        if_exists: bool = False,
     ) -> str:
         """Build ALTER STAGE SQL statement"""
-        sql_parts = [f"ALTER STAGE {stage_name} SET"]  # No escaping to match existing behavior
+        sql_parts = ["ALTER STAGE"]
+        if if_exists:
+            sql_parts.append("IF EXISTS")
+        sql_parts.append(f"{stage_name} SET")
 
         set_clauses = []
         if set_url is not None:
@@ -272,20 +289,28 @@ class BaseStageManager:
         if set_credentials is not None:
             cred_parts = [f"'{k}'='{v}'" for k, v in set_credentials.items()]
             set_clauses.append(f"CREDENTIALS={{{', '.join(cred_parts)}}}")
-        if set_enable is not None:
-            set_clauses.append(f"ENABLE={'TRUE' if set_enable else 'FALSE'}")
         if set_comment is not None:
             set_clauses.append(f"COMMENT='{set_comment}'")
+        if set_enable is not None:
+            set_clauses.append(f"ENABLE={'TRUE' if set_enable else 'FALSE'}")
 
         if not set_clauses:
             raise ValueError("At least one SET clause must be provided for ALTER STAGE")
 
-        sql_parts.append(", ".join(set_clauses))
+        # Use space separator for ALTER STAGE SET clauses (MatrixOne syntax)
+        sql_parts.append(" ".join(set_clauses))
         return " ".join(sql_parts)
 
     def _build_list_stages_sql(self) -> str:
         """Build SQL to list stages"""
         return "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages"
+
+    def _build_get_stage_sql(self, stage_name: str) -> str:
+        """Build SQL to get a specific stage"""
+        return (
+            f"SELECT stage_name, url, stage_status, comment, created_time "
+            f"FROM mo_catalog.mo_stages WHERE stage_name = '{stage_name}'"
+        )
 
     def _row_to_stage(self, row: tuple) -> Stage:
         """Convert database row to Stage object"""
@@ -295,6 +320,88 @@ class BaseStageManager:
             status=row[2] if len(row) > 2 else None,
             comment=row[3] if len(row) > 3 else None,
         )
+
+    def _prepare_create(
+        self,
+        name: str,
+        url: str,
+        credentials: Optional[Dict[str, str]] = None,
+        comment: Optional[str] = None,
+        if_not_exists: bool = False,
+    ) -> tuple:
+        """
+        Prepare data for create operation.
+        Returns: (sql, stage_object)
+        """
+        sql = self._build_create_stage_sql(name, url, credentials, enable=True, comment=comment, if_not_exists=if_not_exists)
+        stage = Stage(
+            name=name,
+            url=url,
+            credentials=credentials,
+            status='enabled',
+            comment=comment,
+            created_time=datetime.now(),
+            _client=self.client,
+        )
+        return sql, stage
+
+    def _prepare_drop(self, name: str, if_exists: bool = False) -> str:
+        """Prepare SQL for drop operation"""
+        return self._build_drop_stage_sql(name, if_exists)
+
+    def _prepare_alter(
+        self,
+        name: str,
+        url: Optional[str] = None,
+        credentials: Optional[Dict[str, str]] = None,
+        comment: Optional[str] = None,
+        enable: Optional[bool] = None,
+        if_exists: bool = False,
+    ) -> str:
+        """Prepare SQL for alter operation"""
+        if not any([url, credentials, comment, enable is not None]):
+            raise ValueError("At least one of url, credentials, comment, or enable must be provided")
+        return self._build_alter_stage_sql(name, url, credentials, enable, comment, if_exists)
+
+    def _prepare_list(self) -> str:
+        """Prepare SQL for list operation"""
+        return self._build_list_stages_sql()
+
+    def _prepare_get(self, name: str) -> str:
+        """Prepare SQL for get operation"""
+        return self._build_get_stage_sql(name)
+
+    def _process_get_result(self, rows, name: str) -> Stage:
+        """Process get result rows into Stage object"""
+        if not rows:
+            raise ValueError(f"Stage '{name}' not found")
+
+        row = rows[0]
+        return Stage(
+            name=row[0],
+            url=row[1] if len(row) > 1 else None,
+            status=row[2] if len(row) > 2 else None,
+            comment=row[3] if len(row) > 3 else None,
+            created_time=row[4] if len(row) > 4 else None,
+            _client=self.client,
+        )
+
+    def _process_list_result(self, rows) -> List[Stage]:
+        """Process list result rows into Stage objects"""
+        if not rows:
+            return []
+        stages = []
+        for row in rows:
+            stage = Stage(
+                name=row[0],
+                url=row[1] if len(row) > 1 else None,
+                status=row[2] if len(row) > 2 else None,
+                comment=row[3] if len(row) > 3 else None,
+                created_time=row[4] if len(row) > 4 else None,
+                _client=self.client,
+            )
+            stages.append(stage)
+        return stages
 
 
 class StageManager(BaseStageManager):
@@ -448,37 +555,9 @@ class StageManager(BaseStageManager):
             ...     'stage://production_data/archive/2024/'
             ... )
         """
-        # Build CREATE STAGE SQL
-        sql_parts = ["CREATE STAGE"]
-
-        if if_not_exists:
-            sql_parts.append("IF NOT EXISTS")
-
-        sql_parts.append(name)
-        sql_parts.append(f"URL='{url}'")
-
-        # Add credentials if provided
-        if credentials:
-            cred_pairs = [f"'{k}'='{v}'" for k, v in credentials.items()]
-            sql_parts.append(f"CREDENTIALS={{{', '.join(cred_pairs)}}}")
-
-        # Add comment if provided
-        if comment:
-            sql_parts.append(f"COMMENT='{comment}'")
-
-        sql = " ".join(sql_parts)
+        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists)
         self._get_executor().execute(sql)
-
-        # Return Stage object with client reference
-        return Stage(
-            name=name,
-            url=url,
-            credentials=credentials,
-            status='enabled',
-            comment=comment,
-            created_time=datetime.now(),
-            _client=self.client,
-        )
+        return stage
 
     def alter(
         self,
@@ -530,38 +609,8 @@ class StageManager(BaseStageManager):
             ...     enable=True
             ... )
         """
-        if not any([url, credentials, comment, enable is not None]):
-            raise ValueError("At least one of url, credentials, comment, or enable must be provided")
-
-        # Build ALTER STAGE SQL
-        sql_parts = ["ALTER STAGE"]
-
-        if if_exists:
-            sql_parts.append("IF EXISTS")
-
-        sql_parts.append(name)
-        sql_parts.append("SET")
-
-        set_clauses = []
-
-        if url is not None:
-            set_clauses.append(f"URL='{url}'")
-
-        if credentials is not None:
-            cred_pairs = [f"'{k}'='{v}'" for k, v in credentials.items()]
-            set_clauses.append(f"CREDENTIALS={{{', '.join(cred_pairs)}}}")
-
-        if comment is not None:
-            set_clauses.append(f"COMMENT='{comment}'")
-
-        if enable is not None:
-            set_clauses.append(f"ENABLE={'TRUE' if enable else 'FALSE'}")
-
-        # Join with space for ALTER STAGE SET syntax
-        sql = " ".join(sql_parts) + " " + " ".join(set_clauses)
+        sql = self._prepare_alter(name, url, credentials, comment, enable, if_exists)
         self._get_executor().execute(sql)
-
-        # Return updated Stage object (fetch from database to get current state)
         return self.get(name)
 
     def drop(self, name: str, if_exists: bool = False) -> None:
@@ -579,7 +628,7 @@ class StageManager(BaseStageManager):
             >>> # Drop with IF EXISTS
             >>> client.stage.drop('my_stage', if_exists=True)
         """
-        sql = self._build_drop_stage_sql(name, if_exists)
+        sql = self._prepare_drop(name, if_exists)
         self._get_executor().execute(sql)
 
     def show(self, like_pattern: Optional[str] = None) -> List[Stage]:
@@ -638,22 +687,9 @@ class StageManager(BaseStageManager):
             >>> for stage in stages:
             ...     print(f"{stage.name}: {stage.url}")
         """
-        sql = "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages"
+        sql = self._prepare_list()
         result = self._get_executor().execute(sql)
-
-        stages = []
-        for row in result.rows:
-            stage = Stage(
-                name=row[0],
-                url=row[1] if len(row) > 1 else None,
-                status=row[2] if len(row) > 2 else None,
-                comment=row[3] if len(row) > 3 else None,
-                created_time=row[4] if len(row) > 4 else None,
-                _client=self.client,
-            )
-            stages.append(stage)
-
-        return stages
+        return self._process_list_result(result.rows)
 
     def get(self, name: str) -> Stage:
         """
@@ -673,25 +709,9 @@ class StageManager(BaseStageManager):
             >>> print(f"URL: {stage.url}")
             >>> print(f"Status: {stage.status}")
         """
-        # Query from system table for accurate information
-        sql = (
-            f"SELECT stage_name, url, stage_status, comment, created_time "
-            f"FROM mo_catalog.mo_stages WHERE stage_name = '{name}'"
-        )
+        sql = self._prepare_get(name)
         result = self._get_executor().execute(sql)
-
-        if not result.rows:
-            raise ValueError(f"Stage '{name}' not found")
-
-        row = result.rows[0]
-        return Stage(
-            name=row[0],
-            url=row[1] if len(row) > 1 else None,
-            status=row[2] if len(row) > 2 else None,
-            comment=row[3] if len(row) > 3 else None,
-            created_time=row[4] if len(row) > 4 else None,
-            _client=self.client,
-        )
+        return self._process_get_result(result.rows, name)
 
     def exists(self, name: str) -> bool:
         """
@@ -859,22 +879,13 @@ class AsyncStageManager(BaseStageManager):
         if_not_exists: bool = False,
     ) -> Stage:
         """Create a stage asynchronously"""
-        sql = self._build_create_stage_sql(name, url, credentials, enable=True, comment=comment, if_not_exists=if_not_exists)
+        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists)
         await self._get_executor().execute(sql)
-
-        return Stage(
-            name=name,
-            url=url,
-            credentials=credentials,
-            status='enabled',
-            comment=comment,
-            created_time=datetime.now(),
-            _client=self.client,
-        )
+        return stage
 
     async def drop(self, name: str, if_exists: bool = False) -> None:
         """Drop a stage asynchronously"""
-        sql = self._build_drop_stage_sql(name, if_exists)
+        sql = self._prepare_drop(name, if_exists)
         await self._get_executor().execute(sql)
 
     async def alter(
@@ -887,35 +898,21 @@ class AsyncStageManager(BaseStageManager):
         if_exists: bool = False,
     ) -> Stage:
         """Alter a stage asynchronously"""
-        sql = self._build_alter_stage_sql(name, url, credentials, enable, comment)
+        sql = self._prepare_alter(name, url, credentials, comment, enable, if_exists)
         await self._get_executor().execute(sql)
-
-        # Return updated Stage (note: would need to query to get actual values)
-        return Stage(name=name, url=url or "", status='enabled' if enable else 'disabled', _client=self.client)
+        return await self.get(name)
 
     async def list(self) -> List[Stage]:
         """List all stages asynchronously"""
-        sql = self._build_list_stages_sql()
+        sql = self._prepare_list()
         result = await self._get_executor().execute(sql)
-
-        if not result or not result.rows:
-            return []
-
-        return [self._row_to_stage(row) for row in result.rows]
+        return self._process_list_result(result.rows if result else [])
 
     async def get(self, name: str) -> Stage:
         """Get a specific stage by name asynchronously"""
-        sql = self._build_list_stages_sql()
+        sql = self._prepare_get(name)
         result = await self._get_executor().execute(sql)
-
-        if not result or not result.rows:
-            raise ValueError(f"Stage '{name}' not found")
-
-        for row in result.rows:
-            if row[0] == name:
-                return self._row_to_stage(row)
-
-        raise ValueError(f"Stage '{name}' not found")
+        return self._process_get_result(result.rows if result else [], name)
 
     async def exists(self, name: str) -> bool:
         """Check if a stage exists asynchronously"""

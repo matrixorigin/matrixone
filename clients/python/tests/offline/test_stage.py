@@ -306,7 +306,7 @@ class TestAsyncStageSQLConsistency(unittest.IsolatedAsyncioTestCase):
         await self.async_session_manager.alter('test_stage', url='file:///new/path/', enable=False)
         async_session_sql = self.session.execute.call_args_list[0][0][0]  # First call is ALTER
 
-        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/', ENABLE=FALSE"
+        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' ENABLE=FALSE"
         self.assertEqual(async_sql, expected_sql)
         self.assertEqual(async_session_sql, expected_sql)
 
