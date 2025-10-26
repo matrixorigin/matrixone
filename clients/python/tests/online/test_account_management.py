@@ -89,6 +89,12 @@ class TestAccountManagement:
         admin_name = "test_admin_002"
         password = "test_password_002"
 
+        # Try to drop the account first (in case it exists from previous test runs)
+        try:
+            account_manager.drop_account(account_name)
+        except Exception:
+            pass  # Ignore if account doesn't exist
+
         account = account_manager.create_account(account_name, admin_name, password)
         assert account is not None
 
@@ -112,6 +118,12 @@ class TestAccountManagement:
         # Create user first
         username = "test_user_002"
         password = "test_password_002"
+
+        # Try to drop user first in case it exists from a previous test
+        try:
+            account_manager.drop_user(username)
+        except Exception:
+            pass  # Ignore if user doesn't exist
 
         user = account_manager.create_user(username, password)
         assert user is not None
@@ -147,6 +159,12 @@ class TestAccountManagement:
             # Create user outside transaction (MatrixOne limitation)
             username = "test_user_003"
             user_password = "test_password_003"
+
+            # Try to drop user first in case it exists from a previous test
+            try:
+                account_manager.drop_user(username)
+            except Exception:
+                pass  # Ignore if user doesn't exist
 
             user = account_manager.create_user(username, user_password)
             assert user is not None
