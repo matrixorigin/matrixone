@@ -33,7 +33,7 @@ from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
-from .load_data import LoadDataManager, TransactionLoadDataManager
+from .load_data import LoadDataManager
 from .stage import StageManager, TransactionStageManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager, TransactionMetadataManager
@@ -3062,7 +3062,7 @@ class Session(SQLAlchemySession):
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         self.metadata = TransactionMetadataManager(client, self)
-        self.load_data = TransactionLoadDataManager(self)
+        self.load_data = LoadDataManager(client, executor=self)
         self.stage = TransactionStageManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):

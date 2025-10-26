@@ -48,7 +48,243 @@ class JsonDataStructure(str, Enum):
     ARRAY = 'array'
 
 
-class LoadDataManager:
+class BaseLoadDataManager:
+    """
+    Base class for Load Data management containing shared SQL building logic.
+
+    This class contains all SQL generation methods that are common between
+    synchronous and asynchronous implementations.
+    """
+
+    def __init__(self, client):
+        """Initialize base load data manager"""
+        self.client = client
+
+    def _build_load_data_sql(
+        self,
+        file_path: str,
+        table_name: str,
+        fields_terminated_by: str = ",",
+        fields_enclosed_by: Optional[str] = None,
+        fields_optionally_enclosed: bool = False,
+        fields_escaped_by: Optional[str] = None,
+        lines_terminated_by: Optional[str] = None,
+        lines_starting_by: Optional[str] = None,
+        ignore_lines: int = 0,
+        character_set: Optional[str] = None,
+        parallel: bool = False,
+        columns: Optional[List[str]] = None,
+        local: bool = False,
+        format: Optional[str] = None,
+        jsondata: Optional[str] = None,
+        compression: Optional[str] = None,
+        set_clause: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """
+        Build the LOAD DATA SQL statement.
+
+        Args:
+            See LoadDataManager.from_file() for parameter descriptions
+            local (bool): Whether to use LOCAL keyword
+
+        Returns:
+            str: Complete LOAD DATA SQL statement
+        """
+        # Check if we need to use brace syntax for JSONLINE or Parquet
+        use_brace_syntax = format in ('jsonline', 'parquet')
+
+        if use_brace_syntax:
+            return self._build_load_data_sql_with_braces(
+                file_path=file_path,
+                table_name=table_name,
+                format=format,
+                jsondata=jsondata,
+                compression=compression,
+                local=local,
+            )
+        else:
+            return self._build_load_data_sql_standard(
+                file_path=file_path,
+                table_name=table_name,
+                fields_terminated_by=fields_terminated_by,
+                fields_enclosed_by=fields_enclosed_by,
+                fields_optionally_enclosed=fields_optionally_enclosed,
+                fields_escaped_by=fields_escaped_by,
+                lines_terminated_by=lines_terminated_by,
+                lines_starting_by=lines_starting_by,
+                ignore_lines=ignore_lines,
+                character_set=character_set,
+                parallel=parallel,
+                columns=columns,
+                local=local,
+                set_clause=set_clause,
+            )
+
+    def _build_load_data_sql_standard(
+        self,
+        file_path: str,
+        table_name: str,
+        fields_terminated_by: str = ",",
+        fields_enclosed_by: Optional[str] = None,
+        fields_optionally_enclosed: bool = False,
+        fields_escaped_by: Optional[str] = None,
+        lines_terminated_by: Optional[str] = None,
+        lines_starting_by: Optional[str] = None,
+        ignore_lines: int = 0,
+        character_set: Optional[str] = None,
+        parallel: bool = False,
+        columns: Optional[List[str]] = None,
+        local: bool = False,
+        set_clause: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Build standard LOAD DATA SQL statement (CSV format)."""
+        sql_parts = []
+
+        # LOAD DATA [LOCAL] INFILE
+        if local:
+            sql_parts.append("LOAD DATA LOCAL INFILE")
+        else:
+            sql_parts.append("LOAD DATA INFILE")
+
+        # File path
+        sql_parts.append(f"'{file_path}'")
+
+        # INTO TABLE
+        sql_parts.append(f"INTO TABLE {table_name}")
+
+        # CHARACTER SET
+        if character_set:
+            sql_parts.append(f"CHARACTER SET {character_set}")
+
+        # FIELDS options
+        fields_options = []
+        if fields_terminated_by:
+            fields_options.append(f"TERMINATED BY '{fields_terminated_by}'")
+        if fields_enclosed_by:
+            if fields_optionally_enclosed:
+                fields_options.append(f"OPTIONALLY ENCLOSED BY '{fields_enclosed_by}'")
+            else:
+                fields_options.append(f"ENCLOSED BY '{fields_enclosed_by}'")
+        if fields_escaped_by:
+            fields_options.append(f"ESCAPED BY '{fields_escaped_by}'")
+
+        if fields_options:
+            sql_parts.append("FIELDS " + " ".join(fields_options))
+
+        # LINES options
+        lines_options = []
+        if lines_starting_by:
+            lines_options.append(f"STARTING BY '{lines_starting_by}'")
+        if lines_terminated_by:
+            lines_options.append(f"TERMINATED BY '{lines_terminated_by}'")
+
+        if lines_options:
+            sql_parts.append("LINES " + " ".join(lines_options))
+
+        # IGNORE LINES
+        if ignore_lines > 0:
+            sql_parts.append(f"IGNORE {ignore_lines} LINES")
+
+        # Column list
+        if columns:
+            column_list = ", ".join(columns)
+            sql_parts.append(f"({column_list})")
+
+        # SET clause
+        if set_clause:
+            set_parts = [f"{col}={expr}" for col, expr in set_clause.items()]
+            sql_parts.append("SET " + ", ".join(set_parts))
+
+        # PARALLEL option
+        if parallel:
+            sql_parts.append("PARALLEL 'true'")
+
+        return " ".join(sql_parts)
+
+    def _build_load_data_sql_with_braces(
+        self,
+        file_path: str,
+        table_name: str,
+        format: str,
+        jsondata: Optional[str] = None,
+        compression: Optional[str] = None,
+        local: bool = False,
+    ) -> str:
+        """Build LOAD DATA SQL with brace syntax for JSONLINE/Parquet."""
+        sql_parts = []
+
+        # LOAD DATA [LOCAL] INFILE
+        if local:
+            sql_parts.append("LOAD DATA LOCAL INFILE")
+        else:
+            sql_parts.append("LOAD DATA INFILE")
+
+        # Build brace parameters
+        brace_params = [f"'filepath'='{file_path}'"]
+        brace_params.append(f"'format'='{format}'")
+
+        if jsondata:
+            brace_params.append(f"'jsondata'='{jsondata}'")
+
+        if compression:
+            brace_params.append(f"'compression'='{compression}'")
+
+        # Combine into brace syntax
+        sql_parts.append("{" + ", ".join(brace_params) + "}")
+
+        # INTO TABLE
+        sql_parts.append(f"INTO TABLE {table_name}")
+
+        return " ".join(sql_parts)
+
+    def _build_load_data_inline_sql(
+        self,
+        data: str,
+        table_name: str,
+        format: str = 'csv',
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        jsontype: Optional[str] = None,
+    ) -> str:
+        """Build LOAD DATA INLINE SQL statement."""
+        sql_parts = []
+
+        # LOAD DATA INLINE
+        sql_parts.append("LOAD DATA INLINE")
+
+        # FORMAT and DATA (comma-separated)
+        inline_params = []
+        inline_params.append(f"FORMAT='{format}'")
+
+        # DATA - escape single quotes in data
+        escaped_data = data.replace("'", "''")
+        inline_params.append(f"DATA='{escaped_data}'")
+
+        # JSONTYPE (for JSONLINE format)
+        if jsontype and format == 'jsonline':
+            inline_params.append(f"JSONTYPE='{jsontype}'")
+
+        # Combine FORMAT, DATA, JSONTYPE with commas
+        sql_parts.append(", ".join(inline_params))
+
+        # INTO TABLE
+        sql_parts.append(f"INTO TABLE {table_name}")
+
+        # FIELDS options (for CSV)
+        if format == 'csv':
+            fields_options = []
+            if delimiter:
+                fields_options.append(f"TERMINATED BY '{delimiter}'")
+            if enclosed_by:
+                fields_options.append(f"ENCLOSED BY '{enclosed_by}'")
+
+            if fields_options:
+                sql_parts.append("FIELDS " + " ".join(fields_options))
+
+        return " ".join(sql_parts)
+
+
+class LoadDataManager(BaseLoadDataManager):
     """
     Manager for LOAD DATA operations in MatrixOne.
 
@@ -87,14 +323,21 @@ class LoadDataManager:
                                      fields_enclosed_by='"')
     """
 
-    def __init__(self, client):
+    def __init__(self, client, executor=None):
         """
         Initialize LoadDataManager.
 
         Args:
             client: Client object that provides execute() method
+            executor: Optional executor (e.g., session) for executing SQL.
+                     If None, uses client.execute
         """
-        self.client = client
+        super().__init__(client)
+        self.executor = executor
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self.client
 
     def from_csv(
         self,
@@ -463,7 +706,7 @@ class LoadDataManager:
             jsontype=jsontype_str,
         )
 
-        return self.client.execute(sql)
+        return self._get_executor().execute(sql)
 
     def from_csv_inline(
         self, data: str, table_name_or_model, delimiter: str = ",", enclosed_by: Optional[str] = None, **kwargs
@@ -1111,7 +1354,7 @@ class LoadDataManager:
         )
 
         # Execute the LOAD DATA statement
-        return self.client.execute(sql)
+        return self._get_executor().execute(sql)
 
     def from_local_file(self, file_path: str, table_name_or_model, **kwargs):
         """
@@ -1146,266 +1389,15 @@ class LoadDataManager:
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return self.client.execute(sql)
-
-    def _build_load_data_sql(
-        self,
-        file_path: str,
-        table_name: str,
-        fields_terminated_by: str = ",",
-        fields_enclosed_by: Optional[str] = None,
-        fields_optionally_enclosed: bool = False,
-        fields_escaped_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
-        lines_starting_by: Optional[str] = None,
-        ignore_lines: int = 0,
-        character_set: Optional[str] = None,
-        parallel: bool = False,
-        columns: Optional[List[str]] = None,
-        local: bool = False,
-        format: Optional[str] = None,
-        jsondata: Optional[str] = None,
-        compression: Optional[str] = None,
-        set_clause: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """
-        Build the LOAD DATA SQL statement.
-
-        Args:
-            See from_file() for parameter descriptions
-            local (bool): Whether to use LOCAL keyword
-
-        Returns:
-            str: Complete LOAD DATA SQL statement
-        """
-        # Check if we need to use brace syntax for JSONLINE or Parquet
-        use_brace_syntax = format in ('jsonline', 'parquet')
-
-        if use_brace_syntax:
-            return self._build_load_data_sql_with_braces(
-                file_path=file_path,
-                table_name=table_name,
-                format=format,
-                jsondata=jsondata,
-                compression=compression,
-                local=local,
-            )
-        else:
-            return self._build_load_data_sql_standard(
-                file_path=file_path,
-                table_name=table_name,
-                fields_terminated_by=fields_terminated_by,
-                fields_enclosed_by=fields_enclosed_by,
-                fields_optionally_enclosed=fields_optionally_enclosed,
-                fields_escaped_by=fields_escaped_by,
-                lines_terminated_by=lines_terminated_by,
-                lines_starting_by=lines_starting_by,
-                ignore_lines=ignore_lines,
-                character_set=character_set,
-                parallel=parallel,
-                columns=columns,
-                local=local,
-                set_clause=set_clause,
-            )
-
-    def _build_load_data_sql_standard(
-        self,
-        file_path: str,
-        table_name: str,
-        fields_terminated_by: str = ",",
-        fields_enclosed_by: Optional[str] = None,
-        fields_optionally_enclosed: bool = False,
-        fields_escaped_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
-        lines_starting_by: Optional[str] = None,
-        ignore_lines: int = 0,
-        character_set: Optional[str] = None,
-        parallel: bool = False,
-        columns: Optional[List[str]] = None,
-        local: bool = False,
-        set_clause: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """Build standard LOAD DATA SQL statement (CSV format)."""
-        sql_parts = []
-
-        # LOAD DATA [LOCAL] INFILE
-        if local:
-            sql_parts.append("LOAD DATA LOCAL INFILE")
-        else:
-            sql_parts.append("LOAD DATA INFILE")
-
-        # File path
-        sql_parts.append(f"'{file_path}'")
-
-        # INTO TABLE
-        sql_parts.append(f"INTO TABLE {table_name}")
-
-        # CHARACTER SET
-        if character_set:
-            sql_parts.append(f"CHARACTER SET {character_set}")
-
-        # FIELDS options
-        fields_options = []
-        if fields_terminated_by:
-            fields_options.append(f"TERMINATED BY '{fields_terminated_by}'")
-        if fields_enclosed_by:
-            if fields_optionally_enclosed:
-                fields_options.append(f"OPTIONALLY ENCLOSED BY '{fields_enclosed_by}'")
-            else:
-                fields_options.append(f"ENCLOSED BY '{fields_enclosed_by}'")
-        if fields_escaped_by:
-            fields_options.append(f"ESCAPED BY '{fields_escaped_by}'")
-
-        if fields_options:
-            sql_parts.append("FIELDS " + " ".join(fields_options))
-
-        # LINES options
-        lines_options = []
-        if lines_starting_by:
-            lines_options.append(f"STARTING BY '{lines_starting_by}'")
-        if lines_terminated_by:
-            lines_options.append(f"TERMINATED BY '{lines_terminated_by}'")
-
-        if lines_options:
-            sql_parts.append("LINES " + " ".join(lines_options))
-
-        # IGNORE LINES
-        if ignore_lines > 0:
-            sql_parts.append(f"IGNORE {ignore_lines} LINES")
-
-        # Column list
-        if columns:
-            column_list = ", ".join(columns)
-            sql_parts.append(f"({column_list})")
-
-        # SET clause
-        if set_clause:
-            set_parts = [f"{col}={expr}" for col, expr in set_clause.items()]
-            sql_parts.append("SET " + ", ".join(set_parts))
-
-        # PARALLEL option
-        if parallel:
-            sql_parts.append("PARALLEL 'true'")
-
-        return " ".join(sql_parts)
-
-    def _build_load_data_sql_with_braces(
-        self,
-        file_path: str,
-        table_name: str,
-        format: str,
-        jsondata: Optional[str] = None,
-        compression: Optional[str] = None,
-        local: bool = False,
-    ) -> str:
-        """Build LOAD DATA SQL with brace syntax for JSONLINE/Parquet."""
-        sql_parts = []
-
-        # LOAD DATA [LOCAL] INFILE
-        if local:
-            sql_parts.append("LOAD DATA LOCAL INFILE")
-        else:
-            sql_parts.append("LOAD DATA INFILE")
-
-        # Build brace parameters
-        brace_params = [f"'filepath'='{file_path}'"]
-        brace_params.append(f"'format'='{format}'")
-
-        if jsondata:
-            brace_params.append(f"'jsondata'='{jsondata}'")
-
-        if compression:
-            brace_params.append(f"'compression'='{compression}'")
-
-        # Combine into brace syntax
-        sql_parts.append("{" + ", ".join(brace_params) + "}")
-
-        # INTO TABLE
-        sql_parts.append(f"INTO TABLE {table_name}")
-
-        return " ".join(sql_parts)
-
-    def _build_load_data_inline_sql(
-        self,
-        data: str,
-        table_name: str,
-        format: str = 'csv',
-        delimiter: str = ",",
-        enclosed_by: Optional[str] = None,
-        jsontype: Optional[str] = None,
-    ) -> str:
-        """Build LOAD DATA INLINE SQL statement."""
-        # 正确的语法：LOAD DATA INLINE FORMAT='csv', DATA='...' INTO TABLE xxx
-        sql_parts = []
-
-        # LOAD DATA INLINE
-        sql_parts.append("LOAD DATA INLINE")
-
-        # FORMAT and DATA (comma-separated)
-        inline_params = []
-        inline_params.append(f"FORMAT='{format}'")
-
-        # DATA - escape single quotes in data
-        escaped_data = data.replace("'", "''")
-        inline_params.append(f"DATA='{escaped_data}'")
-
-        # JSONTYPE (for JSONLINE format)
-        if jsontype and format == 'jsonline':
-            inline_params.append(f"JSONTYPE='{jsontype}'")
-
-        # Combine FORMAT, DATA, JSONTYPE with commas
-        sql_parts.append(", ".join(inline_params))
-
-        # INTO TABLE
-        sql_parts.append(f"INTO TABLE {table_name}")
-
-        # FIELDS options (for CSV)
-        if format == 'csv':
-            fields_options = []
-            if delimiter:
-                fields_options.append(f"TERMINATED BY '{delimiter}'")
-            if enclosed_by:
-                fields_options.append(f"ENCLOSED BY '{enclosed_by}'")
-
-            if fields_options:
-                sql_parts.append("FIELDS " + " ".join(fields_options))
-
-        return " ".join(sql_parts)
+        return self._get_executor().execute(sql)
 
 
-class TransactionLoadDataManager(LoadDataManager):
-    """
-    Load Data Manager for transaction context.
-
-    This manager executes LOAD DATA operations within a transaction,
-    providing atomicity for bulk data loading operations.
-
-    Examples::
-
-        # Load data within transaction
-        with client.transaction() as tx:
-            tx.load_data.from_file('/path/to/data1.csv', 'table1')
-            tx.load_data.from_file('/path/to/data2.csv', 'table2')
-            # Both loads succeed or both roll back
-    """
-
-    def __init__(self, transaction_wrapper):
-        """
-        Initialize TransactionLoadDataManager.
-
-        Args:
-            transaction_wrapper: TransactionWrapper instance
-        """
-        self.transaction_wrapper = transaction_wrapper
-        super().__init__(transaction_wrapper)
-
-
-class AsyncLoadDataManager(LoadDataManager):
+class AsyncLoadDataManager(BaseLoadDataManager):
     """
     Async manager for LOAD DATA operations in MatrixOne.
 
-    This class extends LoadDataManager to provide async/await support.
-    All SQL building logic is inherited - only execute() calls are async.
+    This class provides async/await support for LOAD DATA operations.
+    All SQL building logic is inherited from BaseLoadDataManager.
 
     Examples::
 
@@ -1416,52 +1408,319 @@ class AsyncLoadDataManager(LoadDataManager):
         await client.load_data.from_stage_csv('mystage', 'data.csv', Product)
     """
 
-    async def from_file(self, *args, **kwargs):
-        """Async version - builds SQL via parent, executes asynchronously"""
-        # Temporarily replace client.execute with a SQL capturer
-        sql = self._capture_sql(super().from_file, *args, **kwargs)
-        return await self.client.execute(sql)
+    def __init__(self, client, executor=None):
+        """
+        Initialize AsyncLoadDataManager.
 
-    async def from_inline(self, *args, **kwargs):
-        """Async version - builds SQL via parent, executes asynchronously"""
-        sql = self._capture_sql(super().from_inline, *args, **kwargs)
-        return await self.client.execute(sql)
+        Args:
+            client: Client object
+            executor: Optional executor (e.g., async session) for executing SQL.
+                     If None, uses client.execute
+        """
+        super().__init__(client)
+        self.executor = executor
 
-    def _capture_sql(self, method, *args, **kwargs):
-        """Helper to capture SQL from parent method without executing"""
-        captured_sql = None
-        original_execute = self.client.execute
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self.client
 
-        def capture(sql):
-            nonlocal captured_sql
-            captured_sql = sql
+    async def from_csv(
+        self,
+        file_path: str,
+        table_name_or_model,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        optionally_enclosed: bool = False,
+        escaped_by: Optional[str] = None,
+        ignore_lines: int = 0,
+        columns: Optional[List[str]] = None,
+        character_set: Optional[str] = None,
+        parallel: bool = False,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        set_clause: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        """Async version of from_csv"""
+        return await self.from_file(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            fields_terminated_by=delimiter,
+            fields_enclosed_by=enclosed_by,
+            fields_optionally_enclosed=optionally_enclosed,
+            fields_escaped_by=escaped_by,
+            ignore_lines=ignore_lines,
+            columns=columns,
+            character_set=character_set,
+            parallel=parallel,
+            compression=compression,
+            set_clause=set_clause,
+            **kwargs,
+        )
 
-            # Return mock result
-            class MockResult:
-                affected_rows = 0
+    async def from_tsv(
+        self, file_path: str, table_name_or_model, ignore_lines: int = 0, columns: Optional[List[str]] = None, **kwargs
+    ):
+        """Async version of from_tsv"""
+        return await self.from_csv(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            delimiter='\t',
+            ignore_lines=ignore_lines,
+            columns=columns,
+            **kwargs,
+        )
 
-            return MockResult()
+    async def from_jsonline(
+        self,
+        file_path: str,
+        table_name_or_model,
+        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """Async version of from_jsonline"""
+        structure_str = structure.value if isinstance(structure, JsonDataStructure) else structure
+        compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
 
-        self.client.execute = capture
-        try:
-            method(*args, **kwargs)
-        finally:
-            self.client.execute = original_execute
+        return await self.from_file(
+            file_path=file_path,
+            table_name_or_model=table_name_or_model,
+            format=LoadDataFormat.JSONLINE.value,
+            jsondata=structure_str,
+            compression=compression_str,
+            **kwargs,
+        )
 
-        return captured_sql
+    async def from_parquet(self, file_path: str, table_name_or_model, **kwargs):
+        """Async version of from_parquet"""
+        return await self.from_file(
+            file_path=file_path, table_name_or_model=table_name_or_model, format=LoadDataFormat.PARQUET.value, **kwargs
+        )
 
+    async def from_stage(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        format: Union[str, LoadDataFormat] = LoadDataFormat.CSV,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        jsondata: Optional[Union[str, JsonDataStructure]] = None,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """Async version of from_stage"""
+        stage_url = f"stage://{stage_name}/{filepath}"
 
-class AsyncTransactionLoadDataManager(AsyncLoadDataManager):
-    """
-    Async Load Data Manager for transaction context.
+        if delimiter and 'fields_terminated_by' not in kwargs:
+            kwargs['fields_terminated_by'] = delimiter
+        if enclosed_by and 'fields_enclosed_by' not in kwargs:
+            kwargs['fields_enclosed_by'] = enclosed_by
 
-    Executes LOAD DATA within an async transaction for atomicity.
+        return await self.from_file(
+            stage_url, table_name_or_model, format=format, jsondata=jsondata, compression=compression, **kwargs
+        )
 
-    Examples::
+    async def from_stage_csv(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """Async version of from_stage_csv"""
+        return await self.from_stage(
+            stage_name,
+            filepath,
+            table_name_or_model,
+            format=LoadDataFormat.CSV,
+            delimiter=delimiter,
+            enclosed_by=enclosed_by,
+            compression=compression,
+            **kwargs,
+        )
 
-        async with client.transaction() as tx:
-            await tx.load_data.from_csv('/path/to/data1.csv', User)
-            await tx.load_data.from_csv('/path/to/data2.csv', Product)
-    """
+    async def from_stage_tsv(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """Async version of from_stage_tsv"""
+        return await self.from_stage(
+            stage_name,
+            filepath,
+            table_name_or_model,
+            format=LoadDataFormat.CSV,
+            delimiter='\t',
+            compression=compression,
+            **kwargs,
+        )
 
-    pass  # Inherits all async methods
+    async def from_stage_jsonline(
+        self,
+        stage_name: str,
+        filepath: str,
+        table_name_or_model,
+        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """Async version of from_stage_jsonline"""
+        return await self.from_stage(
+            stage_name,
+            filepath,
+            table_name_or_model,
+            format=LoadDataFormat.JSONLINE,
+            jsondata=structure,
+            compression=compression,
+            **kwargs,
+        )
+
+    async def from_stage_parquet(self, stage_name: str, filepath: str, table_name_or_model, **kwargs):
+        """Async version of from_stage_parquet"""
+        return await self.from_stage(stage_name, filepath, table_name_or_model, format=LoadDataFormat.PARQUET, **kwargs)
+
+    async def from_file(
+        self,
+        file_path: str,
+        table_name_or_model,
+        fields_terminated_by: str = ",",
+        fields_enclosed_by: Optional[str] = None,
+        fields_optionally_enclosed: bool = False,
+        fields_escaped_by: Optional[str] = None,
+        lines_terminated_by: Optional[str] = None,
+        lines_starting_by: Optional[str] = None,
+        ignore_lines: int = 0,
+        character_set: Optional[str] = None,
+        parallel: bool = False,
+        columns: Optional[List[str]] = None,
+        format: Optional[Union[str, LoadDataFormat]] = None,
+        jsondata: Optional[Union[str, JsonDataStructure]] = None,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        set_clause: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        """Async version of from_file - builds SQL and executes asynchronously"""
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+
+        # Validate required parameters
+        if not file_path or not isinstance(file_path, str):
+            raise ValueError("file_path must be a non-empty string")
+
+        if not table_name or not isinstance(table_name, str):
+            raise ValueError("table_name must be a non-empty string")
+
+        if not isinstance(ignore_lines, int) or ignore_lines < 0:
+            raise ValueError("ignore_lines must be a non-negative integer")
+
+        # Convert enums to strings if needed
+        format_str = format.value if isinstance(format, LoadDataFormat) else format
+        jsondata_str = jsondata.value if isinstance(jsondata, JsonDataStructure) else jsondata
+        compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
+
+        # Build the LOAD DATA SQL statement using base class
+        sql = self._build_load_data_sql(
+            file_path=file_path,
+            table_name=table_name,
+            fields_terminated_by=fields_terminated_by,
+            fields_enclosed_by=fields_enclosed_by,
+            fields_optionally_enclosed=fields_optionally_enclosed,
+            fields_escaped_by=fields_escaped_by,
+            lines_terminated_by=lines_terminated_by,
+            lines_starting_by=lines_starting_by,
+            ignore_lines=ignore_lines,
+            character_set=character_set,
+            parallel=parallel,
+            columns=columns,
+            format=format_str,
+            jsondata=jsondata_str,
+            compression=compression_str,
+            set_clause=set_clause,
+        )
+
+        # Execute asynchronously
+        return await self._get_executor().execute(sql)
+
+    async def from_local_file(self, file_path: str, table_name_or_model, **kwargs):
+        """Async version of from_local_file"""
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+
+        # Build SQL with LOCAL keyword
+        sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
+
+        return await self._get_executor().execute(sql)
+
+    async def from_inline(
+        self,
+        data: str,
+        table_name_or_model,
+        format: Union[str, LoadDataFormat] = LoadDataFormat.CSV,
+        delimiter: str = ",",
+        enclosed_by: Optional[str] = None,
+        jsontype: Optional[Union[str, JsonDataStructure]] = None,
+        **kwargs,
+    ):
+        """Async version of from_inline"""
+        # Handle model class input
+        if hasattr(table_name_or_model, '__tablename__'):
+            table_name = table_name_or_model.__tablename__
+        else:
+            table_name = table_name_or_model
+
+        # Validate parameters
+        if not data or not isinstance(data, str):
+            raise ValueError("data must be a non-empty string")
+
+        if not table_name or not isinstance(table_name, str):
+            raise ValueError("table_name must be a non-empty string")
+
+        # Convert enums to strings
+        format_str = format.value if isinstance(format, LoadDataFormat) else format
+        jsontype_str = jsontype.value if isinstance(jsontype, JsonDataStructure) else jsontype
+
+        # Build SQL using base class
+        sql = self._build_load_data_inline_sql(
+            data=data,
+            table_name=table_name,
+            format=format_str,
+            delimiter=delimiter,
+            enclosed_by=enclosed_by,
+            jsontype=jsontype_str,
+        )
+
+        return await self._get_executor().execute(sql)
+
+    async def from_csv_inline(
+        self, data: str, table_name_or_model, delimiter: str = ",", enclosed_by: Optional[str] = None, **kwargs
+    ):
+        """Async version of from_csv_inline"""
+        return await self.from_inline(
+            data=data,
+            table_name_or_model=table_name_or_model,
+            format=LoadDataFormat.CSV,
+            delimiter=delimiter,
+            enclosed_by=enclosed_by,
+            **kwargs,
+        )
+
+    async def from_jsonline_inline(
+        self, data: str, table_name_or_model, structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT, **kwargs
+    ):
+        """Async version of from_jsonline_inline"""
+        return await self.from_inline(
+            data=data, table_name_or_model=table_name_or_model, format=LoadDataFormat.JSONLINE, jsontype=structure, **kwargs
+        )

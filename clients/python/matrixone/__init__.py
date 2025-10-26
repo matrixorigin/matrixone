@@ -40,9 +40,7 @@ from .exceptions import (
 )
 from .load_data import (
     LoadDataManager,
-    TransactionLoadDataManager,
     AsyncLoadDataManager,
-    AsyncTransactionLoadDataManager,
     LoadDataFormat,
     CompressionFormat,
     JsonDataStructure,
@@ -135,9 +133,7 @@ __all__ = [
     "Role",
     "Grant",
     "LoadDataManager",
-    "TransactionLoadDataManager",
     "AsyncLoadDataManager",
-    "AsyncTransactionLoadDataManager",
     "LoadDataFormat",
     "CompressionFormat",
     "JsonDataStructure",
