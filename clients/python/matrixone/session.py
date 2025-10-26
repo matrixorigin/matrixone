@@ -115,7 +115,7 @@ class Session(SQLAlchemySession):
             TransactionFulltextIndexManager = getattr(client_module, 'TransactionFulltextIndexManager')
 
         # These are defined in their respective modules
-        from .metadata import TransactionMetadataManager
+        from .metadata import MetadataManager
         from .load_data import LoadDataManager
         from .stage import StageManager
         from .pitr import PitrManager
@@ -133,7 +133,7 @@ class Session(SQLAlchemySession):
         self.account = AccountManager(client, executor=self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
-        self.metadata = TransactionMetadataManager(client, self)
+        self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
 

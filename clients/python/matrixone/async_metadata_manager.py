@@ -32,31 +32,9 @@ class AsyncMetadataManager(BaseMetadataManager):
 
     Provides async methods to scan table metadata including column statistics,
     row counts, null counts, and data distribution information.
+
+    Supports both AsyncClient and AsyncSession contexts via executor pattern.
     """
-
-    def __init__(self, client):
-        """
-        Initialize async metadata manager.
-
-        Args:
-
-            client: MatrixOne AsyncClient instance
-        """
-        self.client = client
-
-    async def _execute_sql(self, sql: str):
-        """
-        Execute SQL query asynchronously.
-
-        Args:
-
-            sql: SQL query to execute
-
-        Returns:
-
-            SQLAlchemy Result object
-        """
-        return await self.client.execute(sql)
 
     async def scan(
         self,
@@ -103,8 +81,8 @@ class AsyncMetadataManager(BaseMetadataManager):
         # Build SQL query
         sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
 
-        # Execute the query
-        result = await self._execute_sql(sql)
+        # Execute the query using executor
+        result = await self._get_executor().execute(sql)
 
         # Process result based on columns parameter
         return self._process_scan_result(result, columns)
@@ -134,14 +112,17 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             Dictionary with brief statistics for table, tombstone, and indexes
         """
+        queries = self._prepare_brief_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
 
-        # Create a wrapper function that awaits the async execution
-        async def async_execute_func(sql: str):
-            return await self._execute_sql(sql)
+        result = {}
+        for key, sql in queries:
+            query_result = await self._get_executor().execute(sql)
+            rows = query_result.fetchall()
+            stats = self._process_brief_stats_result(rows)
+            if stats:
+                result[key] = stats
 
-        return await self._get_table_brief_stats_logic_async(
-            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes, async_execute_func
-        )
+        return result
 
     async def get_table_detail_stats(
         self,
@@ -168,146 +149,14 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             Dictionary with detailed statistics for table, tombstone, and indexes
         """
+        queries = self._prepare_detail_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
 
-        # Create a wrapper function that awaits the async execution
-        async def async_execute_func(sql: str):
-            return await self._execute_sql(sql)
+        result = {}
+        for key, sql in queries:
+            query_result = await self._get_executor().execute(sql)
+            rows = query_result.fetchall()
+            details = self._process_detail_stats_result(rows)
+            if details:
+                result[key] = details
 
-        return await self._get_table_detail_stats_logic_async(
-            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes, async_execute_func
-        )
-
-
-class AsyncTransactionMetadataManager(BaseMetadataManager):
-    """
-    Async transaction metadata manager for MatrixOne table metadata operations within transactions.
-
-    Provides async methods to scan table metadata including column statistics,
-    row counts, null counts, and data distribution information within a transaction context.
-    """
-
-    def __init__(self, client, transaction_wrapper):
-        """
-        Initialize async transaction metadata manager.
-
-        Args:
-
-            client: MatrixOne AsyncClient instance
-            transaction_wrapper: Async transaction wrapper instance
-        """
-        self.client = client
-        self.transaction_wrapper = transaction_wrapper
-
-    async def _execute_sql(self, sql: str):
-        """
-        Execute SQL query using async transaction wrapper.
-
-        Args:
-
-            sql: SQL query to execute
-
-        Returns:
-
-            SQLAlchemy Result object
-        """
-        return await self.transaction_wrapper.execute(sql)
-
-    async def scan(
-        self,
-        dbname: str,
-        tablename: str,
-        is_tombstone: Optional[bool] = None,
-        indexname: Optional[str] = None,
-        columns: Optional[List[Union[MetadataColumn, str]]] = None,
-        distinct_object_name: Optional[bool] = None,
-    ) -> Union[Result, List[MetadataRow]]:
-        """
-        Scan table metadata using metadata_scan function within transaction (async).
-
-        Args:
-
-            dbname: Database name
-            tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
-            indexname: Optional index name
-
-        Returns:
-
-            SQLAlchemy Result object containing metadata scan results
-        """
-        # Build SQL query
-        sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
-
-        # Execute the query within transaction
-        result = await self._execute_sql(sql)
-
-        # Process result based on columns parameter
-        return self._process_scan_result(result, columns)
-
-    async def get_table_brief_stats(
-        self,
-        dbname: str,
-        tablename: str,
-        is_tombstone: Optional[bool] = None,
-        indexname: Optional[str] = None,
-        include_tombstone: bool = False,
-        include_indexes: Optional[List[str]] = None,
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Get brief statistics for a table, tombstone, and indexes within transaction (async).
-
-        Args:
-
-            dbname: Database name
-            tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
-            indexname: Optional index name
-            include_tombstone: Whether to include tombstone statistics
-            include_indexes: List of index names to include
-
-        Returns:
-
-            Dictionary with brief statistics for table, tombstone, and indexes
-        """
-
-        # Create a wrapper function that awaits the async execution
-        async def async_execute_func(sql: str):
-            return await self._execute_sql(sql)
-
-        return await self._get_table_brief_stats_logic_async(
-            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes, async_execute_func
-        )
-
-    async def get_table_detail_stats(
-        self,
-        dbname: str,
-        tablename: str,
-        is_tombstone: Optional[bool] = None,
-        indexname: Optional[str] = None,
-        include_tombstone: bool = False,
-        include_indexes: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Get detailed statistics for a table, tombstone, and indexes within transaction (async).
-
-        Args:
-
-            dbname: Database name
-            tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
-            indexname: Optional index name
-            include_tombstone: Whether to include tombstone statistics
-            include_indexes: List of index names to include
-
-        Returns:
-
-            Dictionary with detailed statistics for table, tombstone, and indexes
-        """
-
-        # Create a wrapper function that awaits the async execution
-        async def async_execute_func(sql: str):
-            return await self._execute_sql(sql)
-
-        return await self._get_table_detail_stats_logic_async(
-            dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes, async_execute_func
-        )
+        return result

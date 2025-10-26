@@ -36,7 +36,7 @@ from .exceptions import ConnectionError, QueryError
 from .load_data import LoadDataManager
 from .stage import StageManager
 from .logger import MatrixOneLogger, create_default_logger
-from .metadata import MetadataManager, TransactionMetadataManager
+from .metadata import MetadataManager
 from .moctl import MoCtlManager
 from .pitr import PitrManager
 from .pubsub import PubSubManager
@@ -3061,7 +3061,7 @@ class Session(SQLAlchemySession):
         self.account = AccountManager(client, executor=self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
-        self.metadata = TransactionMetadataManager(client, self)
+        self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
 
