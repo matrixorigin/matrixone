@@ -13,8 +13,9 @@
 # limitations under the License.
 
 """
-MatrixOne Python SDK - Publish-Subscribe Manager
-Provides Publish-Subscribe functionality for MatrixOne
+MatrixOne Publish-Subscribe Management
+
+Unified PubSub management supporting sync/async and client/session executors.
 """
 
 from datetime import datetime
@@ -37,20 +38,7 @@ class Publication:
         update_time: Optional[datetime] = None,
         comments: Optional[str] = None,
     ):
-        """
-        Initialize Publication object
-
-        Args::
-
-            name: Publication name
-            database: Database name
-            tables: Tables (can be '*' for all tables or specific table names)
-            sub_account: Subscriber account names (comma-separated)
-            subscribed_accounts: Currently subscribed accounts
-            created_time: Creation time
-            update_time: Last update time
-            comments: Publication comments
-        """
+        """Initialize Publication object"""
         self.name = name
         self.database = database
         self.tables = tables
@@ -82,21 +70,7 @@ class Subscription:
         sub_time: Optional[datetime] = None,
         status: int = 0,
     ):
-        """
-        Initialize Subscription object
-
-        Args::
-
-            pub_name: Publication name
-            pub_account: Publisher account name
-            pub_database: Publisher database name
-            pub_tables: Publisher tables
-            pub_comment: Publication comment
-            pub_time: Publication creation time
-            sub_name: Subscription name
-            sub_time: Subscription creation time
-            status: Subscription status
-        """
+        """Initialize Subscription object"""
         self.pub_name = pub_name
         self.pub_account = pub_account
         self.pub_database = pub_database
@@ -108,85 +82,28 @@ class Subscription:
         self.status = status
 
     def __repr__(self):
-        return f"<Subscription(pub_name='{self.pub_name}', sub_name='{self.sub_name}', " f"status={self.status})>"
+        return (
+            f"<Subscription(pub_name='{self.pub_name}', pub_account='{self.pub_account}', "
+            f"pub_database='{self.pub_database}', sub_name='{self.sub_name}')>"
+        )
 
 
-class PubSubManager:
+class BasePubSubManager:
     """
-    Manager for Publish-Subscribe operations in MatrixOne.
+    Base PubSub manager with shared logic for sync and async implementations.
 
-    This class provides comprehensive pub/sub functionality for real-time data
-    distribution and event-driven architectures. It supports creating publications
-    and subscriptions for database changes, enabling efficient data replication
-    and real-time updates across multiple systems.
-
-    Key Features:
-
-    - Database publication creation and management
-    - Subscription management for real-time updates
-    - Event-driven data distribution
-    - Integration with MatrixOne's replication system
-    - Support for both database and table-level publications
-    - Transaction-aware pub/sub operations
-
-    Supported Operations:
-
-    - Create and manage database publications
-    - Create and manage table publications
-    - Create and manage subscriptions
-    - List and query publications and subscriptions
-    - Monitor pub/sub status and performance
-
-    Usage Examples::
-
-        # Initialize pub/sub manager
-        pubsub = client.pubsub
-
-        # Create database publication
-        publication = pubsub.create_database_publication(
-            name='user_changes',
-            database='my_database',
-            account='my_account'
-        )
-
-        # Create table publication
-        publication = pubsub.create_table_publication(
-            name='user_updates',
-            database='my_database',
-            table='users',
-            account='my_account'
-        )
-
-        # Create subscription
-        subscription = pubsub.create_subscription(
-            name='user_subscription',
-            publication='user_changes',
-            target_database='replica_database',
-            account='my_account'
-        )
-
-        # List publications
-        publications = pubsub.list_publications()
-
-        # List subscriptions
-        subscriptions = pubsub.list_subscriptions()
-
-        # Get pub/sub status
-        status = pubsub.get_publication_status('user_changes')
-
-    Note: Pub/sub functionality requires MatrixOne version 1.0.0 or higher and
-    appropriate replication infrastructure. Pub/sub operations may impact
-    database performance and should be used judiciously.
+    This base class contains all the SQL building and data parsing logic that is
+    shared between sync and async implementations.
     """
 
     def __init__(self, client, executor=None):
         """
-        Initialize PubSubManager.
+        Initialize base PubSub manager.
 
         Args:
             client: MatrixOne client instance
             executor: Optional executor (e.g., session) for executing SQL.
-                     If None, uses client.execute
+                     If None, uses client as executor
         """
         self._client = client
         self.executor = executor
@@ -195,423 +112,49 @@ class PubSubManager:
         """Get the executor for SQL execution (session or client)"""
         return self.executor if self.executor else self._client
 
-    # Publication Operations
+    def _build_create_database_publication_sql(self, name: str, database: str, account: str) -> str:
+        """Build CREATE PUBLICATION DATABASE SQL"""
+        return (
+            f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
+            f"DATABASE {self._client._escape_identifier(database)} "
+            f"ACCOUNT {self._client._escape_identifier(account)}"
+        )
 
-    def create_database_publication(self, name: str, database: str, account: str) -> Publication:
-        """
-            Create database-level publication
+    def _build_create_table_publication_sql(self, name: str, database: str, table: str, account: str) -> str:
+        """Build CREATE PUBLICATION TABLE SQL"""
+        return (
+            f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
+            f"DATABASE {self._client._escape_identifier(database)} "
+            f"TABLE {self._client._escape_identifier(table)} "
+            f"ACCOUNT {self._client._escape_identifier(account)}"
+        )
 
-            Args::
-
-                name: Publication name
-                database: Database name to publish
-                account: Subscriber account name
-
-            Returns::
-
-                Publication: Created publication object
-
-            Raises::
-
-                PubSubError: If publication creation fails
-
-            Example
-
-        >>> pub = client.pubsub.create_database_publication("db_pub", "central_db", "acc1")
-        """
-        try:
-            sql = (
-                f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
-                f"DATABASE {self._client._escape_identifier(database)} "
-                f"ACCOUNT {self._client._escape_identifier(account)}"
-            )
-
-            result = self._get_executor().execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create database publication '{name}'") from None
-
-            # Return publication object (we'll get the actual details via SHOW PUBLICATIONS)
-            return self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create database publication '{name}': {e}") from None
-
-    def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
-        """
-            Create table-level publication
-
-            Args::
-
-                name: Publication name
-                database: Database name
-                table: Table name to publish
-                account: Subscriber account name
-
-            Returns::
-
-                Publication: Created publication object
-
-            Raises::
-
-                PubSubError: If publication creation fails
-
-            Example
-
-        >>> pub = client.pubsub.create_table_publication("table_pub", "central_db", "products", "acc1")
-        """
-        try:
-            sql = (
-                f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
-                f"DATABASE {self._client._escape_identifier(database)} "
-                f"TABLE {self._client._escape_identifier(table)} "
-                f"ACCOUNT {self._client._escape_identifier(account)}"
-            )
-
-            result = self._get_executor().execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create table publication '{name}'") from None
-
-            return self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create table publication '{name}': {e}") from None
-
-    def get_publication(self, name: str) -> Publication:
-        """
-        Get publication by name
-
-        Args::
-
-            name: Publication name
-
-        Returns::
-
-            Publication: Publication object
-
-        Raises::
-
-            PubSubError: If publication not found
-        """
-        try:
-            # List all publications and find the one with matching name
-            sql = "SHOW PUBLICATIONS"
-            result = self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found") from None
-
-            # Find publication with matching name
-            for row in result.rows:
-                if row[0] == name:  # publication name is in first column
-                    return self._row_to_publication(row)
-
-            raise PubSubError(f"Publication '{name}' not found") from None
-
-        except Exception as e:
-            raise PubSubError(f"Failed to get publication '{name}': {e}") from None
-
-    def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
-        """
-        List publications with optional filters
-
-        Args::
-
-            account: Filter by subscriber account
-            database: Filter by database name
-
-        Returns::
-
-            List[Publication]: List of publication objects
-        """
-        try:
-            # For now, just list all publications since WHERE clause syntax may vary
-            # In a real implementation, you would need to check the exact syntax supported
-            sql = "SHOW PUBLICATIONS"
-            result = self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            publications = [self._row_to_publication(row) for row in result.rows]
-
-            # Apply filters in Python if needed
-            if account:
-                publications = [pub for pub in publications if account in pub.sub_account]
-            if database:
-                publications = [pub for pub in publications if pub.database == database]
-
-            return publications
-
-        except Exception as e:
-            raise PubSubError(f"Failed to list publications: {e}") from None
-
-    def alter_publication(
+    def _build_alter_publication_sql(
         self,
         name: str,
         account: Optional[str] = None,
         database: Optional[str] = None,
         table: Optional[str] = None,
-    ) -> Publication:
-        """
-        Alter publication
+    ) -> str:
+        """Build ALTER PUBLICATION SQL"""
+        parts = [f"ALTER PUBLICATION {self._client._escape_identifier(name)}"]
 
-        Args::
+        if account:
+            parts.append(f"ACCOUNT {self._client._escape_identifier(account)}")
+        if database:
+            parts.append(f"DATABASE {self._client._escape_identifier(database)}")
+        if table:
+            parts.append(f"TABLE {self._client._escape_identifier(table)}")
 
-            name: Publication name
-            account: New subscriber account
-            database: New database name
-            table: New table name (for table-level publications)
+        return " ".join(parts)
 
-        Returns::
-
-            Publication: Updated publication object
-
-        Raises::
-
-            PubSubError: If publication alteration fails
-        """
-        try:
-            # Build ALTER PUBLICATION statement
-            parts = [f"ALTER PUBLICATION {self._client._escape_identifier(name)}"]
-
-            if account:
-                parts.append(f"ACCOUNT {self._client._escape_identifier(account)}")
-            if database:
-                parts.append(f"DATABASE {self._client._escape_identifier(database)}")
-            if table:
-                parts.append(f"TABLE {self._client._escape_identifier(table)}")
-
-            sql = " ".join(parts)
-            result = self._get_executor().execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to alter publication '{name}'") from None
-
-            return self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to alter publication '{name}': {e}") from None
-
-    def drop_publication(self, name: str) -> bool:
-        """
-        Drop publication
-
-        Args::
-
-            name: Publication name
-
-        Returns::
-
-            bool: True if deletion was successful
-
-        Raises::
-
-            PubSubError: If publication deletion fails
-        """
-        try:
-            sql = f"DROP PUBLICATION {self._client._escape_identifier(name)}"
-            result = self._get_executor().execute(sql)
-            return result is not None
-
-        except Exception as e:
-            raise PubSubError(f"Failed to drop publication '{name}': {e}") from None
-
-    def show_create_publication(self, name: str) -> str:
-        """
-        Show CREATE PUBLICATION statement for a publication
-
-        Args::
-
-            name: Publication name
-
-        Returns::
-
-            str: CREATE PUBLICATION statement
-
-        Raises::
-
-            PubSubError: If publication not found or retrieval fails
-        """
-        try:
-            sql = f"SHOW CREATE PUBLICATION {self._client._escape_identifier(name)}"
-            result = self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found") from None
-
-            # The result should contain the CREATE statement
-            # Assuming the CREATE statement is in the first column
-            return result.rows[0][0]
-
-        except Exception as e:
-            raise PubSubError(f"Failed to show create publication '{name}': {e}") from None
-
-    # Subscription Operations
-
-    def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
-        """
-            Create subscription from publication
-
-            Args::
-
-                subscription_name: Name for the subscription database
-                publication_name: Name of the publication to subscribe to
-                publisher_account: Publisher account name
-
-            Returns::
-
-                Subscription: Created subscription object
-
-            Raises::
-
-                PubSubError: If subscription creation fails
-
-            Example
-
-        >>> sub = client.pubsub.create_subscription("sub_db", "pub_name", "sys")
-        """
-        try:
-            sql = (
-                f"CREATE DATABASE {self._client._escape_identifier(subscription_name)} "
-                f"FROM {self._client._escape_identifier(publisher_account)} "
-                f"PUBLICATION {self._client._escape_identifier(publication_name)}"
-            )
-
-            result = self._get_executor().execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create subscription '{subscription_name}'") from None
-
-            return self.get_subscription(subscription_name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}") from None
-
-    def get_subscription(self, name: str) -> Subscription:
-        """
-        Get subscription by name
-
-        Args::
-
-            name: Subscription name
-
-        Returns::
-
-            Subscription: Subscription object
-
-        Raises::
-
-            PubSubError: If subscription not found
-        """
-        try:
-            # List all subscriptions and find the one with matching name
-            sql = "SHOW SUBSCRIPTIONS"
-            result = self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Subscription '{name}' not found") from None
-
-            # Find subscription with matching name
-            for row in result.rows:
-                if len(row) > 6 and row[6] == name:  # sub_name is in 7th column (index 6)
-                    return self._row_to_subscription(row)
-
-            raise PubSubError(f"Subscription '{name}' not found") from None
-
-        except Exception as e:
-            raise PubSubError(f"Failed to get subscription '{name}': {e}") from None
-
-    def list_subscriptions(
-        self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
-    ) -> List[Subscription]:
-        """
-        List subscriptions with optional filters
-
-        Args::
-
-            pub_account: Filter by publisher account
-            pub_database: Filter by publisher database
-
-        Returns::
-
-            List[Subscription]: List of subscription objects
-        """
-        try:
-            # List all subscriptions since WHERE clause syntax may vary
-            sql = "SHOW SUBSCRIPTIONS"
-            result = self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            subscriptions = [self._row_to_subscription(row) for row in result.rows]
-
-            # Apply filters in Python if needed
-            if pub_account:
-                subscriptions = [sub for sub in subscriptions if sub.pub_account == pub_account]
-            if pub_database:
-                subscriptions = [sub for sub in subscriptions if sub.pub_database == pub_database]
-
-            return subscriptions
-
-        except Exception as e:
-            raise PubSubError(f"Failed to list subscriptions: {e}") from None
-
-    def _row_to_publication(self, row: tuple) -> Publication:
-        """Convert database row to Publication object"""
-        # Expected columns: publication, database, tables, sub_account, subscribed_accounts,
-        # create_time, update_time, comments
-        # Based on MatrixOne official documentation:
-        # https://docs.matrixorigin.cn/en/v25.2.2.2/MatrixOne/Reference/SQL-Reference/Other/SHOW-Statements/show-publications/
-        return Publication(
-            name=row[0],  # publication
-            database=row[1],  # database
-            tables=row[2],  # tables
-            sub_account=row[3],  # sub_account
-            subscribed_accounts=row[4],  # subscribed_accounts
-            created_time=row[5] if len(row) > 5 else None,  # create_time
-            update_time=row[6] if len(row) > 6 else None,  # update_time
-            comments=row[7] if len(row) > 7 else None,  # comments
+    def _build_create_subscription_sql(self, subscription_name: str, publication_name: str, publisher_account: str) -> str:
+        """Build CREATE DATABASE (subscription) SQL"""
+        return (
+            f"CREATE DATABASE {self._client._escape_identifier(subscription_name)} "
+            f"FROM {self._client._escape_identifier(publisher_account)} "
+            f"PUBLICATION {self._client._escape_identifier(publication_name)}"
         )
-
-    def _row_to_subscription(self, row: tuple) -> Subscription:
-        """Convert database row to Subscription object"""
-        # Expected columns: pub_name, pub_account, pub_database, pub_tables, pub_comment,
-        # pub_time, sub_name, sub_time, status
-        return Subscription(
-            pub_name=row[0],
-            pub_account=row[1],
-            pub_database=row[2],
-            pub_tables=row[3] if row[3] else '*',
-            sub_name=row[6] if len(row) > 6 else '',
-            pub_comment=row[4] if len(row) > 4 else None,
-            pub_time=row[5] if len(row) > 5 else None,
-            sub_time=row[7] if len(row) > 7 else None,
-            status=0,
-        )
-
-
-class AsyncPubSubManager:
-    """
-    Asynchronous Publish-Subscribe management for MatrixOne.
-
-    Provides the same functionality as PubSubManager but with async/await support.
-    Uses the same executor pattern to support both client and session contexts.
-    """
-
-    def __init__(self, client, executor=None):
-        """
-        Initialize async PubSubManager.
-
-        Args:
-            client: MatrixOne async client instance
-            executor: Optional executor (e.g., async session) for executing SQL.
-                     If None, uses client.execute
-        """
-        self._client = client
-        self.executor = executor
-
-    def _get_executor(self):
-        """Get the executor for SQL execution (session or client)"""
-        return self.executor if self.executor else self._client
 
     def _row_to_publication(self, row: tuple) -> Publication:
         """Convert database row to Publication object"""
@@ -640,15 +183,214 @@ class AsyncPubSubManager:
             status=0,
         )
 
+
+class PubSubManager(BasePubSubManager):
+    """
+    Synchronous Publish-Subscribe management for MatrixOne.
+
+    Provides comprehensive pub/sub functionality for real-time data distribution
+    and event-driven architectures.
+
+    Key Features:
+    - Database and table-level publication creation
+    - Subscription management
+    - Event-driven data distribution
+    - Transaction-aware operations via executor pattern
+    - Unified interface for client and session contexts
+
+    Note: SHOW PUBLICATIONS does not support WHERE clause, so filtering is done client-side.
+    """
+
+    def create_database_publication(self, name: str, database: str, account: str) -> Publication:
+        """Create database-level publication"""
+        try:
+            sql = self._build_create_database_publication_sql(name, database, account)
+            result = self._get_executor().execute(sql)
+            if result is None:
+                raise PubSubError(f"Failed to create database publication '{name}'")
+
+            return self.get_publication(name)
+
+        except Exception as e:
+            raise PubSubError(f"Failed to create database publication '{name}': {e}") from None
+
+    def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
+        """Create table-level publication"""
+        try:
+            sql = self._build_create_table_publication_sql(name, database, table, account)
+            result = self._get_executor().execute(sql)
+            if result is None:
+                raise PubSubError(f"Failed to create table publication '{name}'")
+
+            return self.get_publication(name)
+
+        except Exception as e:
+            raise PubSubError(f"Failed to create table publication '{name}': {e}") from None
+
+    def get_publication(self, name: str) -> Publication:
+        """Get publication by name"""
+        try:
+            # SHOW PUBLICATIONS doesn't support WHERE clause
+            sql = "SHOW PUBLICATIONS"
+            result = self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                raise PubSubError(f"Publication '{name}' not found")
+
+            # Find publication with matching name
+            for row in result.rows:
+                if row[0] == name:
+                    return self._row_to_publication(row)
+
+            raise PubSubError(f"Publication '{name}' not found")
+
+        except Exception as e:
+            raise PubSubError(f"Failed to get publication '{name}': {e}") from None
+
+    def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
+        """List publications with optional filters"""
+        try:
+            sql = "SHOW PUBLICATIONS"
+            result = self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                return []
+
+            publications = []
+            for row in result.rows:
+                pub = self._row_to_publication(row)
+
+                # Apply filters
+                if account and account not in pub.sub_account:
+                    continue
+                if database and pub.database != database:
+                    continue
+
+                publications.append(pub)
+
+            return publications
+
+        except Exception as e:
+            raise PubSubError(f"Failed to list publications: {e}") from None
+
+    def alter_publication(
+        self,
+        name: str,
+        account: Optional[str] = None,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
+    ) -> Publication:
+        """Alter publication"""
+        try:
+            sql = self._build_alter_publication_sql(name, account, database, table)
+            result = self._get_executor().execute(sql)
+            if result is None:
+                raise PubSubError(f"Failed to alter publication '{name}'")
+
+            return self.get_publication(name)
+
+        except Exception as e:
+            raise PubSubError(f"Failed to alter publication '{name}': {e}") from None
+
+    def drop_publication(self, name: str) -> bool:
+        """Drop publication"""
+        try:
+            sql = f"DROP PUBLICATION {self._client._escape_identifier(name)}"
+            result = self._get_executor().execute(sql)
+            return result is not None
+
+        except Exception as e:
+            raise PubSubError(f"Failed to drop publication '{name}': {e}") from None
+
+    def show_create_publication(self, name: str) -> str:
+        """Show CREATE PUBLICATION statement"""
+        try:
+            sql = f"SHOW CREATE PUBLICATION {self._client._escape_identifier(name)}"
+            result = self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                raise PubSubError(f"Publication '{name}' not found")
+
+            return result.rows[0][1]  # CREATE statement is in second column
+
+        except Exception as e:
+            raise PubSubError(f"Failed to show create publication '{name}': {e}") from None
+
+    def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
+        """Create subscription"""
+        try:
+            sql = self._build_create_subscription_sql(subscription_name, publication_name, publisher_account)
+            result = self._get_executor().execute(sql)
+            if result is None:
+                raise PubSubError(f"Failed to create subscription '{subscription_name}'")
+
+            return self.get_subscription(subscription_name)
+
+        except Exception as e:
+            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}") from None
+
+    def get_subscription(self, name: str) -> Subscription:
+        """Get subscription by name"""
+        try:
+            # SHOW SUBSCRIPTIONS doesn't support WHERE clause
+            sql = "SHOW SUBSCRIPTIONS"
+            result = self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                raise PubSubError(f"Subscription '{name}' not found")
+
+            # Find subscription with matching name
+            for row in result.rows:
+                if row[6] == name:  # sub_name is in 7th column (index 6)
+                    return self._row_to_subscription(row)
+
+            raise PubSubError(f"Subscription '{name}' not found")
+
+        except Exception as e:
+            raise PubSubError(f"Failed to get subscription '{name}': {e}") from None
+
+    def list_subscriptions(
+        self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
+    ) -> List[Subscription]:
+        """List subscriptions with optional filters"""
+        try:
+            conditions = []
+
+            if pub_account:
+                conditions.append(f"pub_account = {self._client._escape_string(pub_account)}")
+            if pub_database:
+                conditions.append(f"pub_database = {self._client._escape_string(pub_database)}")
+
+            if conditions:
+                where_clause = " WHERE " + " AND ".join(conditions)
+            else:
+                where_clause = ""
+
+            sql = f"SHOW SUBSCRIPTIONS{where_clause}"
+            result = self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                return []
+
+            return [self._row_to_subscription(row) for row in result.rows]
+
+        except Exception as e:
+            raise PubSubError(f"Failed to list subscriptions: {e}") from None
+
+
+class AsyncPubSubManager(BasePubSubManager):
+    """
+    Asynchronous Publish-Subscribe management for MatrixOne.
+
+    Provides the same functionality as PubSubManager but with async/await support.
+    Uses the same executor pattern to support both client and session contexts.
+    Shares SQL building logic with the synchronous version via BasePubSubManager.
+    """
+
     async def create_database_publication(self, name: str, database: str, account: str) -> Publication:
         """Create database-level publication asynchronously"""
         try:
-            sql = (
-                f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
-                f"DATABASE {self._client._escape_identifier(database)} "
-                f"ACCOUNT {self._client._escape_identifier(account)}"
-            )
-
+            sql = self._build_create_database_publication_sql(name, database, account)
             result = await self._get_executor().execute(sql)
             if result is None:
                 raise PubSubError(f"Failed to create database publication '{name}'")
@@ -661,13 +403,7 @@ class AsyncPubSubManager:
     async def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """Create table-level publication asynchronously"""
         try:
-            sql = (
-                f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
-                f"DATABASE {self._client._escape_identifier(database)} "
-                f"TABLE {self._client._escape_identifier(table)} "
-                f"ACCOUNT {self._client._escape_identifier(account)}"
-            )
-
+            sql = self._build_create_table_publication_sql(name, database, table, account)
             result = await self._get_executor().execute(sql)
             if result is None:
                 raise PubSubError(f"Failed to create table publication '{name}'")
@@ -680,6 +416,7 @@ class AsyncPubSubManager:
     async def get_publication(self, name: str) -> Publication:
         """Get publication by name asynchronously"""
         try:
+            # SHOW PUBLICATIONS doesn't support WHERE clause
             sql = "SHOW PUBLICATIONS"
             result = await self._get_executor().execute(sql)
 
@@ -688,7 +425,7 @@ class AsyncPubSubManager:
 
             # Find publication with matching name
             for row in result.rows:
-                if row[0] == name:  # publication name is in first column
+                if row[0] == name:
                     return self._row_to_publication(row)
 
             raise PubSubError(f"Publication '{name}' not found")
@@ -697,7 +434,7 @@ class AsyncPubSubManager:
             raise PubSubError(f"Failed to get publication '{name}': {e}")
 
     async def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
-        """List publications asynchronously"""
+        """List publications with optional filters asynchronously"""
         try:
             sql = "SHOW PUBLICATIONS"
             result = await self._get_executor().execute(sql)
@@ -731,16 +468,7 @@ class AsyncPubSubManager:
     ) -> Publication:
         """Alter publication asynchronously"""
         try:
-            parts = [f"ALTER PUBLICATION {self._client._escape_identifier(name)}"]
-
-            if account:
-                parts.append(f"ACCOUNT {self._client._escape_identifier(account)}")
-            if database:
-                parts.append(f"DATABASE {self._client._escape_identifier(database)}")
-            if table:
-                parts.append(f"TABLE {self._client._escape_identifier(table)}")
-
-            sql = " ".join(parts)
+            sql = self._build_alter_publication_sql(name, account, database, table)
             result = await self._get_executor().execute(sql)
             if result is None:
                 raise PubSubError(f"Failed to alter publication '{name}'")
@@ -779,12 +507,7 @@ class AsyncPubSubManager:
     ) -> Subscription:
         """Create subscription asynchronously"""
         try:
-            sql = (
-                f"CREATE DATABASE {self._client._escape_identifier(subscription_name)} "
-                f"FROM {self._client._escape_identifier(publisher_account)} "
-                f"PUBLICATION {self._client._escape_identifier(publication_name)}"
-            )
-
+            sql = self._build_create_subscription_sql(subscription_name, publication_name, publisher_account)
             result = await self._get_executor().execute(sql)
             if result is None:
                 raise PubSubError(f"Failed to create subscription '{subscription_name}'")
@@ -797,6 +520,7 @@ class AsyncPubSubManager:
     async def get_subscription(self, name: str) -> Subscription:
         """Get subscription by name asynchronously"""
         try:
+            # SHOW SUBSCRIPTIONS doesn't support WHERE clause
             sql = "SHOW SUBSCRIPTIONS"
             result = await self._get_executor().execute(sql)
 
@@ -816,7 +540,7 @@ class AsyncPubSubManager:
     async def list_subscriptions(
         self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
     ) -> List[Subscription]:
-        """List subscriptions asynchronously"""
+        """List subscriptions with optional filters asynchronously"""
         try:
             conditions = []
 
