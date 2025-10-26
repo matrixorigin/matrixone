@@ -406,11 +406,21 @@ class BaseStageManager:
 
 class StageManager(BaseStageManager):
     """
-    Manager for MatrixOne Stage operations.
+    Synchronous stage manager for MatrixOne external storage operations.
 
     A Stage is a named external storage location (like S3, filesystem, or cloud storage)
     that stores data files. Stages provide centralized, secure, and reusable access
-    to external data sources.
+    to external data sources for data loading and export operations.
+
+    Key Features:
+
+    - **External storage integration**: Connect to S3, filesystem, and cloud storage
+    - **Credential management**: Securely store and manage access credentials
+    - **Reusable connections**: Create once, use multiple times
+    - **Centralized configuration**: Single point of configuration for data sources
+    - **Stage hierarchy**: Support for sub-stages and parent-child relationships
+    - **Transaction-aware**: Full integration with transaction contexts
+    - **Enabled/disabled control**: Enable or disable stages as needed
 
     Key Concepts:
     =============
@@ -421,13 +431,14 @@ class StageManager(BaseStageManager):
     - Data files are stored (CSV, JSONLINE, Parquet, etc.)
     - Files can be loaded into tables
     - Query results can be exported
+    - Access credentials are securely managed
 
     Stage Types:
     ------------
     1. **File System Stage**: Local or network filesystem
        >>> CREATE STAGE fs_stage URL='file:///data/files/'
 
-    2. **S3 Stage**: Amazon S3 or compatible (MinIO, etc.)
+    2. **S3 Stage**: Amazon S3 or S3-compatible storage (MinIO, etc.)
        >>> CREATE STAGE s3_stage URL='s3://bucket/path/'
        ... CREDENTIALS={'AWS_KEY_ID'='xxx', 'AWS_SECRET_KEY'='xxx'}
 
@@ -438,9 +449,16 @@ class StageManager(BaseStageManager):
     ---------------
     - **Centralized**: One location for all data files
     - **Reusable**: Create once, use for multiple tables
-    - **Secure**: Credentials managed at stage level
-    - **Efficient**: Direct loading from cloud storage
+    - **Secure**: Credentials managed at stage level, not in SQL
+    - **Efficient**: Direct loading from cloud storage without intermediate copies
     - **Organized**: Logical grouping of related data files
+    - **Portable**: Easy to move between environments (dev, staging, prod)
+
+    Executor Pattern:
+
+    - If executor is None, uses self.client.execute (default client-level executor)
+    - If executor is provided (e.g., session), uses executor.execute (transaction-aware)
+    - All operations can participate in transactions when used via session
 
     Typical Workflow:
     -----------------
@@ -455,31 +473,110 @@ class StageManager(BaseStageManager):
     4. Reuse the same stage for other files:
        >>> client.load_data.from_stage_csv('my_stage', 'orders.csv', Order)
 
-    This class is typically accessed through the Client's `stage` property:
+    Usage Examples::
 
-    Examples::
+        from matrixone import Client
 
-        # Create a file system stage
-        client.stage.create('my_stage', 'file:///path/to/data/')
+        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
 
-        # Create an S3 stage
-        client.stage.create(
-            's3_stage',
-            's3://my-bucket/data/',
-            credentials={
-                'AWS_KEY_ID': 'AKIAIOSFODNN7EXAMPLE',
-                'AWS_SECRET_KEY': 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
-                'AWS_REGION': 'us-east-1'
-            }
+        # ========================================
+        # Create Stages Using Simple Interfaces
+        # ========================================
+
+        # Create local filesystem stage (simple interface)
+        client.stage.create_local('local_data', '/data/imports/')
+
+        # Create S3 stage with simple interface
+        client.stage.create_s3(
+            name='production_s3',
+            bucket='my-bucket',
+            path='data/',
+            aws_key_id='AKIAIOSFODNN7EXAMPLE',
+            aws_secret_key='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+            region='us-east-1',
+            comment='Production data bucket'
         )
+
+        # Create S3-compatible MinIO stage
+        client.stage.create_s3(
+            name='minio_stage',
+            bucket='my-bucket',
+            endpoint='http://localhost:9000',
+            aws_key_id='minioadmin',
+            aws_secret_key='minioadmin'
+        )
+
+        # Create sub-stage for organized data (using generic create)
+        client.stage.create(
+            'sales_data',
+            'stage://production_s3/sales/',
+            comment='Sales department data files'
+        )
+
+        # ========================================
+        # Stage Management Operations
+        # ========================================
 
         # List all stages
         stages = client.stage.list()
         for stage in stages:
-            print(f"{stage.name}: {stage.url}")
+            print(f"{stage.name}: {stage.url} (enabled: {stage.enabled})")
 
-        # Load data from stage
-        client.load_data.from_stage_csv('my_stage', 'data.csv', User)
+        # Get specific stage details
+        stage = client.stage.get('production_s3')
+        print(f"Stage URL: {stage.url}")
+        print(f"Created: {stage.created_time}")
+
+        # Alter stage (update URL or credentials)
+        client.stage.alter(
+            'production_s3',
+            url='s3://new-bucket/data/',
+            credentials={'AWS_KEY_ID': 'new_key_id'}
+        )
+
+        # Disable stage temporarily
+        client.stage.alter('production_s3', enable=False)
+
+        # Re-enable stage
+        client.stage.alter('production_s3', enable=True)
+
+        # Drop stage when no longer needed
+        client.stage.drop('old_stage')
+
+        # ========================================
+        # Load Data from Stages
+        # ========================================
+
+        # Load from stage using ORM model
+        client.load_data.from_stage_csv('production_s3', 'users.csv', User)
+
+        # Load from local stage
+        client.load_data.from_stage_csv('local_data', 'orders.csv', Order)
+
+        # ========================================
+        # Transactional Stage Operations
+        # ========================================
+
+        # Using within a transaction (all operations atomic)
+        with client.session() as session:
+            # Create multiple stages atomically using simple interfaces
+            session.stage.create_local('stage1', '/data1/')
+            session.stage.create_s3('stage2', 'bucket2', 'path/', 'key', 'secret')
+            session.stage.create_local('stage3', '/data3/')
+
+    Common Use Cases:
+
+    - **Cloud data lakes**: Access data stored in S3 or cloud storage
+    - **ETL pipelines**: Centralized configuration for data sources
+    - **Multi-environment**: Separate stages for dev, staging, production
+    - **Data warehousing**: Organize source data by department or domain
+    - **Secure access**: Manage credentials separately from SQL code
+
+    See Also:
+
+        - LoadDataManager: For loading data from stages
+        - AsyncStageManager: For async stage operations
+        - Client.load_data: For data loading operations
     """
 
     def __init__(self, client, executor=None):
@@ -858,10 +955,165 @@ class StageManager(BaseStageManager):
 
 class AsyncStageManager(BaseStageManager):
     """
-    Async manager for MatrixOne Stage operations.
+    Asynchronous stage manager for MatrixOne external storage operations.
 
-    Provides async/await support for stage operations.
-    All SQL building logic is inherited from BaseStageManager.
+    Provides the same comprehensive stage management functionality as StageManager
+    but with full async/await support for non-blocking I/O operations. Ideal for
+    high-concurrency applications and async web frameworks requiring stage management.
+
+    Key Features:
+
+    - **Non-blocking operations**: All stage operations use async/await
+    - **Async stage management**: Create, alter, drop stages asynchronously
+    - **Concurrent operations**: Manage multiple stages concurrently
+    - **Async external storage**: Non-blocking S3 and cloud storage configuration
+    - **Transaction-aware**: Full integration with async transaction contexts
+    - **Executor pattern**: Works with both async client and async session
+
+    Executor Pattern:
+
+    - If executor is None, uses self.client.execute (default async client-level executor)
+    - If executor is provided (e.g., async session), uses executor.execute (async transaction-aware)
+    - All operations are non-blocking and use async/await
+    - Enables concurrent stage management operations
+
+    Usage Examples::
+
+        from matrixone import AsyncClient
+        from matrixone.orm import Column, Integer, String, Float, Base
+        import asyncio
+
+        # Define ORM models for data loading
+        class User(Base):
+            __tablename__ = 'users'
+            id = Column(Integer, primary_key=True)
+            name = Column(String(100))
+            email = Column(String(255))
+
+        async def main():
+            client = AsyncClient()
+            await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # ========================================
+            # Create Stages Using Simple Interfaces
+            # ========================================
+
+            # Create local filesystem stage (simple interface - recommended)
+            stage = await client.stage.create_local('local_data', '/data/imports/')
+            print(f"Local stage created: {stage.name}")
+
+            # Create S3 stage using simple interface (recommended)
+            s3_stage = await client.stage.create_s3(
+                name='production_s3',
+                bucket='my-bucket',
+                path='data/',
+                aws_key_id='AKIAIOSFODNN7EXAMPLE',
+                aws_secret_key='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+                region='us-east-1',
+                comment='Production data bucket'
+            )
+
+            # Create MinIO stage (S3-compatible)
+            minio_stage = await client.stage.create_s3(
+                name='minio_stage',
+                bucket='my-bucket',
+                endpoint='http://localhost:9000',
+                aws_key_id='minioadmin',
+                aws_secret_key='minioadmin'
+            )
+
+            # Create sub-stage for organized data
+            await client.stage.create(
+                'sales_data',
+                'stage://production_s3/sales/',
+                comment='Sales department data'
+            )
+
+            # ========================================
+            # Stage Management Operations
+            # ========================================
+
+            # List all stages asynchronously
+            stages = await client.stage.list()
+            for stage in stages:
+                print(f"{stage.name}: {stage.url}")
+
+            # Get specific stage details
+            stage = await client.stage.get('production_s3')
+            print(f"Stage URL: {stage.url}")
+
+            # Alter stage (update credentials)
+            await client.stage.alter(
+                'production_s3',
+                credentials={'AWS_KEY_ID': 'new_key_id'}
+            )
+
+            # Disable/enable stage
+            await client.stage.alter('production_s3', enable=False)
+            await client.stage.alter('production_s3', enable=True)
+
+            # ========================================
+            # Concurrent Stage Creation
+            # ========================================
+
+            # Create multiple stages concurrently using simple interfaces
+            await asyncio.gather(
+                client.stage.create_local('stage1', '/data1/'),
+                client.stage.create_local('stage2', '/data2/'),
+                client.stage.create_s3('stage3', 'bucket3', 'path/', 'key', 'secret')
+            )
+
+            # Concurrent operations
+            stages, stage_details = await asyncio.gather(
+                client.stage.list(),
+                client.stage.get('production_s3')
+            )
+
+            # ========================================
+            # Load Data from Stages (ORM Style)
+            # ========================================
+
+            # Load from S3 stage using ORM model
+            await client.load_data.from_stage_csv('production_s3', 'users.csv', User)
+
+            # Drop stage when no longer needed
+            await client.stage.drop('old_stage')
+
+            # ========================================
+            # Transactional Stage Operations
+            # ========================================
+
+            # Using within async transaction
+            async with client.session() as session:
+                # Create multiple stages atomically using simple interfaces
+                await session.stage.create_local('stage1', '/data1/')
+                await session.stage.create_s3('stage2', 'bucket2', '', 'key', 'secret')
+                # Both stages created atomically
+
+            await client.disconnect()
+
+        asyncio.run(main())
+
+    Performance Benefits:
+
+    - **Non-blocking I/O**: Don't block the event loop during stage operations
+    - **Concurrent management**: Create and configure multiple stages simultaneously
+    - **Async web frameworks**: Perfect for FastAPI, aiohttp, Sanic, etc.
+    - **High concurrency**: Handle many stage operations concurrently
+
+    Use Cases:
+
+    - **Async ETL configuration**: Non-blocking stage setup for data pipelines
+    - **Dynamic stage management**: Create/modify stages in response to events
+    - **Multi-cloud setup**: Configure stages for multiple cloud providers concurrently
+    - **High-throughput applications**: Stage management without blocking
+    - **Real-time data ingestion**: Configure stages on-the-fly
+
+    See Also:
+
+        - AsyncClient: For async database operations
+        - AsyncLoadDataManager: For async data loading from stages
+        - StageManager: For synchronous stage operations
     """
 
     def __init__(self, client, executor=None):

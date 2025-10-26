@@ -27,7 +27,15 @@ from .version import requires_version
 
 
 class SnapshotLevel(Enum):
-    """Snapshot level enumeration"""
+    """
+    Snapshot level enumeration for specifying snapshot granularity.
+
+    MatrixOne supports four levels of snapshots:
+    - CLUSTER: Entire cluster snapshot (all databases and tables)
+    - ACCOUNT: Account-level snapshot (all databases in an account)
+    - DATABASE: Database-level snapshot (specific database)
+    - TABLE: Table-level snapshot (specific table in a database)
+    """
 
     CLUSTER = "cluster"
     ACCOUNT = "account"
@@ -36,7 +44,34 @@ class SnapshotLevel(Enum):
 
 
 class Snapshot:
-    """Snapshot information"""
+    """
+    Snapshot information object representing a MatrixOne database snapshot.
+
+    This class encapsulates metadata about a database snapshot including
+    its name, level, creation time, and associated database/table information.
+
+    Attributes::
+
+        name (str): Snapshot name (unique identifier)
+        level (SnapshotLevel): Snapshot level (CLUSTER, ACCOUNT, DATABASE, or TABLE)
+        created_at (datetime): Snapshot creation timestamp
+        description (Optional[str]): Optional description/comment
+        database (Optional[str]): Database name (for DATABASE/TABLE level snapshots)
+        table (Optional[str]): Table name (for TABLE level snapshots)
+
+    Examples::
+
+        >>> snapshot = Snapshot(
+        ...     name='daily_backup',
+        ...     level=SnapshotLevel.DATABASE,
+        ...     created_at=datetime.now(),
+        ...     database='my_database'
+        ... )
+        >>> print(snapshot.name)
+        'daily_backup'
+        >>> print(snapshot.level)
+        SnapshotLevel.DATABASE
+    """
 
     def __init__(
         self,
@@ -155,35 +190,83 @@ class SnapshotManager(BaseSnapshotManager):
     Snapshots enable point-in-time recovery and data protection capabilities.
 
     Key Features:
-    - Create snapshots at database, table, or cluster level
-    - List and query existing snapshots
-    - Snapshot lifecycle management
-    - Transaction-aware operations via executor pattern
-    - Unified interface for client and session contexts
+
+    - **Multi-level snapshots**: Create snapshots at CLUSTER, ACCOUNT, DATABASE, or TABLE level
+    - **Snapshot lifecycle management**: Create, list, get, delete, and check existence of snapshots
+    - **Transaction-aware operations**: Use via executor pattern for both client and session contexts
+    - **Unified interface**: Same API works in both client and session contexts
+    - **Point-in-time recovery**: Restore databases/tables to specific snapshot states
 
     Executor Pattern:
-    - If executor is None, uses self.client.execute (default executor)
-    - If executor is provided (e.g., session), uses executor.execute
+
+    - If executor is None, uses self.client.execute (default client-level executor)
+    - If executor is provided (e.g., session), uses executor.execute (transaction-aware)
     - This allows the same logic to work in both client and session contexts
+    - All operations can participate in transactions when used via session
 
     Usage Examples::
 
-        # Using client directly
+        from matrixone import Client, SnapshotLevel
+
+        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+        # Create database-level snapshot
         snapshot = client.snapshots.create(
             name='daily_backup',
             level=SnapshotLevel.DATABASE,
             database='my_database'
         )
+        print(f"Snapshot created: {snapshot.name} at {snapshot.created_at}")
 
-        # Using within a session (transaction)
+        # Create table-level snapshot
+        table_snapshot = client.snapshots.create(
+            name='table_backup',
+            level=SnapshotLevel.TABLE,
+            database='my_database',
+            table='users'
+        )
+
+        # List all snapshots
+        all_snapshots = client.snapshots.list()
+        for snap in all_snapshots:
+            print(f"{snap.name}: {snap.level} - {snap.created_at}")
+
+        # Get specific snapshot
+        snapshot = client.snapshots.get('daily_backup')
+        print(f"Snapshot level: {snapshot.level}")
+
+        # Check if snapshot exists
+        if client.snapshots.exists('daily_backup'):
+            print("Snapshot exists!")
+
+        # Delete snapshot
+        client.snapshots.delete('daily_backup')
+
+        # Using within a transaction (all operations are atomic)
         with client.session() as session:
-            snapshot = session.snapshots.create(
-                name='daily_backup',
+            # Create multiple snapshots in a transaction
+            session.snapshots.create(
+                name='backup_1',
                 level=SnapshotLevel.DATABASE,
-                database='my_database'
+                database='db1'
             )
+            session.snapshots.create(
+                name='backup_2',
+                level=SnapshotLevel.DATABASE,
+                database='db2'
+            )
+            # Both snapshots created atomically when transaction commits
 
-    Note: Snapshot functionality requires MatrixOne version 1.0.0 or higher.
+    Version Requirements:
+
+        Snapshot functionality requires MatrixOne version 1.0.0 or higher.
+        Earlier versions do not support snapshot operations.
+
+    See Also:
+
+        - RestoreManager: For restoring databases from snapshots
+        - CloneManager: For cloning databases using snapshots
+        - PitrManager: For point-in-time recovery operations
     """
 
     @requires_version(

@@ -1070,35 +1070,260 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> AsyncResultSet:
         """
-        Execute SQL query or SQLAlchemy statement asynchronously.
+        Execute SQL query or SQLAlchemy statement asynchronously without transaction isolation.
 
-        Args::
+        This method executes queries asynchronously using the connection pool, without wrapping
+        them in a transaction. Each statement executes independently with auto-commit enabled.
+        For atomic multi-statement operations, use `async with client.session()` instead.
 
-            sql_or_stmt: SQL query string or SQLAlchemy statement (select, update, delete, insert, text).
-                       String SQL can include '?' placeholders for parameter binding.
-            params: Query parameters (only used for string SQL)
+        The method supports both SQLAlchemy ORM-style statements (recommended) and string SQL
+        with parameter binding. It's ideal for single-statement async operations like SELECT
+        queries, simple INSERT/UPDATE/DELETE, or DDL statements.
 
-        Returns::
+        Key Features:
 
-            AsyncResultSet with query results
+        - **Async/await support**: Non-blocking execution using async/await patterns
+        - **ORM-style statements**: Full support for SQLAlchemy select(), insert(), update(), delete()
+        - **Parameter binding**: Automatic escaping of parameters to prevent SQL injection
+        - **Query logging**: Integrated async logging with performance tracking
+        - **Auto-commit**: Each statement commits immediately (no transaction isolation)
+        - **Connection pooling**: Efficient async connection reuse from pool
 
-        Examples::
+        Args:
+            sql_or_stmt (str | SQLAlchemy statement): The SQL query to execute. Can be:
+                - SQLAlchemy select() statement (recommended)
+                - SQLAlchemy insert() statement (recommended)
+                - SQLAlchemy update() statement (recommended)
+                - SQLAlchemy delete() statement (recommended)
+                - String SQL with '?' placeholders for parameters
+                - SQLAlchemy text() statement
 
-            # String SQL
-            >>> result = await async_client.execute("SELECT * FROM users WHERE age > ?", (25,))
+            params (Optional[Tuple]): Query parameters for string SQL only. Values are
+                substituted for '?' placeholders in order. Automatically escaped to prevent
+                SQL injection. Ignored for SQLAlchemy statements.
 
-            # SQLAlchemy statements
-            >>> from sqlalchemy import select, update, delete
-            >>> stmt = select(User).where(User.age > 25)
-            >>> result = await async_client.execute(stmt)
+            _log_mode (Optional[str]): Override SQL logging mode for this query only.
+                Options: 'off', 'simple', 'full'. If None, uses client's global sql_log_mode
+                setting. Useful for debugging or disabling logs for frequently-executed queries.
 
-            # UPDATE with SQLAlchemy
-            >>> stmt = update(User).where(User.id == 1).values(name="New Name")
-            >>> result = await async_client.execute(stmt)
+        Returns:
+            AsyncResultSet: Async query result object with:
+                - columns: List[str] - Column names
+                - rows: List[Tuple] - Row data as tuples
+                - affected_rows: int - Number of rows affected by DML operations
+                - fetchall() -> List[Row] - Get all rows as list
+                - fetchone() -> Optional[Row] - Get next row or None
+                - fetchmany(size) -> List[Row] - Get next N rows
 
-            # DELETE with SQLAlchemy
-            >>> stmt = delete(User).where(User.id == 1)
-            >>> result = await async_client.execute(stmt)
+        Raises:
+            ConnectionError: If not connected to database
+            QueryError: If query execution fails or SQL syntax is invalid
+
+        Usage Examples::
+
+            from matrixone import AsyncClient
+            from sqlalchemy import select, insert, update, delete, and_, or_, func
+            from sqlalchemy.orm import declarative_base
+            import asyncio
+
+            Base = declarative_base()
+
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+                status = Column(String(20))
+
+            class Order(Base):
+                __tablename__ = 'orders'
+                id = Column(Integer, primary_key=True)
+                user_id = Column(Integer)
+                amount = Column(Float)
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+                # ========================================
+                # SQLAlchemy SELECT Statements (Recommended)
+                # ========================================
+
+                # Basic SELECT with WHERE clause
+                stmt = select(User).where(User.age > 25)
+                result = await client.execute(stmt)
+                for user in result.fetchall():
+                    print(f"User: {user.name}, Age: {user.age}")
+
+                # SELECT specific columns
+                stmt = select(User.name, User.email).where(User.status == 'active')
+                result = await client.execute(stmt)
+                for name, email in result.fetchall():
+                    print(f"{name}: {email}")
+
+                # Complex WHERE with AND/OR
+                stmt = select(User).where(
+                    and_(
+                        User.age > 18,
+                        or_(
+                            User.status == 'active',
+                            User.status == 'pending'
+                        )
+                    )
+                )
+                result = await client.execute(stmt)
+
+                # SELECT with JOIN
+                stmt = select(User, Order).join(Order, User.id == Order.user_id)
+                result = await client.execute(stmt)
+                for user, order in result.fetchall():
+                    print(f"{user.name} ordered ${order.amount}")
+
+                # SELECT with aggregation
+                stmt = select(func.count(User.id), func.avg(User.age)).where(User.status == 'active')
+                result = await client.execute(stmt)
+                count, avg_age = result.fetchone()
+                print(f"Active users: {count}, Average age: {avg_age}")
+
+                # ========================================
+                # SQLAlchemy INSERT Statements (Recommended)
+                # ========================================
+
+                # Single INSERT
+                stmt = insert(User).values(name='John', email='john@example.com', age=30)
+                result = await client.execute(stmt)
+                print(f"Inserted {result.affected_rows} rows")
+
+                # Bulk INSERT
+                stmt = insert(User).values([
+                    {'name': 'Alice', 'email': 'alice@example.com', 'age': 28},
+                    {'name': 'Bob', 'email': 'bob@example.com', 'age': 35},
+                    {'name': 'Carol', 'email': 'carol@example.com', 'age': 42}
+                ])
+                result = await client.execute(stmt)
+                print(f"Inserted {result.affected_rows} rows")
+
+                # ========================================
+                # SQLAlchemy UPDATE Statements (Recommended)
+                # ========================================
+
+                # Simple UPDATE
+                stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+                result = await client.execute(stmt)
+                print(f"Updated {result.affected_rows} rows")
+
+                # Conditional UPDATE
+                stmt = update(User).where(User.age < 18).values(status='minor')
+                result = await client.execute(stmt)
+
+                # UPDATE with expressions
+                stmt = update(Order).values(total=Order.quantity * Order.price)
+                result = await client.execute(stmt)
+
+                # ========================================
+                # SQLAlchemy DELETE Statements (Recommended)
+                # ========================================
+
+                # Simple DELETE
+                stmt = delete(User).where(User.id == 1)
+                result = await client.execute(stmt)
+                print(f"Deleted {result.affected_rows} rows")
+
+                # Conditional DELETE
+                stmt = delete(User).where(User.status == 'deleted')
+                result = await client.execute(stmt)
+
+                # DELETE with complex condition
+                stmt = delete(User).where(
+                    and_(
+                        User.age < 18,
+                        User.status == 'inactive'
+                    )
+                )
+                result = await client.execute(stmt)
+
+                # ========================================
+                # Concurrent Execution with asyncio.gather
+                # ========================================
+
+                # Execute multiple independent queries concurrently
+                user_stmt = select(User).where(User.age > 25)
+                order_stmt = select(Order).where(Order.amount > 100)
+
+                user_result, order_result = await asyncio.gather(
+                    client.execute(user_stmt),
+                    client.execute(order_stmt)
+                )
+
+                print(f"Users: {len(user_result.fetchall())}")
+                print(f"Orders: {len(order_result.fetchall())}")
+
+                # ========================================
+                # String SQL with Parameters (Alternative)
+                # ========================================
+
+                # SELECT with parameters
+                result = await client.execute(
+                    "SELECT * FROM users WHERE age > ? AND status = ?",
+                    (25, 'active')
+                )
+
+                # INSERT with parameters
+                result = await client.execute(
+                    "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+                    ('David', 'david@example.com', 28)
+                )
+
+                # UPDATE with parameters
+                result = await client.execute(
+                    "UPDATE users SET status = ? WHERE age < ?",
+                    ('minor', 18)
+                )
+
+                # ========================================
+                # Query Logging Control
+                # ========================================
+
+                # Disable logging for frequently executed query
+                result = await client.execute(
+                    select(User).where(User.id == 1),
+                    _log_mode='off'
+                )
+
+                # Force full SQL logging for debugging
+                result = await client.execute(
+                    select(User).where(User.name.like('%test%')),
+                    _log_mode='full'
+                )
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        Important Notes:
+
+        - **No transaction isolation**: Each execute() call commits immediately
+        - **Use session() for transactions**: For atomic multi-statement operations
+        - **ORM-style preferred**: Use SQLAlchemy statements for better type safety
+        - **Auto-commit behavior**: Changes are permanent immediately after execute()
+        - **Non-blocking**: Uses async/await and doesn't block event loop
+        - **Concurrent execution**: Use asyncio.gather() for parallel queries
+
+        Best Practices:
+
+        1. **Prefer ORM-style statements**: Use select(), insert(), update(), delete()
+        2. **Use parameters**: Always use parameter binding to prevent SQL injection
+        3. **Session for transactions**: Use client.session() for atomic operations
+        4. **Use asyncio.gather()**: For concurrent independent queries
+        5. **Disable logging in production**: Use _log_mode='off' for hot paths
+        6. **Handle exceptions**: Wrap execute() in try-except for error handling
+
+        See Also:
+
+            - AsyncClient.session(): For transaction-aware async operations
+            - AsyncSession.execute(): Execute within async transaction context
+            - Client.execute(): Synchronous version
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -1547,16 +1772,238 @@ class AsyncClient(BaseMatrixOneClient):
     @asynccontextmanager
     async def session(self):
         """
-        Async transaction context manager
+        Create an async transaction-aware session for atomic database operations.
 
-        Usage
+        This method returns an AsyncSession that extends SQLAlchemy AsyncSession with
+        MatrixOne-specific features. All operations within the session are executed
+        atomically using async/await patterns - they either all succeed or all fail together.
 
-            async with client.transaction() as tx:
-            await tx.execute("INSERT INTO users ...")
-            await tx.execute("UPDATE users ...")
-            # Snapshot and clone operations within transaction
-            await tx.snapshots.create("snap1", "table", database="db1", table="t1")
-            await tx.clone.clone_database("target_db", "source_db")
+        The session is an async context manager that automatically handles transaction lifecycle:
+        - Commits the transaction when the context exits normally
+        - Rolls back the transaction if any exception occurs
+        - Cleans up database resources automatically
+        - Enables non-blocking concurrent operations
+
+        Key Features:
+
+        - **Full async SQLAlchemy ORM**: All standard async Session methods with await
+        - **Atomic transactions**: Multiple async operations commit or rollback together
+        - **Async MatrixOne managers**: All MatrixOne operations available asynchronously
+        - **Concurrent execution**: Use asyncio.gather() for parallel operations
+        - **Non-blocking**: All operations use async/await and don't block event loop
+        - **ORM-style operations**: Use SQLAlchemy select(), insert(), update(), delete()
+
+        Available Async Managers (transaction-aware):
+
+        - session.snapshots: AsyncSnapshotManager for async snapshot operations
+        - session.clone: AsyncCloneManager for async clone operations
+        - session.restore: AsyncRestoreManager for async restore operations
+        - session.pitr: AsyncPitrManager for async point-in-time recovery
+        - session.pubsub: AsyncPubSubManager for async publish-subscribe
+        - session.account: AsyncAccountManager for async account management
+        - session.vector_ops: AsyncVectorManager for async vector operations
+        - session.fulltext_index: AsyncFulltextIndexManager for async fulltext search
+        - session.metadata: AsyncMetadataManager for async metadata analysis
+        - session.load_data: AsyncLoadDataManager for async bulk loading
+        - session.stage: AsyncStageManager for async stage management
+
+        Returns:
+            AsyncContextManager[AsyncSession]: Async context manager yielding AsyncSession
+
+        Raises:
+            ConnectionError: If client is not connected to database
+
+        Usage Examples::
+
+            from matrixone import AsyncClient
+            from sqlalchemy import select, insert, update, delete
+            from sqlalchemy.orm import declarative_base
+            import asyncio
+
+            Base = declarative_base()
+
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+
+            class Order(Base):
+                __tablename__ = 'orders'
+                id = Column(Integer, primary_key=True)
+                user_id = Column(Integer)
+                amount = Column(Float)
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+                # ========================================
+                # Example 1: Basic Async Transaction with ORM-style SQL
+                # ========================================
+                async with client.session() as session:
+                    # Insert using SQLAlchemy insert()
+                    await session.execute(insert(User).values(name='John', email='john@example.com', age=30))
+
+                    # Update using SQLAlchemy update()
+                    await session.execute(update(User).where(User.age < 18).values(status='minor'))
+
+                    # Select using SQLAlchemy select()
+                    stmt = select(User).where(User.age > 25)
+                    result = await session.execute(stmt)
+                    for user in result.scalars():
+                        print(f"User: {user.name}")
+
+                    # Delete using SQLAlchemy delete()
+                    await session.execute(delete(User).where(User.status == 'inactive'))
+                    # All operations commit atomically
+
+                # ========================================
+                # Example 2: Async ORM Operations
+                # ========================================
+                async with client.session() as session:
+                    # Create new objects
+                    user1 = User(name='Alice', email='alice@example.com', age=28)
+                    user2 = User(name='Bob', email='bob@example.com', age=35)
+
+                    # Add to session
+                    session.add(user1)
+                    session.add(user2)
+
+                    # Query using ORM
+                    stmt = select(User).where(User.name == 'Alice')
+                    result = await session.execute(stmt)
+                    alice = result.scalar_one()
+
+                    # Update object
+                    alice.email = 'newemail@example.com'
+
+                    # Commit
+                    await session.commit()
+
+                # ========================================
+                # Example 3: Concurrent Operations with asyncio.gather
+                # ========================================
+                async with client.session() as session:
+                    # Execute multiple queries concurrently
+                    user_task = session.execute(select(User).where(User.age > 25))
+                    order_task = session.execute(select(Order).where(Order.amount > 100))
+
+                    user_result, order_result = await asyncio.gather(user_task, order_task)
+
+                    users = user_result.scalars().all()
+                    orders = order_result.scalars().all()
+
+                    print(f"Found {len(users)} users and {len(orders)} orders")
+
+                # ========================================
+                # Example 4: Async MatrixOne Managers
+                # ========================================
+                async with client.session() as session:
+                    from matrixone import SnapshotLevel
+
+                    # Create snapshot asynchronously
+                    snapshot = await session.snapshots.create(
+                        name='daily_backup',
+                        level=SnapshotLevel.DATABASE,
+                        database='production'
+                    )
+
+                    # Clone database asynchronously
+                    await session.clone.clone_database(
+                        target_db='prod_copy',
+                        source_db='production',
+                        snapshot_name='daily_backup'
+                    )
+                    # Both operations commit atomically
+
+                # ========================================
+                # Example 5: Async Data Loading with Stages
+                # ========================================
+                async with client.session() as session:
+                    # Create S3 stage using simple interface
+                    await session.stage.create_s3(
+                        name='import_stage',
+                        bucket='my-bucket',
+                        path='imports/',
+                        aws_key_id='key',
+                        aws_secret_key='secret'
+                    )
+
+                    # Load data from stage using ORM model
+                    await session.load_data.from_stage_csv('import_stage', 'users.csv', User)
+
+                    # Update statistics
+                    await session.execute("ANALYZE TABLE users")
+                    # All operations are atomic
+
+                # ========================================
+                # Example 6: Error Handling and Rollback
+                # ========================================
+                try:
+                    async with client.session() as session:
+                        await session.execute(insert(User).values(name='Charlie', age=40))
+                        await session.execute(insert(InvalidTable).values(data='test'))  # Fails
+                        # Transaction automatically rolls back - Charlie is NOT inserted
+                except Exception as e:
+                    print(f"Transaction failed and rolled back: {e}")
+
+                # ========================================
+                # Example 7: Complex Multi-Manager Transaction
+                # ========================================
+                async with client.session() as session:
+                    # Create publication
+                    await session.pubsub.create_database_publication(
+                        name='analytics_pub',
+                        database='analytics',
+                        account='subscriber_account'
+                    )
+
+                    # Create local stage
+                    await session.stage.create_local('export_stage', '/exports/')
+
+                    # Load data using ORM model
+                    await session.load_data.from_csv('/data/latest.csv', Analytics)
+
+                    # Create snapshot
+                    await session.snapshots.create(
+                        name='post_load_snapshot',
+                        level=SnapshotLevel.DATABASE,
+                        database='analytics'
+                    )
+                    # All operations commit together
+
+                # ========================================
+                # Example 8: High-Performance Concurrent Loading
+                # ========================================
+                async with client.session() as session:
+                    # Load multiple files concurrently
+                    await asyncio.gather(
+                        session.load_data.from_csv('/data/users.csv', User),
+                        session.load_data.from_csv('/data/orders.csv', Order),
+                        session.load_data.from_csv('/data/products.csv', Product)
+                    )
+                    # All loads commit atomically
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        Best Practices:
+
+        1. **Always use async with**: Use `async with client.session()` for automatic cleanup
+        2. **Await all operations**: All execute/manager operations must be awaited
+        3. **Use asyncio.gather()**: For concurrent operations within session
+        4. **Keep transactions short**: Long transactions can block other operations
+        5. **Handle exceptions**: Wrap session code in try-except for error handling
+        6. **Use ORM-style SQL**: Prefer SQLAlchemy insert(), update(), select(), delete()
+
+        See Also:
+
+            - AsyncSession: The async session class returned by this method
+            - Client.session(): Synchronous version
+            - AsyncClient.execute(): Non-transactional async query execution
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")

@@ -337,12 +337,117 @@ class BaseMetadataManager:
 
 class MetadataManager(BaseMetadataManager):
     """
-    Metadata manager for MatrixOne table metadata operations.
+    Synchronous metadata manager for MatrixOne table metadata operations.
 
-    Provides methods to scan table metadata including column statistics,
-    row counts, null counts, and data distribution information.
+    This class provides comprehensive metadata scanning capabilities for analyzing
+    table statistics, column information, data distribution, and storage details.
+    It enables deep introspection of table structure and performance characteristics.
 
-    Supports both Client and Session contexts via executor pattern.
+    Key Features:
+
+    - **Metadata scanning**: Access detailed table and column metadata
+    - **Column statistics**: Row counts, null counts, min/max values, sums
+    - **Storage analysis**: Compression ratios, object sizes, data distribution
+    - **Index metadata**: Scan index-specific metadata
+    - **Tombstone inspection**: Analyze deleted data objects
+    - **Performance insights**: Identify storage hotspots and optimization opportunities
+    - **Transaction-aware**: Full integration with transaction contexts
+
+    Executor Pattern:
+
+    - If executor is None, uses self.client.execute (default client-level executor)
+    - If executor is provided (e.g., session), uses executor.execute (transaction-aware)
+    - All operations can participate in transactions when used via session
+
+    Available Metadata Columns:
+
+    - **COL_NAME**: Column name
+    - **OBJECT_NAME**: Object/block name in storage
+    - **IS_HIDDEN**: Whether object is hidden
+    - **OBJ_LOC**: Object storage location
+    - **CREATE_TS**: Creation timestamp
+    - **DELETE_TS**: Deletion timestamp (for tombstones)
+    - **ROWS_CNT**: Number of rows in the object
+    - **NULL_CNT**: Number of null values
+    - **COMPRESS_SIZE**: Compressed storage size
+    - **ORIGIN_SIZE**: Original uncompressed size
+    - **MIN**: Minimum value in column
+    - **MAX**: Maximum value in column
+    - **SUM**: Sum of values (for numeric columns)
+
+    Usage Examples::
+
+        from matrixone import Client
+        from matrixone.metadata import MetadataColumn
+
+        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+        # Basic metadata scan (returns SQLAlchemy Result)
+        result = client.metadata.scan('test_db', 'users')
+        for row in result:
+            print(f"Column: {row.col_name}, Rows: {row.rows_cnt}")
+
+        # Scan specific columns with structured output
+        rows = client.metadata.scan(
+            'test_db', 'users',
+            columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT, MetadataColumn.NULL_CNT]
+        )
+        for row in rows:
+            print(f"{row['col_name']}: {row['rows_cnt']} rows, {row['null_cnt']} nulls")
+
+        # Get all structured metadata
+        metadata_rows = client.metadata.scan('test_db', 'users', columns='*')
+        for row in metadata_rows:
+            print(f"{row.col_name}: {row.rows_cnt} rows")
+
+        # Scan index metadata
+        index_result = client.metadata.scan(
+            'test_db', 'users',
+            indexname='idx_email'
+        )
+
+        # Scan tombstone (deleted) objects
+        tombstone_result = client.metadata.scan(
+            'test_db', 'users',
+            is_tombstone=True
+        )
+
+        # Get table statistics summary
+        stats = client.metadata.get_table_stats('test_db', 'users')
+        print(f"Total rows: {stats['total_rows']}")
+        print(f"Total size: {stats['total_size']}")
+        print(f"Compression ratio: {stats['compression_ratio']}")
+
+        # Get detailed statistics with indexes and tombstones
+        detailed_stats = client.metadata.get_table_stats(
+            'test_db', 'users',
+            include_indexes=['idx_email', 'idx_name'],
+            include_tombstone=True
+        )
+        print(f"Table data: {detailed_stats['table']}")
+        print(f"Tombstone data: {detailed_stats['tombstone']}")
+        for idx in detailed_stats['indexes']:
+            print(f"Index {idx['name']}: {idx['size']}")
+
+        # Using within a transaction
+        with client.session() as session:
+            # Scan metadata within transaction context
+            result = session.metadata.scan('test_db', 'users')
+
+    Use Cases:
+
+    - **Performance analysis**: Identify tables with high null counts or poor compression
+    - **Storage optimization**: Analyze object distribution and compression ratios
+    - **Data quality**: Check for null values and data distribution
+    - **Index analysis**: Evaluate index size and effectiveness
+    - **Tombstone management**: Monitor deleted data objects
+    - **Capacity planning**: Track table growth and storage usage
+
+    See Also:
+
+        - Client.create_table: For creating tables
+        - VectorManager: For vector-specific metadata operations
+        - LoadDataManager: For bulk data loading
     """
 
     def scan(
@@ -486,12 +591,100 @@ class MetadataManager(BaseMetadataManager):
 
 class AsyncMetadataManager(BaseMetadataManager):
     """
-    Async metadata manager for MatrixOne table metadata operations.
+    Asynchronous metadata manager for MatrixOne table metadata operations.
 
-    Provides async methods to scan table metadata including column statistics,
-    row counts, null counts, and data distribution information.
+    Provides the same comprehensive metadata scanning functionality as MetadataManager
+    but with full async/await support for non-blocking I/O operations. Ideal for
+    high-concurrency applications requiring metadata analysis.
 
-    Supports both AsyncClient and AsyncSession contexts via executor pattern.
+    Key Features:
+
+    - **Non-blocking operations**: All metadata operations use async/await
+    - **Async metadata scanning**: Asynchronously access table and column metadata
+    - **Concurrent analysis**: Scan multiple tables concurrently
+    - **Async statistics**: Get table statistics without blocking
+    - **Transaction-aware**: Full integration with async transaction contexts
+    - **Executor pattern**: Works with both async client and async session
+
+    Executor Pattern:
+
+    - If executor is None, uses self.client.execute (default async client-level executor)
+    - If executor is provided (e.g., async session), uses executor.execute (async transaction-aware)
+    - All operations are non-blocking and use async/await
+    - Enables concurrent metadata operations
+
+    Usage Examples::
+
+        from matrixone import AsyncClient
+        from matrixone.metadata import MetadataColumn
+        import asyncio
+
+        async def main():
+            client = AsyncClient()
+            await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # Basic async metadata scan
+            result = await client.metadata.scan('test_db', 'users')
+            async for row in result:
+                print(f"Column: {row.col_name}, Rows: {row.rows_cnt}")
+
+            # Scan specific columns with structured output
+            rows = await client.metadata.scan(
+                'test_db', 'users',
+                columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT]
+            )
+            for row in rows:
+                print(f"{row['col_name']}: {row['rows_cnt']} rows")
+
+            # Get async table statistics
+            stats = await client.metadata.get_table_stats('test_db', 'users')
+            print(f"Total rows: {stats['total_rows']}")
+            print(f"Compression ratio: {stats['compression_ratio']}")
+
+            # Concurrent metadata scanning of multiple tables
+            results = await asyncio.gather(
+                client.metadata.scan('test_db', 'users'),
+                client.metadata.scan('test_db', 'orders'),
+                client.metadata.scan('test_db', 'products')
+            )
+
+            # Concurrent statistics for multiple tables
+            stats_list = await asyncio.gather(
+                client.metadata.get_table_stats('test_db', 'users'),
+                client.metadata.get_table_stats('test_db', 'orders'),
+                client.metadata.get_table_stats('test_db', 'products')
+            )
+            for table_stats in stats_list:
+                print(f"Table: {table_stats['total_rows']} rows")
+
+            # Scan index metadata asynchronously
+            index_result = await client.metadata.scan(
+                'test_db', 'users',
+                indexname='idx_email'
+            )
+
+            # Using within async transaction
+            async with client.session() as session:
+                result = await session.metadata.scan('test_db', 'users')
+                stats = await session.metadata.get_table_stats('test_db', 'orders')
+
+            await client.disconnect()
+
+        asyncio.run(main())
+
+    Use Cases:
+
+    - **Async performance monitoring**: Non-blocking metadata collection
+    - **Concurrent analysis**: Analyze multiple tables simultaneously
+    - **Real-time dashboards**: Update table statistics without blocking
+    - **High-throughput applications**: Metadata operations in async web servers
+    - **Batch metadata collection**: Gather stats from many tables efficiently
+
+    See Also:
+
+        - AsyncClient: For async database operations
+        - AsyncSession: For async transaction management
+        - MetadataManager: For synchronous metadata operations
     """
 
     async def scan(

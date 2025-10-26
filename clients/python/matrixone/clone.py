@@ -87,46 +87,90 @@ class CloneManager(BaseCloneManager):
     """
     Synchronous clone management for MatrixOne database operations.
 
-    This class provides comprehensive database cloning functionality for creating
-    copies of databases, tables, or data subsets. Cloning enables efficient
-    data replication, testing environments, and data distribution scenarios.
+    This class provides comprehensive database and table cloning functionality, enabling
+    efficient data replication, testing environments, and data distribution scenarios.
+    Cloning operations can work with current data or point-in-time snapshots.
 
     Key Features:
-    - Database cloning with full data replication
-    - Table-level cloning for specific data subsets
-    - Efficient cloning using MatrixOne's native capabilities
-    - Integration with snapshot and restore operations
-    - Transaction-aware cloning operations via executor pattern
-    - Unified interface for client and session contexts
+
+    - **Database cloning**: Clone entire databases with all tables and data
+    - **Table-level cloning**: Clone specific tables for targeted data replication
+    - **Snapshot-based cloning**: Clone from specific point-in-time snapshots
+    - **Efficient native operations**: Uses MatrixOne's native CLONE functionality for performance
+    - **Transaction-aware**: Full integration with transaction contexts via executor pattern
+    - **Flexible naming**: Support for IF NOT EXISTS clause to prevent conflicts
+    - **Cross-database cloning**: Clone tables between different databases
 
     Executor Pattern:
-    - If executor is None, uses self.client.execute (default executor)
-    - If executor is provided (e.g., session), uses executor.execute
+
+    - If executor is None, uses self.client.execute (default client-level executor)
+    - If executor is provided (e.g., session), uses executor.execute (transaction-aware)
     - This allows the same logic to work in both client and session contexts
+    - All operations can participate in transactions when used via session
 
     Usage Examples::
 
-        # Using client directly
+        from matrixone import Client
+
+        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+        # Clone entire database (current state)
         client.clone.clone_database(
-            target_db='cloned_db',
-            source_db='source_db'
+            target_db='production_backup',
+            source_db='production'
         )
 
-        # Using within a session (transaction)
+        # Clone database with IF NOT EXISTS
+        client.clone.clone_database(
+            target_db='dev_environment',
+            source_db='production',
+            if_not_exists=True
+        )
+
+        # Clone database from a specific snapshot
+        client.clone.clone_database(
+            target_db='test_environment',
+            source_db='production',
+            snapshot_name='daily_backup_2024_01_01'
+        )
+
+        # Clone specific table
+        client.clone.clone_table(
+            target_table='users_backup',
+            source_table='users'
+        )
+
+        # Clone table across databases
+        client.clone.clone_table(
+            target_table='dev_db.users',
+            source_table='prod_db.users'
+        )
+
+        # Clone table from snapshot with validation
+        client.clone.clone_table_with_snapshot(
+            target_table='users_202401',
+            source_table='users',
+            snapshot_name='monthly_backup',
+            if_not_exists=True
+        )
+
+        # Using within a transaction (all operations are atomic)
         with client.session() as session:
-            session.clone.clone_database(
-                target_db='cloned_db',
-                source_db='source_db'
-            )
+            # Clone multiple databases atomically
+            session.clone.clone_database('backup_db1', 'source_db1')
+            session.clone.clone_database('backup_db2', 'source_db2')
+            # Both clones succeed or fail together
 
-        # Clone with snapshot
-        client.clone.clone_database(
-            target_db='cloned_db',
-            source_db='source_db',
-            snapshot_name='my_snapshot'
-        )
+    Version Requirements:
 
-    Note: Cloning functionality requires MatrixOne version 1.0.0 or higher.
+        Clone functionality requires MatrixOne version 1.0.0 or higher.
+        Earlier versions do not support native cloning operations.
+
+    See Also:
+
+        - SnapshotManager: For creating snapshots before cloning
+        - RestoreManager: For restoring databases from snapshots
+        - MetadataManager: For managing database metadata
     """
 
     @requires_version(
@@ -252,9 +296,82 @@ class AsyncCloneManager(BaseCloneManager):
     """
     Asynchronous clone management for MatrixOne database operations.
 
-    Provides the same functionality as CloneManager but with async/await support.
-    Uses the same executor pattern to support both client and session contexts.
-    Shares SQL building logic with the synchronous version via BaseCloneManager.
+    Provides the same comprehensive cloning functionality as CloneManager but with
+    full async/await support for non-blocking I/O operations. Ideal for high-concurrency
+    applications and async web frameworks.
+
+    Key Features:
+
+    - **Non-blocking operations**: All clone operations use async/await
+    - **Database cloning**: Asynchronously clone entire databases
+    - **Table-level cloning**: Asynchronously clone specific tables
+    - **Snapshot-based cloning**: Async cloning from point-in-time snapshots
+    - **Concurrent operations**: Clone multiple databases/tables concurrently
+    - **Transaction-aware**: Full integration with async transaction contexts
+    - **Executor pattern**: Works with both async client and async session
+
+    Executor Pattern:
+
+    - If executor is None, uses self.client.execute (default async client-level executor)
+    - If executor is provided (e.g., async session), uses executor.execute (async transaction-aware)
+    - All operations are non-blocking and use async/await
+    - Enables concurrent cloning operations when not in a transaction
+
+    Usage Examples::
+
+        from matrixone import AsyncClient
+        import asyncio
+
+        async def main():
+            client = AsyncClient()
+            await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # Clone entire database asynchronously
+            await client.clone.clone_database(
+                target_db='production_backup',
+                source_db='production'
+            )
+
+            # Clone database from snapshot
+            await client.clone.clone_database(
+                target_db='test_environment',
+                source_db='production',
+                snapshot_name='daily_backup'
+            )
+
+            # Clone specific table asynchronously
+            await client.clone.clone_table(
+                target_table='users_backup',
+                source_table='users'
+            )
+
+            # Concurrent cloning of multiple databases
+            await asyncio.gather(
+                client.clone.clone_database('backup1', 'source1'),
+                client.clone.clone_database('backup2', 'source2'),
+                client.clone.clone_database('backup3', 'source3')
+            )
+
+            # Using within async transaction
+            async with client.session() as session:
+                await session.clone.clone_database('backup_db', 'source_db')
+                await session.clone.clone_table('backup_table', 'source_table')
+                # Both operations commit atomically
+
+            await client.disconnect()
+
+        asyncio.run(main())
+
+    Version Requirements:
+
+        Clone functionality requires MatrixOne version 1.0.0 or higher.
+        Requires async database drivers (aiomysql or asyncmy).
+
+    See Also:
+
+        - AsyncSnapshotManager: For async snapshot operations
+        - AsyncRestoreManager: For async restore operations
+        - AsyncSession: For async transaction management
     """
 
     @requires_version(

@@ -41,57 +41,230 @@ if TYPE_CHECKING:
 
 class Session(SQLAlchemySession):
     """
-    MatrixOne Session - extends SQLAlchemy Session with MatrixOne features.
+    MatrixOne Session - Transaction-aware session extending SQLAlchemy Session.
 
-    This class inherits from SQLAlchemy Session and provides a transaction context
-    for executing multiple database operations atomically, while adding MatrixOne-specific
-    capabilities like snapshots, clones, vector operations, and fulltext search.
+    This class provides a comprehensive transaction context for executing multiple database
+    operations atomically. It inherits all SQLAlchemy Session capabilities while adding
+    MatrixOne-specific features like snapshots, clones, vector operations, and fulltext search.
 
     Key Features:
 
-    - **Full SQLAlchemy Session API** - All inherited methods work as expected
-    - Atomic transaction execution with automatic rollback on errors
-    - Access to all MatrixOne managers within session context
-    - Support for both SQLAlchemy statements and string SQL
-    - Automatic commit/rollback handling
+    - **Full SQLAlchemy API**: All standard SQLAlchemy Session methods (add, delete, query, etc.)
+    - **Atomic transactions**: All operations succeed or fail together
+    - **Automatic rollback**: Errors trigger automatic transaction rollback
+    - **MatrixOne managers**: Access to all MatrixOne-specific operations within transactions
+    - **Hybrid SQL support**: Execute both SQLAlchemy statements and string SQL
+    - **Query logging**: Integrated query logging with performance tracking
+    - **Context manager**: Automatic transaction lifecycle management
 
-    Available Managers:
-    - snapshots: SessionSnapshotManager for snapshot operations
-    - clone: SessionCloneManager for clone operations
-    - restore: SessionRestoreManager for restore operations
-    - pitr: SessionPitrManager for point-in-time recovery
-    - pubsub: SessionPubSubManager for pub/sub operations
-    - account: SessionAccountManager for account operations
-    - vector_ops: SessionVectorIndexManager for vector operations
-    - fulltext_index: SessionFulltextIndexManager for fulltext operations
+    Transaction Behavior:
 
-    Usage Examples
+    - **Auto-commit on success**: Transaction commits when context manager exits normally
+    - **Auto-rollback on error**: Transaction rolls back if any exception occurs
+    - **Explicit control**: Manual commit() and rollback() also supported
+    - **Isolation**: All operations within session are isolated from other transactions
+    - **ACID compliance**: Full ACID guarantees for all operations
 
-    .. code-block:: python
+    Available Managers (all transaction-aware):
 
-            # Standard SQLAlchemy usage
-            from sqlalchemy import select
+    - **snapshots**: SnapshotManager for creating/managing database snapshots
+    - **clone**: CloneManager for cloning databases and tables
+    - **restore**: RestoreManager for restoring from snapshots
+    - **pitr**: PitrManager for point-in-time recovery operations
+    - **pubsub**: PubSubManager for publish-subscribe operations
+    - **account**: AccountManager for account and user management
+    - **vector_ops**: VectorManager for vector operations and indexing
+    - **fulltext_index**: FulltextIndexManager for fulltext search operations
+    - **metadata**: MetadataManager for table metadata analysis
+    - **load_data**: LoadDataManager for bulk data loading
+    - **stage**: StageManager for external stage management
+
+    Usage Examples::
+
+        from matrixone import Client
+        from sqlalchemy import select, insert, update, delete
+
+        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+        # ============================================================
+        # Example 1: Basic Transaction with ORM-style Operations
+        # ============================================================
+        with client.session() as session:
+            # All operations are atomic - succeed or fail together
+            from sqlalchemy import insert, update
+
+            # Insert using SQLAlchemy insert()
+            session.execute(insert(User).values(name='John', email='john@example.com'))
+            session.execute(insert(Order).values(user_id=1, amount=100.0))
+
+            # Update using SQLAlchemy update()
+            session.execute(
+                update(Account).where(Account.user_id == 1).values(balance=Account.balance - 100)
+            )
+            # Transaction commits automatically on successful completion
+
+        # ============================================================
+        # Example 2: SQLAlchemy ORM Operations
+        # ============================================================
+        with client.session() as session:
+            # Create new objects
+            user = User(name="Alice", email="alice@example.com")
+            order = Order(user_id=1, amount=50.0)
+
+            # Add to session
+            session.add(user)
+            session.add(order)
+
+            # Query using ORM
+            stmt = select(User).where(User.name == "Alice")
+            result = session.execute(stmt)
+            users = result.scalars().all()
+
+            # Update using ORM
+            user = session.get(User, 1)
+            user.email = "newemail@example.com"
+
+            # Commit explicitly (or let context manager do it)
+            session.commit()
+
+        # ============================================================
+        # Example 3: MatrixOne Snapshot Operations in Transaction
+        # ============================================================
+        with client.session() as session:
+            # Create snapshot within transaction
+            snapshot = session.snapshots.create(
+                name='daily_backup',
+                level=SnapshotLevel.DATABASE,
+                database='production'
+            )
+
+            # Clone database within same transaction
+            session.clone.clone_database(
+                target_db='production_copy',
+                source_db='production',
+                snapshot_name='daily_backup'
+            )
+            # Both operations commit atomically
+
+        # ============================================================
+        # Example 4: Bulk Data Loading in Transaction
+        # ============================================================
+        with client.session() as session:
+            # Load data files atomically
+            session.load_data.from_csv('/data/users.csv', 'users')
+            session.load_data.from_csv('/data/orders.csv', 'orders')
+
+            # Update statistics after loading
+            session.execute("ANALYZE TABLE users")
+            session.execute("ANALYZE TABLE orders")
+            # All loads and updates commit together
+
+        # ============================================================
+        # Example 5: Error Handling with Automatic Rollback
+        # ============================================================
+        try:
             with client.session() as session:
-                # Execute SQLAlchemy statements
-                stmt = select(User).where(User.age > 25)
-                result = session.execute(stmt)
-                users = result.scalars().all()  # Returns ORM objects
+                session.execute("INSERT INTO users (name) VALUES ('Bob')")
+                session.execute("INSERT INTO invalid_table (data) VALUES ('test')")  # This fails
+                # Transaction automatically rolls back - Bob is NOT inserted
+        except Exception as e:
+            print(f"Transaction failed and rolled back: {e}")
 
-                # ORM operations
-                user = User(name="John", age=30)
-                session.add(user)
-                session.commit()
+        # ============================================================
+        # Example 6: Manual Transaction Control
+        # ============================================================
+        with client.session() as session:
+            try:
+                session.execute("INSERT INTO users (name) VALUES ('Charlie')")
+                session.execute("UPDATE accounts SET balance = balance - 50")
 
-            # MatrixOne features
-            with client.session() as session:
-                # Snapshot operations
-                session.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
+                # Verify conditions before committing
+                result = session.execute("SELECT balance FROM accounts WHERE id = 1")
+                balance = result.scalar()
 
-                # Clone operations
-                session.clone.clone_database("new_db", "source_db")
+                if balance >= 0:
+                    session.commit()  # Explicit commit
+                else:
+                    session.rollback()  # Explicit rollback
+                    print("Transaction rolled back due to insufficient balance")
+            except Exception as e:
+                session.rollback()
+                raise
 
-    Note: This class is automatically created by the Client's session()
-    context manager and should not be instantiated directly.
+        # ============================================================
+        # Example 7: Complex Multi-Manager Transaction
+        # ============================================================
+        with client.session() as session:
+            # Create publication
+            pub = session.pubsub.create_database_publication(
+                name='analytics_data',
+                database='analytics',
+                account='subscriber_account'
+            )
+
+            # Create stage using simple interface
+            session.stage.create_local('export_stage', '/exports/')
+
+            # Load fresh data
+            session.load_data.from_csv('/data/latest.csv', Analytics)  # Use ORM model
+
+            # Create snapshot after load
+            session.snapshots.create(
+                name='post_load_snapshot',
+                level=SnapshotLevel.DATABASE,
+                database='analytics'
+            )
+            # All operations are atomic
+
+        # ============================================================
+        # Example 8: Vector Operations in Transaction
+        # ============================================================
+        with client.session() as session:
+            # Create vector table
+            session.create_table('documents', {
+                'id': 'int primary key',
+                'content': 'text',
+                'embedding': 'vecf32(384)'
+            })
+
+            # Create vector index
+            session.vector_ops.create_ivf(
+                'documents',
+                name='doc_idx',
+                column='embedding',
+                lists=100
+            )
+
+            # Insert vector data
+            session.insert('documents', {
+                'id': 1,
+                'content': 'sample document',
+                'embedding': [0.1] * 384
+            })
+
+    Best Practices:
+
+    1. **Always use context manager**: Use `with client.session()` for automatic cleanup
+    2. **Keep transactions short**: Long transactions can block other operations
+    3. **Handle exceptions**: Wrap session code in try-except for proper error handling
+    4. **Avoid nested transactions**: SQLAlchemy doesn't support true nested transactions
+    5. **Use explicit commits**: When you need fine-grained control over transaction boundaries
+    6. **Test rollback behavior**: Ensure your application handles rollbacks correctly
+
+    Important Notes:
+
+    - Session is created by `Client.session()` context manager
+    - Don't instantiate Session directly
+    - All manager operations within session are transaction-aware
+    - Session automatically manages transaction lifecycle
+    - Errors trigger automatic rollback
+    - Normal exit triggers automatic commit
+
+    See Also:
+
+        - Client.session(): Creates and manages Session instances
+        - AsyncSession: Async version for async/await workflows
+        - SQLAlchemy Session: Parent class documentation
     """
 
     def __init__(self, connection, client):
@@ -139,33 +312,240 @@ class Session(SQLAlchemySession):
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
-        Execute SQL or SQLAlchemy statement within session.
+        Execute SQL or SQLAlchemy statement within the current session transaction.
 
-        Overrides SQLAlchemy Session.execute() to add:
-        - Support for string SQL with MatrixOne parameter substitution
-        - Query logging
+        This method extends SQLAlchemy's Session.execute() with MatrixOne-specific features:
+        - Parameter substitution for string SQL using '?' placeholders
+        - Integrated query logging with performance tracking
+        - Support for both SQLAlchemy statements and raw SQL strings
+
+        All queries executed within the session participate in the current transaction.
+        Changes are committed when the session context exits normally, or rolled back on error.
 
         Args:
-            sql_or_stmt: SQL string or SQLAlchemy statement (select, update, delete, insert, text)
-            params: Query parameters (only used for string SQL with '?' placeholders)
-            **kwargs: Additional arguments passed to parent execute() (including _log_mode for logging control)
+            sql_or_stmt (str | SQLAlchemy statement): The SQL query to execute. Can be:
+                - String SQL with '?' placeholders for parameters
+                - SQLAlchemy select() statement
+                - SQLAlchemy insert() statement
+                - SQLAlchemy update() statement
+                - SQLAlchemy delete() statement
+                - SQLAlchemy text() statement
+
+            params (Optional[Tuple]): Query parameters for string SQL only. Values are
+                substituted for '?' placeholders in order. Ignored for SQLAlchemy statements.
+
+            **kwargs: Additional keyword arguments:
+                - _log_mode (str): Override SQL logging mode for this query only.
+                  Options: 'off', 'simple', 'full'. If not specified, uses client's
+                  global sql_log_mode setting.
+                - Other kwargs are passed to SQLAlchemy's execute()
 
         Returns:
-            sqlalchemy.engine.Result: SQLAlchemy Result object
+            sqlalchemy.engine.Result: SQLAlchemy Result object with methods:
+                - fetchall(): Get all rows as list of tuples
+                - fetchone(): Get next row as tuple or None
+                - fetchmany(size): Get next N rows
+                - scalars(): Get first column of each row
+                - mappings(): Get rows as dictionaries
+                - rowcount: Number of rows affected (for INSERT/UPDATE/DELETE)
+
+        Raises:
+            QueryError: If query execution fails or SQL syntax is invalid
+            ConnectionError: If session is not connected to database
 
         Examples::
 
-            # SQLAlchemy statements
-            from sqlalchemy import select, update
+            from matrixone import Client
+            from sqlalchemy import select, insert, update, delete, and_, or_
+
+            client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # ========================================
+            # String SQL with Parameters
+            # ========================================
             with client.session() as session:
+                # Simple INSERT with parameters
+                result = session.execute(
+                    "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+                    ("John Doe", "john@example.com", 30)
+                )
+                print(f"Inserted {result.rowcount} rows")
+
+                # SELECT with parameters
+                result = session.execute(
+                    "SELECT * FROM users WHERE age > ? AND email LIKE ?",
+                    (25, "%@example.com")
+                )
+                for row in result:
+                    print(f"User: {row.name}, Age: {row.age}")
+
+                # UPDATE with parameters
+                result = session.execute(
+                    "UPDATE users SET status = ? WHERE age < ?",
+                    ("active", 18)
+                )
+                print(f"Updated {result.rowcount} rows")
+
+                # DELETE with parameters
+                result = session.execute(
+                    "DELETE FROM users WHERE status = ?",
+                    ("inactive",)
+                )
+                print(f"Deleted {result.rowcount} rows")
+
+            # ========================================
+            # SQLAlchemy SELECT Statements
+            # ========================================
+            with client.session() as session:
+                # Basic SELECT
                 stmt = select(User).where(User.age > 25)
                 result = session.execute(stmt)
-                users = result.scalars().all()
+                users = result.scalars().all()  # Returns list of User objects
 
-            # String SQL (MatrixOne extension)
+                # SELECT specific columns
+                stmt = select(User.name, User.email).where(User.status == 'active')
+                result = session.execute(stmt)
+                for name, email in result:
+                    print(f"{name}: {email}")
+
+                # Complex WHERE with AND/OR
+                stmt = select(User).where(
+                    and_(
+                        User.age > 18,
+                        or_(
+                            User.status == 'active',
+                            User.status == 'pending'
+                        )
+                    )
+                )
+                result = session.execute(stmt)
+
+                # SELECT with JOINs
+                stmt = select(User, Order).join(Order, User.id == Order.user_id)
+                result = session.execute(stmt)
+                for user, order in result:
+                    print(f"{user.name} ordered {order.amount}")
+
+                # SELECT with aggregation
+                from sqlalchemy import func
+                stmt = select(func.count(User.id), func.avg(User.age))
+                result = session.execute(stmt)
+                count, avg_age = result.one()
+
+            # ========================================
+            # SQLAlchemy INSERT Statements
+            # ========================================
             with client.session() as session:
-                result = session.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+                # Single INSERT
+                stmt = insert(User).values(name='Alice', email='alice@example.com', age=28)
+                result = session.execute(stmt)
+                print(f"Inserted row with ID: {result.lastrowid}")
+
+                # Bulk INSERT
+                stmt = insert(User).values([
+                    {'name': 'Bob', 'email': 'bob@example.com', 'age': 35},
+                    {'name': 'Carol', 'email': 'carol@example.com', 'age': 42}
+                ])
+                result = session.execute(stmt)
                 print(f"Inserted {result.rowcount} rows")
+
+            # ========================================
+            # SQLAlchemy UPDATE Statements
+            # ========================================
+            with client.session() as session:
+                # Simple UPDATE
+                stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+                result = session.execute(stmt)
+                print(f"Updated {result.rowcount} rows")
+
+                # Conditional UPDATE
+                stmt = update(User).where(User.age < 18).values(status='minor')
+                result = session.execute(stmt)
+
+                # UPDATE with expressions
+                stmt = update(Order).values(total=Order.quantity * Order.price)
+                result = session.execute(stmt)
+
+            # ========================================
+            # SQLAlchemy DELETE Statements
+            # ========================================
+            with client.session() as session:
+                # Simple DELETE
+                stmt = delete(User).where(User.id == 1)
+                result = session.execute(stmt)
+
+                # Conditional DELETE
+                stmt = delete(User).where(User.status == 'deleted')
+                result = session.execute(stmt)
+                print(f"Deleted {result.rowcount} rows")
+
+            # ========================================
+            # Result Processing
+            # ========================================
+            with client.session() as session:
+                # fetchall() - get all rows
+                result = session.execute("SELECT * FROM users")
+                rows = result.fetchall()
+                for row in rows:
+                    print(f"User: {row.name}")
+
+                # fetchone() - get one row at a time
+                result = session.execute("SELECT * FROM users")
+                while row := result.fetchone():
+                    print(f"User: {row.name}")
+
+                # fetchmany() - get N rows
+                result = session.execute("SELECT * FROM users")
+                rows = result.fetchmany(10)  # Get 10 rows
+
+                # scalars() - get first column
+                stmt = select(User.name)
+                result = session.execute(stmt)
+                names = result.scalars().all()  # List of names
+
+                # mappings() - get rows as dicts
+                result = session.execute("SELECT name, email FROM users")
+                for row in result.mappings():
+                    print(f"{row['name']}: {row['email']}")
+
+                # scalar() - get single value
+                stmt = select(func.count(User.id))
+                result = session.execute(stmt)
+                count = result.scalar()  # Single integer value
+
+            # ========================================
+            # Query Logging Control
+            # ========================================
+            with client.session() as session:
+                # Disable logging for this query only
+                result = session.execute(
+                    "SELECT * FROM large_table",
+                    _log_mode='off'
+                )
+
+                # Force full SQL logging for debugging
+                result = session.execute(
+                    "SELECT * FROM users WHERE complex_condition",
+                    _log_mode='full'
+                )
+
+                # Simple logging (show operation type only)
+                result = session.execute(
+                    "UPDATE massive_table SET field = 'value'",
+                    _log_mode='simple'
+                )
+
+        Best Practices:
+            - Use parameters (?-placeholders) to prevent SQL injection
+            - Use SQLAlchemy statements for complex queries
+            - Use string SQL for simple, dynamic queries
+            - Always consume or close result sets
+            - Use _log_mode='off' for frequently executed queries in production
+
+        See Also:
+            - AsyncSession.execute(): Async version
+            - Client.execute(): Client-level execute without transaction
+            - SQLAlchemy Result: Result object documentation
         """
         import time
 
@@ -496,12 +876,135 @@ class Session(SQLAlchemySession):
 
 class AsyncSession(SQLAlchemyAsyncSession):
     """
-    MatrixOne Async Session - extends SQLAlchemy AsyncSession with MatrixOne features.
+    MatrixOne Async Session - Asynchronous transaction-aware session extending SQLAlchemy AsyncSession.
 
-    This class inherits from SQLAlchemy AsyncSession and provides:
-    - Full SQLAlchemy AsyncSession API
-    - MatrixOne-specific managers (snapshots, clone, vector_ops, etc.)
-    - Enhanced execute() with MatrixOne parameter substitution
+    This class provides async/await support for all Session functionality with full
+    SQLAlchemy AsyncSession API compatibility, while adding MatrixOne-specific async
+    managers for snapshots, clones, vector operations, and more.
+
+    Key Features:
+
+    - **Full async SQLAlchemy API**: All standard async Session methods (add, delete, execute, etc.)
+    - **Non-blocking transactions**: Async transaction management with async/await
+    - **Async MatrixOne managers**: All MatrixOne operations available asynchronously
+    - **Concurrent operations**: Execute multiple operations concurrently with asyncio.gather
+    - **Automatic lifecycle**: Context manager handles async transaction lifecycle
+    - **Query logging**: Integrated async query logging
+
+    Transaction Behavior:
+
+    - **Auto-commit on success**: Transaction commits when async context manager exits normally
+    - **Auto-rollback on error**: Transaction rolls back if any exception occurs
+    - **Non-blocking**: All operations use async/await and don't block the event loop
+    - **Isolation**: All operations within session are isolated from other transactions
+    - **ACID compliance**: Full ACID guarantees for all async operations
+
+    Available Managers (all async/transaction-aware):
+
+    - **snapshots**: AsyncSnapshotManager for async snapshot operations
+    - **clone**: AsyncCloneManager for async clone operations
+    - **restore**: AsyncRestoreManager for async restore operations
+    - **pitr**: AsyncPitrManager for async point-in-time recovery
+    - **pubsub**: AsyncPubSubManager for async publish-subscribe
+    - **account**: AsyncAccountManager for async account management
+    - **vector_ops**: AsyncVectorManager for async vector operations
+    - **fulltext_index**: AsyncFulltextIndexManager for async fulltext search
+    - **metadata**: AsyncMetadataManager for async metadata analysis
+    - **load_data**: AsyncLoadDataManager for async bulk loading
+    - **stage**: AsyncStageManager for async stage management
+
+    Usage Examples::
+
+        from matrixone import AsyncClient
+        from sqlalchemy import select, insert, update, delete
+        import asyncio
+
+        async def main():
+            client = AsyncClient()
+            await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # ========================================
+            # Example 1: Basic Async Transaction
+            # ========================================
+            async with client.session() as session:
+                # All operations are atomic
+                await session.execute("INSERT INTO users (name) VALUES ('John')")
+                await session.execute("INSERT INTO orders (user_id, amount) VALUES (1, 100)")
+                # Transaction commits automatically
+
+            # ========================================
+            # Example 2: Async ORM Operations
+            # ========================================
+            async with client.session() as session:
+                # Add objects
+                user = User(name="Alice")
+                session.add(user)
+
+                # Query
+                stmt = select(User).where(User.name == "Alice")
+                result = await session.execute(stmt)
+                users = result.scalars().all()
+
+                # Commit
+                await session.commit()
+
+            # ========================================
+            # Example 3: Concurrent Operations
+            # ========================================
+            async with client.session() as session:
+                # Execute multiple queries concurrently
+                results = await asyncio.gather(
+                    session.execute("SELECT * FROM users"),
+                    session.execute("SELECT * FROM orders"),
+                    session.execute("SELECT * FROM products")
+                )
+                users, orders, products = results
+
+            # ========================================
+            # Example 4: Async MatrixOne Managers
+            # ========================================
+            async with client.session() as session:
+                # Create snapshot
+                snapshot = await session.snapshots.create(
+                    'backup',
+                    SnapshotLevel.DATABASE,
+                    database='production'
+                )
+
+                # Clone database
+                await session.clone.clone_database('prod_copy', 'production')
+
+                # Load data
+                await session.load_data.from_csv('/data/users.csv', 'users')
+
+            # ========================================
+            # Example 5: Error Handling
+            # ========================================
+            try:
+                async with client.session() as session:
+                    await session.execute("INSERT INTO users (name) VALUES ('Bob')")
+                    await session.execute("INSERT INTO invalid_table (x) VALUES (1)")
+                    # Automatically rolls back on error
+            except Exception as e:
+                print(f"Transaction rolled back: {e}")
+
+            await client.disconnect()
+
+        asyncio.run(main())
+
+    Important Notes:
+
+    - Use `async with client.session()` for async sessions
+    - All execute operations must be awaited
+    - All manager operations must be awaited
+    - Perfect for FastAPI, aiohttp, and other async frameworks
+    - Enables high-concurrency database operations
+
+    See Also:
+
+        - AsyncClient.session(): Creates AsyncSession instances
+        - Session: Synchronous version
+        - SQLAlchemy AsyncSession: Parent class documentation
     """
 
     def __init__(self, connection, client):
