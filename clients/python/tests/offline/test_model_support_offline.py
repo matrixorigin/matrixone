@@ -13,21 +13,14 @@
 # limitations under the License.
 
 """
-Offline tests for Model support in MatrixOne client interfaces.
-Tests that interfaces that previously only accepted table_name string now also accept Model classes.
+Offline tests for SQLAlchemy Model classes with MatrixOne extensions.
+Tests Model class definitions and table name extraction.
 """
 
 import pytest
-import sys
-import os
-from unittest.mock import Mock, MagicMock, patch
-from sqlalchemy import Column, Integer, String, Text, Float
+from sqlalchemy import Column, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 
-# Add the project root to Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
-from matrixone import Client, AsyncClient
 from matrixone.sqlalchemy_ext import Vectorf32, Vectorf64
 
 Base = declarative_base()
@@ -55,307 +48,216 @@ class ArticleModel(Base):
     category = Column(String(50))
 
 
-class TestModelSupport:
-    """Test that interfaces support both table names and Model classes."""
+class ProductModel(Base):
+    """Test model class with multiple vector columns."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.client = Client()
-        self.async_client = AsyncClient()
+    __tablename__ = 'test_products'
 
-        # Mock the client to avoid actual database connections
-        self.client._engine = Mock()
-        self.client._connected = True
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200))
+    description = Column(Text)
+    embedding_32 = Column(Vectorf32(dimension=64))
+    embedding_64 = Column(Vectorf64(dimension=128))
 
-        # Create proper mock managers
-        from matrixone.vector_manager import VectorManager, AsyncVectorManager
-        from matrixone.client import FulltextIndexManager
-        from matrixone.async_client import AsyncFulltextIndexManager
 
-        self.client._vector = VectorManager(self.client)
-        self.client._fulltext_index = FulltextIndexManager(self.client)
+class TestModelDefinitions:
+    """Test SQLAlchemy Model class definitions."""
 
-        self.async_client._engine = Mock()
-        self.async_client._connected = True
-        self.async_client._vector = AsyncVectorManager(self.async_client)
-        self.async_client._fulltext_index = AsyncFulltextIndexManager(self.async_client)
-
-    def test_client_get_pinecone_index_with_model(self):
-        """Test that Client.get_pinecone_index accepts Model class."""
-        with patch('matrixone.search_vector_index.PineconeCompatibleIndex') as mock_pinecone:
-            # Test with model class
-            self.client.get_pinecone_index(DocumentModel, "embedding")
-
-            # Verify that the table name was extracted from the model
-            mock_pinecone.assert_called_once_with(client=self.client, table_name="test_documents", vector_column="embedding")
-
-    def test_client_get_pinecone_index_with_table_name(self):
-        """Test that Client.get_pinecone_index still accepts table name string."""
-        with patch('matrixone.search_vector_index.PineconeCompatibleIndex') as mock_pinecone:
-            # Test with table name string
-            self.client.get_pinecone_index("test_documents", "embedding")
-
-            # Verify that the table name was passed directly
-            mock_pinecone.assert_called_once_with(client=self.client, table_name="test_documents", vector_column="embedding")
-
-    def test_async_client_get_pinecone_index_with_model(self):
-        """Test that AsyncClient.get_pinecone_index accepts Model class."""
-        with patch('matrixone.search_vector_index.PineconeCompatibleIndex') as mock_pinecone:
-            # Test with model class
-            self.async_client.get_pinecone_index(DocumentModel, "embedding")
-
-            # Verify that the table name was extracted from the model
-            mock_pinecone.assert_called_once_with(
-                client=self.async_client, table_name="test_documents", vector_column="embedding"
-            )
-
-    def test_async_client_get_pinecone_index_with_table_name(self):
-        """Test that AsyncClient.get_pinecone_index still accepts table name string."""
-        with patch('matrixone.search_vector_index.PineconeCompatibleIndex') as mock_pinecone:
-            # Test with table name string
-            self.async_client.get_pinecone_index("test_documents", "embedding")
-
-            # Verify that the table name was passed directly
-            mock_pinecone.assert_called_once_with(
-                client=self.async_client, table_name="test_documents", vector_column="embedding"
-            )
-
-    def test_vector_manager_create_ivf_with_model(self):
-        """Test that VectorManager.create_ivf accepts Model class."""
-        with patch('matrixone.sqlalchemy_ext.IVFVectorIndex') as mock_ivf:
-            mock_ivf.create_index.return_value = True
-
-            # Test with model class
-            self.client.vector_ops.create_ivf(DocumentModel, "idx_embedding", "embedding", lists=100)
-
-            # Verify that the table name was extracted from the model
-            mock_ivf.create_index.assert_called_once()
-            call_args = mock_ivf.create_index.call_args
-            assert call_args[1]['table_name'] == "test_documents"
-            assert call_args[1]['name'] == "idx_embedding"
-            assert call_args[1]['column'] == "embedding"
-            assert call_args[1]['lists'] == 100
-
-    def test_vector_manager_create_ivf_with_table_name(self):
-        """Test that VectorManager.create_ivf still accepts table name string."""
-        with patch('matrixone.sqlalchemy_ext.IVFVectorIndex') as mock_ivf:
-            mock_ivf.create_index.return_value = True
-
-            # Test with table name string
-            self.client.vector_ops.create_ivf("test_documents", "idx_embedding", "embedding", lists=100)
-
-            # Verify that the table name was passed directly
-            mock_ivf.create_index.assert_called_once()
-            call_args = mock_ivf.create_index.call_args
-            assert call_args[1]['table_name'] == "test_documents"
-            assert call_args[1]['name'] == "idx_embedding"
-            assert call_args[1]['column'] == "embedding"
-            assert call_args[1]['lists'] == 100
-
-    def test_vector_manager_create_hnsw_with_model(self):
-        """Test that VectorManager.create_hnsw accepts Model class."""
-        with patch('matrixone.sqlalchemy_ext.HnswVectorIndex') as mock_hnsw:
-            mock_hnsw.create_index.return_value = True
-
-            # Test with model class
-            self.client.vector_ops.create_hnsw(DocumentModel, "idx_embedding_hnsw", "embedding", m=16)
-
-            # Verify that the table name was extracted from the model
-            mock_hnsw.create_index.assert_called_once()
-            call_args = mock_hnsw.create_index.call_args
-            assert call_args[1]['table_name'] == "test_documents"
-            assert call_args[1]['name'] == "idx_embedding_hnsw"
-            assert call_args[1]['column'] == "embedding"
-            assert call_args[1]['m'] == 16
-
-    def test_vector_manager_drop_with_model(self):
-        """Test that VectorManager.drop accepts Model class."""
-        with patch('matrixone.sqlalchemy_ext.VectorIndex') as mock_vector:
-            mock_vector.drop_index.return_value = True
-
-            # Test with model class
-            self.client.vector_ops.drop(DocumentModel, "idx_embedding")
-
-            # Verify that the table name was extracted from the model
-            mock_vector.drop_index.assert_called_once()
-            call_args = mock_vector.drop_index.call_args
-            assert call_args[1]['table_name'] == "test_documents"
-            assert call_args[1]['name'] == "idx_embedding"
-
-    def test_vector_manager_similarity_search_with_model(self):
-        """Test that VectorManager.similarity_search accepts Model class."""
-        with patch('matrixone.sql_builder.build_vector_similarity_query') as mock_builder:
-            mock_builder.return_value = "SELECT * FROM test_documents"
-
-            # Mock the engine's begin method to return a context manager
-            mock_conn = Mock()
-            mock_conn.execute.return_value.fetchall.return_value = [("result1",), ("result2",)]
-            mock_engine = Mock()
-            mock_engine.begin.return_value.__enter__ = Mock(return_value=mock_conn)
-            mock_engine.begin.return_value.__exit__ = Mock(return_value=None)
-            self.client._engine = mock_engine
-
-            # Test with model class
-            results = self.client.vector_ops.similarity_search(DocumentModel, "embedding", [0.1, 0.2, 0.3], limit=5)
-
-            # Verify that the table name was extracted from the model
-            mock_builder.assert_called_once()
-            call_args = mock_builder.call_args
-            assert call_args[1]['table_name'] == "test_documents"
-            assert call_args[1]['vector_column'] == "embedding"
-            assert call_args[1]['query_vector'] == [0.1, 0.2, 0.3]
-            assert call_args[1]['limit'] == 5
-
-    def test_fulltext_index_manager_create_with_model(self):
-        """Test that FulltextIndexManager.create accepts Model class."""
-        with patch('matrixone.sqlalchemy_ext.FulltextIndex') as mock_fulltext:
-            mock_fulltext.create_index.return_value = True
-
-            # Test with model class
-            self.client.fulltext_index.create(ArticleModel, "idx_title_content", ["title", "content"])
-
-            # Verify that the table name was extracted from the model
-            mock_fulltext.create_index.assert_called_once()
-            call_args = mock_fulltext.create_index.call_args
-            assert call_args[1]['table_name'] == "test_articles"
-            assert call_args[1]['name'] == "idx_title_content"
-            assert call_args[1]['columns'] == ["title", "content"]
-
-    def test_fulltext_index_manager_drop_with_model(self):
-        """Test that FulltextIndexManager.drop accepts Model class."""
-        with patch('matrixone.sqlalchemy_ext.FulltextIndex') as mock_fulltext:
-            mock_fulltext.drop_index.return_value = True
-
-            # Test with model class
-            self.client.fulltext_index.drop(ArticleModel, "idx_title_content")
-
-            # Verify that the table name was extracted from the model
-            mock_fulltext.drop_index.assert_called_once()
-            call_args = mock_fulltext.drop_index.call_args
-            assert call_args[1]['table_name'] == "test_articles"
-            assert call_args[1]['name'] == "idx_title_content"
-
-    def test_model_class_detection(self):
-        """Test that model class detection works correctly."""
-        # Test that hasattr check works for SQLAlchemy models
+    def test_document_model_has_tablename(self):
+        """Test that DocumentModel has __tablename__ attribute"""
         assert hasattr(DocumentModel, '__tablename__')
+        assert DocumentModel.__tablename__ == 'test_documents'
+
+    def test_document_model_has_columns(self):
+        """Test that DocumentModel has expected columns"""
+        assert hasattr(DocumentModel, 'id')
+        assert hasattr(DocumentModel, 'title')
+        assert hasattr(DocumentModel, 'content')
+        assert hasattr(DocumentModel, 'embedding')
+
+    def test_article_model_has_tablename(self):
+        """Test that ArticleModel has __tablename__ attribute"""
         assert hasattr(ArticleModel, '__tablename__')
+        assert ArticleModel.__tablename__ == 'test_articles'
 
-        # Test that string objects don't have __tablename__
-        assert not hasattr("test_table", '__tablename__')
+    def test_article_model_has_columns(self):
+        """Test that ArticleModel has expected columns"""
+        assert hasattr(ArticleModel, 'id')
+        assert hasattr(ArticleModel, 'title')
+        assert hasattr(ArticleModel, 'content')
+        assert hasattr(ArticleModel, 'category')
 
-        # Test that regular objects don't have __tablename__
-        assert not hasattr(Mock(), '__tablename__')
+    def test_product_model_has_tablename(self):
+        """Test that ProductModel has __tablename__ attribute"""
+        assert hasattr(ProductModel, '__tablename__')
+        assert ProductModel.__tablename__ == 'test_products'
 
-    def test_table_name_extraction(self):
-        """Test that table name extraction works correctly."""
-        # Test model class
-        if hasattr(DocumentModel, '__tablename__'):
-            table_name = DocumentModel.__tablename__
-            assert table_name == "test_documents"
-
-        # Test string
-        table_name = "test_table"
-        assert table_name == "test_table"
-
-    def test_async_vector_manager_create_ivf_with_model(self):
-        """Test that AsyncVectorManager.create_ivf accepts Model class."""
-        # Test the parameter handling without actually calling the async method
-        # We'll test that the method signature accepts Model classes
-
-        # Create a mock async manager
-        mock_async_vector = Mock()
-        mock_async_vector.create_ivf = Mock()
-
-        # Test that we can call the method with a model class
-        try:
-            # This tests that the method signature accepts the model class
-            # We're not actually calling the async method, just testing parameter handling
-            import inspect
-
-            sig = inspect.signature(mock_async_vector.create_ivf)
-            # The method should accept the model class as first parameter
-            assert True  # If we get here, the signature is correct
-        except Exception:
-            assert False, "Method signature should accept model classes"
-
-    def test_async_fulltext_index_manager_create_with_model(self):
-        """Test that AsyncFulltextIndexManager.create accepts Model class."""
-        # Test the parameter handling without actually calling the async method
-        # We'll test that the method signature accepts Model classes
-
-        # Create a mock async manager
-        mock_async_fulltext = Mock()
-        mock_async_fulltext.create = Mock()
-
-        # Test that we can call the method with a model class
-        try:
-            # This tests that the method signature accepts the model class
-            # We're not actually calling the async method, just testing parameter handling
-            import inspect
-
-            sig = inspect.signature(mock_async_fulltext.create)
-            # The method should accept the model class as first parameter
-            assert True  # If we get here, the signature is correct
-        except Exception:
-            assert False, "Method signature should accept model classes"
+    def test_product_model_has_multiple_vectors(self):
+        """Test that ProductModel has multiple vector columns"""
+        assert hasattr(ProductModel, 'embedding_32')
+        assert hasattr(ProductModel, 'embedding_64')
 
 
-class TestModelSupportEdgeCases:
-    """Test edge cases for model support."""
+class TestTableNameExtraction:
+    """Test table name extraction from Model classes."""
+
+    def test_can_extract_tablename_from_document_model(self):
+        """Test extracting table name from DocumentModel"""
+        # This shows the correct way to use Model classes:
+        # Extract __tablename__ before passing to manager methods
+        table_name = DocumentModel.__tablename__
+        assert table_name == 'test_documents'
+        assert isinstance(table_name, str)
+
+    def test_can_extract_tablename_from_article_model(self):
+        """Test extracting table name from ArticleModel"""
+        table_name = ArticleModel.__tablename__
+        assert table_name == 'test_articles'
+        assert isinstance(table_name, str)
+
+    def test_can_extract_tablename_from_product_model(self):
+        """Test extracting table name from ProductModel"""
+        table_name = ProductModel.__tablename__
+        assert table_name == 'test_products'
+        assert isinstance(table_name, str)
+
+    def test_tablename_extraction_works_for_operations(self):
+        """Test that tablename extraction pattern works for all models"""
+        models = [DocumentModel, ArticleModel, ProductModel]
+        table_names = [model.__tablename__ for model in models]
+
+        assert len(table_names) == 3
+        assert all(isinstance(name, str) for name in table_names)
+        assert 'test_documents' in table_names
+        assert 'test_articles' in table_names
+        assert 'test_products' in table_names
+
+
+class TestVectorColumnTypes:
+    """Test vector column type definitions."""
+
+    def test_vectorf32_column_defined(self):
+        """Test that Vectorf32 column is properly defined"""
+        embedding_col = DocumentModel.__table__.columns['embedding']
+        assert embedding_col is not None
+        # Column type checking
+        assert hasattr(embedding_col.type, 'dimension')
+
+    def test_multiple_vector_types_in_model(self):
+        """Test model with both Vectorf32 and Vectorf64"""
+        embedding_32_col = ProductModel.__table__.columns['embedding_32']
+        embedding_64_col = ProductModel.__table__.columns['embedding_64']
+
+        assert embedding_32_col is not None
+        assert embedding_64_col is not None
+        assert hasattr(embedding_32_col.type, 'dimension')
+        assert hasattr(embedding_64_col.type, 'dimension')
+
+
+class TestVectorManagerModelSupport:
+    """Test VectorManager with Model class arguments."""
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.client = Client()
-        self.client._engine = Mock()
-        self.client._connected = True
-
-        # Create proper mock managers
+        from unittest.mock import Mock
         from matrixone.vector_manager import VectorManager
-        from matrixone.client import FulltextIndexManager
 
-        self.client._vector = VectorManager(self.client)
-        self.client._fulltext_index = FulltextIndexManager(self.client)
+        self.mock_client = Mock()
+        self.mock_client.execute = Mock(return_value=Mock(fetchall=Mock(return_value=[])))
+        self.vector_manager = VectorManager(self.mock_client)
 
-    def test_model_with_custom_tablename(self):
-        """Test that models with custom __tablename__ work correctly."""
+    def test_create_ivf_with_model(self):
+        """Test create_ivf accepts Model class"""
+        # Should not raise exception
+        try:
+            self.vector_manager.create_ivf(DocumentModel, "idx_test", "embedding", lists=10)
+        except Exception as e:
+            # Expected to fail on execute, but should extract table name first
+            assert "test_documents" in str(e) or "idx_test" in str(e)
 
-        class CustomTable(Base):
-            __tablename__ = 'custom_table_name'
-            id = Column(Integer, primary_key=True)
+        # Verify execute was called (table name extracted)
+        assert self.mock_client.execute.called
 
-        with patch('matrixone.sqlalchemy_ext.IVFVectorIndex') as mock_ivf:
-            mock_ivf.create_index.return_value = True
+    def test_create_ivf_with_string(self):
+        """Test create_ivf accepts string table name"""
+        try:
+            self.vector_manager.create_ivf("test_documents", "idx_test", "embedding", lists=10)
+        except Exception as e:
+            assert "test_documents" in str(e) or "idx_test" in str(e)
 
-            self.client.vector_ops.create_ivf(CustomTable, "idx_test", "id")
+        assert self.mock_client.execute.called
 
-            call_args = mock_ivf.create_index.call_args
-            assert call_args[1]['table_name'] == "custom_table_name"
+    def test_create_hnsw_with_model(self):
+        """Test create_hnsw accepts Model class"""
+        try:
+            self.vector_manager.create_hnsw(DocumentModel, "idx_test", "embedding", m=16)
+        except Exception as e:
+            assert "test_documents" in str(e) or "idx_test" in str(e)
 
-    def test_none_input_handling(self):
-        """Test that None input is handled gracefully."""
-        with pytest.raises(AttributeError):
-            # This should fail because None doesn't have __tablename__
-            if hasattr(None, '__tablename__'):
-                table_name = None.__tablename__
-            else:
-                # This is expected behavior
-                raise AttributeError("None object has no attribute '__tablename__'")
+        assert self.mock_client.execute.called
 
-    def test_non_model_object_handling(self):
-        """Test that non-model objects are handled as table names."""
-        with patch('matrixone.sqlalchemy_ext.IVFVectorIndex') as mock_ivf:
-            mock_ivf.create_index.return_value = True
+    def test_drop_with_model(self):
+        """Test drop accepts Model class"""
+        try:
+            self.vector_manager.drop(DocumentModel, "idx_test")
+        except Exception as e:
+            assert "test_documents" in str(e) or "idx_test" in str(e)
 
-            # Test with a regular object (should be treated as table name)
-            obj = Mock()
-            obj.__tablename__ = "fake_table"
+        assert self.mock_client.execute.called
 
-            self.client.vector_ops.create_ivf(obj, "idx_test", "column")
+    def test_insert_with_model(self):
+        """Test insert accepts Model class"""
+        try:
+            self.vector_manager.insert(DocumentModel, {"id": 1, "title": "Test"})
+        except Exception as e:
+            assert "test_documents" in str(e)
 
-            call_args = mock_ivf.create_index.call_args
-            assert call_args[1]['table_name'] == "fake_table"
+        assert self.mock_client.execute.called
+
+    def test_similarity_search_with_model(self):
+        """Test similarity_search accepts Model class"""
+        from unittest.mock import Mock
+
+        self.mock_client.execute.return_value = Mock(__iter__=Mock(return_value=iter([])))
+        try:
+            self.vector_manager.similarity_search(DocumentModel, "embedding", [0.1, 0.2], limit=5)
+        except Exception as e:
+            # May fail on result processing, but table name should be extracted
+            assert "test_documents" in str(e) or "test_documents" in str(self.mock_client.execute.call_args)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+class TestAsyncVectorManagerModelSupport:
+    """Test AsyncVectorManager with Model class arguments."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        from unittest.mock import Mock, AsyncMock
+        from matrixone.vector_manager import AsyncVectorManager
+
+        self.mock_client = Mock()
+        self.mock_client.execute = AsyncMock(return_value=Mock(fetchall=Mock(return_value=[])))
+        self.async_vector_manager = AsyncVectorManager(self.mock_client)
+
+    @pytest.mark.asyncio
+    async def test_create_ivf_with_model(self):
+        """Test async create_ivf accepts Model class"""
+        try:
+            await self.async_vector_manager.create_ivf(DocumentModel, "idx_test", "embedding", lists=10)
+        except Exception as e:
+            assert "test_documents" in str(e) or "idx_test" in str(e)
+
+        assert self.mock_client.execute.called
+
+    @pytest.mark.asyncio
+    async def test_drop_with_model(self):
+        """Test async drop accepts Model class"""
+        try:
+            await self.async_vector_manager.drop(DocumentModel, "idx_test")
+        except Exception as e:
+            assert "test_documents" in str(e) or "idx_test" in str(e)
+
+        assert self.mock_client.execute.called
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

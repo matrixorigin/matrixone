@@ -463,3 +463,184 @@ class TestAsyncVectorManagerSession:
             await async_client.disconnect()
 
         await _test()
+
+
+class TestVectorManagerWithModel:
+    """Test VectorManager with SQLAlchemy Model classes"""
+
+    @pytest.fixture(scope="class")
+    def client(self):
+        """Create and connect Client"""
+        host, port, user, password, database = online_config.get_connection_params()
+        client = Client()
+        client.connect(host=host, port=port, user=user, password=password, database=database)
+        try:
+            yield client
+        finally:
+            try:
+                client.disconnect()
+            except Exception as e:
+                print(f"Warning: Failed to disconnect client: {e}")
+
+    def test_create_ivf_with_model(self, client):
+        """Test create_ivf with Model class"""
+        from sqlalchemy import Column, Integer
+        from sqlalchemy.orm import declarative_base
+        from matrixone.sqlalchemy_ext import Vectorf32
+
+        Base = declarative_base()
+
+        class TestVectorModel(Base):
+            __tablename__ = f'test_model_ivf_{uuid.uuid4().hex[:8]}'
+            id = Column(Integer, primary_key=True)
+            embedding = Column(Vectorf32(dimension=3))
+
+        table_name = TestVectorModel.__tablename__
+
+        try:
+            # Create table
+            client.execute(f"CREATE TABLE {table_name} (id INT PRIMARY KEY, embedding VECF32(3))")
+
+            # Test with Model class
+            result = client.vector_ops.create_ivf(TestVectorModel, "idx_test", "embedding", lists=2)
+            assert result is client.vector_ops
+
+            # Verify index created
+            indexes = client.execute(f"SHOW INDEX FROM {table_name}").fetchall()
+            assert any('idx_test' in str(row) for row in indexes)
+
+        finally:
+            try:
+                client.execute(f"DROP TABLE IF EXISTS {table_name}")
+            except Exception:
+                pass
+
+    def test_similarity_search_with_model(self, client):
+        """Test similarity_search with Model class"""
+        from sqlalchemy import Column, Integer, String
+        from sqlalchemy.orm import declarative_base
+        from matrixone.sqlalchemy_ext import Vectorf32
+
+        Base = declarative_base()
+
+        class TestVectorModel(Base):
+            __tablename__ = f'test_model_search_{uuid.uuid4().hex[:8]}'
+            id = Column(Integer, primary_key=True)
+            title = Column(String(100))
+            embedding = Column(Vectorf32(dimension=3))
+
+        table_name = TestVectorModel.__tablename__
+
+        try:
+            # Create table and insert data
+            client.execute(f"CREATE TABLE {table_name} (id INT PRIMARY KEY, title VARCHAR(100), embedding VECF32(3))")
+            client.vector_ops.insert(table_name, {'id': 1, 'title': 'Test1', 'embedding': [0.1, 0.2, 0.3]})
+            client.vector_ops.insert(table_name, {'id': 2, 'title': 'Test2', 'embedding': [0.4, 0.5, 0.6]})
+
+            # Test with Model class
+            results = client.vector_ops.similarity_search(TestVectorModel, "embedding", [0.1, 0.2, 0.3], limit=2)
+            assert len(results) > 0
+            assert 'distance' in results[0]
+
+        finally:
+            try:
+                client.execute(f"DROP TABLE IF EXISTS {table_name}")
+            except Exception:
+                pass
+
+
+class TestAsyncVectorManagerWithModel:
+    """Test AsyncVectorManager with SQLAlchemy Model classes"""
+
+    def test_async_create_ivf_with_model(self):
+        """Test async create_ivf with Model class"""
+
+        async def _test():
+            from sqlalchemy import Column, Integer
+            from sqlalchemy.orm import declarative_base
+            from matrixone.sqlalchemy_ext import Vectorf32
+
+            Base = declarative_base()
+
+            class TestVectorModel(Base):
+                __tablename__ = f'test_async_model_ivf_{uuid.uuid4().hex[:8]}'
+                id = Column(Integer, primary_key=True)
+                embedding = Column(Vectorf32(dimension=3))
+
+            table_name = TestVectorModel.__tablename__
+
+            host, port, user, password, database = online_config.get_connection_params()
+            async_client = AsyncClient()
+            await async_client.connect(host=host, port=port, user=user, password=password, database=database)
+
+            try:
+                # Create table
+                await async_client.execute(f"CREATE TABLE {table_name} (id INT PRIMARY KEY, embedding VECF32(3))")
+
+                # Test with Model class
+                result = await async_client.vector_ops.create_ivf(TestVectorModel, "idx_test", "embedding", lists=2)
+                assert result is async_client.vector_ops
+
+                # Verify index created
+                indexes = await async_client.execute(f"SHOW INDEX FROM {table_name}")
+                rows = indexes.fetchall()
+                assert any('idx_test' in str(row) for row in rows)
+
+            finally:
+                try:
+                    await async_client.execute(f"DROP TABLE IF EXISTS {table_name}")
+                except Exception:
+                    pass
+                await async_client.disconnect()
+
+        import asyncio
+
+        asyncio.run(_test())
+
+    def test_async_similarity_search_with_model(self):
+        """Test async similarity_search with Model class"""
+
+        async def _test():
+            from sqlalchemy import Column, Integer, String
+            from sqlalchemy.orm import declarative_base
+            from matrixone.sqlalchemy_ext import Vectorf32
+
+            Base = declarative_base()
+
+            class TestVectorModel(Base):
+                __tablename__ = f'test_async_model_search_{uuid.uuid4().hex[:8]}'
+                id = Column(Integer, primary_key=True)
+                title = Column(String(100))
+                embedding = Column(Vectorf32(dimension=3))
+
+            table_name = TestVectorModel.__tablename__
+
+            host, port, user, password, database = online_config.get_connection_params()
+            async_client = AsyncClient()
+            await async_client.connect(host=host, port=port, user=user, password=password, database=database)
+
+            try:
+                # Create table and insert data
+                await async_client.execute(
+                    f"CREATE TABLE {table_name} (id INT PRIMARY KEY, title VARCHAR(100), embedding VECF32(3))"
+                )
+                await async_client.vector_ops.insert(table_name, {'id': 1, 'title': 'Test1', 'embedding': [0.1, 0.2, 0.3]})
+                await async_client.vector_ops.insert(table_name, {'id': 2, 'title': 'Test2', 'embedding': [0.4, 0.5, 0.6]})
+
+                # Test with Model class
+                results = await async_client.vector_ops.similarity_search(
+                    TestVectorModel, "embedding", [0.1, 0.2, 0.3], limit=2
+                )
+                assert len(results) > 0
+                assert 'distance' in results[0]
+
+            finally:
+                try:
+                    await async_client.execute(f"DROP TABLE IF EXISTS {table_name}")
+                except Exception:
+                    pass
+                await async_client.disconnect()
+
+        import asyncio
+
+        asyncio.run(_test())

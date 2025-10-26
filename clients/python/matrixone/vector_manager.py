@@ -20,487 +20,177 @@ synchronous and asynchronous vector operations in MatrixOne.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
 
 
+def _extract_table_name(table_name_or_model: Union[str, type]) -> str:
+    """
+    Extract table name from string or SQLAlchemy Model class.
+
+    Args:
+        table_name_or_model: Table name string or SQLAlchemy Model class
+
+    Returns:
+        Table name string
+    """
+    if isinstance(table_name_or_model, str):
+        return table_name_or_model
+    # Try to extract __tablename__ from Model class
+    if hasattr(table_name_or_model, '__tablename__'):
+        return table_name_or_model.__tablename__
+    # If neither, assume it's a string-like object
+    return str(table_name_or_model)
+
+
 class VectorManager:
     """
-    Unified vector manager for MatrixOne vector operations and chain operations.
+    Unified vector manager for MatrixOne vector operations.
 
-    This class provides comprehensive vector functionality including vector table
-    creation, vector indexing, vector data operations, and vector similarity search.
-    It supports both IVF (Inverted File) and HNSW (Hierarchical Navigable Small World)
-    indexing algorithms for efficient vector similarity search.
+    Supports two usage modes:
+    1. Client mode (executor=None): Each operation is an independent auto-commit transaction
+    2. Session mode (executor=Session): Operations execute within the session's transaction context
 
     Key Features:
-
-    - Vector table creation with configurable dimensions and precision
     - Vector index creation and management (IVF, HNSW)
     - Vector data insertion and batch operations
     - Vector similarity search with multiple distance metrics
     - Vector range search for distance-based filtering
-    - Integration with MatrixOne's vector capabilities
-    - Support for both f32 and f64 vector precision
 
     Supported Index Types:
     - IVF (Inverted File): Good for large datasets, requires training
     - HNSW: Good for high-dimensional vectors, no training required
 
     Supported Distance Metrics:
-    - L2 (Euclidean) distance: Standard Euclidean distance
-    - Cosine similarity: Cosine of the angle between vectors
-    - Inner product: Dot product of vectors
-
-    Supported Operations:
-
-    - Vector table creation with various column types
-    - Vector index creation with configurable parameters
-    - Vector data insertion and batch operations
-    - Vector similarity search and distance calculations
-    - Vector range search for distance-based filtering
-    - Vector index management and optimization
-
-    Usage Examples::
-
-        # Initialize vector manager
-        vector_ops = client.vector_ops
-
-        # Create IVF index
-        vector_ops.create_ivf(
-            table_name="documents",
-            name="idx_embedding_ivf",
-            column="embedding",
-            lists=100
-        )
-
-        # Create HNSW index
-        vector_ops.create_hnsw(
-            table_name="documents",
-            name="idx_embedding_hnsw",
-            column="embedding",
-            m=16,
-            ef_construction=200
-        )
-
-        # Similarity search
-        results = vector_ops.similarity_search(
-            table_name="documents",
-            vector_column="embedding",
-            query_vector=[0.1, 0.2, 0.3, ...],
-            limit=10
-        )
-
-    Note: Vector operations require appropriate vector data and indexing strategies. Vector dimensions
-    and precision must match your embedding model requirements.
+    - L2 (Euclidean) distance
+    - Cosine similarity
+    - Inner product
     """
 
     def __init__(self, client, executor=None):
+        """
+        Initialize VectorManager.
+
+        Args:
+            client: MatrixOne client instance
+            executor: Optional executor (Session). If None, client is used.
+        """
         self.client = client
         self.executor = executor if executor is not None else client
 
-    def _get_executor(self):
-        """Get the executor for SQL execution"""
-        return self.executor
-
-    def _get_engine(self):
-        """Get SQLAlchemy engine from executor"""
-        executor = self._get_executor()
-        # If executor is the client itself, use get_sqlalchemy_engine()
-        if executor is self.client:
-            return executor.get_sqlalchemy_engine()
-        # Otherwise it's a Session, use get_bind()
-        return executor.get_bind()
-
-    def _get_ivf_index_table_names(
-        self,
-        database: str,
-        table_name: str,
-        column_name: str,
-        executor,
-    ) -> Dict[str, str]:
-        """
-        Get the table names of the IVF index tables.
-
-        Args:
-            database: Database name
-            table_name: Table name
-            column_name: Vector column name
-            executor: Executor to use (client or session)
-
-        Returns:
-            Dictionary mapping table types to table names
-        """
-        sql = (
-            f"SELECT i.algo_table_type, i.index_table_name "
-            f"FROM `mo_catalog`.`mo_indexes` AS i "
-            f"JOIN `mo_catalog`.`mo_tables` AS t ON i.table_id = t.rel_id "
-            f"AND i.column_name = '{column_name}' "
-            f"AND t.relname = '{table_name}' "
-            f"AND t.reldatabase = '{database}' "
-            f"AND i.algo='ivfflat'"
-        )
-        result = executor.execute(sql)
-        # +-----------------+-----------------------------------------------------------+
-        # | algo_table_type | index_table_name                                          |
-        # +-----------------+-----------------------------------------------------------+
-        # | metadata        | __mo_index_secondary_01999b6b-414c-71dc-ab7f-8399ab06cb64 |
-        # | centroids       | __mo_index_secondary_01999b6b-414c-7311-98d2-9de6a0f591ee |
-        # | entries         | __mo_index_secondary_01999b6b-414c-7324-90f0-695d791d574f |
-        # +-----------------+-----------------------------------------------------------+
-        return {row[0]: row[1] for row in result.fetchall()}
-
-    def _get_ivf_buckets_distribution(
-        self,
-        database: str,
-        table_name: str,
-        executor,
-    ) -> Dict[str, List[int]]:
-        """
-        Get the buckets distribution of the IVF index tables.
-
-        Args:
-            database: Database name
-            table_name: Entries table name
-            executor: Executor to use (client or session)
-
-        Returns:
-            Dictionary containing bucket distribution data
-        """
-        sql = (
-            f"SELECT "
-            f"  COUNT(*) AS centroid_count, "
-            f"  __mo_index_centroid_fk_id AS centroid_id, "
-            f"  __mo_index_centroid_fk_version AS centroid_version "
-            f"FROM `{database}`.`{table_name}` "
-            f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
-        )
-        result = executor.execute(sql)
-        rows = result.fetchall()
-        # +----------------+-------------+------------------+
-        # | centroid_count | centroid_id | centroid_version |
-        # +----------------+-------------+------------------+
-        # |             51 |           0 |                0 |
-        # |             32 |           1 |                0 |
-        # |             62 |           2 |                0 |
-        # |             40 |           3 |                0 |
-        # |             60 |           4 |                0 |
-        # +----------------+-------------+------------------+
-
-        # Output:
-        # {
-        # "centroid_count": [51, 32, 62, 40, 60],
-        # "centroid_id": [0, 1, 2, 3, 4],
-        # "centroid_version": [0, 0, 0, 0, 0]
-        # }
-
-        return {
-            "centroid_count": [row[0] for row in rows],
-            "centroid_id": [row[1] for row in rows],
-            "centroid_version": [row[2] for row in rows],
-        }
-
     def create_ivf(
         self,
-        table_name_or_model,
+        table_name: Union[str, type],
         name: str,
         column: str,
         lists: int = 100,
-        op_type: VectorOpType = None,
+        op_type: "VectorOpType" = None,
     ) -> "VectorManager":
         """
-            Create an IVFFLAT vector index using chain operations.
+        Create an IVFFLAT vector index.
 
-            IVFFLAT (Inverted File with Flat Compression) is a vector index type
-            that provides good performance for similarity search on large datasets.
-            It supports insert, update, and delete operations.
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
+            name: Name of the index
+            column: Vector column to index
+            lists: Number of lists for IVFFLAT (default: 100)
+            op_type: Vector operation type (default: VectorOpType.VECTOR_L2_OPS)
 
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Name of the index
-                column: Vector column to index
-                lists: Number of lists for IVFFLAT (default: 100). More lists for larger datasets
-                op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
-
-            Returns::
-
-                VectorManager: Self for chaining
-
-            Example
-
-        # Create IVF index by table name
-                client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=50)
-
-                # Create IVF index by model class
-                client.vector_ops.create_ivf(DocumentModel, "idx_embedding", "embedding", lists=100)
+        Returns:
+            Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Use default if not provided
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        success = IVFVectorIndex.create_index(
-            engine=self._get_engine(),
-            table_name=table_name,
-            name=name,
-            column=column,
-            lists=lists,
-            op_type=op_type,
-        )
+        try:
+            table_name = _extract_table_name(table_name)
+            index = IVFVectorIndex(name, column, lists, op_type)
+            sql = index.create_sql(table_name)
 
-        if not success:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}")
-
-        # Add summary log
-        op_type_str = op_type.value if hasattr(op_type, 'value') else op_type
-        self.client.logger.info(
-            f"✓ Created IVF index '{name}' on {table_name}.{column} | " f"lists={lists} | op_type={op_type_str}"
-        )
-
-        return self
+            # Execute as auto-commit transaction or within session context
+            self.executor.execute("SET experimental_ivf_index = 1")
+            self.executor.execute("SET probe_limit = 1")
+            self.executor.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
 
     def create_hnsw(
         self,
-        table_name_or_model,
+        table_name: Union[str, type],
         name: str,
         column: str,
         m: int = 16,
         ef_construction: int = 200,
         ef_search: int = 50,
-        op_type: VectorOpType = None,
+        op_type: "VectorOpType" = None,
     ) -> "VectorManager":
         """
-            Create an HNSW vector index using chain operations.
+        Create an HNSW vector index.
 
-            HNSW (Hierarchical Navigable Small World) is a vector index type
-            that provides excellent search performance but is read-only.
-            It does not support insert, update, or delete operations.
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
+            name: Name of the index
+            column: Vector column to index
+            m: Number of bi-directional links for HNSW (default: 16)
+            ef_construction: Size of dynamic candidate list for construction (default: 200)
+            ef_search: Size of dynamic candidate list for search (default: 50)
+            op_type: Vector operation type (default: VectorOpType.VECTOR_L2_OPS)
 
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Name of the index
-                column: Vector column to index
-                m: Number of bi-directional links for HNSW (default: 16)
-                ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-                ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-                op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
-
-            Returns::
-
-                VectorManager: Self for chaining
-
-            Example
-
-        # Create HNSW index by table name
-                client.vector_ops.create_hnsw("documents", "idx_embedding", "embedding", m=32)
-
-                # Create HNSW index by model class
-                client.vector_ops.create_hnsw(DocumentModel, "idx_embedding", "embedding", m=16)
+        Returns:
+            Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Use default if not provided
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        # Build index creation SQL
-        success = HnswVectorIndex.create_index(
-            engine=self._get_engine(),
-            table_name=table_name,
-            name=name,
-            column=column,
-            m=m,
-            ef_construction=ef_construction,
-            ef_search=ef_search,
-            op_type=op_type,
-        )
+        try:
+            table_name = _extract_table_name(table_name)
+            index = HnswVectorIndex(name, column, m, ef_construction, ef_search, op_type)
+            sql = index.create_sql(table_name)
 
-        if not success:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}")
+            self.executor.execute("SET experimental_hnsw_index = 1")
+            self.executor.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
 
-        # Add summary log
-        op_type_str = op_type.value if hasattr(op_type, 'value') else op_type
-        self.client.logger.info(
-            f"✓ Created HNSW index '{name}' on {table_name}.{column} | "
-            f"m={m} | ef_construction={ef_construction} | ef_search={ef_search} | op_type={op_type_str}"
-        )
-
-        return self
-
-    def create_ivf_in_transaction(
-        self,
-        table_name: str,
-        name: str,
-        column: str,
-        connection,
-        lists: int = 100,
-        op_type: str = "vector_l2_ops",
-    ) -> "VectorManager":
+    def drop(self, table_name: Union[str, type], name: str) -> "VectorManager":
         """
-        Create an IVFFLAT vector index within an existing SQLAlchemy transaction.
+        Drop a vector index.
 
-        Args::
-
-            table_name: Name of the table
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
             name: Name of the index
-            column: Vector column to index
-            connection: SQLAlchemy connection object (required for transaction support)
-            lists: Number of lists for IVFFLAT (default: 100)
-            op_type: Vector operation type (default: vector_l2_ops)
 
-        Returns::
-
-            VectorManager: Self for chaining
-
-        Raises::
-
-            ValueError: If connection is not provided
+        Returns:
+            Self for chaining
         """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        # Enable IVF indexing if needed
-        from .sqlalchemy_ext import create_ivf_config
-
-        ivf_config = create_ivf_config(self.client._engine)
-        ivf_config.enable_ivf_indexing()
-        ivf_config.set_probe_limit(1)
-
-        # Build CREATE INDEX statement
-        sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
-
-        # Create the index
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
-
-        return self
-
-    def create_hnsw_in_transaction(
-        self,
-        table_name: str,
-        name: str,
-        column: str,
-        connection,
-        m: int = 16,
-        ef_construction: int = 200,
-        ef_search: int = 50,
-        op_type: str = "vector_l2_ops",
-    ) -> "VectorManager":
-        """
-        Create an HNSW vector index within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            name: Name of the index
-            column: Vector column to index
-            connection: SQLAlchemy connection object (required for transaction support)
-            m: Number of bi-directional links for HNSW (default: 16)
-            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (default: vector_l2_ops)
-
-        Returns::
-
-            VectorManager: Self for chaining
-
-        Raises::
-
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        # Enable HNSW indexing if needed
-        from .sqlalchemy_ext import create_hnsw_config
-
-        hnsw_config = create_hnsw_config(self.client._engine)
-        hnsw_config.enable_hnsw_indexing(connection)
-
-        # Build CREATE INDEX statement
-        sql = (
-            f"CREATE INDEX {name} USING hnsw ON {table_name}({column}) "
-            f"M {m} EF_CONSTRUCTION {ef_construction} EF_SEARCH {ef_search} "
-            f"op_type '{op_type}'"
-        )
-
-        # Create the index
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
-
-        return self
-
-    def drop(self, table_name_or_model, name: str) -> "VectorManager":
-        """
-        Drop a vector index using chain operations.
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Name of the index to drop
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        from .sqlalchemy_ext import VectorIndex
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        success = VectorIndex.drop_index(engine=self._get_engine(), table_name=table_name, name=name)
-
-        if not success:
-            raise Exception(f"Failed to drop vector index {name} from table {table_name}")
-
-        # Add summary log
-        self.client.logger.info(f"✓ Dropped vector index '{name}' from {table_name}")
-
-        return self
+        try:
+            table_name = _extract_table_name(table_name)
+            self.executor.execute(f"DROP INDEX IF EXISTS {name} ON {table_name}")
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to drop vector index {name} from table {table_name}: {e}")
 
     def enable_ivf(self, probe_limit: int = 1) -> "VectorManager":
         """
         Enable IVF indexing with probe limit.
 
-        Args::
+        Args:
+            probe_limit: Probe limit for IVF indexing
 
-            probe_limit: Probe limit for IVF search
-
-        Returns::
-
-            VectorManager: Self for chaining
+        Returns:
+            Self for chaining
         """
         try:
-            self._get_executor().execute("SET experimental_ivf_index = 1")
-            self._get_executor().execute(f"SET probe_limit = {probe_limit}")
+            self.executor.execute("SET experimental_ivf_index = 1")
+            self.executor.execute(f"SET probe_limit = {probe_limit}")
             return self
         except Exception as e:
             raise Exception(f"Failed to enable IVF indexing: {e}")
@@ -509,12 +199,11 @@ class VectorManager:
         """
         Disable IVF indexing.
 
-        Returns::
-
-            VectorManager: Self for chaining
+        Returns:
+            Self for chaining
         """
         try:
-            self._get_executor().execute("SET experimental_ivf_index = 0")
+            self.executor.execute("SET experimental_ivf_index = 0")
             return self
         except Exception as e:
             raise Exception(f"Failed to disable IVF indexing: {e}")
@@ -523,12 +212,11 @@ class VectorManager:
         """
         Enable HNSW indexing.
 
-        Returns::
-
-            VectorManager: Self for chaining
+        Returns:
+            Self for chaining
         """
         try:
-            self._get_executor().execute("SET experimental_hnsw_index = 1")
+            self.executor.execute("SET experimental_hnsw_index = 1")
             return self
         except Exception as e:
             raise Exception(f"Failed to enable HNSW indexing: {e}")
@@ -537,347 +225,189 @@ class VectorManager:
         """
         Disable HNSW indexing.
 
-        Returns::
-
-            VectorManager: Self for chaining
+        Returns:
+            Self for chaining
         """
         try:
-            self._get_executor().execute("SET experimental_hnsw_index = 0")
+            self.executor.execute("SET experimental_hnsw_index = 0")
             return self
         except Exception as e:
             raise Exception(f"Failed to disable HNSW indexing: {e}")
 
-    # Data operations
-    def insert(self, table_name: str, data: dict) -> "VectorManager":
+    def insert(self, table_name: Union[str, type], data: Dict[str, Any]) -> "VectorManager":
         """
-        Insert vector data using chain operations.
+        Insert a single vector record.
 
-        Args::
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
+            data: Dictionary of column names and values
 
+        Returns:
+            Self for chaining
+        """
+        try:
+            table_name = _extract_table_name(table_name)
+            columns = ", ".join(data.keys())
+            # Format values directly for MatrixOne
+            values = []
+            for key in data.keys():
+                val = data[key]
+                if isinstance(val, (list, tuple)):
+                    # Vector type: format as '[v1,v2,v3,...]' with quotes
+                    values.append("'[" + ",".join(str(v) for v in val) + "]'")
+                elif isinstance(val, str):
+                    values.append(f"'{val}'")
+                else:
+                    values.append(str(val))
+            values_str = ", ".join(values)
+            sql = f"INSERT INTO {table_name} ({columns}) VALUES ({values_str})"
+
+            self.executor.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to insert vector data into table {table_name}: {e}")
+
+    def batch_insert(self, table_name: Union[str, type], data: List[Dict[str, Any]]) -> "VectorManager":
+        """
+        Insert multiple vector records in batch.
+
+        Args:
             table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
+            data: List of dictionaries containing column names and values
 
-        Returns::
-
-            VectorManager: Self for chaining
+        Returns:
+            Self for chaining
         """
-        self._get_executor().insert(table_name, data)
-        return self
+        if not data:
+            return self
 
-    def insert_in_transaction(self, table_name: str, data: dict, connection) -> "VectorManager":
-        """
-        Insert vector data within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
-            connection: SQLAlchemy connection object (required for transaction support)
-
-        Returns::
-
-            VectorManager: Self for chaining
-
-        Raises::
-
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                # Escape single quotes
-                formatted_values.append(str(value).replace("'", "''"))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
-
-        return self
-
-    def batch_insert(self, table_name: str, data_list: list) -> "VectorManager":
-        """
-        Batch insert vector data using chain operations.
-
-        Args::
-
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        self._get_executor().batch_insert(table_name, data_list)
-        return self
+        try:
+            for record in data:
+                self.insert(table_name, record)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to batch insert vector data into table {table_name}: {e}")
 
     def similarity_search(
         self,
-        table_name_or_model,
+        table_name: Union[str, type],
         vector_column: str,
-        query_vector: list,
+        query_vector: List[float],
         limit: int = 10,
+        select_columns: List[str] = None,
+        where_clause: str = None,
         distance_type: str = "l2",
-        select_columns: list = None,
-        where_conditions: list = None,
-        where_params: list = None,
-        connection=None,
-        _log_mode: str = None,
-    ) -> list:
+    ) -> List[Dict[str, Any]]:
         """
-        Perform similarity search using chain operations.
+        Perform vector similarity search.
 
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
             vector_column: Name of the vector column
-            query_vector: Query vector as list
-            limit: Number of results to return
-            distance_type: Type of distance calculation (l2, cosine, inner_product)
-            select_columns: List of columns to select (None means all columns)
-            where_conditions: List of WHERE conditions
-            where_params: List of parameters for WHERE conditions
-            connection: Optional existing database connection (for transaction support)
-            _log_mode: Override SQL logging mode for this operation ('off', 'auto', 'simple', 'full')
+            query_vector: Query vector
+            limit: Maximum number of results (default: 10)
+            select_columns: Columns to return (default: all)
+            where_clause: Optional WHERE clause filter
+            distance_type: Distance metric ("l2", "cosine", "inner_product") (default: "l2")
 
-        Returns::
-
-            List of search results
-
-        Example::
-
-            # Basic similarity search
-            results = client.vector_ops.similarity_search(
-                "documents", "embedding", [0.1, 0.2, 0.3], limit=5
-            )
-
-            # Search with filtering
-            results = client.vector_ops.similarity_search(
-                "documents", "embedding", [0.1, 0.2, 0.3], limit=5,
-                where_conditions=["category = ?"], where_params=["AI"]
-            )
+        Returns:
+            List of matching records with similarity scores
         """
-        from .sql_builder import DistanceFunction, build_vector_similarity_query
+        try:
+            table_name = _extract_table_name(table_name)
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
+            # Select distance function based on distance_type
+            if distance_type == "l2":
+                distance_func = "l2_distance"
+            elif distance_type == "cosine":
+                distance_func = "cosine_distance"
+            elif distance_type == "inner_product":
+                distance_func = "inner_product"
+            else:
+                distance_func = "l2_distance"  # Default to l2
 
-        # Convert distance type to enum
-        if distance_type == "l2":
-            distance_func = DistanceFunction.L2  # Use L2 for consistency with ORM l2_distance()
-        elif distance_type == "l2_sq":
-            distance_func = DistanceFunction.L2_SQ  # Explicitly use squared distance if needed
-        elif distance_type == "cosine":
-            distance_func = DistanceFunction.COSINE
-        elif distance_type == "inner_product":
-            distance_func = DistanceFunction.INNER_PRODUCT
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
+            sql = f"SELECT {columns}, " f"{distance_func}({vector_column}, '{vector_str}') as distance " f"FROM {table_name}"
 
-        # Build query using unified SQL builder
-        sql = build_vector_similarity_query(
-            table_name=table_name,
-            vector_column=vector_column,
-            query_vector=query_vector,
-            distance_func=distance_func,
-            limit=limit,
-            select_columns=select_columns,
-            where_conditions=where_conditions,
-            where_params=where_params,
-        )
+            if where_clause:
+                sql += f" WHERE {where_clause}"
 
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = self.client._execute_with_logging(
-                connection, sql, context="Vector similarity search", override_sql_log_mode=_log_mode
-            )
-            return result.fetchall()
-        else:
-            # Create new connection
-            with self._get_engine().begin() as conn:
-                result = self.client._execute_with_logging(
-                    conn, sql, context="Vector similarity search", override_sql_log_mode=_log_mode
-                )
-                return result.fetchall()
+            sql += f" ORDER BY distance LIMIT {limit}"
+
+            result = self.executor.execute(sql)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
 
     def range_search(
         self,
-        table_name: str,
+        table_name: Union[str, type],
         vector_column: str,
-        query_vector: list,
+        query_vector: List[float],
         max_distance: float,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        connection=None,
-    ) -> list:
+        select_columns: List[str] = None,
+        where_clause: str = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Perform range search using chain operations.
+        Perform vector range search within a maximum distance.
 
-        Args::
-
-            table_name: Name of the table
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
             vector_column: Name of the vector column
-            query_vector: Query vector as list
+            query_vector: Query vector
             max_distance: Maximum distance threshold
-            distance_type: Type of distance calculation
-            select_columns: List of columns to select (None means all columns)
-            connection: Optional existing database connection (for transaction support)
+            select_columns: Columns to return (default: all)
+            where_clause: Optional WHERE clause filter
 
-        Returns::
-
-            List of search results within range
+        Returns:
+            List of matching records within distance threshold
         """
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
+        try:
+            table_name = _extract_table_name(table_name)
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
-        # Build distance function based on type
-        if distance_type == "l2":
-            distance_func = "l2_distance"
-        elif distance_type == "cosine":
-            distance_func = "cosine_distance"
-        elif distance_type == "inner_product":
-            distance_func = "inner_product"
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
+            sql = (
+                f"SELECT {columns}, "
+                f"l2_distance({vector_column}, '{vector_str}') as distance "
+                f"FROM {table_name} "
+                f"WHERE l2_distance({vector_column}, '{vector_str}') <= {max_distance}"
+            )
 
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if vector_column not in columns_to_select:
-                columns_to_select.append(vector_column)
-            select_clause = ", ".join(columns_to_select)
+            if where_clause:
+                sql += f" AND ({where_clause})"
 
-        # Build SQL query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
-        FROM {table_name}
-        WHERE {distance_func}({vector_column}, '{vector_str}') <= {max_distance}
-        ORDER BY distance
+            result = self.executor.execute(sql)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+
+    def get_ivf_stats(
+        self,
+        table_name: Union[str, type],
+        column_name: str = None,
+        database: str = None,
+    ) -> Dict[str, Any]:
         """
+        Get IVF index statistics.
 
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = self.client._execute_with_logging(connection, sql, context="Vector range search")
-            return result.fetchall()
-        else:
-            # Create new connection
-            with self._get_engine().begin() as conn:
-                result = self.client._execute_with_logging(conn, sql, context="Vector range search")
-                return result.fetchall()
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class
+            column_name: Optional vector column name (auto-inferred if not provided)
+            database: Optional database name (uses current if not provided)
 
-    def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
+        Returns:
+            Dictionary containing index statistics and distribution
         """
-        Get IVF index statistics for monitoring and optimization.
+        table_name = _extract_table_name(table_name)
 
-        This method provides critical insights into IVF index health and performance.
-        It helps evaluate whether the current IVF index configuration is optimal
-        and whether the index needs to be rebuilt.
+        if database is None:
+            # Get database from client connection string or default database
+            database = getattr(self.client, 'database', 'test')
 
-        Key Use Cases:
-
-        - **Index Health Monitoring**: Check if centroid count matches expected lists parameter
-        - **Load Balancing Analysis**: Evaluate if vectors are evenly distributed across centroids
-        - **Performance Optimization**: Identify when to rebuild the index for better performance
-        - **Capacity Planning**: Understand data distribution patterns
-
-        Critical Metrics to Monitor:
-
-        - **Centroid Count**: Should match the 'lists' parameter used during index creation
-        - **Load Distribution**: Each centroid should have roughly equal numbers of vectors
-        - **Centroid Versions**: Should be consistent (usually all 0 for stable indexes)
-
-        When to Rebuild Index:
-
-        - Centroid count doesn't match expected lists parameter
-        - Significant imbalance in centroid load distribution (>2x difference between min/max)
-        - Performance degradation in similarity search queries
-        - After major data changes (bulk inserts, updates, deletes)
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            column_name: Name of the vector column (optional, will be inferred if not provided)
-
-        Returns::
-
-            Dict containing IVF index statistics including:
-            - index_tables: Dictionary mapping table types to table names
-            - distribution: Dictionary containing:
-                - centroid_count: List of row counts per centroid
-                - centroid_id: List of centroid identifiers
-                - centroid_version: List of centroid versions
-            - database: Database name
-            - table_name: Table name
-            - column_name: Vector column name
-
-        Raises::
-
-            Exception: If IVF index is not found or if there are errors retrieving stats
-
-        Examples::
-
-            # Monitor index health
-            stats = client.vector_ops.get_ivf_stats("documents", "embedding")
-
-            # Check centroid distribution
-            centroid_counts = stats['distribution']['centroid_count']
-            total_centroids = len(centroid_counts)
-            min_count = min(centroid_counts)
-            max_count = max(centroid_counts)
-
-            print(f"Total centroids: {total_centroids}")
-            print(f"Min vectors per centroid: {min_count}")
-            print(f"Max vectors per centroid: {max_count}")
-            print(f"Load balance ratio: {max_count/min_count:.2f}")
-
-            # Check if index needs rebuilding
-            expected_centroids = 100  # Original lists parameter
-            if total_centroids != expected_centroids:
-                print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
-
-            if max_count / min_count > 2.0:
-                print("⚠️  Poor load balance! Consider rebuilding index.")
-
-            # Get stats using model class
-            stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
-        """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Get database name from connection params
-        database = self.client._connection_params.get('database')
-        if not database:
-            raise Exception("No database connection found. Please connect to a database first.")
-
-        # If column_name is not provided, try to infer it
+        # Auto-infer column name if not provided
         if not column_name:
-            # Query the table schema to find vector columns
             schema_sql = (
                 f"SELECT column_name, data_type "
                 f"FROM information_schema.columns "
@@ -885,7 +415,7 @@ class VectorManager:
                 f"AND table_name = '{table_name}' "
                 f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
             )
-            result = self._get_executor().execute(schema_sql)
+            result = self.executor.execute(schema_sql)
             vector_columns = result.fetchall()
 
             if not vector_columns:
@@ -893,7 +423,6 @@ class VectorManager:
             elif len(vector_columns) == 1:
                 column_name = vector_columns[0][0]
             else:
-                # Multiple vector columns found, raise error asking user to specify
                 column_names = [col[0] for col in vector_columns]
                 raise Exception(
                     f"Multiple vector columns found in table {table_name}: {column_names}. "
@@ -901,7 +430,17 @@ class VectorManager:
                 )
 
         # Get IVF index table names
-        index_tables = self._get_ivf_index_table_names(database, table_name, column_name, self._get_executor())
+        index_sql = (
+            f"SELECT i.algo_table_type, i.index_table_name "
+            f"FROM `mo_catalog`.`mo_indexes` AS i "
+            f"JOIN `mo_catalog`.`mo_tables` AS t ON i.table_id = t.rel_id "
+            f"AND i.column_name = '{column_name}' "
+            f"AND t.relname = '{table_name}' "
+            f"AND t.reldatabase = '{database}' "
+            f"AND i.algo='ivfflat'"
+        )
+        result = self.executor.execute(index_sql)
+        index_tables = {row[0]: row[1] for row in result}
 
         if not index_tables:
             raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
@@ -912,7 +451,21 @@ class VectorManager:
             raise Exception("No entries table found in IVF index")
 
         # Get bucket distribution
-        distribution = self._get_ivf_buckets_distribution(database, entries_table, self._get_executor())
+        dist_sql = (
+            f"SELECT "
+            f"  COUNT(*) AS centroid_count, "
+            f"  __mo_index_centroid_fk_id AS centroid_id, "
+            f"  __mo_index_centroid_fk_version AS centroid_version "
+            f"FROM `{database}`.`{entries_table}` "
+            f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
+        )
+        result = self.executor.execute(dist_sql)
+        rows = result.fetchall()
+        distribution = {
+            "centroid_count": [row[0] for row in rows],
+            "centroid_id": [row[1] for row in rows],
+            "centroid_version": [row[2] for row in rows],
+        }
 
         return {
             'index_tables': index_tables,
@@ -925,119 +478,81 @@ class VectorManager:
 
 class AsyncVectorManager:
     """
-    Unified async vector manager for MatrixOne vector operations and chain operations.
+    Unified async vector manager for MatrixOne vector operations.
 
-    This class provides comprehensive asynchronous vector functionality including vector table
-    creation, vector indexing, vector data operations, and vector similarity search.
-    It supports both IVF (Inverted File) and HNSW (Hierarchical Navigable Small World)
-    indexing algorithms for efficient vector similarity search.
+    Supports two usage modes:
+    1. AsyncClient mode (executor=None): Each operation is an independent auto-commit transaction
+    2. AsyncSession mode (executor=AsyncSession): Operations execute within the session's transaction context
 
     Key Features:
-
-    - Async vector table creation with configurable dimensions and precision
     - Async vector index creation and management (IVF, HNSW)
     - Async vector data insertion and batch operations
     - Async vector similarity search with multiple distance metrics
     - Async vector range search for distance-based filtering
-    - Integration with MatrixOne's vector capabilities
-    - Support for both f32 and f64 vector precision
 
     Supported Index Types:
     - IVF (Inverted File): Good for large datasets, requires training
     - HNSW: Good for high-dimensional vectors, no training required
 
     Supported Distance Metrics:
-    - L2 (Euclidean) distance: Standard Euclidean distance
-    - Cosine similarity: Cosine of the angle between vectors
-    - Inner product: Dot product of vectors
-
-    Usage Examples:
-
-        # Initialize async vector manager
-        vector_ops = client.vector_ops
-
-        # Create vector table
-        await vector_ops.create_table("documents", {
-            "id": "int primary key",
-            "content": "text",
-            "embedding": "vecf32(384)"
-        })
-
-        # Create vector index
-        await vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=100)
-
-        # Vector similarity search
-        results = await vector_ops.similarity_search(
-            table_name="documents",
-            vector_column="embedding",
-            query_vector=[0.1, 0.2, 0.3, ...],  # 384-dimensional vector
-            limit=10,
-            distance_type="l2"
-        )
+    - L2 (Euclidean) distance
+    - Cosine similarity
+    - Inner product
     """
 
     def __init__(self, client, executor=None):
+        """
+        Initialize AsyncVectorManager.
+
+        Args:
+            client: MatrixOne async client instance
+            executor: Optional executor (AsyncSession). If None, client is used.
+        """
         self.client = client
         self.executor = executor if executor is not None else client
 
-    def _get_executor(self):
-        """Get the executor for SQL execution"""
-        return self.executor
-
-    def _get_engine(self):
-        """Get SQLAlchemy engine from executor"""
-        executor = self._get_executor()
-        # If executor is the client itself, use get_sqlalchemy_engine()
-        if executor is self.client:
-            return executor.get_sqlalchemy_engine()
-        # Otherwise it's an AsyncSession, use get_bind()
-        return executor.get_bind()
-
     async def create_ivf(
         self,
-        table_name: str,
+        table_name: Union[str, type],
         name: str,
         column: str,
         lists: int = 100,
         op_type: "VectorOpType" = None,
     ) -> "AsyncVectorManager":
         """
-        Create an IVFFLAT vector index using chain operations.
+        Create an IVFFLAT vector index.
 
         Args:
-
-            table_name: Name of the table
+            table_name: Name of the table (string) or SQLAlchemy Model class
             name: Name of the index
             column: Vector column to index
             lists: Number of lists for IVFFLAT (default: 100)
-            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
+            op_type: Vector operation type (default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
 
-        # Use default if not provided
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         try:
+            table_name = _extract_table_name(table_name)
             index = IVFVectorIndex(name, column, lists, op_type)
             sql = index.create_sql(table_name)
 
-            async with self._get_engine().begin() as conn:
-                # Enable IVF indexing in the same connection
-                await _exec_sql_safe_async(conn, "SET experimental_ivf_index = 1")
-                await _exec_sql_safe_async(conn, "SET probe_limit = 1")
-                await _exec_sql_safe_async(conn, sql)
+            # Execute as auto-commit transaction or within session context
+            await self.executor.execute("SET experimental_ivf_index = 1")
+            await self.executor.execute("SET probe_limit = 1")
+            await self.executor.execute(sql)
             return self
         except Exception as e:
             raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
 
     async def create_hnsw(
         self,
-        table_name: str,
+        table_name: Union[str, type],
         name: str,
         column: str,
         m: int = 16,
@@ -1046,56 +561,50 @@ class AsyncVectorManager:
         op_type: "VectorOpType" = None,
     ) -> "AsyncVectorManager":
         """
-        Create an HNSW vector index using chain operations.
+        Create an HNSW vector index.
 
         Args:
-
-            table_name: Name of the table
+            table_name: Name of the table (string) or SQLAlchemy Model class
             name: Name of the index
             column: Vector column to index
             m: Number of bi-directional links for HNSW (default: 16)
-            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
+            ef_construction: Size of dynamic candidate list for construction (default: 200)
+            ef_search: Size of dynamic candidate list for search (default: 50)
+            op_type: Vector operation type (default: VectorOpType.VECTOR_L2_OPS)
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
 
-        # Use default if not provided
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
         try:
+            table_name = _extract_table_name(table_name)
             index = HnswVectorIndex(name, column, m, ef_construction, ef_search, op_type)
             sql = index.create_sql(table_name)
 
-            async with self._get_engine().begin() as conn:
-                # Enable HNSW indexing in the same connection
-                await _exec_sql_safe_async(conn, "SET experimental_hnsw_index = 1")
-                await _exec_sql_safe_async(conn, sql)
+            await self.executor.execute("SET experimental_hnsw_index = 1")
+            await self.executor.execute(sql)
             return self
         except Exception as e:
             raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
 
-    async def drop(self, table_name: str, name: str) -> "AsyncVectorManager":
+    async def drop(self, table_name: Union[str, type], name: str) -> "AsyncVectorManager":
         """
-        Drop a vector index using chain operations.
+        Drop a vector index.
 
         Args:
-
-            table_name: Name of the table
+            table_name: Name of the table (string) or SQLAlchemy Model class
             name: Name of the index
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         try:
-            async with self._get_engine().begin() as conn:
-                await _exec_sql_safe_async(conn, f"DROP INDEX IF EXISTS {name} ON {table_name}")
+            table_name = _extract_table_name(table_name)
+            await self.executor.execute(f"DROP INDEX IF EXISTS {name} ON {table_name}")
             return self
         except Exception as e:
             raise Exception(f"Failed to drop vector index {name} from table {table_name}: {e}")
@@ -1105,16 +614,14 @@ class AsyncVectorManager:
         Enable IVF indexing with probe limit.
 
         Args:
-
             probe_limit: Probe limit for IVF indexing
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         try:
-            await self._get_executor().execute("SET experimental_ivf_index = 1")
-            await self._get_executor().execute(f"SET probe_limit = {probe_limit}")
+            await self.executor.execute("SET experimental_ivf_index = 1")
+            await self.executor.execute(f"SET probe_limit = {probe_limit}")
             return self
         except Exception as e:
             raise Exception(f"Failed to enable IVF indexing: {e}")
@@ -1124,11 +631,10 @@ class AsyncVectorManager:
         Disable IVF indexing.
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         try:
-            await self._get_executor().execute("SET experimental_ivf_index = 0")
+            await self.executor.execute("SET experimental_ivf_index = 0")
             return self
         except Exception as e:
             raise Exception(f"Failed to disable IVF indexing: {e}")
@@ -1138,11 +644,10 @@ class AsyncVectorManager:
         Enable HNSW indexing.
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         try:
-            await self._get_executor().execute("SET experimental_hnsw_index = 1")
+            await self.executor.execute("SET experimental_hnsw_index = 1")
             return self
         except Exception as e:
             raise Exception(f"Failed to enable HNSW indexing: {e}")
@@ -1152,400 +657,211 @@ class AsyncVectorManager:
         Disable HNSW indexing.
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
         try:
-            await self._get_executor().execute("SET experimental_hnsw_index = 0")
+            await self.executor.execute("SET experimental_hnsw_index = 0")
             return self
         except Exception as e:
             raise Exception(f"Failed to disable HNSW indexing: {e}")
 
-    # Data operations
-    async def insert(self, table_name_or_model, data: dict) -> "AsyncVectorManager":
+    async def insert(self, table_name: Union[str, type], data: Dict[str, Any]) -> "AsyncVectorManager":
         """
-        Insert vector data using chain operations asynchronously.
+        Insert a single vector record.
 
         Args:
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            data: Data to insert (dict with column names as keys)
+            table_name: Name of the table (string) or SQLAlchemy Model class
+            data: Dictionary of column names and values
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
+            Self for chaining
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        try:
+            table_name = _extract_table_name(table_name)
+            columns = ", ".join(data.keys())
+            # Format values directly for MatrixOne
+            values = []
+            for key in data.keys():
+                val = data[key]
+                if isinstance(val, (list, tuple)):
+                    # Vector type: format as '[v1,v2,v3,...]' with quotes
+                    values.append("'[" + ",".join(str(v) for v in val) + "]'")
+                elif isinstance(val, str):
+                    values.append(f"'{val}'")
+                else:
+                    values.append(str(val))
+            values_str = ", ".join(values)
+            sql = f"INSERT INTO {table_name} ({columns}) VALUES ({values_str})"
 
-        await self._get_executor().insert(table_name, data)
-        return self
+            await self.executor.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to insert vector data into table {table_name}: {e}")
 
-    async def insert_in_transaction(self, table_name_or_model, data: dict, connection) -> "AsyncVectorManager":
+    async def batch_insert(self, table_name: Union[str, type], data: List[Dict[str, Any]]) -> "AsyncVectorManager":
         """
-        Insert vector data within an existing SQLAlchemy transaction asynchronously.
+        Insert multiple vector records in batch.
 
         Args:
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            data: Data to insert (dict with column names as keys)
-            connection: SQLAlchemy connection object (required for transaction support)
+            table_name: Name of the table
+            data: List of dictionaries containing column names and values
 
         Returns:
-
-            AsyncVectorManager: Self for chaining
-
-        Raises:
-
-            ValueError: If connection is not provided
+            Self for chaining
         """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
+        if not data:
+            return self
 
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
-
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if value is None:
-                formatted_values.append("NULL")
-            elif isinstance(value, list):
-                formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
-            else:
-                formatted_values.append(f"'{str(value)}'")
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join(formatted_values)
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-        await self.client._execute_with_logging(connection, sql, context="Vector insert")
-
-        return self
-
-    async def batch_insert(self, table_name_or_model, data_list: list) -> "AsyncVectorManager":
-        """
-        Batch insert vector data using chain operations asynchronously.
-
-        Args:
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            data_list: List of data dictionaries to insert
-
-        Returns:
-
-            AsyncVectorManager: Self for chaining
-        """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
-
-        await self._get_executor().batch_insert(table_name, data_list)
-        return self
+        try:
+            for record in data:
+                await self.insert(table_name, record)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to batch insert vector data into table {table_name}: {e}")
 
     async def similarity_search(
         self,
-        table_name: str,
+        table_name: Union[str, type],
         vector_column: str,
-        query_vector: list,
+        query_vector: List[float],
         limit: int = 10,
+        select_columns: List[str] = None,
+        where_clause: str = None,
         distance_type: str = "l2",
-        select_columns: list = None,
-        where_conditions: list = None,
-        where_params: list = None,
-        connection=None,
-    ) -> list:
+    ) -> List[Dict[str, Any]]:
         """
-        Perform similarity search using chain operations.
+        Perform vector similarity search.
 
         Args:
-
-            table_name: Name of the table
+            table_name: Name of the table (string) or SQLAlchemy Model class
             vector_column: Name of the vector column
-            query_vector: Query vector as list
-            limit: Number of results to return
-            distance_type: Type of distance calculation (l2, cosine, inner_product)
-            select_columns: List of columns to select (None means all columns)
-            where_conditions: List of WHERE conditions
-            where_params: List of parameters for WHERE conditions
-            connection: Optional existing database connection (for transaction support)
+            query_vector: Query vector
+            limit: Maximum number of results (default: 10)
+            select_columns: Columns to return (default: all)
+            where_clause: Optional WHERE clause filter
+            distance_type: Distance metric ("l2", "cosine", "inner_product") (default: "l2")
 
         Returns:
-
-            List of search results
+            List of matching records with similarity scores
         """
-        from .sql_builder import DistanceFunction, build_vector_similarity_query
+        try:
+            table_name = _extract_table_name(table_name)
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
-        # Convert distance type to enum
-        if distance_type == "l2":
-            distance_func = DistanceFunction.L2  # Use L2 for consistency with ORM l2_distance()
-        elif distance_type == "l2_sq":
-            distance_func = DistanceFunction.L2_SQ  # Explicitly use squared distance if needed
-        elif distance_type == "cosine":
-            distance_func = DistanceFunction.COSINE
-        elif distance_type == "inner_product":
-            distance_func = DistanceFunction.INNER_PRODUCT
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
+            # Select distance function based on distance_type
+            if distance_type == "l2":
+                distance_func = "l2_distance"
+            elif distance_type == "cosine":
+                distance_func = "cosine_distance"
+            elif distance_type == "inner_product":
+                distance_func = "inner_product"
+            else:
+                distance_func = "l2_distance"  # Default to l2
 
-        # Build query using unified SQL builder
-        sql = build_vector_similarity_query(
-            table_name=table_name,
-            vector_column=vector_column,
-            query_vector=query_vector,
-            distance_func=distance_func,
-            limit=limit,
-            select_columns=select_columns,
-            where_conditions=where_conditions,
-            where_params=where_params,
-        )
+            sql = f"SELECT {columns}, " f"{distance_func}({vector_column}, '{vector_str}') as distance " f"FROM {table_name}"
 
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = await self.client._execute_with_logging(connection, sql, context="Async vector similarity search")
-            return result.fetchall()
-        else:
-            # Create new connection
-            async with self._get_engine().begin() as conn:
-                result = await self.client._execute_with_logging(conn, sql, context="Async vector similarity search")
-                return result.fetchall()
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+
+            sql += f" ORDER BY distance LIMIT {limit}"
+
+            result = await self.executor.execute(sql)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
 
     async def range_search(
         self,
-        table_name: str,
+        table_name: Union[str, type],
         vector_column: str,
-        query_vector: list,
+        query_vector: List[float],
         max_distance: float,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        connection=None,
-    ) -> list:
+        select_columns: List[str] = None,
+        where_clause: str = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Perform range search using chain operations.
+        Perform vector range search within a maximum distance.
 
         Args:
-
-            table_name: Name of the table
+            table_name: Name of the table (string) or SQLAlchemy Model class
             vector_column: Name of the vector column
-            query_vector: Query vector as list
+            query_vector: Query vector
             max_distance: Maximum distance threshold
-            distance_type: Type of distance calculation
-            select_columns: List of columns to select (None means all columns)
-            connection: Optional existing database connection (for transaction support)
+            select_columns: Columns to return (default: all)
+            where_clause: Optional WHERE clause filter
 
         Returns:
-
-            List of search results within range
+            List of matching records within distance threshold
         """
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
+        try:
+            table_name = _extract_table_name(table_name)
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
-        # Build distance function based on type
-        if distance_type == "l2":
-            distance_func = "l2_distance"
-        elif distance_type == "cosine":
-            distance_func = "cosine_distance"
-        elif distance_type == "inner_product":
-            distance_func = "inner_product"
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
+            sql = (
+                f"SELECT {columns}, "
+                f"l2_distance({vector_column}, '{vector_str}') as distance "
+                f"FROM {table_name} "
+                f"WHERE l2_distance({vector_column}, '{vector_str}') <= {max_distance}"
+            )
 
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if vector_column not in columns_to_select:
-                columns_to_select.append(vector_column)
-            select_clause = ", ".join(columns_to_select)
+            if where_clause:
+                sql += f" AND ({where_clause})"
 
-        # Build query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
-        FROM {table_name}
-        WHERE {distance_func}({vector_column}, '{vector_str}') <= {max_distance}
-        ORDER BY distance
+            result = await self.executor.execute(sql)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+
+    async def get_ivf_stats(
+        self,
+        table_name: Union[str, type],
+        column_name: str = None,
+        database: str = None,
+    ) -> Dict[str, Any]:
         """
-
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = await self.client._execute_with_logging(connection, sql, context="Async vector range search")
-            return result.fetchall()
-        else:
-            # Create new connection
-            async with self._get_engine().begin() as conn:
-                result = await self.client._execute_with_logging(conn, sql, context="Async vector range search")
-                return result.fetchall()
-
-    async def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
-        """
-        Get IVF index statistics for a table.
+        Get IVF index statistics.
 
         Args:
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            column_name: Name of the vector column (optional, will be inferred if not provided)
+            table_name: Name of the table (string) or SQLAlchemy Model class
+            column_name: Optional vector column name (auto-inferred if not provided)
+            database: Optional database name (uses current if not provided)
 
         Returns:
-
-            Dict containing IVF index statistics including:
-            - index_tables: Dictionary mapping table types to table names
-            - distribution: Dictionary containing bucket distribution data
-            - database: Database name
-            - table_name: Table name
-            - column_name: Vector column name
-
-        Raises:
-
-            Exception: If IVF index is not found or if there are errors retrieving stats
-
-        Examples:
-
-            # Get stats for a table with vector column
-            stats = await client.vector_ops.get_ivf_stats("my_table", "embedding")
-            print(f"Index tables: {stats['index_tables']}")
-            print(f"Distribution: {stats['distribution']}")
-
-            # Get stats using model class
-            stats = await client.vector_ops.get_ivf_stats(MyModel, "vector_col")
+            Dictionary containing index statistics and distribution
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
+        table_name = _extract_table_name(table_name)
 
-        # Get database name from connection params
-        database = self.client._connection_params.get('database')
-        if not database:
-            raise Exception("No database connection found. Please connect to a database first.")
+        if database is None:
+            # Get database from client connection string or default database
+            database = getattr(self.client, 'database', 'test')
 
-        # Check if executor has an existing connection (session) or needs to create one (client)
-        executor = self._get_executor()
-        has_connection = hasattr(executor, '_connection') and executor._connection is not None
+        # Auto-infer column name if not provided
+        if not column_name:
+            schema_sql = (
+                f"SELECT column_name, data_type "
+                f"FROM information_schema.columns "
+                f"WHERE table_schema = '{database}' "
+                f"AND table_name = '{table_name}' "
+                f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
+            )
+            result = await self.executor.execute(schema_sql)
+            vector_columns = result.fetchall()
 
-        if has_connection:
-            # Use existing connection from session
-            conn = executor._connection
-
-            # If column_name is not provided, try to infer it
-            if not column_name:
-                schema_sql = (
-                    f"SELECT column_name, data_type "
-                    f"FROM information_schema.columns "
-                    f"WHERE table_schema = '{database}' "
-                    f"AND table_name = '{table_name}' "
-                    f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
+            if not vector_columns:
+                raise Exception(f"No vector columns found in table {table_name}")
+            elif len(vector_columns) == 1:
+                column_name = vector_columns[0][0]
+            else:
+                column_names = [col[0] for col in vector_columns]
+                raise Exception(
+                    f"Multiple vector columns found in table {table_name}: {column_names}. "
+                    f"Please specify the column_name parameter."
                 )
-                result = await self.client._execute_with_logging(conn, schema_sql, context="Auto-detect vector column")
-                vector_columns = result.fetchall()
 
-                if not vector_columns:
-                    raise Exception(f"No vector columns found in table {table_name}")
-                elif len(vector_columns) == 1:
-                    column_name = vector_columns[0][0]
-                else:
-                    # Multiple vector columns found, raise error asking user to specify
-                    column_names = [col[0] for col in vector_columns]
-                    raise Exception(
-                        f"Multiple vector columns found in table {table_name}: {column_names}. "
-                        f"Please specify the column_name parameter."
-                    )
-
-            # Get IVF index table names
-            index_tables = await self._get_ivf_index_table_names(database, table_name, column_name, conn)
-
-            if not index_tables:
-                raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
-
-            # Get the entries table name for distribution analysis
-            entries_table = index_tables.get('entries')
-            if not entries_table:
-                raise Exception("No entries table found in IVF index")
-
-            # Get bucket distribution
-            distribution = await self._get_ivf_buckets_distribution(database, entries_table, conn)
-        else:
-            # Create new connection from client
-            # If column_name is not provided, try to infer it
-            if not column_name:
-                # Query the table schema to find vector columns
-                async with self._get_engine().begin() as conn:
-                    schema_sql = (
-                        f"SELECT column_name, data_type "
-                        f"FROM information_schema.columns "
-                        f"WHERE table_schema = '{database}' "
-                        f"AND table_name = '{table_name}' "
-                        f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
-                    )
-                    result = await self.client._execute_with_logging(conn, schema_sql, context="Auto-detect vector column")
-                    vector_columns = result.fetchall()
-
-                    if not vector_columns:
-                        raise Exception(f"No vector columns found in table {table_name}")
-                    elif len(vector_columns) == 1:
-                        column_name = vector_columns[0][0]
-                    else:
-                        # Multiple vector columns found, raise error asking user to specify
-                        column_names = [col[0] for col in vector_columns]
-                        raise Exception(
-                            f"Multiple vector columns found in table {table_name}: {column_names}. "
-                            f"Please specify the column_name parameter."
-                        )
-
-            # Get IVF index table names
-            async with self._get_engine().begin() as conn:
-                index_tables = await self._get_ivf_index_table_names(database, table_name, column_name, conn)
-
-                if not index_tables:
-                    raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
-
-                # Get the entries table name for distribution analysis
-                entries_table = index_tables.get('entries')
-                if not entries_table:
-                    raise Exception("No entries table found in IVF index")
-
-                # Get bucket distribution
-                distribution = await self._get_ivf_buckets_distribution(database, entries_table, conn)
-
-        return {
-            'index_tables': index_tables,
-            'distribution': distribution,
-            'database': database,
-            'table_name': table_name,
-            'column_name': column_name,
-        }
-
-    async def _get_ivf_index_table_names(
-        self,
-        database: str,
-        table_name: str,
-        column_name: str,
-        connection,
-    ) -> Dict[str, str]:
-        """
-        Get the table names of the IVF index tables.
-        """
-        sql = (
+        # Get IVF index table names
+        index_sql = (
             f"SELECT i.algo_table_type, i.index_table_name "
             f"FROM `mo_catalog`.`mo_indexes` AS i "
             f"JOIN `mo_catalog`.`mo_tables` AS t ON i.table_id = t.rel_id "
@@ -1554,42 +870,38 @@ class AsyncVectorManager:
             f"AND t.reldatabase = '{database}' "
             f"AND i.algo='ivfflat'"
         )
-        result = await self.client._execute_with_logging(connection, sql, context="Get IVF index table names")
-        return {row[0]: row[1] for row in result}
+        result = await self.executor.execute(index_sql)
+        index_tables = {row[0]: row[1] for row in result}
 
-    async def _get_ivf_buckets_distribution(
-        self,
-        database: str,
-        table_name: str,
-        connection,
-    ) -> Dict[str, List[int]]:
-        """
-        Get the buckets distribution of the IVF index tables.
-        """
-        sql = (
+        if not index_tables:
+            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+
+        # Get the entries table name for distribution analysis
+        entries_table = index_tables.get('entries')
+        if not entries_table:
+            raise Exception("No entries table found in IVF index")
+
+        # Get bucket distribution
+        dist_sql = (
             f"SELECT "
             f"  COUNT(*) AS centroid_count, "
             f"  __mo_index_centroid_fk_id AS centroid_id, "
             f"  __mo_index_centroid_fk_version AS centroid_version "
-            f"FROM `{database}`.`{table_name}` "
+            f"FROM `{database}`.`{entries_table}` "
             f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
         )
-        result = await self.client._execute_with_logging(connection, sql, context="Get IVF buckets distribution")
+        result = await self.executor.execute(dist_sql)
         rows = result.fetchall()
-        return {
+        distribution = {
             "centroid_count": [row[0] for row in rows],
             "centroid_id": [row[1] for row in rows],
             "centroid_version": [row[2] for row in rows],
         }
 
-
-async def _exec_sql_safe_async(connection, sql: str):
-    """Execute SQL safely for async connections, bypassing bind parameter parsing when possible."""
-    if hasattr(connection, 'exec_driver_sql'):
-        # Escape % to %% for pymysql's format string handling
-        escaped_sql = sql.replace('%', '%%')
-        return await connection.exec_driver_sql(escaped_sql)
-    else:
-        from sqlalchemy import text
-
-        return await connection.execute(text(sql))
+        return {
+            'index_tables': index_tables,
+            'distribution': distribution,
+            'database': database,
+            'table_name': table_name,
+            'column_name': column_name,
+        }
