@@ -776,7 +776,7 @@ class Client(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise
 
-    def execute(self, sql_or_stmt, params: Optional[Tuple] = None) -> "ResultSet":
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> "ResultSet":
         """
         Execute SQL query or SQLAlchemy statement using connection pool.
 
@@ -853,7 +853,11 @@ class Client(BaseMatrixOneClient):
                         result_set = ResultSet(columns, rows)
                         execution_time = time.time() - start_time
                         self.logger.log_query(
-                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, len(rows), success=True
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            len(rows),
+                            success=True,
+                            override_sql_log_mode=_log_mode,
                         )
                         return result_set
                     else:
@@ -861,7 +865,11 @@ class Client(BaseMatrixOneClient):
                         result_set = ResultSet([], [], affected_rows=result.rowcount)
                         execution_time = time.time() - start_time
                         self.logger.log_query(
-                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, result.rowcount, success=True
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            result.rowcount,
+                            success=True,
+                            override_sql_log_mode=_log_mode,
                         )
                         return result_set
 
@@ -888,12 +896,16 @@ class Client(BaseMatrixOneClient):
                     columns = list(result.keys())
                     rows = result.fetchall()
                     result_set = ResultSet(columns, rows)
-                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
+                    )
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
+                    )
                     return result_set
 
         except Exception as e:
@@ -2768,6 +2780,9 @@ class Session(SQLAlchemySession):
 
         start_time = time.time()
 
+        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
+        _log_mode = kwargs.pop('_log_mode', None)
+
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
@@ -2788,16 +2803,27 @@ class Session(SQLAlchemySession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(original_sql, execution_time, None, success=True)
+                self.client.logger.log_query(
+                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
+                )
             else:
-                self.client.logger.log_query(original_sql, execution_time, getattr(result, 'rowcount', 0), success=True)
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    getattr(result, 'rowcount', 0),
+                    success=True,
+                    override_sql_log_mode=_log_mode,
+                )
 
             return result
 
         except Exception as e:
             execution_time = time.time() - start_time
             self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt), execution_time, success=False
+                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                execution_time,
+                success=False,
+                override_sql_log_mode=_log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
             raise QueryError(f"Session query execution failed: {e}")

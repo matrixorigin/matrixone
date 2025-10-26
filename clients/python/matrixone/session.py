@@ -148,7 +148,7 @@ class Session(SQLAlchemySession):
         Args:
             sql_or_stmt: SQL string or SQLAlchemy statement (select, update, delete, insert, text)
             params: Query parameters (only used for string SQL with '?' placeholders)
-            **kwargs: Additional arguments passed to parent execute()
+            **kwargs: Additional arguments passed to parent execute() (including _log_mode for logging control)
 
         Returns:
             sqlalchemy.engine.Result: SQLAlchemy Result object
@@ -171,6 +171,9 @@ class Session(SQLAlchemySession):
 
         start_time = time.time()
 
+        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
+        _log_mode = kwargs.pop('_log_mode', None)
+
         try:
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
@@ -191,16 +194,27 @@ class Session(SQLAlchemySession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(original_sql, execution_time, None, success=True)
+                self.client.logger.log_query(
+                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
+                )
             else:
-                self.client.logger.log_query(original_sql, execution_time, getattr(result, 'rowcount', 0), success=True)
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    getattr(result, 'rowcount', 0),
+                    success=True,
+                    override_sql_log_mode=_log_mode,
+                )
 
             return result
 
         except Exception as e:
             execution_time = time.time() - start_time
             self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt), execution_time, success=False
+                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                execution_time,
+                success=False,
+                override_sql_log_mode=_log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
             raise QueryError(f"Session query execution failed: {e}")
@@ -542,7 +556,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         Args:
             sql_or_stmt: SQL string or SQLAlchemy statement
             params: Query parameters (only used for string SQL with '?' placeholders)
-            **kwargs: Additional execution options
+            **kwargs: Additional execution options (including _log_mode for logging control)
 
         Returns:
             SQLAlchemy async result object
@@ -550,6 +564,9 @@ class AsyncSession(SQLAlchemyAsyncSession):
         import time
 
         start_time = time.time()
+
+        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
+        _log_mode = kwargs.pop('_log_mode', None)
 
         try:
             # Check if this is a string SQL
@@ -571,16 +588,27 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(original_sql, execution_time, None, success=True)
+                self.client.logger.log_query(
+                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
+                )
             else:
-                self.client.logger.log_query(original_sql, execution_time, getattr(result, 'rowcount', 0), success=True)
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    getattr(result, 'rowcount', 0),
+                    success=True,
+                    override_sql_log_mode=_log_mode,
+                )
 
             return result
 
         except Exception as e:
             execution_time = time.time() - start_time
             self.client.logger.log_query(
-                original_sql if 'original_sql' in locals() else str(sql_or_stmt), execution_time, success=False
+                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                execution_time,
+                success=False,
+                override_sql_log_mode=_log_mode,
             )
             self.client.logger.log_error(e, context="Async session query execution")
             raise QueryError(f"Async session query execution failed: {e}")

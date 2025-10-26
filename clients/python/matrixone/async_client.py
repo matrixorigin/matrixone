@@ -1068,7 +1068,7 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise
 
-    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None) -> AsyncResultSet:
+    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> AsyncResultSet:
         """
         Execute SQL query or SQLAlchemy statement asynchronously.
 
@@ -1122,7 +1122,11 @@ class AsyncClient(BaseMatrixOneClient):
                         async_result = AsyncResultSet(columns, rows)
                         execution_time = time.time() - start_time
                         self.logger.log_query(
-                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, len(rows), success=True
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            len(rows),
+                            success=True,
+                            override_sql_log_mode=_log_mode,
                         )
                         return async_result
                     else:
@@ -1130,7 +1134,11 @@ class AsyncClient(BaseMatrixOneClient):
                         async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
                         execution_time = time.time() - start_time
                         self.logger.log_query(
-                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, result.rowcount, success=True
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            result.rowcount,
+                            success=True,
+                            override_sql_log_mode=_log_mode,
                         )
                         return async_result
 
@@ -1156,11 +1164,15 @@ class AsyncClient(BaseMatrixOneClient):
                     rows = result.fetchall()
                     columns = list(result.keys()) if hasattr(result, "keys") else []
                     async_result = AsyncResultSet(columns, rows)
-                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
+                    )
                     return async_result
                 else:
                     async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
+                    )
                     return async_result
 
         except Exception as e:

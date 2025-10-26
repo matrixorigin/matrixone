@@ -332,6 +332,7 @@ class VectorManager(_VectorManagerBase):
         select_columns: List[str] = None,
         where_clause: str = None,
         distance_type: str = "l2",
+        _log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search."""
         try:
@@ -339,7 +340,7 @@ class VectorManager(_VectorManagerBase):
             sql = self._build_similarity_search_sql(
                 table_name, vector_column, query_vector, limit, select_columns, where_clause, distance_type
             )
-            result = self.executor.execute(sql)
+            result = self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
             raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
@@ -352,6 +353,7 @@ class VectorManager(_VectorManagerBase):
         max_distance: float,
         select_columns: List[str] = None,
         where_clause: str = None,
+        _log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector range search."""
         try:
@@ -359,7 +361,7 @@ class VectorManager(_VectorManagerBase):
             sql = self._build_range_search_sql(
                 table_name, vector_column, query_vector, max_distance, select_columns, where_clause
             )
-            result = self.executor.execute(sql)
+            result = self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
             raise Exception(f"Failed to perform range search on table {table_name}: {e}")
@@ -563,6 +565,7 @@ class AsyncVectorManager(_VectorManagerBase):
         select_columns: List[str] = None,
         where_clause: str = None,
         distance_type: str = "l2",
+        _log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search."""
         try:
@@ -570,7 +573,7 @@ class AsyncVectorManager(_VectorManagerBase):
             sql = self._build_similarity_search_sql(
                 table_name, vector_column, query_vector, limit, select_columns, where_clause, distance_type
             )
-            result = await self.executor.execute(sql)
+            result = await self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
             raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
@@ -583,6 +586,7 @@ class AsyncVectorManager(_VectorManagerBase):
         max_distance: float,
         select_columns: List[str] = None,
         where_clause: str = None,
+        _log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector range search."""
         try:
@@ -590,7 +594,7 @@ class AsyncVectorManager(_VectorManagerBase):
             sql = self._build_range_search_sql(
                 table_name, vector_column, query_vector, max_distance, select_columns, where_clause
             )
-            result = await self.executor.execute(sql)
+            result = await self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
             raise Exception(f"Failed to perform range search on table {table_name}: {e}")
