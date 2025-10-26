@@ -1015,7 +1015,7 @@ class TestAsyncTransactionManagerConsistency:
             from matrixone.pubsub import AsyncPubSubManager
             from matrixone.account import AsyncAccountManager
             from matrixone.vector_manager import AsyncVectorManager
-            from matrixone.async_client import AsyncTransactionFulltextIndexManager
+            from matrixone.fulltext_manager import AsyncFulltextIndexManager
 
             assert isinstance(tx.snapshots, AsyncSnapshotManager)
             assert isinstance(tx.clone, AsyncCloneManager)
@@ -1024,7 +1024,7 @@ class TestAsyncTransactionManagerConsistency:
             assert isinstance(tx.pubsub, AsyncPubSubManager)
             assert isinstance(tx.account, AsyncAccountManager)
             assert isinstance(tx.vector_ops, AsyncVectorManager)
-            assert isinstance(tx.fulltext_index, AsyncTransactionFulltextIndexManager)
+            assert isinstance(tx.fulltext_index, AsyncFulltextIndexManager)
 
     def test_sync_vector_ops_transaction_behavior(self, sync_client_setup):
         """Test sync vector_ops manager behavior in transaction"""

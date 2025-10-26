@@ -310,7 +310,7 @@ class FulltextIndex(Index):
     @classmethod
     def create_index(
         cls,
-        engine,
+        bind,
         table_name: str,
         name: str,
         columns: Union[str, List[str]],
@@ -324,7 +324,7 @@ class FulltextIndex(Index):
         parser support for specialized content types (JSON, Chinese text, etc.).
 
         Args:
-            engine: SQLAlchemy engine instance
+            bind: SQLAlchemy connection (from session.connection() or engine.begin())
             table_name (str): Target table name (e.g., 'articles', 'documents')
             name (str): Index name (e.g., 'ftidx_content', 'idx_search')
             columns (str or list): Column(s) to index
@@ -349,28 +349,23 @@ class FulltextIndex(Index):
 
         Examples::
 
-            # Basic fulltext index
-            FulltextIndex.create_index(
-                engine, 'articles', 'ftidx_content', 'content'
-            )
+            # With session connection (recommended)
+            with client.session() as session:
+                conn = session.connection()
+                FulltextIndex.create_index(
+                    conn, 'articles', 'ftidx_content', 'content'
+                )
+                session.commit()
 
-            # Multiple columns with BM25
-            FulltextIndex.create_index(
-                engine, 'articles', 'ftidx_search', ['title', 'content'],
-                algorithm=FulltextAlgorithmType.BM25
-            )
-
-            # JSON parser
-            FulltextIndex.create_index(
-                engine, 'products', 'ftidx_json', 'details',
-                parser=FulltextParserType.JSON
-            )
-
-            # NGRAM parser
-            FulltextIndex.create_index(
-                engine, 'chinese_articles', 'ftidx_chinese', ['title', 'body'],
-                parser=FulltextParserType.NGRAM
-            )
+            # With async session connection
+            async with async_client.session() as session:
+                conn = await session.connection()
+                await conn.run_sync(
+                    lambda sync_conn: FulltextIndex.create_index(
+                        sync_conn, 'articles', 'ftidx_content', 'content'
+                    )
+                )
+                await session.commit()
         """
         try:
             if isinstance(columns, str):
@@ -381,8 +376,8 @@ class FulltextIndex(Index):
             if parser:
                 sql += f" WITH PARSER {parser}"
 
-            with engine.begin() as conn:
-                _exec_sql_safe(conn, sql)
+            # Directly use the provided connection
+            _exec_sql_safe(bind, sql)
 
             return True
         except Exception as e:
@@ -466,13 +461,13 @@ class FulltextIndex(Index):
             return False
 
     @classmethod
-    def drop_index(cls, engine, table_name: str, name: str) -> bool:
+    def drop_index(cls, bind, table_name: str, name: str) -> bool:
         """
         Drop a fulltext index using ORM-style method.
 
         Args:
 
-            engine: SQLAlchemy engine
+            bind: SQLAlchemy connection (from session.connection() or engine.begin())
             table_name: Target table name
             name: Index name
 
@@ -483,8 +478,8 @@ class FulltextIndex(Index):
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
 
-            with engine.begin() as conn:
-                _exec_sql_safe(conn, sql)
+            # Directly use the provided connection
+            _exec_sql_safe(bind, sql)
 
             return True
         except Exception as e:

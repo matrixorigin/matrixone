@@ -1658,14 +1658,17 @@ class FulltextIndexManager:
         # Set the algorithm
         self.client.execute(f'SET ft_relevancy_algorithm = "{algorithm}"')
 
-        # Create the index
-        success = FulltextIndex.create_index(
-            engine=self.client.get_sqlalchemy_engine(),
-            table_name=table_name,
-            name=name,
-            columns=columns,
-            algorithm=algorithm,
-        )
+        # Create the index using session connection
+        with self.client.session() as session:
+            conn = session.connection()
+            success = FulltextIndex.create_index(
+                bind=conn,
+                table_name=table_name,
+                name=name,
+                columns=columns,
+                algorithm=algorithm,
+            )
+            session.commit()
 
         return success
 
@@ -1684,7 +1687,11 @@ class FulltextIndexManager:
         """
         from .fulltext_index import FulltextIndex
 
-        success = FulltextIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
+        # Drop the index using session connection
+        with self.client.session() as session:
+            conn = session.connection()
+            success = FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
+            session.commit()
 
         return success
 

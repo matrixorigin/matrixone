@@ -503,7 +503,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         # Import async vector and fulltext managers
         from .vector_manager import AsyncVectorManager
-        from .async_client import AsyncTransactionFulltextIndexManager
+        from .fulltext_manager import AsyncFulltextIndexManager
 
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
@@ -525,7 +525,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.pubsub = AsyncPubSubManager(client, executor=self)
         self.account = AsyncAccountManager(client, executor=self)
         self.vector_ops = AsyncVectorManager(client, executor=self)
-        self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
+        self.fulltext_index = AsyncFulltextIndexManager(client, executor=self)
         self.metadata = AsyncMetadataManager(client, executor=self)
         self.load_data = AsyncLoadDataManager(client, executor=self)
         self.stage = AsyncStageManager(client, executor=self)
