@@ -19,8 +19,7 @@ Offline tests for MatrixOne metadata operations
 import asyncio
 import unittest
 from unittest.mock import Mock, patch, AsyncMock
-from matrixone.metadata import MetadataManager
-from matrixone.async_metadata_manager import AsyncMetadataManager
+from matrixone.metadata import MetadataManager, AsyncMetadataManager
 
 
 class TestMetadataManager(unittest.TestCase):
@@ -553,6 +552,171 @@ class TestAsyncSessionMetadataManager(unittest.TestCase):
             self.assertIn("test_table", stats)
 
         asyncio.run(_test())
+
+
+class TestMetadataSQLConsistency(unittest.TestCase):
+    """Test that sync/async/session generate identical SQL"""
+
+    def test_scan_sql_consistency(self):
+        """Test scan() SQL consistency across all contexts"""
+        # Setup mocks
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        # Create managers
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        # Execute scan
+        sync_manager.scan("test_db", "test_table")
+        session_manager.scan("test_db", "test_table")
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table")
+            await async_session_manager.scan("test_db", "test_table")
+
+        asyncio.run(_test())
+
+        # Extract SQL
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        # Verify all SQL is identical
+        expected_sql = "SELECT * FROM metadata_scan('test_db.test_table', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    def test_scan_with_index_sql_consistency(self):
+        """Test scan with index SQL consistency"""
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        sync_manager.scan("test_db", "test_table", indexname="idx_test")
+        session_manager.scan("test_db", "test_table", indexname="idx_test")
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table", indexname="idx_test")
+            await async_session_manager.scan("test_db", "test_table", indexname="idx_test")
+
+        asyncio.run(_test())
+
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        expected_sql = "SELECT * FROM metadata_scan('test_db.test_table.?idx_test', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    def test_scan_with_tombstone_sql_consistency(self):
+        """Test scan with tombstone SQL consistency"""
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        sync_manager.scan("test_db", "test_table", is_tombstone=True)
+        session_manager.scan("test_db", "test_table", is_tombstone=True)
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table", is_tombstone=True)
+            await async_session_manager.scan("test_db", "test_table", is_tombstone=True)
+
+        asyncio.run(_test())
+
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        expected_sql = "SELECT * FROM metadata_scan('test_db.test_table.#', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    def test_scan_with_distinct_sql_consistency(self):
+        """Test scan with distinct_object_name SQL consistency"""
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        sync_manager.scan("test_db", "test_table", distinct_object_name=True)
+        session_manager.scan("test_db", "test_table", distinct_object_name=True)
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table", distinct_object_name=True)
+            await async_session_manager.scan("test_db", "test_table", distinct_object_name=True)
+
+        asyncio.run(_test())
+
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        expected_sql = "SELECT DISTINCT(object_name) as object_name, * FROM metadata_scan('test_db.test_table', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
 
 
 if __name__ == '__main__':

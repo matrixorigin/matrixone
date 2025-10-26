@@ -334,6 +334,81 @@ class BaseMetadataManager:
             )
         return details
 
+
+class MetadataManager(BaseMetadataManager):
+    """
+    Metadata manager for MatrixOne table metadata operations.
+
+    Provides methods to scan table metadata including column statistics,
+    row counts, null counts, and data distribution information.
+
+    Supports both Client and Session contexts via executor pattern.
+    """
+
+    def scan(
+        self,
+        dbname: str,
+        tablename: str,
+        is_tombstone: Optional[bool] = None,
+        indexname: Optional[str] = None,
+        columns: Optional[Union[List[Union[MetadataColumn, str]], str]] = None,
+        distinct_object_name: Optional[bool] = None,
+    ) -> Union[Result, List[MetadataRow]]:
+        """
+        Scan table metadata using metadata_scan function.
+
+        Args:
+
+            dbname: Database name
+            tablename: Table name
+            is_tombstone: Optional tombstone flag (True/False)
+            indexname: Optional index name
+            columns: Optional list of columns to return. Can be MetadataColumn enum values or strings.
+                    If None, returns all columns as SQLAlchemy Result. If specified, returns List[MetadataRow].
+            distinct_object_name: Optional flag to return distinct object names only.
+
+        Returns:
+
+            If columns is None: SQLAlchemy Result object containing metadata scan results
+            If columns is specified: List[MetadataRow] containing structured metadata
+
+        Example:
+
+            ```python
+            # Scan all columns of a table (returns SQLAlchemy Result)
+            result = client.metadata.scan("test_db", "users")
+
+            # Scan specific column
+            result = client.metadata.scan("test_db", "users", indexname="id")
+
+            # Scan with tombstone filter
+            result = client.metadata.scan("test_db", "users", is_tombstone=False)
+
+            # Scan tombstone objects
+            result = client.metadata.scan("test_db", "users", is_tombstone=True)
+
+            # Scan specific index
+            result = client.metadata.scan("test_db", "users", indexname="idx_name")
+
+            # Get structured results with specific columns
+            rows = client.metadata.scan("test_db", "users",
+                                      columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT])
+            for row in rows:
+                print(f"Column: {row.col_name}, Rows: {row.rows_cnt}")
+
+            # Get all structured results
+            rows = client.metadata.scan("test_db", "users", columns="*")
+            ```
+        """
+        # Build SQL query
+        sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
+
+        # Execute the query using executor
+        result = self._get_executor().execute(sql)
+
+        # Process result based on columns parameter
+        return self._process_scan_result(result, columns)
+
     def get_table_brief_stats(
         self,
         dbname: str,
@@ -409,27 +484,27 @@ class BaseMetadataManager:
         return result
 
 
-class MetadataManager(BaseMetadataManager):
+class AsyncMetadataManager(BaseMetadataManager):
     """
-    Metadata manager for MatrixOne table metadata operations.
+    Async metadata manager for MatrixOne table metadata operations.
 
-    Provides methods to scan table metadata including column statistics,
+    Provides async methods to scan table metadata including column statistics,
     row counts, null counts, and data distribution information.
 
-    Supports both Client and Session contexts via executor pattern.
+    Supports both AsyncClient and AsyncSession contexts via executor pattern.
     """
 
-    def scan(
+    async def scan(
         self,
         dbname: str,
         tablename: str,
         is_tombstone: Optional[bool] = None,
         indexname: Optional[str] = None,
-        columns: Optional[Union[List[Union[MetadataColumn, str]], str]] = None,
+        columns: Optional[List[Union[MetadataColumn, str]]] = None,
         distinct_object_name: Optional[bool] = None,
     ) -> Union[Result, List[MetadataRow]]:
         """
-        Scan table metadata using metadata_scan function.
+        Scan table metadata using metadata_scan function (async).
 
         Args:
 
@@ -437,48 +512,110 @@ class MetadataManager(BaseMetadataManager):
             tablename: Table name
             is_tombstone: Optional tombstone flag (True/False)
             indexname: Optional index name
-            columns: Optional list of columns to return. Can be MetadataColumn enum values or strings.
-                    If None, returns all columns as SQLAlchemy Result. If specified, returns List[MetadataRow].
-            distinct_object_name: Optional flag to return distinct object names only.
+            columns: Optional list of columns to return
 
         Returns:
 
-            If columns is None: SQLAlchemy Result object containing metadata scan results
-            If columns is specified: List[MetadataRow] containing structured metadata
+            SQLAlchemy Result object containing metadata scan results
 
         Example:
 
             ```python
-            # Scan all columns of a table (returns SQLAlchemy Result)
-            result = client.metadata.scan("test_db", "users")
+            # Scan all columns of a table
+            result = await client.metadata.scan("test_db", "users")
 
             # Scan specific column
-            result = client.metadata.scan("test_db", "users", indexname="id")
+            result = await client.metadata.scan("test_db", "users", indexname="id")
 
             # Scan with tombstone filter
-            result = client.metadata.scan("test_db", "users", is_tombstone=False)
+            result = await client.metadata.scan("test_db", "users", is_tombstone=False)
 
             # Scan tombstone objects
-            result = client.metadata.scan("test_db", "users", is_tombstone=True)
+            result = await client.metadata.scan("test_db", "users", is_tombstone=True)
 
             # Scan specific index
-            result = client.metadata.scan("test_db", "users", indexname="idx_name")
-
-            # Get structured results with specific columns
-            rows = client.metadata.scan("test_db", "users",
-                                      columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT])
-            for row in rows:
-                print(f"Column: {row.col_name}, Rows: {row.rows_cnt}")
-
-            # Get all structured results
-            rows = client.metadata.scan("test_db", "users", columns="*")
+            result = await client.metadata.scan("test_db", "users", indexname="idx_name")
             ```
         """
         # Build SQL query
         sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
 
         # Execute the query using executor
-        result = self._get_executor().execute(sql)
+        result = await self._get_executor().execute(sql)
 
         # Process result based on columns parameter
         return self._process_scan_result(result, columns)
+
+    async def get_table_brief_stats(
+        self,
+        dbname: str,
+        tablename: str,
+        is_tombstone: Optional[bool] = None,
+        indexname: Optional[str] = None,
+        include_tombstone: bool = False,
+        include_indexes: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Get brief statistics for a table, tombstone, and indexes (async).
+
+        Args:
+
+            dbname: Database name
+            tablename: Table name
+            is_tombstone: Optional tombstone flag (True/False)
+            indexname: Optional index name
+            include_tombstone: Whether to include tombstone statistics
+            include_indexes: List of index names to include
+
+        Returns:
+
+            Dictionary with brief statistics for table, tombstone, and indexes
+        """
+        queries = self._prepare_brief_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
+
+        result = {}
+        for key, sql in queries:
+            query_result = await self._get_executor().execute(sql)
+            rows = query_result.fetchall()
+            stats = self._process_brief_stats_result(rows)
+            if stats:
+                result[key] = stats
+
+        return result
+
+    async def get_table_detail_stats(
+        self,
+        dbname: str,
+        tablename: str,
+        is_tombstone: Optional[bool] = None,
+        indexname: Optional[str] = None,
+        include_tombstone: bool = False,
+        include_indexes: Optional[List[str]] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get detailed statistics for a table, tombstone, and indexes (async).
+
+        Args:
+
+            dbname: Database name
+            tablename: Table name
+            is_tombstone: Optional tombstone flag (True/False)
+            indexname: Optional index name
+            include_tombstone: Whether to include tombstone statistics
+            include_indexes: List of index names to include
+
+        Returns:
+
+            Dictionary with detailed statistics for table, tombstone, and indexes
+        """
+        queries = self._prepare_detail_stats(dbname, tablename, is_tombstone, indexname, include_tombstone, include_indexes)
+
+        result = {}
+        for key, sql in queries:
+            query_result = await self._get_executor().execute(sql)
+            rows = query_result.fetchall()
+            details = self._process_detail_stats_result(rows)
+            if details:
+                result[key] = details
+
+        return result

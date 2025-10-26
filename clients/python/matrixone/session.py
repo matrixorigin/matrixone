@@ -516,6 +516,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         from .account import AsyncAccountManager
         from .load_data import AsyncLoadDataManager
         from .stage import AsyncStageManager
+        from .metadata import AsyncMetadataManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -527,6 +528,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.account = AsyncAccountManager(client, executor=self)
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
+        self.metadata = AsyncMetadataManager(client, executor=self)
         self.load_data = AsyncLoadDataManager(client, executor=self)
         self.stage = AsyncStageManager(client, executor=self)
 

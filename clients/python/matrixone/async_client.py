@@ -34,7 +34,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .account import AsyncAccountManager
-from .async_metadata_manager import AsyncMetadataManager
+from .metadata import AsyncMetadataManager
 from .session import AsyncSession
 from .async_vector_index_manager import AsyncVectorManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
