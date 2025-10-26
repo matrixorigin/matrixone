@@ -58,7 +58,7 @@ from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
-from .stage import Stage, StageManager, TransactionStageManager, AsyncStageManager, AsyncTransactionStageManager
+from .stage import Stage, StageManager, AsyncStageManager
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -149,9 +149,7 @@ __all__ = [
     "requires_version",
     "Stage",
     "StageManager",
-    "TransactionStageManager",
     "AsyncStageManager",
-    "AsyncTransactionStageManager",
     # SQLAlchemy extensions
     "VectorType",
     "Vectorf32",

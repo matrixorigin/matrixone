@@ -117,7 +117,7 @@ class Session(SQLAlchemySession):
         # These are defined in their respective modules
         from .metadata import TransactionMetadataManager
         from .load_data import LoadDataManager
-        from .stage import TransactionStageManager
+        from .stage import StageManager
         from .pitr import PitrManager
         from .pubsub import PubSubManager
         from .restore import RestoreManager
@@ -135,7 +135,7 @@ class Session(SQLAlchemySession):
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         self.metadata = TransactionMetadataManager(client, self)
         self.load_data = LoadDataManager(client, executor=self)
-        self.stage = TransactionStageManager(self)
+        self.stage = StageManager(client, executor=self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
@@ -515,7 +515,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         from .pubsub import AsyncPubSubManager
         from .account import AsyncAccountManager
         from .load_data import AsyncLoadDataManager
-        from .stage import AsyncTransactionStageManager
+        from .stage import AsyncStageManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -528,7 +528,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         self.load_data = AsyncLoadDataManager(client, executor=self)
-        self.stage = AsyncTransactionStageManager(self)
+        self.stage = AsyncStageManager(client, executor=self)
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """

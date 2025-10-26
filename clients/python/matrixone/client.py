@@ -34,7 +34,7 @@ from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
 from .load_data import LoadDataManager
-from .stage import StageManager, TransactionStageManager
+from .stage import StageManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager, TransactionMetadataManager
 from .moctl import MoCtlManager
@@ -3063,7 +3063,7 @@ class Session(SQLAlchemySession):
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         self.metadata = TransactionMetadataManager(client, self)
         self.load_data = LoadDataManager(client, executor=self)
-        self.stage = TransactionStageManager(self)
+        self.stage = StageManager(client, executor=self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
