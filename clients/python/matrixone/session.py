@@ -111,8 +111,8 @@ class Session(SQLAlchemySession):
 
         client_module = sys.modules.get('matrixone.client')
         if client_module:
-            TransactionVectorIndexManager = getattr(client_module, 'TransactionVectorIndexManager')
-            TransactionFulltextIndexManager = getattr(client_module, 'TransactionFulltextIndexManager')
+            VectorManager = getattr(client_module, 'VectorManager')
+            FulltextIndexManager = getattr(client_module, 'FulltextIndexManager')
 
         # These are defined in their respective modules
         from .metadata import MetadataManager
@@ -131,8 +131,8 @@ class Session(SQLAlchemySession):
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)
         self.account = AccountManager(client, executor=self)
-        self.vector_ops = TransactionVectorIndexManager(client, self)
-        self.fulltext_index = TransactionFulltextIndexManager(client, self)
+        self.vector_ops = VectorManager(client, executor=self)
+        self.fulltext_index = FulltextIndexManager(client, executor=self)
         self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
@@ -500,12 +500,10 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         # Import manager classes dynamically to avoid circular imports
         # Some are defined in async_client.py after the AsyncSession class
-        import sys
 
-        async_client_module = sys.modules.get('matrixone.async_client')
-        if async_client_module:
-            AsyncTransactionVectorIndexManager = getattr(async_client_module, 'AsyncTransactionVectorIndexManager')
-            AsyncTransactionFulltextIndexManager = getattr(async_client_module, 'AsyncTransactionFulltextIndexManager')
+        # Import async vector and fulltext managers
+        from .client import AsyncVectorManager
+        from .async_client import AsyncTransactionFulltextIndexManager
 
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
@@ -526,7 +524,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.pitr = AsyncPitrManager(client, executor=self)
         self.pubsub = AsyncPubSubManager(client, executor=self)
         self.account = AsyncAccountManager(client, executor=self)
-        self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
+        self.vector_ops = AsyncVectorManager(client, executor=self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
         self.metadata = AsyncMetadataManager(client, executor=self)
         self.load_data = AsyncLoadDataManager(client, executor=self)

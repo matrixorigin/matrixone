@@ -68,8 +68,8 @@ class TestModelSupport:
         self.client._connected = True
 
         # Create proper mock managers
-        from matrixone.client import VectorManager, FulltextIndexManager
-        from matrixone.async_client import AsyncVectorManager, AsyncFulltextIndexManager
+        from matrixone.client import VectorManager, FulltextIndexManager, AsyncVectorManager
+        from matrixone.async_client import AsyncFulltextIndexManager
 
         self.client._vector = VectorManager(self.client)
         self.client._fulltext_index = FulltextIndexManager(self.client)

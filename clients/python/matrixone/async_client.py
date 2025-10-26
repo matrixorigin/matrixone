@@ -36,7 +36,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from .account import AsyncAccountManager
 from .metadata import AsyncMetadataManager
 from .session import AsyncSession
-from .async_vector_index_manager import AsyncVectorManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .load_data import AsyncLoadDataManager
@@ -1040,7 +1039,7 @@ class AsyncClient(BaseMatrixOneClient):
     def _initialize_vector_managers(self) -> None:
         """Initialize vector managers after successful connection"""
         try:
-            from .async_vector_index_manager import AsyncVectorManager
+            from .client import AsyncVectorManager
 
             self._vector = AsyncVectorManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)
@@ -2136,138 +2135,3 @@ class AsyncClient(BaseMatrixOneClient):
         if self._stage is None:
             self._stage = AsyncStageManager(self)
         return self._stage
-
-
-class AsyncTransactionVectorIndexManager(AsyncVectorManager):
-    """Async transaction-aware vector index manager"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """Execute SQL within transaction"""
-        return await self.transaction_wrapper.execute(sql, params)
-
-    async def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
-        """
-            Get IVF index statistics for a table within transaction.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                column_name: Name of the vector column (optional, will be inferred if not provided)
-
-            Returns::
-
-                Dict containing IVF index statistics including:
-                - index_tables: Dictionary mapping table types to table names
-                - distribution: Dictionary containing bucket distribution data
-                - database: Database name
-                - table_name: Table name
-                - column_name: Vector column name
-
-            Raises::
-
-                Exception: If IVF index is not found or if there are errors retrieving stats
-
-            Examples
-
-        # Get stats for a table with vector column within transaction
-                async with client.transaction() as tx:
-                    stats = await tx.vector_ops.get_ivf_stats("my_table", "embedding")
-                    print(f"Index tables: {stats['index_tables']}")
-                    print(f"Distribution: {stats['distribution']}")
-        """
-        from sqlalchemy import text
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Get database name from connection params
-        database = self.client._connection_params.get('database')
-        if not database:
-            raise Exception("No database connection found. Please connect to a database first.")
-
-        # If column_name is not provided, try to infer it
-        if not column_name:
-            # Query the table schema to find vector columns using transaction connection
-            schema_sql = text(
-                f"""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = '{database}'
-                AND table_name = '{table_name}'
-                AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
-            """
-            )
-            result = await self.transaction_wrapper.execute(schema_sql)
-            vector_columns = result.fetchall()
-
-            if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
-            elif len(vector_columns) == 1:
-                column_name = vector_columns[0][0]
-            else:
-                # Multiple vector columns found, raise error asking user to specify
-                column_names = [col[0] for col in vector_columns]
-                raise Exception(
-                    f"Multiple vector columns found in table {table_name}: {column_names}. "
-                    f"Please specify the column_name parameter."
-                )
-
-        # For transaction context, we need to execute queries using transaction_wrapper.execute()
-        # instead of using the connection directly with _execute_with_logging
-
-        # Get IVF index table names
-        sql = (
-            f"SELECT i.algo_table_type, i.index_table_name "
-            f"FROM `mo_catalog`.`mo_indexes` AS i "
-            f"JOIN `mo_catalog`.`mo_tables` AS t ON i.table_id = t.rel_id "
-            f"AND i.column_name = '{column_name}' "
-            f"AND t.relname = '{table_name}' "
-            f"AND t.reldatabase = '{database}' "
-            f"AND i.algo='ivfflat'"
-        )
-        result = await self.transaction_wrapper.execute(sql)
-        rows = result.fetchall()
-        index_tables = {row[0]: row[1] for row in rows}
-
-        if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
-
-        # Get the entries table name for distribution analysis
-        entries_table = index_tables.get('entries')
-        if not entries_table:
-            raise Exception("No entries table found in IVF index")
-
-        # Get bucket distribution
-        sql = (
-            f"SELECT `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`, COUNT(*) AS bucket_size "
-            f"FROM `{database}`.`{entries_table}` "
-            f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
-        )
-        result = await self.transaction_wrapper.execute(sql)
-        rows = result.fetchall()
-        distribution = {
-            'buckets': [{'centroid_id': row[0], 'centroid_version': row[1], 'size': row[2]} for row in rows],
-            'total_buckets': len(rows),
-            'total_vectors': sum(row[2] for row in rows),
-        }
-
-        return {
-            'index_tables': index_tables,
-            'distribution': distribution,
-            'database': database,
-            'table_name': table_name,
-            'column_name': column_name,
-        }
-
-
-try:
-    from sqlalchemy.ext.asyncio import AsyncSession as SQLAlchemyAsyncSession
-except ImportError:
-    SQLAlchemyAsyncSession = None

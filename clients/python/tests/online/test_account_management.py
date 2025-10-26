@@ -134,6 +134,12 @@ class TestAccountManagement:
         admin_name = "test_admin_003"
         password = "test_password_003"
 
+        # Try to drop the account first (in case it exists from previous test runs)
+        try:
+            account_manager.drop_account(account_name)
+        except Exception:
+            pass  # Ignore if account doesn't exist
+
         account = account_manager.create_account(account_name, admin_name, password)
         assert account is not None
 
