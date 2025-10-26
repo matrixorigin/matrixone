@@ -118,7 +118,7 @@ class BaseMetadataManager:
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
 
         Returns:
@@ -466,20 +466,18 @@ class MetadataManager(BaseMetadataManager):
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
             columns: Optional list of columns to return. Can be MetadataColumn enum values or strings.
-                    If None, returns all columns as SQLAlchemy Result. If specified, returns List[MetadataRow].
+                If None, returns all columns as SQLAlchemy Result. If specified, returns List of MetadataRow.
             distinct_object_name: Optional flag to return distinct object names only.
 
         Returns:
+            - If columns is None: SQLAlchemy Result object
+            - If columns is specified: List of MetadataRow
 
-            If columns is None: SQLAlchemy Result object containing metadata scan results
-            If columns is specified: List[MetadataRow] containing structured metadata
+        Example::
 
-        Example:
-
-            ```python
             # Scan all columns of a table (returns SQLAlchemy Result)
             result = client.metadata.scan("test_db", "users")
 
@@ -496,14 +494,15 @@ class MetadataManager(BaseMetadataManager):
             result = client.metadata.scan("test_db", "users", indexname="idx_name")
 
             # Get structured results with specific columns
+            from matrixone.metadata import MetadataColumn
             rows = client.metadata.scan("test_db", "users",
-                                      columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT])
+                                         columns=[MetadataColumn.COL_NAME,
+                                                  MetadataColumn.ROWS_CNT])
             for row in rows:
                 print(f"Column: {row.col_name}, Rows: {row.rows_cnt}")
 
             # Get all structured results
             rows = client.metadata.scan("test_db", "users", columns="*")
-            ```
         """
         # Build SQL query
         sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
@@ -530,7 +529,7 @@ class MetadataManager(BaseMetadataManager):
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
             include_tombstone: Whether to include tombstone statistics
             include_indexes: List of index names to include
@@ -567,7 +566,7 @@ class MetadataManager(BaseMetadataManager):
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
             include_tombstone: Whether to include tombstone statistics
             include_indexes: List of index names to include
@@ -703,17 +702,15 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
             columns: Optional list of columns to return
 
         Returns:
+            SQLAlchemy Result object
 
-            SQLAlchemy Result object containing metadata scan results
+        Example::
 
-        Example:
-
-            ```python
             # Scan all columns of a table
             result = await client.metadata.scan("test_db", "users")
 
@@ -728,7 +725,6 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             # Scan specific index
             result = await client.metadata.scan("test_db", "users", indexname="idx_name")
-            ```
         """
         # Build SQL query
         sql = self._build_metadata_scan_sql(dbname, tablename, is_tombstone, indexname, distinct_object_name)
@@ -755,7 +751,7 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
             include_tombstone: Whether to include tombstone statistics
             include_indexes: List of index names to include
@@ -792,7 +788,7 @@ class AsyncMetadataManager(BaseMetadataManager):
 
             dbname: Database name
             tablename: Table name
-            is_tombstone: Optional tombstone flag (True/False)
+            is_tombstone: Optional tombstone flag (True or False)
             indexname: Optional index name
             include_tombstone: Whether to include tombstone statistics
             include_indexes: List of index names to include

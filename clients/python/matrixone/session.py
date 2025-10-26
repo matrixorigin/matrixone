@@ -315,6 +315,7 @@ class Session(SQLAlchemySession):
         Execute SQL or SQLAlchemy statement within the current session transaction.
 
         This method extends SQLAlchemy's Session.execute() with MatrixOne-specific features:
+
         - Parameter substitution for string SQL using '?' placeholders
         - Integrated query logging with performance tracking
         - Support for both SQLAlchemy statements and raw SQL strings
@@ -335,6 +336,7 @@ class Session(SQLAlchemySession):
                 substituted for '?' placeholders in order. Ignored for SQLAlchemy statements.
 
             **kwargs: Additional keyword arguments:
+
                 - _log_mode (str): Override SQL logging mode for this query only.
                   Options: 'off', 'simple', 'full'. If not specified, uses client's
                   global sql_log_mode setting.

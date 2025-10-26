@@ -209,38 +209,140 @@ client.disconnect()
 > 
 > By default, all features (IVF, HNSW, fulltext) are automatically enabled via `on_connect=[ConnectionAction.ENABLE_ALL]`.
 
+### Transaction Management (Recommended)
+
+Use `client.session()` for atomic transactions. All operations within a session succeed or fail together:
+
+```python
+from matrixone import Client
+from sqlalchemy import select, insert, update, delete
+
+client = Client()
+client.connect(database='test')
+
+# Basic transaction with automatic commit/rollback
+with client.session() as session:
+    # All operations are atomic
+    session.execute(insert(User).values(name='Alice', age=30))
+    session.execute(update(User).where(User.age < 18).values(status='minor'))
+    
+    # Query within transaction
+    stmt = select(User).where(User.age > 25)
+    result = session.execute(stmt)
+    users = result.scalars().all()
+    # Commits automatically on success, rolls back on error
+
+client.disconnect()
+```
+
+**Key Benefits:**
+- ✅ Atomic operations - all succeed or fail together
+- ✅ Automatic rollback on errors
+- ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
+- ✅ Full SQLAlchemy ORM support
+
+### SQLAlchemy ORM Integration
+
+The SDK provides seamless SQLAlchemy integration with ORM-style operations:
+
+```python
+from matrixone import Client
+from matrixone.orm import Base, Column, Integer, String, select, insert, update, delete
+
+# Define ORM models
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(255))
+    age = Column(Integer)
+
+client = Client()
+client.connect(database='test')
+
+# Create table from model
+client.create_table(User)
+
+# ORM-style INSERT
+stmt = insert(User).values(name='John', email='john@example.com', age=30)
+client.execute(stmt)
+
+# ORM-style SELECT
+stmt = select(User).where(User.age > 25)
+result = client.execute(stmt)
+for user in result.scalars():
+    print(f"User: {user.name}, Age: {user.age}")
+
+# ORM-style UPDATE
+stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+client.execute(stmt)
+
+# ORM-style DELETE
+stmt = delete(User).where(User.age < 18)
+client.execute(stmt)
+
+client.disconnect()
+```
+
+**Recommended Practices:**
+- ✅ Use `session()` for multi-statement transactions
+- ✅ Use ORM-style statements (`select`, `insert`, `update`, `delete`)
+- ✅ Use `client.execute()` for single-statement operations
+- ✅ Prefer SQLAlchemy statements over raw SQL strings
+
 ### Async Usage
+
+Full async/await support with `AsyncClient` and async sessions:
 
 ```python
 import asyncio
 from matrixone import AsyncClient
+from sqlalchemy import select, insert, update
 
 async def main():
     client = AsyncClient()
-    await client.connect(
-        host='localhost',
-        port=6001,
-        user='root',
-        password='111',
-        database='test'
-    )
+    await client.connect(database='test')
     
-    result = await client.execute("SELECT 1 as test")
+    # Basic async query
+    result = await client.execute(select(User).where(User.age > 25))
     print(result.fetchall())
+    
+    # Async transaction
+    async with client.session() as session:
+        # All operations are atomic
+        await session.execute(insert(User).values(name='Alice', age=30))
+        await session.execute(update(User).where(User.age < 18).values(status='minor'))
+        
+        # Concurrent queries with asyncio.gather
+        user_result, order_result = await asyncio.gather(
+            session.execute(select(User)),
+            session.execute(select(Order))
+        )
+        # Commits automatically
     
     await client.disconnect()
 
 asyncio.run(main())
 ```
 
+**Async Benefits:**
+- ✅ Non-blocking I/O operations
+- ✅ Concurrent execution with `asyncio.gather()`
+- ✅ Perfect for FastAPI, aiohttp, and async frameworks
+- ✅ Same transaction guarantees as sync version
+
 ### Snapshot Management
 
+Create and manage database snapshots. Use `session()` for atomic snapshot + clone operations:
+
 ```python
-# Create a snapshot
+from matrixone import SnapshotLevel
+
+# Single snapshot operation
 snapshot = client.snapshots.create(
     name='my_snapshot',
-    level='cluster',
-    description='Backup before migration'
+    level=SnapshotLevel.DATABASE,
+    database='production'
 )
 
 # List snapshots
@@ -248,12 +350,22 @@ snapshots = client.snapshots.list()
 for snap in snapshots:
     print(f"Snapshot: {snap.name}, Created: {snap.created_at}")
 
-# Clone database from snapshot
-client.clone.clone_database(
-    target_db='new_database',
-    source_db='old_database',
-    snapshot_name='my_snapshot'
-)
+# Atomic snapshot + clone in transaction
+with client.session() as session:
+    # Create snapshot
+    snapshot = session.snapshots.create(
+        name='daily_backup',
+        level=SnapshotLevel.DATABASE,
+        database='production'
+    )
+    
+    # Clone from snapshot atomically
+    session.clone.clone_database(
+        target_db='production_copy',
+        source_db='production',
+        snapshot_name='daily_backup'
+    )
+    # Both operations commit together
 ```
 
 ### Vector Search
@@ -345,6 +457,51 @@ results = client.query(
         .must_not('basic')
 ).execute()
 ```
+
+### Data Loading with Stages
+
+Load data from external sources using stages. Use `session()` for atomic multi-file loading:
+
+```python
+from matrixone.orm import Base, Column, Integer, String
+
+# Define ORM model
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(255))
+
+# Create S3 stage using simple interface
+client.stage.create_s3(
+    name='data_stage',
+    bucket='my-bucket',
+    path='data/',
+    aws_key_id='your_key',
+    aws_secret_key='your_secret',
+    region='us-east-1'
+)
+
+# Load data from stage using ORM model
+client.load_data.from_stage_csv('data_stage', 'users.csv', User)
+
+# Atomic multi-file loading in transaction
+with client.session() as session:
+    # Create local stage
+    session.stage.create_local('import_stage', '/data/imports/')
+    
+    # Load multiple files atomically
+    session.load_data.from_csv('/data/users.csv', User)
+    session.load_data.from_csv('/data/orders.csv', Order)
+    
+    # All loads commit together
+```
+
+**Stage Benefits:**
+- ✅ Centralized data source configuration
+- ✅ Support for S3, local filesystem, and cloud storage
+- ✅ Automatic path resolution
+- ✅ Transaction support for atomic operations
 
 ### Metadata Analysis
 

@@ -608,18 +608,19 @@ class StageManager(BaseStageManager):
 
         Args:
             name (str): Stage name
-            url (str): Storage location URL
-                Supported protocols:
+            url (str): Storage location URL. Supported protocols:
+
                 - file:///path/to/data/ - Local or network filesystem
                 - s3://bucket/path/ - Amazon S3
                 - stage://parent_stage/subdir/ - Sub-stage
-            credentials (dict, optional): Authentication credentials
-                For S3/cloud storage:
+
+            credentials (dict, optional): Authentication credentials. For S3/cloud storage::
+
                 {
                     'AWS_KEY_ID': 'your_key_id',
                     'AWS_SECRET_KEY': 'your_secret_key',
-                    'AWS_REGION': 'us-east-1',  # optional
-                    'PROVIDER': 'minio'  # optional: minio, aws, etc.
+                    'AWS_REGION': 'us-east-1',
+                    'PROVIDER': 'minio'
                 }
             comment (str, optional): Stage description
             if_not_exists (bool): If True, don't error if stage already exists

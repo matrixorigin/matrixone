@@ -3149,9 +3149,10 @@ class Session(SQLAlchemySession):
             sql_or_stmt: SQL string or SQLAlchemy statement (select, update, delete, insert, text)
             params: Query parameters (only used for string SQL with '?' placeholders)
             **kwargs: Additional arguments passed to parent execute(). Supports special parameter:
-                     _log_mode (str): Override SQL logging mode for this operation only.
-                                     Options: 'off', 'simple', 'full'. Useful for debugging
-                                     specific operations without changing global settings.
+
+                - _log_mode (str): Override SQL logging mode for this operation only.
+                  Options: 'off', 'simple', 'full'. Useful for debugging
+                  specific operations without changing global settings.
 
         Returns:
             sqlalchemy.engine.Result: SQLAlchemy Result object

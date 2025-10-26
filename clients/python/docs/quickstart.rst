@@ -81,23 +81,140 @@ Basic Usage
 
    client.disconnect()
 
-Async Usage with Table Models and Modern API
-----------------------------------------------
+Transaction Management (Recommended)
+------------------------------------
+
+Use ``client.session()`` for atomic transactions. All operations within a session succeed or fail together with automatic commit/rollback.
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select, insert, update, delete
+   from sqlalchemy import Column, Integer, String
+   from matrixone.orm import declarative_base
+
+   client = Client()
+   client.connect(database='test')
+
+   # Define model
+   Base = declarative_base()
+   
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       email = Column(String(255))
+       age = Column(Integer)
+       status = Column(String(20))
+
+   # Create table
+   client.create_table(User)
+
+   # Basic transaction with automatic commit/rollback
+   with client.session() as session:
+       # All operations are atomic
+       session.execute(insert(User).values(name='Alice', email='alice@example.com', age=30))
+       session.execute(update(User).where(User.age < 18).values(status='minor'))
+       
+       # Query within transaction
+       stmt = select(User).where(User.age > 25)
+       result = session.execute(stmt)
+       users = result.scalars().all()
+       # Commits automatically on success, rolls back on error
+
+   # Error handling with automatic rollback
+   try:
+       with client.session() as session:
+           session.execute(insert(User).values(name='Bob', age=25))
+           # This will fail and trigger automatic rollback
+           session.execute(insert(InvalidTable).values(data='test'))
+   except Exception as e:
+       print(f"Transaction failed and rolled back: {e}")
+
+   client.disconnect()
+
+**Key Benefits:**
+
+- ✅ **Atomic operations** - all succeed or fail together
+- ✅ **Automatic rollback** on errors
+- ✅ **Access to all managers** (snapshots, clones, load_data, etc.)
+- ✅ **Full SQLAlchemy ORM** support
+
+SQLAlchemy ORM Style (Recommended)
+-----------------------------------
+
+The SDK provides seamless SQLAlchemy integration with ORM-style operations:
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import Base, Column, Integer, String
+   from sqlalchemy import select, insert, update, delete, and_, or_
+
+   # Define ORM models
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       email = Column(String(255))
+       age = Column(Integer)
+
+   client = Client()
+   client.connect(database='test')
+   client.create_table(User)
+
+   # ORM-style INSERT
+   stmt = insert(User).values(name='John', email='john@example.com', age=30)
+   client.execute(stmt)
+
+   # ORM-style SELECT with WHERE
+   stmt = select(User).where(User.age > 25)
+   result = client.execute(stmt)
+   for user in result.scalars():
+       print(f"User: {user.name}, Age: {user.age}")
+
+   # ORM-style SELECT with complex WHERE
+   stmt = select(User).where(
+       and_(
+           User.age > 18,
+           or_(User.status == 'active', User.status == 'pending')
+       )
+   )
+   result = client.execute(stmt)
+
+   # ORM-style UPDATE
+   stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+   result = client.execute(stmt)
+   print(f"Updated {result.affected_rows} rows")
+
+   # ORM-style DELETE
+   stmt = delete(User).where(User.age < 18)
+   result = client.execute(stmt)
+
+   client.disconnect()
+
+**Recommended Practices:**
+
+- ✅ Use SQLAlchemy statements (``select``, ``insert``, ``update``, ``delete``)
+- ✅ Use ``session()`` for multi-statement transactions
+- ✅ Use ``client.execute()`` for single-statement operations
+- ✅ Prefer SQLAlchemy statements over raw SQL strings
+
+Async Usage with Sessions and ORM
+----------------------------------
+
+Full async/await support with async sessions for non-blocking operations:
 
 .. code-block:: python
 
    import asyncio
    from matrixone import AsyncClient
-   from matrixone.config import get_connection_params
-   from sqlalchemy import Column, Integer, String, DECIMAL
-   from matrixone.orm import declarative_base
+   from matrixone.orm import Base, Column, Integer, String, DECIMAL
+   from sqlalchemy import select, insert, update
 
    async def async_quickstart():
-       # Get connection parameters
-       host, port, user, password, database = get_connection_params()
-       
        client = AsyncClient()
-       await client.connect(host=host, port=port, user=user, password=password, database=database)
+       await client.connect(database='test')
        
        # Define table model
        Base = declarative_base()
@@ -109,41 +226,50 @@ Async Usage with Table Models and Modern API
            price = Column(DECIMAL(10, 2))
            category = Column(String(50))
        
-       # Create table using model
+       # Create table
        await client.create_table(Product)
        
-       # Insert data using async insert API
-       await client.insert("products", {
-           "id": 1,
-           "name": "Laptop",
-           "price": 999.99,
-           "category": "Electronics"
-       })
+       # ORM-style async INSERT
+       stmt = insert(Product).values(
+           id=1, name='Laptop', price=999.99, category='Electronics'
+       )
+       await client.execute(stmt)
        
-       # Simple query using async execute API
-       result = await client.execute("SELECT * FROM products WHERE category = ?", ("Electronics",))
-       rows = result.fetchall()
-       for row in rows:
-           print(f"Product: {row[1]}, Price: ${row[2]}")
+       # ORM-style async SELECT
+       stmt = select(Product).where(Product.category == 'Electronics')
+       result = await client.execute(stmt)
+       for product in result.scalars():
+           print(f"Product: {product.name}, Price: ${product.price}")
        
-       # Complex query using async query builder
-       result = await client.query(Product).select("*").filter(Product.category == "Electronics").execute()
-       rows = result.fetchall()
-       for row in rows:
-           print(f"Product: {row[1]}, Price: ${row[2]}")
+       # Async transaction with session
+       async with client.session() as session:
+           # All operations are atomic
+           await session.execute(
+               insert(Product).values(id=2, name='Phone', price=699.99, category='Electronics')
+           )
+           await session.execute(
+               update(Product).where(Product.id == 1).values(price=899.99)
+           )
+           
+           # Concurrent queries with asyncio.gather
+           product_result, count_result = await asyncio.gather(
+               session.execute(select(Product).where(Product.category == 'Electronics')),
+               session.execute(select(func.count(Product.id)))
+           )
+           # Commits automatically
        
-       # Batch insert using async batch_insert API
-       products = [
-           {"id": 2, "name": "Phone", "price": 699.99, "category": "Electronics"},
-           {"id": 3, "name": "Book", "price": 29.99, "category": "Education"}
-       ]
-       await client.batch_insert(Product, products)
-       
-       # Clean up using async drop_table API
+       # Clean up
        await client.drop_table(Product)
        await client.disconnect()
 
    asyncio.run(async_quickstart())
+
+**Async Advantages:**
+
+- ✅ **Non-blocking operations** - don't block the event loop
+- ✅ **Concurrent execution** with ``asyncio.gather()``
+- ✅ **Perfect for web frameworks** (FastAPI, aiohttp)
+- ✅ **Same transaction guarantees** as sync version
 
 Vector Operations with Table Models
 ------------------------------------

@@ -29,10 +29,18 @@ type safety and extensive documentation.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Advanced Features
+   :caption: Data Management
 
+   stage_guide
+   load_data_guide
+   export_guide
    snapshot_restore_guide
    clone_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Advanced Features
+
    account_guide
    pubsub_guide
    moctl_guide
@@ -77,7 +85,7 @@ Features
 Quick Start
 -----------
 
-**Basic Database Operations:**
+**Basic Connection:**
 
 .. code-block:: python
 
@@ -93,15 +101,61 @@ Quick Start
        database='test'
    )
 
-   # Execute queries
-   result = client.execute("SELECT 1 as test")
-   print(result.fetchall())
-
    # Get backend version (auto-detected)
    version = client.get_backend_version()
    print(f"MatrixOne version: {version}")
 
    client.disconnect()
+
+**Transaction Management (Recommended):**
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import Base, Column, Integer, String
+   from sqlalchemy import select, insert, update, delete
+
+   # Define ORM model
+   Base = declarative_base()
+   
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       email = Column(String(255))
+       age = Column(Integer)
+
+   client = Client()
+   client.connect(database='test')
+   
+   # Create table
+   client.create_table(User)
+
+   # Use session for atomic transactions (recommended)
+   with client.session() as session:
+       # All operations are atomic - succeed or fail together
+       session.execute(insert(User).values(name='Alice', email='alice@example.com', age=30))
+       session.execute(update(User).where(User.age < 18).values(status='minor'))
+       
+       # Query using SQLAlchemy select
+       stmt = select(User).where(User.age > 25)
+       result = session.execute(stmt)
+       for user in result.scalars():
+           print(f"User: {user.name}, Age: {user.age}")
+       
+       # Commits automatically on success, rolls back on error
+
+   client.disconnect()
+
+.. note::
+   **Why use ``session()``?**
+   
+   * ✅ **Atomic operations** - all succeed or fail together
+   * ✅ **Automatic rollback** on errors
+   * ✅ **Access to all managers** (snapshots, clones, load_data, etc.)
+   * ✅ **Full SQLAlchemy ORM** support with type safety
+   
+   See :doc:`quickstart` and :doc:`orm_guide` for detailed examples.
 
 **Vector Search:**
 

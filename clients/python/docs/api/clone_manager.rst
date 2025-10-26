@@ -6,7 +6,7 @@ This section documents the clone management classes that provide database clonin
 CloneManager
 ------------
 
-.. autoclass:: matrixone.snapshot.CloneManager
+.. autoclass:: matrixone.clone.CloneManager
    :members:
    :undoc-members:
    :show-inheritance:
