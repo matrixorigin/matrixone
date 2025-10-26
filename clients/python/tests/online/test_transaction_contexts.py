@@ -973,8 +973,8 @@ class TestAsyncTransactionManagerConsistency:
             from matrixone.snapshot import SnapshotManager
             from matrixone.clone import CloneManager
             from matrixone.restore import RestoreManager
+            from matrixone.pitr import PitrManager
             from matrixone.client import (
-                TransactionPitrManager,
                 TransactionPubSubManager,
                 TransactionAccountManager,
                 TransactionVectorIndexManager,
@@ -984,7 +984,7 @@ class TestAsyncTransactionManagerConsistency:
             assert isinstance(tx.snapshots, SnapshotManager)
             assert isinstance(tx.clone, CloneManager)
             assert isinstance(tx.restore, RestoreManager)
-            assert isinstance(tx.pitr, TransactionPitrManager)
+            assert isinstance(tx.pitr, PitrManager)
             assert isinstance(tx.pubsub, TransactionPubSubManager)
             assert isinstance(tx.account, TransactionAccountManager)
             assert isinstance(tx.vector_ops, TransactionVectorIndexManager)
@@ -1011,8 +1011,8 @@ class TestAsyncTransactionManagerConsistency:
             from matrixone.snapshot import AsyncSnapshotManager
             from matrixone.clone import AsyncCloneManager
             from matrixone.restore import AsyncRestoreManager
+            from matrixone.pitr import AsyncPitrManager
             from matrixone.async_client import (
-                AsyncTransactionPitrManager,
                 AsyncTransactionPubSubManager,
                 AsyncTransactionAccountManager,
                 AsyncTransactionVectorIndexManager,
@@ -1022,7 +1022,7 @@ class TestAsyncTransactionManagerConsistency:
             assert isinstance(tx.snapshots, AsyncSnapshotManager)
             assert isinstance(tx.clone, AsyncCloneManager)
             assert isinstance(tx.restore, AsyncRestoreManager)
-            assert isinstance(tx.pitr, AsyncTransactionPitrManager)
+            assert isinstance(tx.pitr, AsyncPitrManager)
             assert isinstance(tx.pubsub, AsyncTransactionPubSubManager)
             assert isinstance(tx.account, AsyncTransactionAccountManager)
             assert isinstance(tx.vector_ops, AsyncTransactionVectorIndexManager)

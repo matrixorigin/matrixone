@@ -122,9 +122,21 @@ class PitrManager:
     time depending on the amount of data and the target timestamp.
     """
 
-    def __init__(self, client):
-        """Initialize PitrManager with client connection"""
+    def __init__(self, client, executor=None):
+        """
+        Initialize PITR manager.
+
+        Args:
+            client: MatrixOne client instance
+            executor: Optional executor (e.g., session) for executing SQL.
+                     If None, uses client.execute
+        """
         self._client = client
+        self.executor = executor
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self._client
 
     @requires_version(
         min_version="1.0.0",
@@ -159,7 +171,7 @@ class PitrManager:
 
             sql = f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
 
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to create cluster PITR '{name}'") from None
 
@@ -216,7 +228,7 @@ class PitrManager:
                     f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
                 )
 
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to create account PITR '{name}'") from None
 
@@ -257,7 +269,7 @@ class PitrManager:
                 f"RANGE {range_value} '{range_unit}'"
             )
 
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to create database PITR '{name}'") from None
 
@@ -307,7 +319,7 @@ class PitrManager:
                 f"RANGE {range_value} '{range_unit}'"
             )
 
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to create table PITR '{name}'") from None
 
@@ -334,7 +346,7 @@ class PitrManager:
         """
         try:
             sql = f"SHOW PITR WHERE pitr_name = {self._client._escape_string(name)}"
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 raise PitrError(f"PITR '{name}' not found") from None
@@ -384,7 +396,7 @@ class PitrManager:
                 where_clause = ""
 
             sql = f"SHOW PITR{where_clause}"
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 return []
@@ -417,7 +429,7 @@ class PitrManager:
 
             sql = f"ALTER PITR {self._client._escape_identifier(name)} " f"RANGE {range_value} '{range_unit}'"
 
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to alter PITR '{name}'") from None
 
@@ -444,7 +456,7 @@ class PitrManager:
         """
         try:
             sql = f"DROP PITR {self._client._escape_identifier(name)}"
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
             return result is not None
 
         except Exception as e:
@@ -476,33 +488,125 @@ class PitrManager:
         )
 
 
-class TransactionPitrManager(PitrManager):
-    """PitrManager for use within transactions"""
+class AsyncPitrManager:
+    """
+    Asynchronous PITR management for MatrixOne.
 
-    def __init__(self, client, transaction_wrapper):
-        """Initialize TransactionPitrManager with client and transaction wrapper"""
-        super().__init__(client)
-        self._transaction_wrapper = transaction_wrapper
+    Provides the same functionality as PitrManager but with async/await support.
+    Uses the same executor pattern to support both client and session contexts.
+    """
 
-    def create_cluster_pitr(self, name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
-        """Create cluster PITR within transaction"""
-        return self._create_pitr_with_executor("cluster", name, range_value, range_unit)
+    def __init__(self, client, executor=None):
+        """
+        Initialize async PITR manager.
 
-    def create_account_pitr(
+        Args:
+            client: MatrixOne async client instance
+            executor: Optional executor (e.g., async session) for executing SQL.
+                     If None, uses client.execute
+        """
+        self._client = client
+        self.executor = executor
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self._client
+
+    def _validate_range(self, range_value: int, range_unit: str) -> None:
+        """Validate PITR range parameters"""
+        if not (1 <= range_value <= 100):
+            raise PitrError("Range value must be between 1 and 100")
+
+        valid_units = ["h", "d", "mo", "y"]
+        if range_unit not in valid_units:
+            raise PitrError(f"Range unit must be one of: {', '.join(valid_units)}")
+
+    def _row_to_pitr(self, row: tuple) -> Pitr:
+        """Convert database row to Pitr object"""
+        return Pitr(
+            name=row[0],
+            created_time=row[1],
+            modified_time=row[2],
+            level=row[3],
+            account_name=row[4],
+            database_name=row[5],
+            table_name=row[6],
+            range_value=row[7],
+            range_unit=row[8],
+        )
+
+    @requires_version(
+        min_version="1.0.0",
+        feature_name="pitr_cluster_level",
+        description="Cluster-level Point-in-Time Recovery functionality",
+        alternative="Use snapshot restore instead",
+    )
+    async def create_cluster_pitr(self, name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
+        """Create cluster-level PITR asynchronously"""
+        try:
+            self._validate_range(range_value, range_unit)
+
+            sql = f"CREATE PITR {self._client._escape_identifier(name)} FOR CLUSTER RANGE {range_value} '{range_unit}'"
+
+            result = await self._get_executor().execute(sql)
+            if result is None:
+                raise PitrError(f"Failed to create cluster PITR '{name}'")
+
+            return await self.get(name)
+
+        except Exception as e:
+            raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
+
+    async def create_account_pitr(
         self,
         name: str,
         account_name: Optional[str] = None,
         range_value: int = 1,
         range_unit: str = "d",
     ) -> Pitr:
-        """Create account PITR within transaction"""
-        return self._create_pitr_with_executor("account", name, range_value, range_unit, account_name)
+        """Create account-level PITR asynchronously"""
+        try:
+            self._validate_range(range_value, range_unit)
 
-    def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
-        """Create database PITR within transaction"""
-        return self._create_pitr_with_executor("database", name, range_value, range_unit, None, database_name)
+            if account_name:
+                sql = (
+                    f"CREATE PITR {self._client._escape_identifier(name)} "
+                    f"FOR ACCOUNT {self._client._escape_identifier(account_name)} "
+                    f"RANGE {range_value} '{range_unit}'"
+                )
+            else:
+                sql = f"CREATE PITR {self._client._escape_identifier(name)} FOR ACCOUNT RANGE {range_value} '{range_unit}'"
 
-    def create_table_pitr(
+            result = await self._get_executor().execute(sql)
+            if result is None:
+                raise PitrError(f"Failed to create account PITR '{name}'")
+
+            return await self.get(name)
+
+        except Exception as e:
+            raise PitrError(f"Failed to create account PITR '{name}': {e}")
+
+    async def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
+        """Create database-level PITR asynchronously"""
+        try:
+            self._validate_range(range_value, range_unit)
+
+            sql = (
+                f"CREATE PITR {self._client._escape_identifier(name)} "
+                f"FOR DATABASE {self._client._escape_identifier(database_name)} "
+                f"RANGE {range_value} '{range_unit}'"
+            )
+
+            result = await self._get_executor().execute(sql)
+            if result is None:
+                raise PitrError(f"Failed to create database PITR '{name}'")
+
+            return await self.get(name)
+
+        except Exception as e:
+            raise PitrError(f"Failed to create database PITR '{name}': {e}")
+
+    async def create_table_pitr(
         self,
         name: str,
         database_name: str,
@@ -510,87 +614,49 @@ class TransactionPitrManager(PitrManager):
         range_value: int = 1,
         range_unit: str = "d",
     ) -> Pitr:
-        """Create table PITR within transaction"""
-        return self._create_pitr_with_executor("table", name, range_value, range_unit, None, database_name, table_name)
-
-    def _create_pitr_with_executor(
-        self,
-        level: str,
-        name: str,
-        range_value: int,
-        range_unit: str,
-        account_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        table_name: Optional[str] = None,
-    ) -> Pitr:
-        """Create PITR with custom executor (for transaction support)"""
+        """Create table-level PITR asynchronously"""
         try:
             self._validate_range(range_value, range_unit)
 
-            if level == "cluster":
-                sql = (
-                    f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
-                )
-            elif level == "account":
-                if account_name:
-                    sql = (
-                        f"CREATE PITR {self._client._escape_identifier(name)} "
-                        f"FOR ACCOUNT {self._client._escape_identifier(account_name)} "
-                        f"RANGE {range_value} '{range_unit}'"
-                    )
-                else:
-                    sql = (
-                        f"CREATE PITR {self._client._escape_identifier(name)} "
-                        f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
-                    )
-            elif level == "database":
-                sql = (
-                    f"CREATE PITR {self._client._escape_identifier(name)} "
-                    f"FOR DATABASE {self._client._escape_identifier(database_name)} "
-                    f"RANGE {range_value} '{range_unit}'"
-                )
-            elif level == "table":
-                sql = (
-                    f"CREATE PITR {self._client._escape_identifier(name)} "
-                    f"FOR TABLE {self._client._escape_identifier(database_name)} "
-                    f"TABLE {self._client._escape_identifier(table_name)} "
-                    f"RANGE {range_value} '{range_unit}'"
-                )
-            else:
-                raise PitrError(f"Invalid PITR level: {level}") from None
+            sql = (
+                f"CREATE PITR {self._client._escape_identifier(name)} "
+                f"FOR TABLE {self._client._escape_identifier(database_name)} "
+                f"{self._client._escape_identifier(table_name)} "
+                f"RANGE {range_value} '{range_unit}'"
+            )
 
-            result = self._transaction_wrapper.execute(sql)
+            result = await self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create {level} PITR '{name}'") from None
+                raise PitrError(f"Failed to create table PITR '{name}'")
 
-            return self.get(name)
+            return await self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to create {level} PITR '{name}': {e}") from None
+            raise PitrError(f"Failed to create table PITR '{name}': {e}")
 
-    def get(self, name: str) -> Pitr:
-        """Get PITR within transaction"""
+    async def get(self, name: str) -> Pitr:
+        """Get PITR by name asynchronously"""
         try:
             sql = f"SHOW PITR WHERE pitr_name = {self._client._escape_string(name)}"
-            result = self._transaction_wrapper.execute(sql)
+            result = await self._get_executor().execute(sql)
 
             if not result or not result.rows:
-                raise PitrError(f"PITR '{name}' not found") from None
+                raise PitrError(f"PITR '{name}' not found")
 
             row = result.rows[0]
             return self._row_to_pitr(row)
 
         except Exception as e:
-            raise PitrError(f"Failed to get PITR '{name}': {e}") from None
+            raise PitrError(f"Failed to get PITR '{name}': {e}")
 
-    def list(
+    async def list(
         self,
         level: Optional[str] = None,
         account_name: Optional[str] = None,
         database_name: Optional[str] = None,
         table_name: Optional[str] = None,
     ) -> List[Pitr]:
-        """List PITRs within transaction"""
+        """List PITRs asynchronously"""
         try:
             conditions = []
 
@@ -609,7 +675,7 @@ class TransactionPitrManager(PitrManager):
                 where_clause = ""
 
             sql = f"SHOW PITR{where_clause}"
-            result = self._transaction_wrapper.execute(sql)
+            result = await self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 return []
@@ -617,30 +683,30 @@ class TransactionPitrManager(PitrManager):
             return [self._row_to_pitr(row) for row in result.rows]
 
         except Exception as e:
-            raise PitrError(f"Failed to list PITRs: {e}") from None
+            raise PitrError(f"Failed to list PITRs: {e}")
 
-    def alter(self, name: str, range_value: int, range_unit: str) -> Pitr:
-        """Alter PITR within transaction"""
+    async def alter(self, name: str, range_value: int, range_unit: str) -> Pitr:
+        """Alter PITR configuration asynchronously"""
         try:
             self._validate_range(range_value, range_unit)
 
-            sql = f"ALTER PITR {self._client._escape_identifier(name)} " f"RANGE {range_value} '{range_unit}'"
+            sql = f"ALTER PITR {self._client._escape_identifier(name)} RANGE {range_value} '{range_unit}'"
 
-            result = self._transaction_wrapper.execute(sql)
+            result = await self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to alter PITR '{name}'") from None
+                raise PitrError(f"Failed to alter PITR '{name}'")
 
-            return self.get(name)
+            return await self.get(name)
 
         except Exception as e:
-            raise PitrError(f"Failed to alter PITR '{name}': {e}") from None
+            raise PitrError(f"Failed to alter PITR '{name}': {e}")
 
-    def delete(self, name: str) -> bool:
-        """Delete PITR within transaction"""
+    async def delete(self, name: str) -> bool:
+        """Delete PITR asynchronously"""
         try:
             sql = f"DROP PITR {self._client._escape_identifier(name)}"
-            result = self._transaction_wrapper.execute(sql)
+            result = await self._get_executor().execute(sql)
             return result is not None
 
         except Exception as e:
-            raise PitrError(f"Failed to delete PITR '{name}': {e}") from None
+            raise PitrError(f"Failed to delete PITR '{name}': {e}")

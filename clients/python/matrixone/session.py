@@ -118,7 +118,7 @@ class Session(SQLAlchemySession):
         from .metadata import TransactionMetadataManager
         from .load_data import TransactionLoadDataManager
         from .stage import TransactionStageManager
-        from .pitr import TransactionPitrManager
+        from .pitr import PitrManager
         from .pubsub import TransactionPubSubManager
         from .restore import RestoreManager
         from .account import TransactionAccountManager
@@ -128,7 +128,7 @@ class Session(SQLAlchemySession):
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
-        self.pitr = TransactionPitrManager(client, self)
+        self.pitr = PitrManager(client, executor=self)
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
@@ -506,7 +506,6 @@ class AsyncSession(SQLAlchemyAsyncSession):
         if async_client_module:
             AsyncTransactionVectorIndexManager = getattr(async_client_module, 'AsyncTransactionVectorIndexManager')
             AsyncTransactionFulltextIndexManager = getattr(async_client_module, 'AsyncTransactionFulltextIndexManager')
-            AsyncTransactionPitrManager = getattr(async_client_module, 'AsyncTransactionPitrManager')
             AsyncTransactionPubSubManager = getattr(async_client_module, 'AsyncTransactionPubSubManager')
             AsyncTransactionAccountManager = getattr(async_client_module, 'AsyncTransactionAccountManager')
 
@@ -514,6 +513,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         from .snapshot import AsyncSnapshotManager
         from .clone import AsyncCloneManager
         from .restore import AsyncRestoreManager
+        from .pitr import AsyncPitrManager
         from .load_data import AsyncTransactionLoadDataManager
         from .stage import AsyncTransactionStageManager
 
@@ -522,7 +522,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.snapshots = AsyncSnapshotManager(client, executor=self)
         self.clone = AsyncCloneManager(client, executor=self)
         self.restore = AsyncRestoreManager(client, executor=self)
-        self.pitr = AsyncTransactionPitrManager(client, self)
+        self.pitr = AsyncPitrManager(client, executor=self)
         self.pubsub = AsyncTransactionPubSubManager(client, self)
         self.account = AsyncTransactionAccountManager(self)
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
