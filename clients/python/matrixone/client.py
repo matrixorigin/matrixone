@@ -39,7 +39,7 @@ from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager, TransactionMetadataManager
 from .moctl import MoCtlManager
 from .pitr import PitrManager
-from .pubsub import PubSubManager, TransactionPubSubManager
+from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
 from .clone import CloneManager
@@ -3010,7 +3010,7 @@ class Session(SQLAlchemySession):
     - clone: CloneManager for clone operations
     - restore: RestoreManager for restore operations
     - pitr: PitrManager for point-in-time recovery
-    - pubsub: TransactionPubSubManager for pub/sub operations
+    - pubsub: PubSubManager for pub/sub operations
     - account: TransactionAccountManager for account operations
     - vector_ops: TransactionVectorIndexManager for vector operations
     - fulltext_index: TransactionFulltextIndexManager for fulltext operations
@@ -3057,7 +3057,7 @@ class Session(SQLAlchemySession):
         self.clone = CloneManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
-        self.pubsub = TransactionPubSubManager(client, self)
+        self.pubsub = PubSubManager(client, executor=self)
         self.account = TransactionAccountManager(self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)

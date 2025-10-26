@@ -119,7 +119,7 @@ class Session(SQLAlchemySession):
         from .load_data import TransactionLoadDataManager
         from .stage import TransactionStageManager
         from .pitr import PitrManager
-        from .pubsub import TransactionPubSubManager
+        from .pubsub import PubSubManager
         from .restore import RestoreManager
         from .account import TransactionAccountManager
 
@@ -129,7 +129,7 @@ class Session(SQLAlchemySession):
         self.clone = CloneManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
-        self.pubsub = TransactionPubSubManager(client, self)
+        self.pubsub = PubSubManager(client, executor=self)
         self.account = TransactionAccountManager(self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
@@ -506,7 +506,6 @@ class AsyncSession(SQLAlchemyAsyncSession):
         if async_client_module:
             AsyncTransactionVectorIndexManager = getattr(async_client_module, 'AsyncTransactionVectorIndexManager')
             AsyncTransactionFulltextIndexManager = getattr(async_client_module, 'AsyncTransactionFulltextIndexManager')
-            AsyncTransactionPubSubManager = getattr(async_client_module, 'AsyncTransactionPubSubManager')
             AsyncTransactionAccountManager = getattr(async_client_module, 'AsyncTransactionAccountManager')
 
         # These are defined in their respective modules
@@ -514,6 +513,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         from .clone import AsyncCloneManager
         from .restore import AsyncRestoreManager
         from .pitr import AsyncPitrManager
+        from .pubsub import AsyncPubSubManager
         from .load_data import AsyncTransactionLoadDataManager
         from .stage import AsyncTransactionStageManager
 
@@ -523,7 +523,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.clone = AsyncCloneManager(client, executor=self)
         self.restore = AsyncRestoreManager(client, executor=self)
         self.pitr = AsyncPitrManager(client, executor=self)
-        self.pubsub = AsyncTransactionPubSubManager(client, self)
+        self.pubsub = AsyncPubSubManager(client, executor=self)
         self.account = AsyncTransactionAccountManager(self)
         self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
         self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)

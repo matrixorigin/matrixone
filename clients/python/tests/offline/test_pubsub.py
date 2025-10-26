@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 from matrixone import Client, AsyncClient, PubSubError, Publication, Subscription
 from matrixone.exceptions import PubSubError as PubSubErrorClass
-from matrixone.pubsub import TransactionPubSubManager
+from matrixone.pubsub import PubSubManager, AsyncPubSubManager
 
 
 class TestPubSubManager(unittest.TestCase):
@@ -487,7 +487,7 @@ class TestAsyncPubSubManager(unittest.IsolatedAsyncioTestCase):
         self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
 
 
-class TestTransactionPubSubManager(unittest.TestCase):
+class TestPubSubManagerWithExecutor(unittest.TestCase):
     """Test cases for TransactionPubSubManager"""
 
     def setUp(self):
@@ -496,42 +496,44 @@ class TestTransactionPubSubManager(unittest.TestCase):
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        self.transaction_wrapper = Mock()
-        self.transaction_pubsub_manager = TransactionPubSubManager(self.client, self.transaction_wrapper)
+        # Create mock executor (session)
+        self.session = Mock()
+        # Create PubSubManager with executor
+        self.pubsub_manager = PubSubManager(self.client, executor=self.session)
 
     def test_transaction_create_database_publication(self):
         """Test create database publication within transaction"""
         # Mock successful execution
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test create database publication
-        pub = self.transaction_pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
+        pub = self.pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
 
         # Verify
         self.assertIsInstance(pub, Publication)
         self.assertEqual(pub.name, "db_pub1")
         # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`")
+        self.assertEqual(self.session.execute.call_count, 2)
+        self.session.execute.assert_any_call("CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`")
 
     def test_transaction_create_table_publication(self):
         """Test create table publication within transaction"""
         # Mock successful execution
         mock_result = Mock()
         mock_result.rows = [('table_pub1', 'sys', 'central_db', 'products', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test create table publication
-        pub = self.transaction_pubsub_manager.create_table_publication("table_pub1", "central_db", "products", "acc1")
+        pub = self.pubsub_manager.create_table_publication("table_pub1", "central_db", "products", "acc1")
 
         # Verify
         self.assertIsInstance(pub, Publication)
         self.assertEqual(pub.name, "table_pub1")
         # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call(
+        self.assertEqual(self.session.execute.call_count, 2)
+        self.session.execute.assert_any_call(
             "CREATE PUBLICATION `table_pub1` DATABASE `central_db` TABLE `products` ACCOUNT `acc1`"
         )
 
@@ -540,15 +542,16 @@ class TestTransactionPubSubManager(unittest.TestCase):
         # Mock successful execution
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test get publication
-        pub = self.transaction_pubsub_manager.get_publication("db_pub1")
+        pub = self.pubsub_manager.get_publication("db_pub1")
 
         # Verify
         self.assertIsInstance(pub, Publication)
         self.assertEqual(pub.name, "db_pub1")
-        self.transaction_wrapper.execute.assert_called_with("SHOW PUBLICATIONS WHERE pub_name = 'db_pub1'")
+        # get_publication uses SHOW PUBLICATIONS and filters
+        self.session.execute.assert_called_with("SHOW PUBLICATIONS")
 
     def test_transaction_list_publications(self):
         """Test list publications within transaction"""
@@ -558,45 +561,45 @@ class TestTransactionPubSubManager(unittest.TestCase):
             ('db_pub1', 'sys', 'central_db', '*', None, datetime.now()),
             ('table_pub1', 'sys', 'central_db', 'products', None, datetime.now()),
         ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test list publications
-        pubs = self.transaction_pubsub_manager.list_publications()
+        pubs = self.pubsub_manager.list_publications()
 
         # Verify
         self.assertEqual(len(pubs), 2)
         self.assertIsInstance(pubs[0], Publication)
         self.assertIsInstance(pubs[1], Publication)
-        self.transaction_wrapper.execute.assert_called_with("SHOW PUBLICATIONS")
+        self.session.execute.assert_called_with("SHOW PUBLICATIONS")
 
     def test_transaction_alter_publication(self):
         """Test alter publication within transaction"""
         # Mock successful execution
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test alter publication
-        pub = self.transaction_pubsub_manager.alter_publication("db_pub1", account="acc2")
+        pub = self.pubsub_manager.alter_publication("db_pub1", account="acc2")
 
         # Verify
         self.assertIsInstance(pub, Publication)
         # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("ALTER PUBLICATION `db_pub1` ACCOUNT `acc2`")
+        self.assertEqual(self.session.execute.call_count, 2)
+        self.session.execute.assert_any_call("ALTER PUBLICATION `db_pub1` ACCOUNT `acc2`")
 
     def test_transaction_drop_publication(self):
         """Test drop publication within transaction"""
         # Mock successful execution
         mock_result = Mock()
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test drop publication
-        result = self.transaction_pubsub_manager.drop_publication("db_pub1")
+        result = self.pubsub_manager.drop_publication("db_pub1")
 
         # Verify
         self.assertTrue(result)
-        self.transaction_wrapper.execute.assert_called_with("DROP PUBLICATION `db_pub1`")
+        self.session.execute.assert_called_with("DROP PUBLICATION `db_pub1`")
 
     def test_transaction_create_subscription(self):
         """Test create subscription within transaction"""
@@ -615,17 +618,17 @@ class TestTransactionPubSubManager(unittest.TestCase):
                 0,
             )
         ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test create subscription
-        sub = self.transaction_pubsub_manager.create_subscription("sub_db1", "db_pub1", "sys")
+        sub = self.pubsub_manager.create_subscription("sub_db1", "db_pub1", "sys")
 
         # Verify
         self.assertIsInstance(sub, Subscription)
         self.assertEqual(sub.sub_name, "sub_db1")
         # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE DATABASE `sub_db1` FROM `sys` PUBLICATION `db_pub1`")
+        self.assertEqual(self.session.execute.call_count, 2)
+        self.session.execute.assert_any_call("CREATE DATABASE `sub_db1` FROM `sys` PUBLICATION `db_pub1`")
 
     def test_transaction_get_subscription(self):
         """Test get subscription within transaction"""
@@ -644,15 +647,15 @@ class TestTransactionPubSubManager(unittest.TestCase):
                 0,
             )
         ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test get subscription
-        sub = self.transaction_pubsub_manager.get_subscription("sub_db1")
+        sub = self.pubsub_manager.get_subscription("sub_db1")
 
         # Verify
         self.assertIsInstance(sub, Subscription)
         self.assertEqual(sub.sub_name, "sub_db1")
-        self.transaction_wrapper.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+        self.session.execute.assert_called_with("SHOW SUBSCRIPTIONS")
 
     def test_transaction_list_subscriptions(self):
         """Test list subscriptions within transaction"""
@@ -682,16 +685,16 @@ class TestTransactionPubSubManager(unittest.TestCase):
                 0,
             ),
         ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
         # Test list subscriptions
-        subs = self.transaction_pubsub_manager.list_subscriptions()
+        subs = self.pubsub_manager.list_subscriptions()
 
         # Verify
         self.assertEqual(len(subs), 2)
         self.assertIsInstance(subs[0], Subscription)
         self.assertIsInstance(subs[1], Subscription)
-        self.transaction_wrapper.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+        self.session.execute.assert_called_with("SHOW SUBSCRIPTIONS")
 
 
 if __name__ == '__main__':
@@ -702,7 +705,7 @@ if __name__ == '__main__':
     # Add test cases
     suite.addTests(loader.loadTestsFromTestCase(TestPubSubManager))
     suite.addTests(loader.loadTestsFromTestCase(TestAsyncPubSubManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestTransactionPubSubManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestPubSubManagerWithExecutor))
 
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)
