@@ -183,12 +183,34 @@ class BaseAccountManager:
         return "SELECT CURRENT_USER()"
 
     # Helper methods
-    def _get_current_account(self) -> str:
-        """Get current account name"""
-        try:
-            return "sys"  # Default account
-        except Exception:
-            return "sys"
+    def _show_accounts_sql(self) -> str:
+        """Build SQL to show accounts"""
+        return "SHOW ACCOUNTS"
+
+    def _get_current_account_from_results(self, accounts: List[tuple]) -> str:
+        """
+        Determine current account from SHOW ACCOUNTS results.
+
+        Logic:
+        - sys account: SHOW ACCOUNTS returns all accounts
+        - Normal account: SHOW ACCOUNTS returns only the current account
+
+        Args:
+            accounts: List of account rows from SHOW ACCOUNTS
+
+        Returns:
+            Current account name
+        """
+        if not accounts:
+            return "sys"  # Default
+
+        # If only one account is returned, that's the current account
+        if len(accounts) == 1:
+            return accounts[0][0]  # First column is account name
+
+        # If multiple accounts are returned, we're in sys account
+        # (sys can see all accounts)
+        return "sys"
 
     def _row_to_account(self, row: tuple) -> Account:
         """Convert database row to Account object"""
@@ -434,8 +456,12 @@ class AccountManager(BaseAccountManager):
             sql = self._build_create_user_sql(user_name, password, comment)
             self._get_executor().execute(sql)
 
-            # Return a User object with current account context
-            current_account = self._get_current_account()
+            # Get current account by executing SHOW ACCOUNTS
+            show_sql = self._show_accounts_sql()
+            result = self._get_executor().execute(show_sql)
+            accounts = result.rows if result and hasattr(result, 'rows') else []
+            current_account = self._get_current_account_from_results(accounts)
+
             return User(
                 name=user_name,
                 host="%",  # Default host
@@ -568,8 +594,21 @@ class AccountManager(BaseAccountManager):
         This method returns the current user's information.
         """
         try:
-            current_user = self.get_current_user()
-            return [current_user]
+            sql = self._build_list_users_sql()
+            result = self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                return []
+
+            current_user_name = result.rows[0][0]
+
+            # Get current account by executing SHOW ACCOUNTS
+            show_sql = self._show_accounts_sql()
+            show_result = self._get_executor().execute(show_sql)
+            accounts = show_result.rows if show_result and hasattr(show_result, 'rows') else []
+            current_account = self._get_current_account_from_results(accounts)
+
+            return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 
         except Exception as e:
             raise AccountError(f"Failed to list users: {e}") from None
@@ -886,8 +925,12 @@ class AsyncAccountManager(BaseAccountManager):
             sql = self._build_create_user_sql(user_name, password, comment)
             await self._get_executor().execute(sql)
 
-            # Return a User object with current account context
-            current_account = self._get_current_account()
+            # Get current account by executing SHOW ACCOUNTS
+            show_sql = self._show_accounts_sql()
+            result = await self._get_executor().execute(show_sql)
+            accounts = result.rows if result and hasattr(result, 'rows') else []
+            current_account = self._get_current_account_from_results(accounts)
+
             return User(
                 name=user_name,
                 host="%",
@@ -910,7 +953,13 @@ class AsyncAccountManager(BaseAccountManager):
                 return []
 
             current_user_name = result.rows[0][0]
-            current_account = self._get_current_account()
+
+            # Get current account by executing SHOW ACCOUNTS
+            show_sql = self._show_accounts_sql()
+            show_result = await self._get_executor().execute(show_sql)
+            accounts = show_result.rows if show_result and hasattr(show_result, 'rows') else []
+            current_account = self._get_current_account_from_results(accounts)
+
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 
         except Exception as e:

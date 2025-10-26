@@ -49,13 +49,13 @@ class TestAccountSQLConsistency(unittest.TestCase):
 
         try:
             self.sync_manager.create_account("test_acc", "admin", "pass123", "comment")
-        except:
+        except Exception:
             pass
         sync_sql = self.client.execute.call_args_list[0][0][0]  # First call
 
         try:
             self.session_manager.create_account("test_acc", "admin", "pass123", "comment")
-        except:
+        except Exception:
             pass
         session_sql = self.session.execute.call_args_list[0][0][0]  # First call
 
@@ -102,13 +102,13 @@ class TestAccountSQLConsistency(unittest.TestCase):
 
         try:
             self.sync_manager.get_account("test_acc")
-        except:
+        except Exception:
             pass
         sync_sql = self.client.execute.call_args[0][0]
 
         try:
             self.session_manager.get_account("test_acc")
-        except:
+        except Exception:
             pass
         session_sql = self.session.execute.call_args[0][0]
 
@@ -133,14 +133,32 @@ class TestAccountSQLConsistency(unittest.TestCase):
 
     def test_create_user_sql_consistency(self):
         """Test that create_user generates identical SQL"""
-        self.client.execute = Mock()
-        self.session.execute = Mock()
+
+        # Mock to return proper results for both CREATE USER and SHOW ACCOUNTS
+        def mock_sync_execute(sql):
+            result = Mock()
+            if sql.startswith('SHOW ACCOUNTS'):
+                result.rows = [('sys', 'root', None, 'OPEN', None)]
+            else:
+                result.rows = []
+            return result
+
+        def mock_session_execute(sql):
+            result = Mock()
+            if sql.startswith('SHOW ACCOUNTS'):
+                result.rows = [('sys', 'root', None, 'OPEN', None)]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = Mock(side_effect=mock_sync_execute)
+        self.session.execute = Mock(side_effect=mock_session_execute)
 
         self.sync_manager.create_user("test_user", "pass123")
-        sync_sql = self.client.execute.call_args[0][0]
+        sync_sql = self.client.execute.call_args_list[0][0][0]  # First call is CREATE USER
 
         self.session_manager.create_user("test_user", "pass123")
-        session_sql = self.session.execute.call_args[0][0]
+        session_sql = self.session.execute.call_args_list[0][0][0]  # First call is CREATE USER
 
         expected_sql = "CREATE USER `test_user` IDENTIFIED BY 'pass123'"
         self.assertEqual(sync_sql, expected_sql)
@@ -199,13 +217,13 @@ class TestAsyncAccountSQLConsistency(unittest.IsolatedAsyncioTestCase):
 
         try:
             await self.async_manager.create_account("test_acc", "admin", "pass123", "comment")
-        except:
+        except Exception:
             pass
         async_sql = self.client.execute.call_args_list[0][0][0]  # First call
 
         try:
             await self.async_session_manager.create_account("test_acc", "admin", "pass123", "comment")
-        except:
+        except Exception:
             pass
         async_session_sql = self.session.execute.call_args_list[0][0][0]  # First call
 
@@ -230,14 +248,32 @@ class TestAsyncAccountSQLConsistency(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_create_user_sql_consistency(self):
         """Test async create_user SQL"""
-        self.client.execute = AsyncMock()
-        self.session.execute = AsyncMock()
+
+        # Mock to return proper results for both CREATE USER and SHOW ACCOUNTS
+        async def mock_async_execute(sql):
+            result = AsyncMock()
+            if sql.startswith('SHOW ACCOUNTS'):
+                result.rows = [('sys', 'root', None, 'OPEN', None)]
+            else:
+                result.rows = []
+            return result
+
+        async def mock_session_execute(sql):
+            result = AsyncMock()
+            if sql.startswith('SHOW ACCOUNTS'):
+                result.rows = [('sys', 'root', None, 'OPEN', None)]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = AsyncMock(side_effect=mock_async_execute)
+        self.session.execute = AsyncMock(side_effect=mock_session_execute)
 
         await self.async_manager.create_user("test_user", "pass123")
-        async_sql = self.client.execute.call_args[0][0]
+        async_sql = self.client.execute.call_args_list[0][0][0]  # First call is CREATE USER
 
         await self.async_session_manager.create_user("test_user", "pass123")
-        async_session_sql = self.session.execute.call_args[0][0]
+        async_session_sql = self.session.execute.call_args_list[0][0][0]  # First call is CREATE USER
 
         expected_sql = "CREATE USER `test_user` IDENTIFIED BY 'pass123'"
         self.assertEqual(async_sql, expected_sql)
@@ -490,21 +526,23 @@ class TestAccountManager(unittest.TestCase):
 
     def test_create_user_success(self):
         """Test successful user creation"""
-        # Mock successful execution - first call for CREATE, second call for get_user
-        mock_result = Mock()
-        mock_result.rows = [
-            (
-                'test_user',
-                'localhost',
-                'test_account',
-                datetime.now(),
-                'OPEN',
-                'Test user',
-                None,
-                None,
-            )
-        ]
-        self.client.execute = Mock(return_value=mock_result)
+
+        # Mock successful execution
+        # First call: CREATE USER (no result needed)
+        # Second call: SHOW ACCOUNTS (returns multiple accounts for sys)
+        def mock_execute(sql):
+            result = Mock()
+            if sql.startswith('SHOW ACCOUNTS'):
+                # Multiple accounts means sys account
+                result.rows = [
+                    ('sys', 'root', datetime.now(), 'OPEN', 'System account'),
+                    ('test_account', 'admin', datetime.now(), 'OPEN', 'Test account'),
+                ]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = Mock(side_effect=mock_execute)
 
         # Test user creation
         user = self.account_manager.create_user(user_name="test_user", password="password123", comment="Test user")
@@ -516,8 +554,8 @@ class TestAccountManager(unittest.TestCase):
         self.assertEqual(user.account, "sys")
         self.assertEqual(user.comment, "Test user")
 
-        # Verify SQL was called correctly - check the first call (CREATE USER)
-        self.assertEqual(self.client.execute.call_count, 1)  # CREATE only
+        # Verify SQL was called correctly - CREATE USER + SHOW ACCOUNTS
+        self.assertEqual(self.client.execute.call_count, 2)
         first_call_args = self.client.execute.call_args_list[0][0][0]
         self.assertIn("CREATE USER", first_call_args)
         self.assertIn("test_user", first_call_args)
@@ -601,21 +639,25 @@ class TestAccountManager(unittest.TestCase):
 
     def test_get_user_success(self):
         """Test successful user retrieval"""
+
         # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            (
-                'test_user',
-                'localhost',
-                'test_account',
-                datetime.now(),
-                'OPEN',
-                'Test user',
-                None,
-                None,
-            )
-        ]
-        self.client.execute = Mock(return_value=mock_result)
+        # First call: SELECT CURRENT_USER()
+        # Second call: SHOW ACCOUNTS (returns multiple accounts for sys)
+        def mock_execute(sql):
+            result = Mock()
+            if sql.startswith('SELECT CURRENT_USER'):
+                result.rows = [['test_user']]
+            elif sql.startswith('SHOW ACCOUNTS'):
+                # Multiple accounts means sys account
+                result.rows = [
+                    ('sys', 'root', datetime.now(), 'OPEN', 'System account'),
+                    ('test_account', 'admin', datetime.now(), 'OPEN', 'Test account'),
+                ]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = Mock(side_effect=mock_execute)
 
         # Test user retrieval (using list_users instead of get_user)
         users = self.account_manager.list_users()
@@ -629,21 +671,25 @@ class TestAccountManager(unittest.TestCase):
 
     def test_list_users_success(self):
         """Test successful user listing"""
-        # Mock successful execution (list_users only returns current user)
-        mock_result = Mock()
-        mock_result.rows = [
-            (
-                'current_user',
-                '%',
-                'current_account',
-                datetime.now(),
-                'OPEN',
-                'Current user',
-                None,
-                None,
-            )
-        ]
-        self.client.execute = Mock(return_value=mock_result)
+
+        # Mock successful execution
+        # First call: SELECT CURRENT_USER() (returns username)
+        # Second call: SHOW ACCOUNTS (returns multiple accounts for sys)
+        def mock_execute(sql):
+            result = Mock()
+            if sql.startswith('SELECT CURRENT_USER'):
+                result.rows = [['current_user']]
+            elif sql.startswith('SHOW ACCOUNTS'):
+                # Multiple accounts means sys account
+                result.rows = [
+                    ('sys', 'root', datetime.now(), 'OPEN', 'System account'),
+                    ('test_account', 'admin', datetime.now(), 'OPEN', 'Test account'),
+                ]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = Mock(side_effect=mock_execute)
 
         # Test user listing
         users = self.account_manager.list_users()
@@ -790,21 +836,23 @@ class TestAsyncAccountManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_create_user_success(self):
         """Test successful async user creation"""
+
         # Mock successful execution
-        mock_result = AsyncMock()
-        mock_result.rows = [
-            (
-                'test_user',
-                'localhost',
-                'test_account',
-                datetime.now(),
-                'OPEN',
-                'Test user',
-                None,
-                None,
-            )
-        ]
-        self.client.execute = AsyncMock(return_value=mock_result)
+        # First call: CREATE USER
+        # Second call: SHOW ACCOUNTS (returns multiple accounts for sys)
+        async def mock_execute(sql):
+            result = AsyncMock()
+            if sql.startswith('SHOW ACCOUNTS'):
+                # Multiple accounts means sys account
+                result.rows = [
+                    ('sys', 'root', datetime.now(), 'OPEN', 'System account'),
+                    ('test_account', 'admin', datetime.now(), 'OPEN', 'Test account'),
+                ]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = AsyncMock(side_effect=mock_execute)
 
         # Test async user creation
         user = await self.async_account_manager.create_user(
@@ -818,8 +866,8 @@ class TestAsyncAccountManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user.account, "sys")
         self.assertEqual(user.comment, "Test user")
 
-        # Verify SQL was called correctly - check the first call (CREATE USER)
-        self.assertEqual(self.client.execute.call_count, 1)  # CREATE only
+        # Verify SQL was called correctly - CREATE USER + SHOW ACCOUNTS
+        self.assertEqual(self.client.execute.call_count, 2)
         first_call_args = self.client.execute.call_args_list[0][0][0]
         self.assertIn("CREATE USER", first_call_args)
         self.assertIn("test_user", first_call_args)
@@ -827,10 +875,25 @@ class TestAsyncAccountManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_list_users_success(self):
         """Test successful async user listing"""
-        # Mock successful execution (list_users only returns current user)
-        mock_result = AsyncMock()
-        mock_result.rows = [['current_user']]
-        self.client.execute = AsyncMock(return_value=mock_result)
+
+        # Mock successful execution
+        # First call: SELECT CURRENT_USER()
+        # Second call: SHOW ACCOUNTS (returns multiple accounts for sys)
+        async def mock_execute(sql):
+            result = AsyncMock()
+            if sql.startswith('SELECT CURRENT_USER'):
+                result.rows = [['current_user']]
+            elif sql.startswith('SHOW ACCOUNTS'):
+                # Multiple accounts means sys account
+                result.rows = [
+                    ('sys', 'root', datetime.now(), 'OPEN', 'System account'),
+                    ('test_account', 'admin', datetime.now(), 'OPEN', 'Test account'),
+                ]
+            else:
+                result.rows = []
+            return result
+
+        self.client.execute = AsyncMock(side_effect=mock_execute)
 
         # Test async user listing
         users = await self.async_account_manager.list_users()
@@ -839,6 +902,7 @@ class TestAsyncAccountManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(users), 1)
         self.assertIsInstance(users[0], User)
         self.assertEqual(users[0].name, "current_user")
+        self.assertEqual(users[0].account, "sys")
 
 
 class TestAsyncTransactionAccountManager(unittest.IsolatedAsyncioTestCase):

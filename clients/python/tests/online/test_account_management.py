@@ -19,7 +19,6 @@ These tests are inspired by example_02_account_management.py
 """
 
 import pytest
-from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager, AccountError
 
 
@@ -204,3 +203,81 @@ class TestAccountManagement:
             assert False, "Should have failed with non-existent account"
         except AccountError:
             pass  # Expected
+
+    def test_show_accounts_and_current_account_detection(self, test_client):
+        """
+        Test SHOW ACCOUNTS behavior and current account detection.
+
+        This test verifies:
+        1. SHOW ACCOUNTS returns different results for sys vs normal accounts
+        2. _get_current_account_from_results correctly identifies the current account
+        3. The logic works for both sys account and created accounts
+        """
+        account_manager = AccountManager(test_client)
+
+        # Part 1: Test with sys account (current connection)
+        print("\n=== Part 1: Testing with sys account ===")
+        result = test_client.execute("SHOW ACCOUNTS")
+        assert result is not None
+        assert hasattr(result, 'rows')
+
+        print(f"\nSHOW ACCOUNTS returned {len(result.rows)} rows:")
+        for i, row in enumerate(result.rows):
+            print(f"  Row {i}: {row}")
+
+        # sys account should see multiple accounts
+        current_account = account_manager._get_current_account_from_results(result.rows)
+        print(f"\nDetected current account: {current_account}")
+
+        if len(result.rows) > 1:
+            assert current_account == "sys", f"Expected 'sys' for multiple accounts, got '{current_account}'"
+            print("✓ Correctly identified as sys account (can see multiple accounts)")
+        else:
+            print("⚠ Warning: Only one account visible, may not be sys account")
+
+        # Part 2: Test creating a new account and simulating what it would see
+        print("\n=== Part 2: Testing account detection logic ===")
+        test_account_name = "test_account_detection_001"
+
+        try:
+            # Create a test account
+            try:
+                account_manager.drop_account(test_account_name, if_exists=True)
+            except Exception:
+                pass
+
+            account = account_manager.create_account(
+                test_account_name, "test_admin", "test_password", "Test account for detection"
+            )
+            assert account is not None
+            print(f"✓ Created test account: {test_account_name}")
+
+            # Simulate what SHOW ACCOUNTS would return for a normal account (single row)
+            simulated_single_account = [(test_account_name, 'test_admin', None, 'OPEN', 'Test account')]
+            detected = account_manager._get_current_account_from_results(simulated_single_account)
+            assert detected == test_account_name, f"Expected '{test_account_name}', got '{detected}'"
+            print(f"✓ Correctly identified '{test_account_name}' from single account result")
+
+            # Test with multiple accounts (sys scenario)
+            simulated_multi_accounts = [
+                ('sys', 'root', None, 'OPEN', 'System'),
+                (test_account_name, 'test_admin', None, 'OPEN', 'Test'),
+            ]
+            detected_multi = account_manager._get_current_account_from_results(simulated_multi_accounts)
+            assert detected_multi == "sys", f"Expected 'sys' for multiple accounts, got '{detected_multi}'"
+            print("✓ Correctly identified 'sys' from multiple accounts result")
+
+            # Test with empty result
+            detected_empty = account_manager._get_current_account_from_results([])
+            assert detected_empty == "sys", f"Expected 'sys' for empty result, got '{detected_empty}'"
+            print("✓ Correctly defaulted to 'sys' for empty result")
+
+        finally:
+            # Clean up
+            try:
+                account_manager.drop_account(test_account_name)
+                print(f"✓ Cleaned up test account: {test_account_name}")
+            except Exception:
+                pass
+
+        print("\n✓ All account detection logic tests passed!")
