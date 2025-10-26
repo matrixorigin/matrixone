@@ -66,6 +66,10 @@ class MatrixOneDialect(MySQLDialect):
         super().__init__(**kwargs)
         # Initialize missing MySQL dialect attributes
         self._connection_charset = "utf8mb4"
+        # Set MySQL dialect compatibility flags
+        # This flag is used by MySQL dialect to handle foreign key reflection quirks
+        # For MatrixOne, we set it to False as we don't have those specific MySQL bugs
+        self._needs_correct_for_88718_96365 = False
 
     def _extract_error_code(self, exception):
         """Extract error code from MatrixOne exceptions."""

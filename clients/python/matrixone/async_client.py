@@ -1223,18 +1223,37 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise
 
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
+    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None) -> AsyncResultSet:
         """
-        Execute SQL query asynchronously using SQLAlchemy async engine
+        Execute SQL query or SQLAlchemy statement asynchronously.
 
         Args::
 
-            sql: SQL query string
-            params: Query parameters
+            sql_or_stmt: SQL query string or SQLAlchemy statement (select, update, delete, insert, text).
+                       String SQL can include '?' placeholders for parameter binding.
+            params: Query parameters (only used for string SQL)
 
         Returns::
 
             AsyncResultSet with query results
+
+        Examples::
+
+            # String SQL
+            >>> result = await async_client.execute("SELECT * FROM users WHERE age > ?", (25,))
+
+            # SQLAlchemy statements
+            >>> from sqlalchemy import select, update, delete
+            >>> stmt = select(User).where(User.age > 25)
+            >>> result = await async_client.execute(stmt)
+
+            # UPDATE with SQLAlchemy
+            >>> stmt = update(User).where(User.id == 1).values(name="New Name")
+            >>> result = await async_client.execute(stmt)
+
+            # DELETE with SQLAlchemy
+            >>> stmt = delete(User).where(User.id == 1)
+            >>> result = await async_client.execute(stmt)
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -1244,8 +1263,34 @@ class AsyncClient(BaseMatrixOneClient):
         start_time = time.time()
 
         try:
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self._substitute_parameters(sql, params)
+            # Check if this is a SQLAlchemy statement
+            if not isinstance(sql_or_stmt, str):
+                # SQLAlchemy statement - delegate to session for consistent behavior
+                async with self.session() as session:
+                    result = await session.execute(sql_or_stmt, params)
+
+                    # Convert SQLAlchemy result to AsyncResultSet
+                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                        # SELECT query
+                        columns = list(result.keys())
+                        rows = result.fetchall()
+                        async_result = AsyncResultSet(columns, rows)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, len(rows), success=True
+                        )
+                        return async_result
+                    else:
+                        # INSERT/UPDATE/DELETE query
+                        async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, result.rowcount, success=True
+                        )
+                        return async_result
+
+            # String SQL - original implementation
+            final_sql = self._substitute_parameters(sql_or_stmt, params)
 
             async with self._engine.begin() as conn:
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
@@ -1266,11 +1311,11 @@ class AsyncClient(BaseMatrixOneClient):
                     rows = result.fetchall()
                     columns = list(result.keys()) if hasattr(result, "keys") else []
                     async_result = AsyncResultSet(columns, rows)
-                    self.logger.log_query(final_sql, execution_time, len(rows), success=True)
+                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True)
                     return async_result
                 else:
                     async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(final_sql, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True)
                     return async_result
 
         except Exception as e:
@@ -1279,7 +1324,8 @@ class AsyncClient(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                self.logger.log_query(final_sql, execution_time, success=False)
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Async query execution")
             except Exception as log_err:
                 # If logging fails, print to stderr as fallback but continue with error handling

@@ -775,49 +775,60 @@ class Client(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise
 
-    def execute(self, sql: str, params: Optional[Tuple] = None) -> "ResultSet":
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None) -> "ResultSet":
         """
-            Execute SQL query using connection pool.
+        Execute SQL query or SQLAlchemy statement using connection pool.
 
-            This is the primary method for executing SQL statements against the MatrixOne
-            database. It supports both SELECT queries (returning data) and DML operations
-            (INSERT, UPDATE, DELETE) that modify data.
+        This is the primary method for executing SQL statements against the MatrixOne
+        database. It supports both SELECT queries (returning data) and DML operations
+        (INSERT, UPDATE, DELETE) that modify data.
 
-            Args::
+        Args::
 
-                sql (str): SQL query string. Can include '?' placeholders for parameter binding.
-                params (Optional[Tuple]): Query parameters to replace '?' placeholders in the SQL.
-                                        Parameters are automatically escaped to prevent SQL injection.
+            sql_or_stmt: SQL query string or SQLAlchemy statement (select, update, delete, insert, text).
+                       String SQL can include '?' placeholders for parameter binding.
+            params (Optional[Tuple]): Query parameters to replace '?' placeholders in the SQL.
+                                    Parameters are automatically escaped to prevent SQL injection.
+                                    Only used for string SQL, not SQLAlchemy statements.
 
-            Returns::
+        Returns::
 
-                ResultSet: Object containing query results with the following attributes:
-                    - columns: List of column names
-                    - rows: List of tuples containing row data
-                    - affected_rows: Number of rows affected (for DML operations)
-                    - fetchall(): Method to get all rows as a list
-                    - fetchone(): Method to get the next row
-                    - fetchmany(size): Method to get multiple rows
+            ResultSet: Object containing query results with the following attributes:
+                - columns: List of column names
+                - rows: List of tuples containing row data
+                - affected_rows: Number of rows affected (for DML operations)
+                - fetchall(): Method to get all rows as a list
+                - fetchone(): Method to get the next row
+                - fetchmany(size): Method to get multiple rows
 
-            Raises::
+        Raises::
 
-                ConnectionError: If not connected to database
-                QueryError: If query execution fails
+            ConnectionError: If not connected to database
+            QueryError: If query execution fails
 
-            Examples
+        Examples::
 
-        # SELECT query
-                >>> result = client.execute("SELECT * FROM users WHERE age > ?", (25,))
-                >>> for row in result.fetchall():
-                ...     print(row)
+            # String SQL with parameters
+            >>> result = client.execute("SELECT * FROM users WHERE age > ?", (25,))
+            >>> for row in result.fetchall():
+            ...     print(row)
 
-                # INSERT query
-                >>> result = client.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("John", 30))
-                >>> print(f"Inserted {result.affected_rows} rows")
+            # SQLAlchemy statements
+            >>> from sqlalchemy import select, update, delete
+            >>> stmt = select(User).where(User.age > 25)
+            >>> result = client.execute(stmt)
+            >>> for row in result.fetchall():
+            ...     print(row)
 
-                # UPDATE query
-                >>> result = client.execute("UPDATE users SET age = ? WHERE name = ?", (31, "John"))
-                >>> print(f"Updated {result.affected_rows} rows")
+            # UPDATE with SQLAlchemy
+            >>> stmt = update(User).where(User.id == 1).values(name="New Name")
+            >>> result = client.execute(stmt)
+            >>> print(f"Updated {result.affected_rows} rows")
+
+            # DELETE with SQLAlchemy
+            >>> stmt = delete(User).where(User.id == 1)
+            >>> result = client.execute(stmt)
+            >>> print(f"Deleted {result.affected_rows} rows")
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -827,8 +838,34 @@ class Client(BaseMatrixOneClient):
         start_time = time.time()
 
         try:
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self._substitute_parameters(sql, params)
+            # Check if this is a SQLAlchemy statement
+            if not isinstance(sql_or_stmt, str):
+                # SQLAlchemy statement - delegate to session for consistent behavior
+                with self.session() as session:
+                    result = session.execute(sql_or_stmt, params)
+
+                    # Convert SQLAlchemy result to ResultSet
+                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                        # SELECT query
+                        columns = list(result.keys())
+                        rows = result.fetchall()
+                        result_set = ResultSet(columns, rows)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, len(rows), success=True
+                        )
+                        return result_set
+                    else:
+                        # INSERT/UPDATE/DELETE query
+                        result_set = ResultSet([], [], affected_rows=result.rowcount)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>", execution_time, result.rowcount, success=True
+                        )
+                        return result_set
+
+            # String SQL - original implementation
+            final_sql = self._substitute_parameters(sql_or_stmt, params)
 
             with self._engine.begin() as conn:
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
@@ -850,12 +887,12 @@ class Client(BaseMatrixOneClient):
                     columns = list(result.keys())
                     rows = result.fetchall()
                     result_set = ResultSet(columns, rows)
-                    self.logger.log_query(sql, execution_time, len(rows), success=True)
+                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True)
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True)
                     return result_set
 
         except Exception as e:
@@ -864,7 +901,8 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                self.logger.log_query(sql, execution_time, success=False)
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
                 # If logging fails, print to stderr as fallback but continue with error handling
@@ -920,7 +958,8 @@ class Client(BaseMatrixOneClient):
 
             elif 'syntax error' in error_msg.lower() or '1064' in error_msg:
                 # SQL syntax error
-                sql_preview = sql[:200] + '...' if len(sql) > 200 else sql
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_preview = sql_display[:200] + '...' if len(sql_display) > 200 else sql_display
                 raise QueryError(f"SQL syntax error: {error_msg}\n" f"Query: {sql_preview}") from None
 
             elif 'column' in error_msg.lower() and ('unknown' in error_msg.lower() or 'not found' in error_msg.lower()):
