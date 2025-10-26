@@ -1747,20 +1747,25 @@ class Client(BaseMatrixOneClient):
 
         session_wrapper = None
         try:
-            # Use engine's connection pool for transaction
-            with self._engine.begin() as conn:
-                session_wrapper = Session(conn, self)
-                yield session_wrapper
+            # Create session from engine (standard SQLAlchemy pattern)
+            # Session will automatically acquire connection from pool
+            session_wrapper = Session(bind=self._engine, client=self)
 
-                # Commit the session
-                session_wrapper.commit()
+            # Begin transaction explicitly
+            session_wrapper.begin()
+
+            yield session_wrapper
+
+            # Commit the transaction on success
+            session_wrapper.commit()
 
         except Exception:
-            # engine.begin() automatically rolls back on exception
-            # No need to explicitly call rollback() here
+            # Rollback on error
+            if session_wrapper:
+                session_wrapper.rollback()
             raise
         finally:
-            # Clean up session resources
+            # Close session (returns connection to pool)
             if session_wrapper:
                 session_wrapper.close()
 
@@ -3116,9 +3121,17 @@ class Session(SQLAlchemySession):
     context manager and should not be instantiated directly.
     """
 
-    def __init__(self, connection, client):
-        # Initialize parent SQLAlchemy Session
-        super().__init__(bind=connection, expire_on_commit=False)
+    def __init__(self, bind=None, client=None, **kwargs):
+        """
+        Initialize MatrixOne Session.
+
+        Args:
+            bind: SQLAlchemy Engine or Connection to bind to
+            client: MatrixOne Client instance
+            **kwargs: Additional arguments passed to SQLAlchemy Session
+        """
+        # Initialize parent SQLAlchemy Session with engine/connection
+        super().__init__(bind=bind, expire_on_commit=False, **kwargs)
 
         # Store MatrixOne client reference
         self.client = client

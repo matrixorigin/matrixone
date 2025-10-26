@@ -2010,16 +2010,25 @@ class AsyncClient(BaseMatrixOneClient):
 
         tx_wrapper = None
         try:
-            # Use SQLAlchemy async engine for transaction
-            async with self._engine.begin() as conn:
-                tx_wrapper = AsyncSession(conn, self)
-                yield tx_wrapper
+            # Create async session from engine (standard SQLAlchemy async pattern)
+            # Session will automatically acquire connection from pool
+            tx_wrapper = AsyncSession(bind=self._engine, client=self)
+
+            # Begin transaction explicitly
+            await tx_wrapper.begin()
+
+            yield tx_wrapper
+
+            # Commit the transaction on success
+            await tx_wrapper.commit()
 
         except Exception as e:
-            # Transaction will be automatically rolled back by SQLAlchemy
+            # Rollback on error
+            if tx_wrapper:
+                await tx_wrapper.rollback()
             raise e
         finally:
-            # Clean up session - close is inherited from SQLAlchemy AsyncSession
+            # Close session (returns connection to pool)
             if tx_wrapper:
                 await tx_wrapper.close()
 

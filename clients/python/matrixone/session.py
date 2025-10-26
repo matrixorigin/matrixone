@@ -267,9 +267,17 @@ class Session(SQLAlchemySession):
         - SQLAlchemy Session: Parent class documentation
     """
 
-    def __init__(self, connection, client):
-        # Initialize parent SQLAlchemy Session
-        super().__init__(bind=connection, expire_on_commit=False)
+    def __init__(self, bind=None, client=None, **kwargs):
+        """
+        Initialize MatrixOne Session.
+
+        Args:
+            bind: SQLAlchemy Engine or Connection to bind to
+            client: MatrixOne Client instance
+            **kwargs: Additional arguments passed to SQLAlchemy Session
+        """
+        # Initialize parent SQLAlchemy Session with engine/connection
+        super().__init__(bind=bind, expire_on_commit=False, **kwargs)
 
         # Store MatrixOne client reference
         self.client = client
@@ -1009,13 +1017,20 @@ class AsyncSession(SQLAlchemyAsyncSession):
         - SQLAlchemy AsyncSession: Parent class documentation
     """
 
-    def __init__(self, connection, client):
+    def __init__(self, bind=None, client=None, **kwargs):
+        """
+        Initialize MatrixOne AsyncSession.
+
+        Args:
+            bind: SQLAlchemy AsyncEngine or AsyncConnection to bind to
+            client: MatrixOne AsyncClient instance
+            **kwargs: Additional arguments passed to SQLAlchemy AsyncSession
+        """
         # Store references before calling super().__init__
         self.client = client
-        self._connection = connection
 
-        # Initialize parent SQLAlchemy AsyncSession
-        super().__init__(bind=connection, expire_on_commit=False)
+        # Initialize parent SQLAlchemy AsyncSession with engine/connection
+        super().__init__(bind=bind, expire_on_commit=False, **kwargs)
 
         # Import manager classes dynamically to avoid circular imports
         # Some are defined in async_client.py after the AsyncSession class
@@ -1082,8 +1097,8 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
                 from sqlalchemy import text
 
-                # Execute using the stored _connection to avoid greenlet issues
-                result = await self._connection.execute(text(final_sql), **kwargs)
+                # Call parent's execute() with text()
+                result = await super().execute(text(final_sql), **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
