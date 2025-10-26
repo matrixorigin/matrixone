@@ -19,7 +19,7 @@ Tests executor pattern and SQL consistency.
 
 import unittest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
-from matrixone.client import VectorManager, AsyncVectorManager
+from matrixone.vector_manager import VectorManager, AsyncVectorManager
 
 
 class TestVectorManagerExecutor(unittest.TestCase):

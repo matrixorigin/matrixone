@@ -1039,7 +1039,7 @@ class AsyncClient(BaseMatrixOneClient):
     def _initialize_vector_managers(self) -> None:
         """Initialize vector managers after successful connection"""
         try:
-            from .client import AsyncVectorManager
+            from .vector_manager import AsyncVectorManager
 
             self._vector = AsyncVectorManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)

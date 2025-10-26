@@ -1014,7 +1014,7 @@ class TestAsyncTransactionManagerConsistency:
             from matrixone.pitr import AsyncPitrManager
             from matrixone.pubsub import AsyncPubSubManager
             from matrixone.account import AsyncAccountManager
-            from matrixone.client import AsyncVectorManager
+            from matrixone.vector_manager import AsyncVectorManager
             from matrixone.async_client import AsyncTransactionFulltextIndexManager
 
             assert isinstance(tx.snapshots, AsyncSnapshotManager)

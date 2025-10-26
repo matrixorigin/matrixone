@@ -68,7 +68,8 @@ class TestModelSupport:
         self.client._connected = True
 
         # Create proper mock managers
-        from matrixone.client import VectorManager, FulltextIndexManager, AsyncVectorManager
+        from matrixone.vector_manager import VectorManager, AsyncVectorManager
+        from matrixone.client import FulltextIndexManager
         from matrixone.async_client import AsyncFulltextIndexManager
 
         self.client._vector = VectorManager(self.client)
@@ -310,7 +311,8 @@ class TestModelSupportEdgeCases:
         self.client._connected = True
 
         # Create proper mock managers
-        from matrixone.client import VectorManager, FulltextIndexManager
+        from matrixone.vector_manager import VectorManager
+        from matrixone.client import FulltextIndexManager
 
         self.client._vector = VectorManager(self.client)
         self.client._fulltext_index = FulltextIndexManager(self.client)

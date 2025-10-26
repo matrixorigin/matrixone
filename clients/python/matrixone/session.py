@@ -502,7 +502,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # Some are defined in async_client.py after the AsyncSession class
 
         # Import async vector and fulltext managers
-        from .client import AsyncVectorManager
+        from .vector_manager import AsyncVectorManager
         from .async_client import AsyncTransactionFulltextIndexManager
 
         # These are defined in their respective modules
