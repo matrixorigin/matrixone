@@ -23,6 +23,227 @@ from matrixone.account import AccountManager, Account, User, AsyncAccountManager
 from matrixone.exceptions import AccountError
 
 
+class TestAccountSQLConsistency(unittest.TestCase):
+    """Test SQL generation consistency across sync/async/session interfaces"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.client = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.client._escape_string = lambda x: f"'{x}'"
+
+        self.session = Mock()
+        self.session.client = self.client
+
+        # Create managers
+        self.sync_manager = AccountManager(self.client)
+        self.session_manager = AccountManager(self.client, executor=self.session)
+        self.async_manager = AsyncAccountManager(self.client)
+        self.async_session_manager = AsyncAccountManager(self.client, executor=self.session)
+
+    def test_create_account_sql_consistency(self):
+        """Test that create_account generates identical SQL across all versions"""
+        # Capture SQL from sync version (first call is CREATE, second is SHOW ACCOUNTS)
+        self.client.execute = Mock(return_value=Mock(rows=[]))
+        self.session.execute = Mock(return_value=Mock(rows=[]))
+
+        try:
+            self.sync_manager.create_account("test_acc", "admin", "pass123", "comment")
+        except:
+            pass
+        sync_sql = self.client.execute.call_args_list[0][0][0]  # First call
+
+        try:
+            self.session_manager.create_account("test_acc", "admin", "pass123", "comment")
+        except:
+            pass
+        session_sql = self.session.execute.call_args_list[0][0][0]  # First call
+
+        # Verify SQL is identical
+        expected_sql = "CREATE ACCOUNT `test_acc` ADMIN_NAME 'admin' IDENTIFIED BY 'pass123' COMMENT 'comment'"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(sync_sql, session_sql)
+
+    def test_drop_account_sql_consistency(self):
+        """Test that drop_account generates identical SQL"""
+        self.client.execute = Mock()
+        self.session.execute = Mock()
+
+        self.sync_manager.drop_account("test_acc")
+        sync_sql = self.client.execute.call_args[0][0]
+
+        self.session_manager.drop_account("test_acc")
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "DROP ACCOUNT `test_acc`"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+    def test_drop_account_if_exists_sql_consistency(self):
+        """Test DROP ACCOUNT IF EXISTS SQL"""
+        self.client.execute = Mock()
+        self.session.execute = Mock()
+
+        self.sync_manager.drop_account("test_acc", if_exists=True)
+        sync_sql = self.client.execute.call_args[0][0]
+
+        self.session_manager.drop_account("test_acc", if_exists=True)
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "DROP ACCOUNT IF EXISTS `test_acc`"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+    def test_get_account_sql_consistency(self):
+        """Test that get_account generates identical SQL"""
+        self.client.execute = Mock(return_value=Mock(rows=[]))
+        self.session.execute = Mock(return_value=Mock(rows=[]))
+
+        try:
+            self.sync_manager.get_account("test_acc")
+        except:
+            pass
+        sync_sql = self.client.execute.call_args[0][0]
+
+        try:
+            self.session_manager.get_account("test_acc")
+        except:
+            pass
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "SHOW ACCOUNTS"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+    def test_list_accounts_sql_consistency(self):
+        """Test that list_accounts generates identical SQL"""
+        self.client.execute = Mock(return_value=Mock(rows=[]))
+        self.session.execute = Mock(return_value=Mock(rows=[]))
+
+        self.sync_manager.list_accounts()
+        sync_sql = self.client.execute.call_args[0][0]
+
+        self.session_manager.list_accounts()
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "SHOW ACCOUNTS"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+    def test_create_user_sql_consistency(self):
+        """Test that create_user generates identical SQL"""
+        self.client.execute = Mock()
+        self.session.execute = Mock()
+
+        self.sync_manager.create_user("test_user", "pass123")
+        sync_sql = self.client.execute.call_args[0][0]
+
+        self.session_manager.create_user("test_user", "pass123")
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "CREATE USER `test_user` IDENTIFIED BY 'pass123'"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+    def test_drop_user_sql_consistency(self):
+        """Test that drop_user generates identical SQL"""
+        self.client.execute = Mock()
+        self.session.execute = Mock()
+
+        self.sync_manager.drop_user("test_user")
+        sync_sql = self.client.execute.call_args[0][0]
+
+        self.session_manager.drop_user("test_user")
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "DROP USER `test_user`"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+    def test_drop_user_if_exists_sql_consistency(self):
+        """Test DROP USER IF EXISTS SQL"""
+        self.client.execute = Mock()
+        self.session.execute = Mock()
+
+        self.sync_manager.drop_user("test_user", if_exists=True)
+        sync_sql = self.client.execute.call_args[0][0]
+
+        self.session_manager.drop_user("test_user", if_exists=True)
+        session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "DROP USER IF EXISTS `test_user`"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+
+
+class TestAsyncAccountSQLConsistency(unittest.IsolatedAsyncioTestCase):
+    """Test SQL generation consistency for async versions"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.client = AsyncMock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.client._escape_string = lambda x: f"'{x}'"
+
+        self.session = AsyncMock()
+        self.session.client = self.client
+
+        self.async_manager = AsyncAccountManager(self.client)
+        self.async_session_manager = AsyncAccountManager(self.client, executor=self.session)
+
+    async def test_async_create_account_sql_consistency(self):
+        """Test async create_account SQL"""
+        self.client.execute = AsyncMock(return_value=AsyncMock(rows=[]))
+        self.session.execute = AsyncMock(return_value=AsyncMock(rows=[]))
+
+        try:
+            await self.async_manager.create_account("test_acc", "admin", "pass123", "comment")
+        except:
+            pass
+        async_sql = self.client.execute.call_args_list[0][0][0]  # First call
+
+        try:
+            await self.async_session_manager.create_account("test_acc", "admin", "pass123", "comment")
+        except:
+            pass
+        async_session_sql = self.session.execute.call_args_list[0][0][0]  # First call
+
+        expected_sql = "CREATE ACCOUNT `test_acc` ADMIN_NAME 'admin' IDENTIFIED BY 'pass123' COMMENT 'comment'"
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    async def test_async_drop_account_sql_consistency(self):
+        """Test async drop_account SQL"""
+        self.client.execute = AsyncMock()
+        self.session.execute = AsyncMock()
+
+        await self.async_manager.drop_account("test_acc")
+        async_sql = self.client.execute.call_args[0][0]
+
+        await self.async_session_manager.drop_account("test_acc")
+        async_session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "DROP ACCOUNT `test_acc`"
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    async def test_async_create_user_sql_consistency(self):
+        """Test async create_user SQL"""
+        self.client.execute = AsyncMock()
+        self.session.execute = AsyncMock()
+
+        await self.async_manager.create_user("test_user", "pass123")
+        async_sql = self.client.execute.call_args[0][0]
+
+        await self.async_session_manager.create_user("test_user", "pass123")
+        async_session_sql = self.session.execute.call_args[0][0]
+
+        expected_sql = "CREATE USER `test_user` IDENTIFIED BY 'pass123'"
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+
 class TestAccount(unittest.TestCase):
     """Test Account data class"""
 
