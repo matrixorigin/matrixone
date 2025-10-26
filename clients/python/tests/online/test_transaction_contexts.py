@@ -975,8 +975,8 @@ class TestAsyncTransactionManagerConsistency:
             from matrixone.restore import RestoreManager
             from matrixone.pitr import PitrManager
             from matrixone.pubsub import PubSubManager
+            from matrixone.account import AccountManager
             from matrixone.client import (
-                TransactionAccountManager,
                 TransactionVectorIndexManager,
                 TransactionFulltextIndexManager,
             )
@@ -986,7 +986,7 @@ class TestAsyncTransactionManagerConsistency:
             assert isinstance(tx.restore, RestoreManager)
             assert isinstance(tx.pitr, PitrManager)
             assert isinstance(tx.pubsub, PubSubManager)
-            assert isinstance(tx.account, TransactionAccountManager)
+            assert isinstance(tx.account, AccountManager)
             assert isinstance(tx.vector_ops, TransactionVectorIndexManager)
             assert isinstance(tx.fulltext_index, TransactionFulltextIndexManager)
 
@@ -1013,8 +1013,8 @@ class TestAsyncTransactionManagerConsistency:
             from matrixone.restore import AsyncRestoreManager
             from matrixone.pitr import AsyncPitrManager
             from matrixone.pubsub import AsyncPubSubManager
+            from matrixone.account import AsyncAccountManager
             from matrixone.async_client import (
-                AsyncTransactionAccountManager,
                 AsyncTransactionVectorIndexManager,
                 AsyncTransactionFulltextIndexManager,
             )
@@ -1024,7 +1024,7 @@ class TestAsyncTransactionManagerConsistency:
             assert isinstance(tx.restore, AsyncRestoreManager)
             assert isinstance(tx.pitr, AsyncPitrManager)
             assert isinstance(tx.pubsub, AsyncPubSubManager)
-            assert isinstance(tx.account, AsyncTransactionAccountManager)
+            assert isinstance(tx.account, AsyncAccountManager)
             assert isinstance(tx.vector_ops, AsyncTransactionVectorIndexManager)
             assert isinstance(tx.fulltext_index, AsyncTransactionFulltextIndexManager)
 

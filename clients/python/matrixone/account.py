@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, List, Optional
 from matrixone.exceptions import AccountError
 
 if TYPE_CHECKING:
-    from matrixone.client import Client, TransactionWrapper
+    from matrixone.client import Client
 
 
 @dataclass
@@ -102,7 +102,131 @@ class Grant:
         return self.__str__()
 
 
-class AccountManager:
+class BaseAccountManager:
+    """
+    Base class for Account management containing shared SQL building logic.
+
+    This class contains all SQL generation methods that are common between
+    synchronous and asynchronous implementations.
+    """
+
+    def __init__(self, client: "Client"):
+        """Initialize base account manager"""
+        self._client = client
+
+    # SQL Building Methods
+    def _build_create_account_sql(
+        self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None
+    ) -> str:
+        """Build CREATE ACCOUNT SQL statement"""
+        sql_parts = [f"CREATE ACCOUNT {self._client._escape_identifier(account_name)}"]
+        sql_parts.append(f"ADMIN_NAME {self._client._escape_string(admin_name)}")
+        sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
+        if comment:
+            sql_parts.append(f"COMMENT {self._client._escape_string(comment)}")
+        return " ".join(sql_parts)
+
+    def _build_drop_account_sql(self, account_name: str, if_exists: bool = False) -> str:
+        """Build DROP ACCOUNT SQL statement"""
+        sql = "DROP ACCOUNT "
+        if if_exists:
+            sql += "IF EXISTS "
+        sql += self._client._escape_identifier(account_name)
+        return sql
+
+    def _build_alter_account_sql(
+        self, account_name: str, admin_name: Optional[str] = None, comment: Optional[str] = None
+    ) -> str:
+        """Build ALTER ACCOUNT SQL statement"""
+        sql_parts = [f"ALTER ACCOUNT {self._client._escape_identifier(account_name)}"]
+        if admin_name:
+            sql_parts.append(f"ADMIN_NAME {self._client._escape_string(admin_name)}")
+        if comment:
+            sql_parts.append(f"COMMENT {self._client._escape_string(comment)}")
+        return " ".join(sql_parts)
+
+    def _build_get_account_sql(self) -> str:
+        """Build SQL to get account information"""
+        return "SHOW ACCOUNTS"
+
+    def _build_list_accounts_sql(self) -> str:
+        """Build SQL to list all accounts"""
+        return "SHOW ACCOUNTS"
+
+    def _build_create_user_sql(self, user_name: str, password: str, comment: Optional[str] = None) -> str:
+        """Build CREATE USER SQL statement"""
+        sql_parts = [f"CREATE USER {self._client._escape_identifier(user_name)}"]
+        sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
+        return " ".join(sql_parts)
+
+    def _build_drop_user_sql(self, user_name: str, if_exists: bool = False) -> str:
+        """Build DROP USER SQL statement"""
+        sql = "DROP USER "
+        if if_exists:
+            sql += "IF EXISTS "
+        sql += self._client._escape_identifier(user_name)
+        return sql
+
+    def _build_alter_user_sql(self, user_name: str, password: Optional[str] = None, comment: Optional[str] = None) -> str:
+        """Build ALTER USER SQL statement"""
+        sql_parts = [f"ALTER USER {self._client._escape_identifier(user_name)}"]
+        if password:
+            sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
+        return " ".join(sql_parts)
+
+    def _build_get_current_user_sql(self) -> str:
+        """Build SQL to get current user"""
+        return "SELECT CURRENT_USER()"
+
+    def _build_list_users_sql(self) -> str:
+        """Build SQL to list users (returns current user)"""
+        return "SELECT CURRENT_USER()"
+
+    # Helper methods
+    def _get_current_account(self) -> str:
+        """Get current account name"""
+        try:
+            return "sys"  # Default account
+        except Exception:
+            return "sys"
+
+    def _row_to_account(self, row: tuple) -> Account:
+        """Convert database row to Account object"""
+        return Account(
+            name=row[0],
+            admin_name=row[1],
+            created_time=row[2] if len(row) > 2 else None,
+            status=row[3] if len(row) > 3 else None,
+            comment=row[4] if len(row) > 4 else None,
+            suspended_time=row[5] if len(row) > 5 else None,
+            suspended_reason=row[6] if len(row) > 6 else None,
+        )
+
+    def _row_to_role(self, row: tuple) -> Role:
+        """Convert database row to Role object"""
+        return Role(name=row[0], id=row[1], created_time=row[2] if len(row) > 2 else None)
+
+    def _parse_grant_statement(self, grant_statement: str) -> Grant:
+        """Parse grant statement to extract components"""
+        try:
+            # Example: "GRANT SELECT ON TABLE table_name TO user_name"
+            pattern = r"GRANT\s+(\w+)\s+ON\s+(\w+)\s+(\w+)\s+TO\s+(\w+)"
+            match = re.match(pattern, grant_statement, re.IGNORECASE)
+            if match:
+                privilege, object_type, object_name, user = match.groups()
+                return Grant(
+                    grant_statement=grant_statement,
+                    privilege=privilege,
+                    object_type=object_type,
+                    object_name=object_name,
+                    user=user,
+                )
+        except Exception:
+            pass
+        return Grant(grant_statement=grant_statement)
+
+
+class AccountManager(BaseAccountManager):
     """
     MatrixOne Account Manager for user and account management operations.
 
@@ -162,8 +286,21 @@ class AccountManager:
     privileges in MatrixOne.
     """
 
-    def __init__(self, client: "Client"):
-        self._client = client
+    def __init__(self, client: "Client", executor=None):
+        """
+        Initialize AccountManager.
+
+        Args:
+            client: MatrixOne client instance
+            executor: Optional executor (e.g., session) for executing SQL.
+                     If None, uses client.execute
+        """
+        super().__init__(client)
+        self.executor = executor
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self._client
 
     # Account Management
     def create_account(self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None) -> Account:
@@ -186,18 +323,8 @@ class AccountManager:
             AccountError: If account creation fails
         """
         try:
-            # Build CREATE ACCOUNT statement according to MatrixOne syntax
-            sql_parts = [f"CREATE ACCOUNT {self._client._escape_identifier(account_name)}"]
-            sql_parts.append(f"ADMIN_NAME {self._client._escape_string(admin_name)}")
-            sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
-
-            if comment:
-                sql_parts.append(f"COMMENT {self._client._escape_string(comment)}")
-
-            sql = " ".join(sql_parts)
-            self._client.execute(sql)
-
-            # Return the created account
+            sql = self._build_create_account_sql(account_name, admin_name, password, comment)
+            self._get_executor().execute(sql)
             return self.get_account(account_name)
 
         except Exception as e:
@@ -213,13 +340,8 @@ class AccountManager:
             if_exists: If True, add IF EXISTS clause to avoid errors when account doesn't exist
         """
         try:
-            sql_parts = ["DROP ACCOUNT"]
-            if if_exists:
-                sql_parts.append("IF EXISTS")
-            sql_parts.append(self._client._escape_identifier(account_name))
-
-            sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            sql = self._build_drop_account_sql(account_name, if_exists)
+            self._get_executor().execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to drop account '{account_name}': {e}") from None
 
@@ -247,7 +369,7 @@ class AccountManager:
                     sql_parts.append("OPEN")
 
             sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
 
             return self.get_account(account_name)
 
@@ -257,8 +379,8 @@ class AccountManager:
     def get_account(self, account_name: str) -> Account:
         """Get account by name"""
         try:
-            sql = "SHOW ACCOUNTS"
-            result = self._client.execute(sql)
+            sql = self._build_get_account_sql()
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 raise AccountError(f"Account '{account_name}' not found") from None
@@ -275,8 +397,8 @@ class AccountManager:
     def list_accounts(self) -> List[Account]:
         """List all accounts"""
         try:
-            sql = "SHOW ACCOUNTS"
-            result = self._client.execute(sql)
+            sql = self._build_list_accounts_sql()
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 return []
@@ -309,16 +431,8 @@ class AccountManager:
             AccountError: If user creation fails
         """
         try:
-            # MatrixOne CREATE USER syntax
-            sql_parts = [f"CREATE USER {self._client._escape_identifier(user_name)}"]
-            sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
-
-            # Note: MatrixOne doesn't support COMMENT in CREATE USER
-            # if comment:
-            #     sql_parts.append(f"COMMENT {self._client._escape_string(comment)}")
-
-            sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            sql = self._build_create_user_sql(user_name, password, comment)
+            self._get_executor().execute(sql)
 
             # Return a User object with current account context
             current_account = self._get_current_account()
@@ -345,13 +459,8 @@ class AccountManager:
             if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
         """
         try:
-            sql_parts = ["DROP USER"]
-            if if_exists:
-                sql_parts.append("IF EXISTS")
-
-            sql_parts.append(self._client._escape_identifier(user_name))
-            sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            sql = self._build_drop_user_sql(user_name, if_exists)
+            self._get_executor().execute(sql)
 
         except Exception as e:
             raise AccountError(f"Failed to drop user '{user_name}': {e}") from None
@@ -397,7 +506,7 @@ class AccountManager:
             # Only execute if there are operations to perform
             if has_operations:
                 sql = " ".join(sql_parts)
-                self._client.execute(sql)
+                self._get_executor().execute(sql)
             else:
                 # If no operations, just return current user info
                 pass
@@ -422,7 +531,7 @@ class AccountManager:
         """Get current user information"""
         try:
             sql = "SELECT USER()"
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 raise AccountError("Failed to get current user") from None
@@ -471,7 +580,7 @@ class AccountManager:
         try:
             # MatrixOne CREATE ROLE syntax doesn't support COMMENT
             sql = f"CREATE ROLE {self._client._escape_identifier(role_name)}"
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
 
             return self.get_role(role_name)
 
@@ -494,7 +603,7 @@ class AccountManager:
             sql_parts.append(self._client._escape_identifier(role_name))
 
             sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to drop role '{role_name}': {e}") from None
 
@@ -502,7 +611,7 @@ class AccountManager:
         """Get role by name"""
         try:
             sql = "SHOW ROLES"
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 raise AccountError(f"Role '{role_name}' not found") from None
@@ -520,7 +629,7 @@ class AccountManager:
         """List all roles"""
         try:
             sql = "SHOW ROLES"
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 return []
@@ -563,7 +672,7 @@ class AccountManager:
             sql_parts.append(f"TO {self._client._escape_identifier(target)}")
 
             sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
 
         except Exception as e:
             raise AccountError(f"Failed to grant privilege: {e}") from None
@@ -588,7 +697,7 @@ class AccountManager:
             sql_parts.append(f"FROM {self._client._escape_identifier(target)}")
 
             sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
 
         except Exception as e:
             raise AccountError(f"Failed to revoke privilege: {e}") from None
@@ -598,7 +707,7 @@ class AccountManager:
         try:
             # MatrixOne syntax: GRANT role_name TO user_name
             sql = f"GRANT {self._client._escape_identifier(role_name)} TO {self._client._escape_identifier(to_user)}"
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to grant role '{role_name}' to user '{to_user}': {e}") from None
 
@@ -607,7 +716,7 @@ class AccountManager:
         try:
             # MatrixOne syntax: REVOKE role_name FROM user_name
             sql = f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
-            self._client.execute(sql)
+            self._get_executor().execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to revoke role '{role_name}' from user '{from_user}': {e}") from None
 
@@ -619,7 +728,7 @@ class AccountManager:
             else:
                 sql = "SHOW GRANTS"
 
-            result = self._client.execute(sql)
+            result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
                 return []
@@ -691,33 +800,118 @@ class AccountManager:
             return Grant(grant_statement=grant_statement)
 
 
-class TransactionAccountManager(AccountManager):
-    """Transaction-scoped account manager"""
+class AsyncAccountManager(BaseAccountManager):
+    """
+    Asynchronous Account management for MatrixOne.
 
-    def __init__(self, transaction: "TransactionWrapper"):
-        super().__init__(transaction.client)
-        self._transaction = transaction
+    Provides async/await support for account operations.
+    Uses the same executor pattern as AccountManager.
+    """
 
-    def _execute_sql(self, sql: str):
-        """Execute SQL within transaction"""
-        return self._transaction.execute(sql)
+    def __init__(self, client, executor=None):
+        """
+        Initialize async AccountManager.
 
-    # Override all methods to use transaction
-    def create_account(self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None) -> Account:
+        Args:
+            client: MatrixOne async client instance
+            executor: Optional executor (e.g., async session) for executing SQL.
+                     If None, uses client.execute
+        """
+        super().__init__(client)
+        self.executor = executor
+
+    def _get_executor(self):
+        """Get the executor for SQL execution (session or client)"""
+        return self.executor if self.executor else self._client
+
+    async def create_account(
+        self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None
+    ) -> Account:
+        """Create a new account asynchronously"""
         try:
-            sql_parts = [f"CREATE ACCOUNT {self._client._escape_identifier(account_name)}"]
-            sql_parts.append(f"ADMIN_NAME {self._client._escape_string(admin_name)}")
-            sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
-
-            if comment:
-                sql_parts.append(f"COMMENT {self._client._escape_string(comment)}")
-
-            sql = " ".join(sql_parts)
-            self._transaction.execute(sql)
-
-            return self.get_account(account_name)
+            sql = self._build_create_account_sql(account_name, admin_name, password, comment)
+            await self._get_executor().execute(sql)
+            return await self.get_account(account_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to create account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to create account '{account_name}': {e}")
 
-    # Add other transaction methods as needed...
+    async def drop_account(self, account_name: str, if_exists: bool = False) -> None:
+        """Drop account asynchronously"""
+        try:
+            sql = self._build_drop_account_sql(account_name, if_exists)
+            await self._get_executor().execute(sql)
+        except Exception as e:
+            raise AccountError(f"Failed to drop account '{account_name}': {e}")
+
+    async def get_account(self, account_name: str) -> Account:
+        """Get account by name asynchronously"""
+        try:
+            sql = self._build_get_account_sql()
+            result = await self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                raise AccountError(f"Account '{account_name}' not found")
+
+            for row in result.rows:
+                if row[0] == account_name:
+                    return self._row_to_account(row)
+
+            raise AccountError(f"Account '{account_name}' not found")
+
+        except Exception as e:
+            raise AccountError(f"Failed to get account '{account_name}': {e}")
+
+    async def list_accounts(self) -> List[Account]:
+        """List all accounts asynchronously"""
+        try:
+            sql = self._build_list_accounts_sql()
+            result = await self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                return []
+
+            accounts = []
+            for row in result.rows:
+                accounts.append(self._row_to_account(row))
+
+            return accounts
+
+        except Exception as e:
+            raise AccountError(f"Failed to list accounts: {e}")
+
+    async def create_user(self, user_name: str, password: str, comment: Optional[str] = None) -> User:
+        """Create a new user asynchronously"""
+        try:
+            sql = self._build_create_user_sql(user_name, password, comment)
+            await self._get_executor().execute(sql)
+
+            # Return a User object with current account context
+            current_account = self._get_current_account()
+            return User(
+                name=user_name,
+                host="%",
+                account=current_account,
+                created_time=datetime.now(),
+                status="ACTIVE",
+                comment=comment,
+            )
+
+        except Exception as e:
+            raise AccountError(f"Failed to create user '{user_name}': {e}")
+
+    async def list_users(self) -> List[User]:
+        """List users in current account asynchronously"""
+        try:
+            sql = self._build_list_users_sql()
+            result = await self._get_executor().execute(sql)
+
+            if not result or not result.rows:
+                return []
+
+            current_user_name = result.rows[0][0]
+            current_account = self._get_current_account()
+            return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
+
+        except Exception as e:
+            raise AccountError(f"Failed to list users: {e}")

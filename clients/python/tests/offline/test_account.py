@@ -17,11 +17,9 @@ Unit tests for MatrixOne Account Management functionality
 """
 
 import unittest
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, AsyncMock
 from datetime import datetime
-from matrixone.account import AccountManager, Account, User, TransactionAccountManager
-from matrixone.async_client import AsyncAccountManager, AsyncTransactionAccountManager
+from matrixone.account import AccountManager, Account, User, AsyncAccountManager
 from matrixone.exceptions import AccountError
 
 
@@ -436,7 +434,7 @@ class TestAccountManager(unittest.TestCase):
 
 
 class TestTransactionAccountManager(unittest.TestCase):
-    """Test TransactionAccountManager functionality"""
+    """Test AccountManager with executor (session) functionality"""
 
     def setUp(self):
         """Set up test fixtures"""
@@ -446,13 +444,14 @@ class TestTransactionAccountManager(unittest.TestCase):
         self.transaction = Mock()
         self.transaction.client = self.client
         self.transaction.execute = Mock()
-        self.transaction_account_manager = TransactionAccountManager(self.transaction)
+        self.transaction_account_manager = AccountManager(self.client, executor=self.transaction)
 
     def test_create_account_in_transaction(self):
         """Test account creation within transaction"""
-        # Mock successful execution - first call for CREATE, second call for get_account
+        # Mock successful execution - first call for CREATE, second call for get_account (SHOW ACCOUNTS)
         mock_result = Mock()
-        mock_result.rows = [('test_account', 'admin_user', datetime.now(), 'OPEN', 'Test account', None, None)]
+        # SHOW ACCOUNTS format: account_name, admin_name, created, status, comments
+        mock_result.rows = [['test_account', 'admin_user', datetime.now(), 'OPEN', 'Test account']]
         self.transaction.execute = Mock(return_value=mock_result)
         self.client.execute = Mock(return_value=mock_result)
 
@@ -468,9 +467,9 @@ class TestTransactionAccountManager(unittest.TestCase):
         self.assertIsInstance(account, Account)
         self.assertEqual(account.name, "test_account")
 
-        # Verify transaction.execute was called - only for CREATE ACCOUNT
-        self.assertEqual(self.transaction.execute.call_count, 1)  # CREATE only
-        self.assertEqual(self.client.execute.call_count, 1)  # get_account
+        # Verify transaction.execute was called twice - CREATE and get_account (both use executor)
+        self.assertEqual(self.transaction.execute.call_count, 2)
+        self.assertEqual(self.client.execute.call_count, 0)  # Not used when executor is provided
         first_call_args = self.transaction.execute.call_args_list[0][0][0]
         self.assertIn("CREATE ACCOUNT", first_call_args)
 
@@ -607,37 +606,22 @@ class TestAsyncAccountManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_list_users_success(self):
         """Test successful async user listing"""
-        # Mock successful execution
+        # Mock successful execution (list_users only returns current user)
         mock_result = AsyncMock()
-        mock_result.rows = [
-            ('user1', 'localhost', 'account1', datetime.now(), 'OPEN', 'User 1', None, None),
-            (
-                'user2',
-                'localhost',
-                'account1',
-                datetime.now(),
-                'LOCKED',
-                'User 2',
-                datetime.now(),
-                'Security issue',
-            ),
-        ]
+        mock_result.rows = [['current_user']]
         self.client.execute = AsyncMock(return_value=mock_result)
 
         # Test async user listing
         users = await self.async_account_manager.list_users()
 
         # Verify
-        self.assertEqual(len(users), 2)
+        self.assertEqual(len(users), 1)
         self.assertIsInstance(users[0], User)
-        self.assertIsInstance(users[1], User)
-        self.assertEqual(users[0].name, "user1")
-        self.assertEqual(users[1].name, "user2")
-        self.assertEqual(users[1].status, "LOCKED")
+        self.assertEqual(users[0].name, "current_user")
 
 
 class TestAsyncTransactionAccountManager(unittest.IsolatedAsyncioTestCase):
-    """Test AsyncTransactionAccountManager functionality"""
+    """Test AsyncAccountManager with executor (session) functionality"""
 
     def setUp(self):
         """Set up test fixtures"""
@@ -647,7 +631,7 @@ class TestAsyncTransactionAccountManager(unittest.IsolatedAsyncioTestCase):
         self.transaction = AsyncMock()
         self.transaction.client = self.client
         self.transaction.execute = AsyncMock()
-        self.async_transaction_account_manager = AsyncTransactionAccountManager(self.transaction)
+        self.async_transaction_account_manager = AsyncAccountManager(self.client, executor=self.transaction)
 
     async def test_async_transaction_create_account(self):
         """Test account creation within async transaction"""

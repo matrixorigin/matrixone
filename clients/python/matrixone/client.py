@@ -29,7 +29,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
-from .account import AccountManager, TransactionAccountManager
+from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
@@ -3011,7 +3011,7 @@ class Session(SQLAlchemySession):
     - restore: RestoreManager for restore operations
     - pitr: PitrManager for point-in-time recovery
     - pubsub: PubSubManager for pub/sub operations
-    - account: TransactionAccountManager for account operations
+    - account: AccountManager for account operations
     - vector_ops: TransactionVectorIndexManager for vector operations
     - fulltext_index: TransactionFulltextIndexManager for fulltext operations
 
@@ -3058,7 +3058,7 @@ class Session(SQLAlchemySession):
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)
-        self.account = TransactionAccountManager(self)
+        self.account = AccountManager(client, executor=self)
         self.vector_ops = TransactionVectorIndexManager(client, self)
         self.fulltext_index = TransactionFulltextIndexManager(client, self)
         self.metadata = TransactionMetadataManager(client, self)

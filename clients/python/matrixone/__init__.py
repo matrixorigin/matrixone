@@ -20,7 +20,7 @@ for database operations, snapshot management, PITR, restore operations,
 table cloning, and mo-ctl integration.
 """
 
-from .account import Account, AccountManager, Grant, Role, TransactionAccountManager, User
+from .account import Account, AccountManager, Grant, Role, User
 from .async_client import AsyncClient, AsyncResultSet
 from .client import Client
 from .session import Session, AsyncSession
@@ -134,7 +134,6 @@ __all__ = [
     "User",
     "Role",
     "Grant",
-    "TransactionAccountManager",
     "LoadDataManager",
     "TransactionLoadDataManager",
     "AsyncLoadDataManager",
