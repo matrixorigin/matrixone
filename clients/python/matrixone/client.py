@@ -3121,17 +3121,22 @@ class Session(SQLAlchemySession):
     context manager and should not be instantiated directly.
     """
 
-    def __init__(self, bind=None, client=None, **kwargs):
+    def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
         """
         Initialize MatrixOne Session.
 
         Args:
             bind: SQLAlchemy Engine or Connection to bind to
             client: MatrixOne Client instance
+            wrap_session: Existing SQLAlchemy Session to wrap with MatrixOne features
             **kwargs: Additional arguments passed to SQLAlchemy Session
         """
-        # Initialize parent SQLAlchemy Session with engine/connection
-        super().__init__(bind=bind, expire_on_commit=False, **kwargs)
+        if wrap_session is not None:
+            # Wrap existing SQLAlchemy session with MatrixOne features
+            self.__dict__.update(wrap_session.__dict__)
+        else:
+            # Initialize parent SQLAlchemy Session with engine/connection
+            super().__init__(bind=bind, expire_on_commit=False, **kwargs)
 
         # Store MatrixOne client reference
         self.client = client

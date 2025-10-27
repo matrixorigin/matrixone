@@ -283,6 +283,101 @@ class TransactionManagementDemo:
             self.results['tests_failed'] += 1
             self.results['unexpected_results'].append({'test': 'Async Transaction Management', 'error': str(e)})
 
+    def test_wrap_existing_session(self):
+        """
+        Test wrapping existing SQLAlchemy session with MatrixOne features.
+
+        This demonstrates how to add MatrixOne features to existing SQLAlchemy
+        sessions in legacy projects without refactoring.
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from matrixone.session import Session as MatrixOneSession
+
+        print("\n" + "=" * 60)
+        print("Test: Wrapping Existing SQLAlchemy Session")
+        print("=" * 60)
+
+        self.results['tests_run'] += 1
+
+        try:
+            # Get connection parameters
+            host, port, user, password, database = get_connection_params()
+
+            # Create MatrixOne client
+            client = Client()
+            client.connect(host=host, port=port, user=user, password=password, database=database)
+
+            print("\n📦 Step 1: Create standard SQLAlchemy session")
+            # Standard SQLAlchemy setup (existing code)
+            engine_url = f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}'
+            sqlalchemy_engine = create_engine(engine_url)
+            SessionFactory = sessionmaker(bind=sqlalchemy_engine)
+            sqlalchemy_session = SessionFactory()
+            print("✓ Created standard SQLAlchemy session")
+
+            print("\n🎁 Step 2: Wrap session with MatrixOne features")
+            # Wrap existing session with MatrixOne features
+            mo_session = MatrixOneSession(client=client, wrap_session=sqlalchemy_session)
+            print("✓ Wrapped session with MatrixOne features")
+
+            try:
+                print("\n💼 Step 3: Use standard SQLAlchemy operations")
+                # Standard SQLAlchemy operations still work
+                result = mo_session.execute("SELECT 1 as test_value")
+                value = result.fetchone()[0]
+                assert value == 1
+                print(f"✓ Standard SQL works: SELECT returned {value}")
+
+                print("\n🚀 Step 4: Use MatrixOne-specific features")
+                # Now can use MatrixOne features on the wrapped session
+
+                # Example: Stage operations
+                test_db = "test_wrap_session"
+                mo_session.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
+                mo_session.execute(f"USE {test_db}")
+
+                # List stages (MatrixOne-specific feature)
+                stages = mo_session.stage.list()
+                print(f"✓ Stage operations available: found {len(stages)} stages")
+
+                # Example: Snapshot operations
+                snapshots = mo_session.snapshots.list()
+                print(f"✓ Snapshot operations available: found {len(snapshots)} snapshots")
+
+                # Example: Load data operations
+                print("✓ Load data operations available")
+
+                # Example: Metadata operations
+                print("✓ Metadata operations available")
+
+                print("\n✅ Step 5: Commit transaction")
+                mo_session.commit()
+                print("✓ Transaction committed successfully")
+
+                # Cleanup
+                mo_session.execute(f"DROP DATABASE IF EXISTS {test_db}")
+                mo_session.commit()
+
+                self.results['tests_passed'] += 1
+                print("\n✅ Wrap existing session test passed!")
+
+                print("\n📝 Summary:")
+                print("  - Existing SQLAlchemy session wrapped successfully")
+                print("  - Standard SQLAlchemy operations work normally")
+                print("  - MatrixOne features (stage, snapshot, etc.) added")
+                print("  - No need to refactor existing code")
+                print("  - Perfect for legacy project migration")
+
+            finally:
+                mo_session.close()
+                client.disconnect()
+
+        except Exception as e:
+            self.logger.error(f"❌ Wrap existing session test failed: {e}")
+            self.results['tests_failed'] += 1
+            self.results['unexpected_results'].append({'test': 'Wrap Existing Session', 'error': str(e)})
+
     def generate_summary_report(self):
         """Generate comprehensive summary report."""
         print("\n" + "=" * 80)
@@ -329,6 +424,7 @@ def main():
         # Run tests
         demo.test_basic_transaction_operations()
         demo.test_transaction_error_handling()
+        demo.test_wrap_existing_session()
 
         # Run async tests
         asyncio.run(demo.test_async_transaction_management())

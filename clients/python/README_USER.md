@@ -175,6 +175,44 @@ client.disconnect()
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
 - ✅ Full SQLAlchemy ORM support
 
+### Wrapping Existing Sessions (For Legacy Code)
+
+If you have existing SQLAlchemy code, wrap your sessions to add MatrixOne features:
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from matrixone import Client
+from matrixone.session import Session as MatrixOneSession
+
+# Your existing SQLAlchemy code
+engine = create_engine('mysql+pymysql://root:111@localhost:6001/test')
+SessionFactory = sessionmaker(bind=engine)
+sqlalchemy_session = SessionFactory()
+
+# Create MatrixOne client
+mo_client = Client()
+mo_client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+# Wrap existing session with MatrixOne features
+mo_session = MatrixOneSession(
+    client=mo_client,
+    wrap_session=sqlalchemy_session
+)
+
+# Now use both SQLAlchemy and MatrixOne features
+mo_session.execute("SELECT * FROM users")  # Standard SQLAlchemy
+mo_session.stage.create_s3('backup', bucket='my-backups')  # MatrixOne feature
+mo_session.snapshots.create('backup', level='database')  # MatrixOne feature
+mo_session.commit()
+mo_session.close()
+```
+
+**Perfect for:**
+- 🔄 Migrating legacy projects incrementally
+- 🏢 Adding MatrixOne to existing applications
+- 📦 Testing new features without refactoring
+
 ### SQLAlchemy ORM Integration
 
 The SDK provides seamless SQLAlchemy integration:

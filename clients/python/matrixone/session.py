@@ -79,12 +79,71 @@ class Session(SQLAlchemySession):
     - **load_data**: LoadDataManager for bulk data loading
     - **stage**: StageManager for external stage management
 
+    Creating Session:
+
+    There are two ways to create a MatrixOne Session:
+
+    1. New Session (Recommended): Create directly from client::
+
+        with client.session() as session:
+            # Your operations here
+            pass
+
+    2. Wrap Existing Session (For Legacy Projects): Wrap existing SQLAlchemy session::
+
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from matrixone.session import Session as MatrixOneSession
+
+        # Your existing SQLAlchemy code
+        engine = create_engine('mysql+pymysql://...')
+        SessionFactory = sessionmaker(bind=engine)
+        sqlalchemy_session = SessionFactory()
+
+        # Wrap with MatrixOne features
+        mo_session = MatrixOneSession(
+            client=mo_client,
+            wrap_session=sqlalchemy_session
+        )
+        # Now you can use both SQLAlchemy and MatrixOne features
+
     Usage Examples::
 
         from matrixone import Client
         from sqlalchemy import select, insert, update, delete
 
         client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+        # ============================================================
+        # Example 0: Wrapping Existing SQLAlchemy Session (Legacy Projects)
+        # ============================================================
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from matrixone.session import Session as MatrixOneSession
+
+        # Your existing SQLAlchemy setup
+        engine = create_engine('mysql+pymysql://root:111@127.0.0.1:6001/test')
+        SessionFactory = sessionmaker(bind=engine)
+        existing_session = SessionFactory()
+
+        # Wrap it with MatrixOne features
+        mo_session = MatrixOneSession(
+            client=client,
+            wrap_session=existing_session
+        )
+
+        try:
+            # Standard SQLAlchemy operations work
+            result = mo_session.execute("SELECT * FROM users")
+
+            # MatrixOne features now available
+            mo_session.stage.create_s3('backup', bucket='my-backup')
+            mo_session.snapshots.create('snapshot1', level='database')
+            mo_session.load_data.from_csv('/data/file.csv', 'users')
+
+            mo_session.commit()
+        finally:
+            mo_session.close()
 
         # ============================================================
         # Example 1: Basic Transaction with ORM-style Operations
@@ -112,7 +171,7 @@ class Session(SQLAlchemySession):
             order = Order(user_id=1, amount=50.0)
 
             # Add to session
-            session.add(user)
+                session.add(user)
             session.add(order)
 
             # Query using ORM
@@ -125,12 +184,12 @@ class Session(SQLAlchemySession):
             user.email = "newemail@example.com"
 
             # Commit explicitly (or let context manager do it)
-            session.commit()
+                session.commit()
 
         # ============================================================
         # Example 3: MatrixOne Snapshot Operations in Transaction
         # ============================================================
-        with client.session() as session:
+            with client.session() as session:
             # Create snapshot within transaction
             snapshot = session.snapshots.create(
                 name='daily_backup',
@@ -267,17 +326,31 @@ class Session(SQLAlchemySession):
         - SQLAlchemy Session: Parent class documentation
     """
 
-    def __init__(self, bind=None, client=None, **kwargs):
+    def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
         """
         Initialize MatrixOne Session.
 
         Args:
             bind: SQLAlchemy Engine or Connection to bind to
             client: MatrixOne Client instance
+            wrap_session: Existing SQLAlchemy Session to wrap with MatrixOne features
             **kwargs: Additional arguments passed to SQLAlchemy Session
+
+        Examples:
+            # Create new session from engine
+            session = Session(bind=engine, client=client)
+
+            # Wrap existing SQLAlchemy session (for legacy projects)
+            existing_session = sessionmaker(bind=engine)()
+            mo_session = Session(client=client, wrap_session=existing_session)
         """
-        # Initialize parent SQLAlchemy Session with engine/connection
-        super().__init__(bind=bind, expire_on_commit=False, **kwargs)
+        if wrap_session is not None:
+            # Wrap existing SQLAlchemy session with MatrixOne features
+            # Copy the session's state to this instance
+            self.__dict__.update(wrap_session.__dict__)
+        else:
+            # Initialize parent SQLAlchemy Session with engine/connection
+            super().__init__(bind=bind, expire_on_commit=False, **kwargs)
 
         # Store MatrixOne client reference
         self.client = client
@@ -923,6 +996,33 @@ class AsyncSession(SQLAlchemyAsyncSession):
     - **load_data**: AsyncLoadDataManager for async bulk loading
     - **stage**: AsyncStageManager for async stage management
 
+    Creating AsyncSession:
+
+    There are two ways to create a MatrixOne AsyncSession:
+
+    1. **New AsyncSession (Recommended)**: Create directly from async client::
+
+        async with client.session() as session:
+            # Your async operations here
+            pass
+
+    2. **Wrap Existing AsyncSession (For Legacy Projects)**: Wrap existing SQLAlchemy async session::
+
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from matrixone.session import AsyncSession as MatrixOneAsyncSession
+
+        # Your existing async SQLAlchemy code
+        async_engine = create_async_engine('mysql+aiomysql://...')
+        AsyncSessionFactory = async_sessionmaker(bind=async_engine)
+        sqlalchemy_async_session = AsyncSessionFactory()
+
+        # Wrap with MatrixOne features
+        mo_async_session = MatrixOneAsyncSession(
+            client=mo_async_client,
+            wrap_session=sqlalchemy_async_session
+        )
+        # Now you can use both async SQLAlchemy and MatrixOne features
+
     Usage Examples::
 
         from matrixone import AsyncClient
@@ -932,6 +1032,36 @@ class AsyncSession(SQLAlchemyAsyncSession):
         async def main():
             client = AsyncClient()
             await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # ========================================
+            # Example 0: Wrapping Existing Async Session (Legacy Projects)
+            # ========================================
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+            from matrixone.session import AsyncSession as MatrixOneAsyncSession
+
+            # Your existing async SQLAlchemy setup
+            async_engine = create_async_engine('mysql+aiomysql://root:111@127.0.0.1:6001/test')
+            AsyncSessionFactory = async_sessionmaker(bind=async_engine)
+            existing_async_session = AsyncSessionFactory()
+
+            # Wrap it with MatrixOne features
+            mo_async_session = MatrixOneAsyncSession(
+                client=client,
+                wrap_session=existing_async_session
+            )
+
+            try:
+                # Standard async SQLAlchemy operations work
+                result = await mo_async_session.execute("SELECT * FROM users")
+
+                # MatrixOne async features now available
+                await mo_async_session.stage.create_s3('backup', bucket='my-backup')
+                await mo_async_session.snapshots.create('snapshot1', level='database')
+                await mo_async_session.load_data.from_csv('/data/file.csv', 'users')
+
+                await mo_async_session.commit()
+            finally:
+                await mo_async_session.close()
 
             # ========================================
             # Example 1: Basic Async Transaction
@@ -1017,20 +1147,34 @@ class AsyncSession(SQLAlchemyAsyncSession):
         - SQLAlchemy AsyncSession: Parent class documentation
     """
 
-    def __init__(self, bind=None, client=None, **kwargs):
+    def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
         """
         Initialize MatrixOne AsyncSession.
 
         Args:
             bind: SQLAlchemy AsyncEngine or AsyncConnection to bind to
             client: MatrixOne AsyncClient instance
+            wrap_session: Existing SQLAlchemy AsyncSession to wrap with MatrixOne features
             **kwargs: Additional arguments passed to SQLAlchemy AsyncSession
+
+        Examples:
+            # Create new async session from engine
+            session = AsyncSession(bind=async_engine, client=async_client)
+
+            # Wrap existing SQLAlchemy async session (for legacy projects)
+            existing_session = async_sessionmaker(bind=async_engine)()
+            mo_session = AsyncSession(client=async_client, wrap_session=existing_session)
         """
         # Store references before calling super().__init__
         self.client = client
 
-        # Initialize parent SQLAlchemy AsyncSession with engine/connection
-        super().__init__(bind=bind, expire_on_commit=False, **kwargs)
+        if wrap_session is not None:
+            # Wrap existing SQLAlchemy async session with MatrixOne features
+            # Copy the session's state to this instance
+            self.__dict__.update(wrap_session.__dict__)
+        else:
+            # Initialize parent SQLAlchemy AsyncSession with engine/connection
+            super().__init__(bind=bind, expire_on_commit=False, **kwargs)
 
         # Import manager classes dynamically to avoid circular imports
         # Some are defined in async_client.py after the AsyncSession class

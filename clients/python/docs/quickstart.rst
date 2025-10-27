@@ -140,6 +140,88 @@ Use ``client.session()`` for atomic transactions. All operations within a sessio
 - ✅ **Access to all managers** (snapshots, clones, load_data, etc.)
 - ✅ **Full SQLAlchemy ORM** support
 
+Wrapping Existing SQLAlchemy Sessions
+--------------------------------------
+
+If you have existing SQLAlchemy code, you can wrap your sessions to add MatrixOne features without refactoring:
+
+.. code-block:: python
+
+   from sqlalchemy import create_engine
+   from sqlalchemy.orm import sessionmaker
+   from matrixone import Client
+   from matrixone.session import Session as MatrixOneSession
+
+   # Your existing SQLAlchemy setup
+   engine = create_engine('mysql+pymysql://root:111@localhost:6001/test')
+   SessionFactory = sessionmaker(bind=engine)
+   sqlalchemy_session = SessionFactory()
+
+   # Create MatrixOne client
+   mo_client = Client()
+   mo_client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+   # Wrap your existing session with MatrixOne features
+   mo_session = MatrixOneSession(
+       client=mo_client,
+       wrap_session=sqlalchemy_session
+   )
+
+   try:
+       # Your existing SQLAlchemy operations still work
+       result = mo_session.execute("SELECT * FROM users")
+       
+       # Now you can also use MatrixOne-specific features
+       mo_session.stage.create_s3('backup_stage', bucket='my-backups')
+       mo_session.snapshots.create('daily_backup', level='database')
+       mo_session.load_data.from_csv('/data/users.csv', 'users')
+       
+       mo_session.commit()
+   finally:
+       mo_session.close()
+
+**Perfect For:**
+
+- 🔄 Gradual migration from pure SQLAlchemy to MatrixOne
+- 🏢 Adding MatrixOne features to existing enterprise applications
+- 📦 Legacy code modernization without complete refactoring
+- 🔧 Testing MatrixOne features alongside existing code
+
+**Async Version:**
+
+.. code-block:: python
+
+   from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+   from matrixone import AsyncClient
+   from matrixone.session import AsyncSession as MatrixOneAsyncSession
+
+   # Existing async SQLAlchemy setup
+   async_engine = create_async_engine('mysql+aiomysql://root:111@localhost:6001/test')
+   AsyncSessionFactory = async_sessionmaker(bind=async_engine)
+   sqlalchemy_async_session = AsyncSessionFactory()
+
+   # Create async MatrixOne client
+   mo_async_client = AsyncClient()
+   await mo_async_client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+   # Wrap existing async session
+   mo_async_session = MatrixOneAsyncSession(
+       client=mo_async_client,
+       wrap_session=sqlalchemy_async_session
+   )
+
+   try:
+       # Standard async SQLAlchemy operations
+       result = await mo_async_session.execute("SELECT * FROM users")
+       
+       # MatrixOne async features now available
+       await mo_async_session.stage.create_local('export_stage', '/exports/')
+       await mo_async_session.snapshots.create('async_backup', level='database')
+       
+       await mo_async_session.commit()
+   finally:
+       await mo_async_session.close()
+
 SQLAlchemy ORM Style (Recommended)
 -----------------------------------
 
