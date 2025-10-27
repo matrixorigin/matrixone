@@ -58,3 +58,21 @@ select * from ivf3 order by L2_DISTANCE(b, "[0, 0, 0, 0, 0, 101, 82, 4, 2, 0, 0,
 drop table ivf3;
 
 
+-- ivf4
+-- composite primary key
+create table ivf4(a bigint, b int, c vecf32(3), primary key (a, b));
+
+insert into ivf4 values (0, 1, "[1,2,3]"), (1, 2, "[2,2,3]"), (2, 3, "[1,3,3]"), (3, 4, "[1,2,4]"), (4, 5, "[1,2,5]"), (5,6, NULL);
+
+-- empty data
+create index idx01 using ivfflat on ivf4(c) op_type "vector_l2_ops" LISTS=1 ASYNC;
+
+select sleep(20);
+
+select *, L2_DISTANCE(c, "[2,2,3]") from ivf4 order by L2_DISTANCE(c, "[2,2,3]") LIMIT 6;
+
+drop table ivf4;
+
+-- end t4
+
+

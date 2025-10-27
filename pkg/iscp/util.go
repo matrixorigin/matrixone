@@ -251,14 +251,12 @@ func convertColIntoSql(
 		//|   �?   @  @@                  |
 		//+------------------------------+
 		value := data.([]float32)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
+		typstr := typ.DescString()
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
 	case types.T_array_float64:
 		value := data.([]float64)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
+		typstr := typ.DescString()
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
 	case types.T_date:
 		value := data.(types.Date)
 		sqlBuff = appendByte(sqlBuff, '\'')

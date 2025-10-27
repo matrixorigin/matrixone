@@ -9,8 +9,10 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (8, NULL, 'NOT INCLUDED'),
 (9, 'NOT INCLUDED BODY', NULL),
 (10, NULL, NULL);
-select sleep(30);
-sleep(30)
+create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT ftidx(body, title) ASYNC);
+insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4'),  ('id4', 4, 'bright red null', NULL);
+select sleep(20);
+sleep(20)
 0
 select * from src where match(body, title) against('red');
 id    body    title
@@ -20,4 +22,12 @@ show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) ASYNC\n)
 alter table src rename to src1;
+select * from src2 where match(body, title) against('red');
+id1    id2    body    title
+id0    0    red    t1
+id3    3    blue red    t4
+show create table src2;
+Table    Create Table
+src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT `ftidx`(`body`,`title`) ASYNC\n)
 drop table src1;
+drop table src2;

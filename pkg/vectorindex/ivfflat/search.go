@@ -164,7 +164,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	sql := fmt.Sprintf(
-		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IS NOT NULL AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -172,6 +172,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		tblcfg.DbName, tblcfg.EntriesTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		idx.Version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		instr,
 		rt.Limit,
