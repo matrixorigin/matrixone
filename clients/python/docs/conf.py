@@ -139,31 +139,66 @@ todo_include_todos = True
 latex_engine = 'pdflatex'  # Use pdflatex for compatibility  
 latex_elements = {
     'preamble': r'''
-% Define text replacements for all emoji and special characters
-\DeclareUnicodeCharacter{221A}{\ensuremath{\surd}}  % √
-\DeclareUnicodeCharacter{2588}{\rule{0.6em}{1em}}  % █
-\DeclareUnicodeCharacter{2705}{\textbf{[YES]}}     % ✅
-\DeclareUnicodeCharacter{274C}{\textbf{[NO]}}      % ❌
-\DeclareUnicodeCharacter{26A0}{\textbf{[!]}}       % ⚠
-\DeclareUnicodeCharacter{2B50}{\textbf{[*]}}       % ⭐
-\DeclareUnicodeCharacter{FE0F}{}                   % Variation Selector
-% All remaining emoji - convert to generic markers
+% Complete emoji and special character support for PDF generation
+\DeclareUnicodeCharacter{221A}{\ensuremath{\surd}}
+\DeclareUnicodeCharacter{2588}{\rule{0.6em}{1em}}
+\DeclareUnicodeCharacter{FE0F}{}
 \newcommand{\emojimarker}[1]{\textbf{[#1]}}
-\DeclareUnicodeCharacter{1F504}{\emojimarker{SYNC}}
-\DeclareUnicodeCharacter{1F3E2}{\emojimarker{BUILD}}
-\DeclareUnicodeCharacter{1F4A1}{\emojimarker{IDEA}}
-\DeclareUnicodeCharacter{1F4C1}{\emojimarker{FOLDER}}
-\DeclareUnicodeCharacter{1F4CA}{\emojimarker{CHART}}
-\DeclareUnicodeCharacter{1F4DD}{\emojimarker{MEMO}}
-\DeclareUnicodeCharacter{1F4E6}{\emojimarker{PKG}}
-\DeclareUnicodeCharacter{1F50D}{\emojimarker{SEARCH}}
-\DeclareUnicodeCharacter{1F527}{\emojimarker{TOOL}}
+\DeclareUnicodeCharacter{26A0}{\emojimarker{WARN}}
+\DeclareUnicodeCharacter{26A1}{\emojimarker{BOLT}}
+\DeclareUnicodeCharacter{2705}{\emojimarker{YES}}
+\DeclareUnicodeCharacter{2713}{\emojimarker{CHK}}
+\DeclareUnicodeCharacter{2717}{\emojimarker{X}}
+\DeclareUnicodeCharacter{2728}{\emojimarker{STAR}}
+\DeclareUnicodeCharacter{274C}{\emojimarker{NO}}
+\DeclareUnicodeCharacter{1F310}{\emojimarker{GLOB}}
+\DeclareUnicodeCharacter{1F381}{\emojimarker{GIFT}}
 \DeclareUnicodeCharacter{1F389}{\emojimarker{PARTY}}
-\DeclareUnicodeCharacter{1F3AF}{\emojimarker{TARGET}}
-\DeclareUnicodeCharacter{1F680}{\emojimarker{ROCKET}}
+\DeclareUnicodeCharacter{1F3A8}{\emojimarker{ART}}
+\DeclareUnicodeCharacter{1F3AF}{\emojimarker{TGT}}
+\DeclareUnicodeCharacter{1F3E2}{\emojimarker{BUILD}}
+\DeclareUnicodeCharacter{1F3EA}{\emojimarker{SHOP}}
+\DeclareUnicodeCharacter{1F41B}{\emojimarker{BUG}}
+\DeclareUnicodeCharacter{1F44B}{\emojimarker{WAVE}}
+\DeclareUnicodeCharacter{1F464}{\emojimarker{USER}}
+\DeclareUnicodeCharacter{1F465}{\emojimarker{USERS}}
+\DeclareUnicodeCharacter{1F4A1}{\emojimarker{IDEA}}
+\DeclareUnicodeCharacter{1F4AC}{\emojimarker{CHAT}}
+\DeclareUnicodeCharacter{1F4B0}{\emojimarker{MONEY}}
+\DeclareUnicodeCharacter{1F4BB}{\emojimarker{PC}}
+\DeclareUnicodeCharacter{1F4BC}{\emojimarker{CASE}}
+\DeclareUnicodeCharacter{1F4BE}{\emojimarker{DISK}}
+\DeclareUnicodeCharacter{1F4C2}{\emojimarker{DIR}}
+\DeclareUnicodeCharacter{1F4C8}{\emojimarker{UP}}
+\DeclareUnicodeCharacter{1F4CA}{\emojimarker{CHART}}
+\DeclareUnicodeCharacter{1F4CB}{\emojimarker{CLIP}}
+\DeclareUnicodeCharacter{1F4D1}{\emojimarker{BOOK}}
+\DeclareUnicodeCharacter{1F4D6}{\emojimarker{READ}}
+\DeclareUnicodeCharacter{1F4DA}{\emojimarker{BOOKS}}
+\DeclareUnicodeCharacter{1F4DC}{\emojimarker{SCROLL}}
+\DeclareUnicodeCharacter{1F4DD}{\emojimarker{MEMO}}
+\DeclareUnicodeCharacter{1F4E4}{\emojimarker{OUT}}
+\DeclareUnicodeCharacter{1F4E5}{\emojimarker{IN}}
+\DeclareUnicodeCharacter{1F4E6}{\emojimarker{PKG}}
+\DeclareUnicodeCharacter{1F4E7}{\emojimarker{MAIL}}
+\DeclareUnicodeCharacter{1F4F8}{\emojimarker{CAM}}
+\DeclareUnicodeCharacter{1F504}{\emojimarker{SYNC}}
+\DeclareUnicodeCharacter{1F50D}{\emojimarker{MAG}}
+\DeclareUnicodeCharacter{1F50E}{\emojimarker{ZOOM}}
+\DeclareUnicodeCharacter{1F517}{\emojimarker{LINK}}
+\DeclareUnicodeCharacter{1F525}{\emojimarker{FIRE}}
+\DeclareUnicodeCharacter{1F527}{\emojimarker{TOOL}}
+\DeclareUnicodeCharacter{1F5C4}{\emojimarker{CAB}}
+\DeclareUnicodeCharacter{1F680}{\emojimarker{ROCK}}
 \DeclareUnicodeCharacter{1F6A7}{\emojimarker{WORK}}
 \DeclareUnicodeCharacter{1F6A8}{\emojimarker{ALERT}}
-\DeclareUnicodeCharacter{1F6E0}{\emojimarker{WRENCH}}
+\DeclareUnicodeCharacter{1F6D2}{\emojimarker{CART}}
+\DeclareUnicodeCharacter{1F6E0}{\emojimarker{WRCH}}
+\DeclareUnicodeCharacter{1F6E1}{\emojimarker{SHIELD}}
+\DeclareUnicodeCharacter{1F91D}{\emojimarker{SHAKE}}
+\DeclareUnicodeCharacter{1F9E0}{\emojimarker{BRAIN}}
+\DeclareUnicodeCharacter{1F9EA}{\emojimarker{TEST}}
+\DeclareUnicodeCharacter{1F9F9}{\emojimarker{CLEAN}}
 ''',
     'papersize': 'a4paper',
     'pointsize': '10pt',
