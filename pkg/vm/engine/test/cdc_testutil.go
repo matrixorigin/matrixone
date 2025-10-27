@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -550,4 +551,159 @@ func (s *MockEngineSink) ClearStats() {
 	s.BeginCount = 0
 	s.CommitCount = 0
 	s.RollbackCount = 0
+}
+
+// MockWatermarkUpdater is a mock implementation of WatermarkUpdater for CDC unit tests
+// It stores watermarks in memory without database persistence
+type MockWatermarkUpdater struct {
+	mu sync.RWMutex
+
+	// In-memory watermark storage
+	watermarks map[cdc.WatermarkKey]types.TS
+	errMsgs    map[cdc.WatermarkKey]string
+
+	// Statistics for test verification
+	GetOrAddCommittedCount int
+	UpdateOnlyCount        int
+	UpdateErrMsgCount      int
+	RemoveCachedCount      int
+	ForceFlushCount        int
+}
+
+func NewMockWatermarkUpdater() *MockWatermarkUpdater {
+	return &MockWatermarkUpdater{
+		watermarks: make(map[cdc.WatermarkKey]types.TS),
+		errMsgs:    make(map[cdc.WatermarkKey]string),
+	}
+}
+
+func (m *MockWatermarkUpdater) Start() {
+	// No-op for mock
+}
+
+func (m *MockWatermarkUpdater) Stop() {
+	// No-op for mock
+}
+
+func (m *MockWatermarkUpdater) GetFromCache(
+	ctx context.Context,
+	key *cdc.WatermarkKey,
+) (watermark types.TS, err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	wm, ok := m.watermarks[*key]
+	if !ok {
+		return types.TS{}, cdc.ErrNoWatermarkFound
+	}
+	return wm, nil
+}
+
+func (m *MockWatermarkUpdater) UpdateWatermarkErrMsg(
+	ctx context.Context,
+	key *cdc.WatermarkKey,
+	errMsg string,
+) (err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.errMsgs[*key] = errMsg
+	m.UpdateErrMsgCount++
+	return nil
+}
+
+func (m *MockWatermarkUpdater) UpdateWatermarkOnly(
+	ctx context.Context,
+	key *cdc.WatermarkKey,
+	watermark *types.TS,
+) (err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.watermarks[*key] = *watermark
+	m.UpdateOnlyCount++
+	return nil
+}
+
+func (m *MockWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context,
+	key *cdc.WatermarkKey,
+) (err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.watermarks, *key)
+	delete(m.errMsgs, *key)
+	m.RemoveCachedCount++
+	return nil
+}
+
+func (m *MockWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ForceFlushCount++
+	return nil
+}
+
+func (m *MockWatermarkUpdater) GetOrAddCommitted(
+	ctx context.Context,
+	key *cdc.WatermarkKey,
+	watermark *types.TS,
+) (ret types.TS, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if watermark exists
+	if existing, ok := m.watermarks[*key]; ok {
+		// Return the larger watermark
+		if existing.GE(watermark) {
+			ret = existing
+		} else {
+			m.watermarks[*key] = *watermark
+			ret = *watermark
+		}
+	} else {
+		// Add new watermark
+		m.watermarks[*key] = *watermark
+		ret = *watermark
+	}
+
+	m.GetOrAddCommittedCount++
+	return ret, nil
+}
+
+// GetWatermark retrieves a watermark for testing verification
+func (m *MockWatermarkUpdater) GetWatermark(key cdc.WatermarkKey) (types.TS, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wm, ok := m.watermarks[key]
+	return wm, ok
+}
+
+// GetErrMsg retrieves an error message for testing verification
+func (m *MockWatermarkUpdater) GetErrMsg(key cdc.WatermarkKey) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	errMsg, ok := m.errMsgs[key]
+	return errMsg, ok
+}
+
+// GetStats returns statistics for test verification
+func (m *MockWatermarkUpdater) GetStats() (getOrAdd, updateOnly, updateErr, remove, flush int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.GetOrAddCommittedCount, m.UpdateOnlyCount, m.UpdateErrMsgCount,
+		m.RemoveCachedCount, m.ForceFlushCount
+}
+
+// ClearStats clears all statistics
+func (m *MockWatermarkUpdater) ClearStats() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetOrAddCommittedCount = 0
+	m.UpdateOnlyCount = 0
+	m.UpdateErrMsgCount = 0
+	m.RemoveCachedCount = 0
+	m.ForceFlushCount = 0
 }
