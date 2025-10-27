@@ -135,6 +135,34 @@ intersphinx_mapping = {
 # -- Options for todo extension ----------------------------------------------
 todo_include_todos = True
 
+# -- Options for LaTeX output ------------------------------------------------
+latex_engine = 'pdflatex'  # Use pdflatex for compatibility  
+latex_elements = {
+    'preamble': r'''
+% Define text replacements for all emoji characters used in documentation
+\DeclareUnicodeCharacter{2705}{\textbf{[YES]}}  % ✅
+\DeclareUnicodeCharacter{274C}{\textbf{[NO]}}   % ❌
+\DeclareUnicodeCharacter{26A0}{\textbf{[WARN]}} % ⚠️
+\DeclareUnicodeCharacter{1F504}{\textbf{[SYNC]}}  % 🔄
+\DeclareUnicodeCharacter{1F4CA}{\textbf{[CHART]}}  % 📊
+\DeclareUnicodeCharacter{1F4DD}{\textbf{[MEMO]}}   % 📝
+\DeclareUnicodeCharacter{1F4C1}{\textbf{[FOLDER]}}  % 📁
+\DeclareUnicodeCharacter{1F50D}{\textbf{[SEARCH]}}  % 🔍
+\DeclareUnicodeCharacter{1F389}{\textbf{[PARTY]}}   % 🎉
+\DeclareUnicodeCharacter{1F4A1}{\textbf{[IDEA]}}    % 💡
+\DeclareUnicodeCharacter{1F6E0}{\textbf{[TOOL]}}    % 🛠
+\DeclareUnicodeCharacter{1F3AF}{\textbf{[TARGET]}}  % 🎯
+\DeclareUnicodeCharacter{1F680}{\textbf{[ROCKET]}}  % 🚀
+\DeclareUnicodeCharacter{1F4E6}{\textbf{[PACKAGE]}} % 📦
+\DeclareUnicodeCharacter{1F527}{\textbf{[WRENCH]}}  % 🔧
+''',
+    'papersize': 'a4paper',
+    'pointsize': '10pt',
+    'figure_align': 'htbp',
+    'inputenc': '',  # Don't use inputenc with UTF-8
+    'utf8extra': '',  # Don't use utf8extra
+}
+
 # -- Custom configuration ----------------------------------------------------
 html_theme_options = {
     'canonical_url': '',
