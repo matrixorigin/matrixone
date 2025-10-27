@@ -595,42 +595,7 @@ func mergeDiff(
 		cnt++
 		buf.WriteString("(")
 		for j := 2; j < len(row); j++ {
-			switch r := row[j].(type) {
-			case string:
-				buf.WriteString("'")
-				buf.WriteString(r)
-				buf.WriteString("'")
-			case []byte:
-				buf.WriteString("'")
-				buf.WriteString(string(r))
-				buf.WriteString("'")
-			case types.Date:
-				buf.WriteString("'")
-				buf.WriteString(r.String())
-				buf.WriteString("'")
-			case types.Timestamp:
-				buf.WriteString("'")
-				buf.WriteString(r.String2(ses.timeZone, colTypes[j-2].Scale))
-				buf.WriteString("'")
-			case types.Datetime:
-				buf.WriteString("'")
-				buf.WriteString(r.String2(colTypes[j-2].Scale))
-				buf.WriteString("'")
-			case types.Decimal64:
-				buf.WriteString("'")
-				buf.WriteString(r.Format(colTypes[j-2].Scale))
-				buf.WriteString("'")
-			case types.Decimal128:
-				buf.WriteString("'")
-				buf.WriteString(r.Format(colTypes[j-2].Scale))
-				buf.WriteString("'")
-			case types.Decimal256:
-				buf.WriteString("'")
-				buf.WriteString(r.Format(colTypes[j-2].Scale))
-				buf.WriteString("'")
-			default:
-				buf.WriteString(fmt.Sprintf("%v", r))
-			}
+			formatValIntoString(ses, row[j], colTypes[j-2], buf)
 			if j != len(row)-1 {
 				buf.WriteString(",")
 			}
@@ -1315,59 +1280,7 @@ func handleDelsOnLCA(
 			//bufVals.WriteString("(")
 
 			for j, _ := range tuple {
-				switch pk := tuple[j].(type) {
-				case string:
-					bufVals.WriteString("'")
-					bufVals.WriteString(pk)
-					bufVals.WriteString("'")
-				case float32:
-					bufVals.WriteString(strconv.FormatFloat(float64(pk), 'f', -1, 32))
-				case float64:
-					bufVals.WriteString(strconv.FormatFloat(pk, 'f', -1, 64))
-				case bool:
-					bufVals.WriteString(strconv.FormatBool(pk))
-				case uint8:
-					bufVals.WriteString(strconv.FormatUint(uint64(pk), 10))
-				case int8:
-					bufVals.WriteString(strconv.FormatInt(int64(pk), 10))
-				case uint16:
-					bufVals.WriteString(strconv.FormatUint(uint64(pk), 10))
-				case int16:
-					bufVals.WriteString(strconv.FormatInt(int64(pk), 10))
-				case uint32:
-					bufVals.WriteString(strconv.FormatUint(uint64(pk), 10))
-				case int32:
-					bufVals.WriteString(strconv.FormatInt(int64(pk), 10))
-				case uint64:
-					bufVals.WriteString(strconv.FormatUint(pk, 10))
-				case int64:
-					bufVals.WriteString(strconv.FormatInt(pk, 10))
-				case []uint8:
-					bufVals.WriteString("'")
-					bufVals.WriteString(string(pk))
-					bufVals.WriteString("'")
-				case types.Timestamp:
-					bufVals.WriteString("'")
-					bufVals.WriteString(pk.String2(time.Local, dels.GetType().Scale))
-					bufVals.WriteString("'")
-				case types.Datetime:
-					bufVals.WriteString("'")
-					bufVals.WriteString(pk.String2(dels.GetType().Scale))
-					bufVals.WriteString("'")
-				case types.Date:
-					bufVals.WriteString("'")
-					bufVals.WriteString(pk.String())
-					bufVals.WriteString("'")
-				case types.Decimal64:
-					bufVals.WriteString(pk.Format(dels.GetType().Scale))
-				case types.Decimal128:
-					bufVals.WriteString(pk.Format(dels.GetType().Scale))
-				case types.Decimal256:
-					bufVals.WriteString(pk.Format(dels.GetType().Scale))
-				default:
-					return nil, moerr.NewInternalErrorNoCtxf("unknown pk type: %T", pk)
-				}
-
+				formatValIntoString(ses, tuple[j], colTypes[pkIdxes[j]], bufVals)
 				if j != len(tuple)-1 {
 					bufVals.WriteString(", ")
 				}
@@ -1495,6 +1408,41 @@ func handleDelsOnLCA(
 	}
 
 	return
+}
+
+func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) {
+	switch t.Oid {
+	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
+		T_varbinary, types.T_binary, types.T_array_float32, types.T_array_float64:
+		buf.WriteString("'")
+		if x, ok := val.([]byte); ok {
+			buf.WriteString(string(x))
+		} else {
+			buf.WriteString(val.(string))
+		}
+		buf.WriteString("'")
+	case types.T_timestamp:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
+		buf.WriteString("'")
+	case types.T_datetime:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Datetime).String2(t.Scale))
+		buf.WriteString("'")
+	case types.T_date:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Date).String())
+		buf.WriteString("'")
+	case types.T_decimal64:
+		buf.WriteString(val.(types.Decimal64).Format(t.Scale))
+	case types.T_decimal128:
+		buf.WriteString(val.(types.Decimal128).Format(t.Scale))
+	case types.T_decimal256:
+		buf.WriteString(val.(types.Decimal256).Format(t.Scale))
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8,
+		types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
+		buf.WriteString(fmt.Sprintf("%v", val))
+	}
 }
 
 func buildShowDiffSchema(
