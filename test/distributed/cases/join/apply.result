@@ -1,3 +1,4 @@
+set enable_remap_hint = 1;
 drop table if exists t;
 create table t (a int, b int, j json);
 insert into t values(1,3,'{"foo":1,"bar":2}'),(2,-2,'{"foo":11,"bar":22}');
@@ -289,3 +290,4 @@ create table t1(a datetime,b datetime,c varchar);
 insert into t1 values('2020-02-28 00:00:00','2021-03-01 00:01:00', NULL);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
 invalid input: generate_series datetime step can't be NULL
+set enable_remap_hint = 0;
