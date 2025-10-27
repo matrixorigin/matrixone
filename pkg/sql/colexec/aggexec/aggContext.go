@@ -96,13 +96,6 @@ func (a *AggContext) getGroupContext(i int) AggGroupExecContext {
 	return nil
 }
 
-func (a *AggContext) getGroupContextBinaryMarshaller() []AggGroupExecContext {
-	if !a.hasGroupContext {
-		return nil
-	}
-	return a.groupContext
-}
-
 func (a *AggContext) getGroupContextEncodings() [][]byte {
 	if !a.hasGroupContext {
 		return nil

@@ -52,20 +52,20 @@ func MakeAggFunctionExpression(id int64, isDistinct bool, args []*plan.Expr, con
 	}
 }
 
-func (expr AggFuncExecExpression) GetAggID() int64 {
-	return expr.aggID
+func (ag *AggFuncExecExpression) GetAggID() int64 {
+	return ag.aggID
 }
 
-func (expr AggFuncExecExpression) IsDistinct() bool {
-	return expr.isDistinct
+func (ag *AggFuncExecExpression) IsDistinct() bool {
+	return ag.isDistinct
 }
 
-func (expr AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
-	return expr.argExpressions
+func (ag *AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
+	return ag.argExpressions
 }
 
-func (expr AggFuncExecExpression) GetExtraConfig() []byte {
-	return expr.extraConfig
+func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
+	return ag.extraConfig
 }
 
 // AggFuncExec is an interface to do execution for aggregation.
@@ -434,6 +434,9 @@ func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *op
 	var extra [][]byte
 	// read groups
 	cnt, err := types.ReadInt64(reader)
+	if err != nil {
+		return nil, nil, err
+	}
 	if cnt != 0 {
 		res = make([]T, cnt)
 		for i := range res {

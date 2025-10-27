@@ -233,6 +233,9 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	bat.rowCount = int(i64)
 
 	l, err := types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
 	if l != len(bat.Vecs) {
 		if len(bat.Vecs) > 0 {
 			bat.Clean(mp)
