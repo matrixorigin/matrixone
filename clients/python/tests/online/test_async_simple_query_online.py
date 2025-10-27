@@ -283,9 +283,10 @@ class TestAsyncSimpleQueryOnline:
         assert len(rows) > 0
 
         # Check that score column is included
-        assert len(results.columns) == 4  # id, title, content, score
-        assert "score" in results.columns
-        score_column_index = results.columns.index("score")
+        columns = list(results.keys())
+        assert len(columns) == 4  # id, title, content, score
+        assert "score" in columns
+        score_column_index = columns.index("score")
 
         # Verify score values are numeric
         for row in rows:
@@ -305,11 +306,13 @@ class TestAsyncSimpleQueryOnline:
             boolean_match("title", "content").encourage("artificial", "intelligence").label("relevance"),
         ).execute()
 
-        assert isinstance(results.fetchall(), list)
+        rows = results.fetchall()
+        assert isinstance(rows, list)
         # Score column should be present (custom alias doesn't change result structure)
-        if results.fetchall():
-            score_index = len(results.columns) - 1
-            for row in results.fetchall():
+        if rows:
+            columns = list(results.keys())
+            score_index = len(columns) - 1
+            for row in rows:
                 score = row[score_index]
                 assert isinstance(score, (int, float))
 
@@ -691,7 +694,7 @@ class TestAsyncTransactionSimpleQueryOnline:
     async def test_async_transaction_simple_query_basic(self, async_tx_client_setup):
         """Test basic async transaction simple query."""
         client, test_db = async_tx_client_setup
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             results = await tx.query(
                 AsyncArticle.title, AsyncArticle.content, boolean_match("title", "content").encourage("python")
             ).execute()
@@ -711,7 +714,7 @@ class TestAsyncTransactionSimpleQueryOnline:
     async def test_async_transaction_simple_query_with_score(self, async_tx_client_setup):
         """Test async transaction simple query with scoring."""
         client, test_db = async_tx_client_setup
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             results = await tx.query(
                 AsyncArticle.title,
                 AsyncArticle.content,
@@ -727,9 +730,10 @@ class TestAsyncTransactionSimpleQueryOnline:
                 assert True  # Query executed successfully
 
             # Check that score column is included
-            assert len(results.columns) == 3  # title, content, score
-            assert "score" in results.columns
-            score_column_index = results.columns.index("score")
+            columns = list(results.keys())
+            assert len(columns) == 3  # title, content, score
+            assert "score" in columns
+            score_column_index = columns.index("score")
 
             # Verify score values are numeric (if we have results)
             if len(rows) > 0:
@@ -742,7 +746,7 @@ class TestAsyncTransactionSimpleQueryOnline:
     async def test_async_transaction_simple_query_boolean(self, async_tx_client_setup):
         """Test async transaction simple query with boolean mode."""
         client, test_db = async_tx_client_setup
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             results = await (
                 tx.query(
                     AsyncArticle,
@@ -767,7 +771,7 @@ class TestAsyncTransactionSimpleQueryOnline:
     async def test_async_transaction_simple_query_complex(self, async_tx_client_setup):
         """Test complex async transaction simple query with multiple conditions."""
         client, test_db = async_tx_client_setup
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             results = await (
                 tx.query(
                     AsyncArticle.title,
@@ -789,7 +793,7 @@ class TestAsyncTransactionSimpleQueryOnline:
     async def test_async_transaction_simple_query_error_handling(self, async_tx_client_setup):
         """Test error handling in async transaction simple query."""
         client, test_db = async_tx_client_setup
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # This query should execute successfully now
             results = await tx.query(
                 AsyncArticle.title, AsyncArticle.content, boolean_match("title", "content").encourage("test")

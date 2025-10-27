@@ -104,7 +104,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test basic async transaction simple_query functionality"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test basic search within transaction
             result = await tx.query("async_tx_docs").filter(boolean_match("title", "content").encourage("python")).execute()
 
@@ -122,7 +122,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test async transaction simple_query with score"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test search with score within transaction
             result = await tx.query(
                 "async_tx_docs.title",
@@ -135,8 +135,9 @@ class TestAsyncTransactionSimpleQuery:
             assert len(rows) > 0
 
             # Verify results have score column
-            assert "score" in result.columns
-            score_column_index = result.columns.index("score")
+            columns = list(result.keys())
+            assert "score" in columns
+            score_column_index = columns.index("score")
 
             # Verify score values are numeric
             for row in rows:
@@ -149,7 +150,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test async transaction simple_query with boolean mode"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test boolean mode search within transaction
             result = (
                 await tx.query("async_tx_docs.title", "async_tx_docs.content")
@@ -172,7 +173,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test async transaction simple_query with WHERE conditions"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test search with WHERE conditions within transaction
             result = (
                 await tx.query("async_tx_docs.title", "async_tx_docs.content")
@@ -194,7 +195,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test async transaction simple_query with ordering and limit"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test search with ordering and limit within transaction
             result = (
                 await tx.query("async_tx_docs.title", "async_tx_docs.content")
@@ -217,7 +218,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test async transaction simple_query explain functionality"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test basic query functionality within transaction
             result = (
                 await tx.query("async_tx_docs.title", "async_tx_docs.content")
@@ -240,7 +241,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test multiple async transaction simple_query operations in one transaction"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test multiple searches within the same transaction
             results = []
 
@@ -282,7 +283,7 @@ class TestAsyncTransactionSimpleQuery:
         """Test async transaction simple_query with database prefix"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test search with database prefix within transaction
             result = await tx.query(
                 f"{test_db}.async_tx_docs.title",

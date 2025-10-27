@@ -117,31 +117,42 @@ class TestVersionManagement:
             # If an error is raised, it should contain relevant information
             assert "version" in str(e).lower() or "feature" in str(e).lower()
 
-    def test_version_checking_decorators(self):
+    def test_version_checking_decorators(self, test_client):
         """Test version checking decorators"""
         version_manager = VersionManager()
 
-        # Test decorator with valid version
+        # Get current backend version
+        backend_version_str = test_client.get_backend_version()
+        backend_version = version_manager.parse_version(backend_version_str)
+
+        # Test decorator with valid version (lower than any reasonable backend version)
         @requires_version("1.0.0")
-        def test_function():
+        def test_function_low_version():
             return "success"
 
         # This should work with any backend version >= 1.0.0
-        result = test_function()
+        result = test_function_low_version()
         assert result == "success"
 
-        # Test decorator with high version requirement
-        @requires_version("999.0.0")
+        # Test decorator with high version requirement (higher than current backend)
+        # Use a version that's definitely higher than current
+        high_version = f"{backend_version.major + 100}.0.0"
+
+        @requires_version(high_version)
         def test_function_high_version():
             return "success"
 
-        # This might fail depending on backend version
-        try:
-            result = test_function_high_version()
-            assert result == "success"
-        except VersionError:
-            # Expected to fail if backend version < 999.0.0
-            pass
+        # This should fail because backend version < high_version
+        # Import the correct VersionError from version module
+        from matrixone.version import VersionError as VersionErr
+
+        with pytest.raises(VersionErr) as exc_info:
+            test_function_high_version()
+
+        # Verify error message contains version information
+        error_msg = str(exc_info.value)
+        assert "version" in error_msg.lower()
+        assert high_version in error_msg
 
     def test_custom_feature_requirements(self, test_client):
         """Test custom feature requirements"""

@@ -35,6 +35,11 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Get all secondary index table names
   - Get specific index table by index name
   - Verify row counts across main table and all indexes in single query
+- 📂 **Stage Management**: Comprehensive external stage operations for centralized data storage
+  - Create and manage stages (file system, S3, cloud storage)
+  - Load data from stages with automatic path resolution
+  - Stage-scoped load operations for convenience
+  - Transaction support for atomic stage operations
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
@@ -89,11 +94,11 @@ source venv/bin/activate
 # On Windows:
 # venv\Scripts\activate
 
-# Quick setup with Makefile
+# Quick setup with Makefile (includes all dev dependencies)
 make dev-setup
 
 # Or manual setup
-pip install -e .
+pip install -e '.[dev]'  # Includes pyarrow, Faker, pytest, etc.
 ```
 
 #### Using Conda Environment
@@ -110,7 +115,7 @@ conda activate matrixone-dev
 make dev-setup
 
 # Or manual setup
-pip install -e .
+pip install -e '.[dev]'
 ```
 
 #### Direct Installation (Not Recommended)
@@ -123,7 +128,41 @@ cd matrixone/clients/python
 make dev-setup
 
 # Or manual setup
-pip install -e .
+pip install -e '.[dev]'
+```
+
+### Testing Environment Setup
+
+#### For Testing and Examples
+
+```bash
+# Install test dependencies (includes pyarrow for Parquet support)
+pip install -e '.[test]'
+
+# Or use requirements files
+pip install -r requirements-sqlalchemy20.txt  # SQLAlchemy 2.x
+pip install -r requirements-sqlalchemy14.txt  # SQLAlchemy 1.4.x
+```
+
+#### For Load Data Features
+
+The SDK includes comprehensive `LOAD DATA` functionality with support for:
+- **CSV/TSV files**: Basic delimited file loading
+- **JSONLINE files**: JSON Lines format with object/array structures  
+- **Parquet files**: Columnar format loading (requires `pyarrow`)
+- **Inline data**: Direct string data loading
+- **Stage loading**: Loading from named external stages
+
+**Dependencies for Load Data:**
+```bash
+# Required for Parquet file support
+pip install pyarrow>=10.0.0
+
+# For generating test data
+pip install Faker>=10.0.0
+
+# Or install everything at once
+pip install -e '.[dev]'  # Includes pyarrow, Faker, pytest, etc.
 ```
 
 ## Quick Start
@@ -170,38 +209,185 @@ client.disconnect()
 > 
 > By default, all features (IVF, HNSW, fulltext) are automatically enabled via `on_connect=[ConnectionAction.ENABLE_ALL]`.
 
+### Transaction Management (Recommended)
+
+Use `client.session()` for atomic transactions. All operations within a session succeed or fail together:
+
+```python
+from matrixone import Client
+from sqlalchemy import select, insert, update, delete
+
+client = Client()
+client.connect(database='test')
+
+# Basic transaction with automatic commit/rollback
+with client.session() as session:
+    # All operations are atomic
+    session.execute(insert(User).values(name='Alice', age=30))
+    session.execute(update(User).where(User.age < 18).values(status='minor'))
+    
+    # Query within transaction
+    stmt = select(User).where(User.age > 25)
+    result = session.execute(stmt)
+    users = result.scalars().all()
+    # Commits automatically on success, rolls back on error
+
+client.disconnect()
+```
+
+**Key Benefits:**
+- ✅ Atomic operations - all succeed or fail together
+- ✅ Automatic rollback on errors
+- ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
+- ✅ Full SQLAlchemy ORM support
+
+### Wrapping Existing SQLAlchemy Sessions (For Legacy Projects)
+
+If you have existing SQLAlchemy code, you can wrap your sessions with MatrixOne features without refactoring:
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from matrixone import Client
+from matrixone.session import Session as MatrixOneSession
+
+# Your existing SQLAlchemy setup
+engine = create_engine('mysql+pymysql://root:111@localhost:6001/test')
+SessionFactory = sessionmaker(bind=engine)
+sqlalchemy_session = SessionFactory()
+
+# Create MatrixOne client
+mo_client = Client()
+mo_client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+# Wrap your existing session with MatrixOne features
+mo_session = MatrixOneSession(
+    client=mo_client,
+    wrap_session=sqlalchemy_session
+)
+
+try:
+    # Your existing SQLAlchemy operations still work
+    result = mo_session.execute("SELECT * FROM users")
+    
+    # Now you can also use MatrixOne-specific features
+    mo_session.stage.create_s3('backup_stage', bucket='my-backups')
+    mo_session.snapshots.create('daily_backup', level='database')
+    mo_session.load_data.from_csv('/data/users.csv', 'users')
+    
+    mo_session.commit()
+finally:
+    mo_session.close()
+```
+
+**Use Cases:**
+- 🔄 Gradual migration from pure SQLAlchemy to MatrixOne
+- 🏢 Adding MatrixOne features to existing enterprise applications
+- 📦 Legacy code modernization without complete refactoring
+- 🔧 Testing MatrixOne features alongside existing code
+
+### SQLAlchemy ORM Integration
+
+The SDK provides seamless SQLAlchemy integration with ORM-style operations:
+
+```python
+from matrixone import Client
+from matrixone.orm import Base, Column, Integer, String, select, insert, update, delete
+
+# Define ORM models
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(255))
+    age = Column(Integer)
+
+client = Client()
+client.connect(database='test')
+
+# Create table from model
+client.create_table(User)
+
+# ORM-style INSERT
+stmt = insert(User).values(name='John', email='john@example.com', age=30)
+client.execute(stmt)
+
+# ORM-style SELECT
+stmt = select(User).where(User.age > 25)
+result = client.execute(stmt)
+for user in result.scalars():
+    print(f"User: {user.name}, Age: {user.age}")
+
+# ORM-style UPDATE
+stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+client.execute(stmt)
+
+# ORM-style DELETE
+stmt = delete(User).where(User.age < 18)
+client.execute(stmt)
+
+client.disconnect()
+```
+
+**Recommended Practices:**
+- ✅ Use `session()` for multi-statement transactions
+- ✅ Use ORM-style statements (`select`, `insert`, `update`, `delete`)
+- ✅ Use `client.execute()` for single-statement operations
+- ✅ Prefer SQLAlchemy statements over raw SQL strings
+
 ### Async Usage
+
+Full async/await support with `AsyncClient` and async sessions:
 
 ```python
 import asyncio
 from matrixone import AsyncClient
+from sqlalchemy import select, insert, update
 
 async def main():
     client = AsyncClient()
-    await client.connect(
-        host='localhost',
-        port=6001,
-        user='root',
-        password='111',
-        database='test'
-    )
+    await client.connect(database='test')
     
-    result = await client.execute("SELECT 1 as test")
+    # Basic async query
+    result = await client.execute(select(User).where(User.age > 25))
     print(result.fetchall())
+    
+    # Async transaction
+    async with client.session() as session:
+        # All operations are atomic
+        await session.execute(insert(User).values(name='Alice', age=30))
+        await session.execute(update(User).where(User.age < 18).values(status='minor'))
+        
+        # Concurrent queries with asyncio.gather
+        user_result, order_result = await asyncio.gather(
+            session.execute(select(User)),
+            session.execute(select(Order))
+        )
+        # Commits automatically
     
     await client.disconnect()
 
 asyncio.run(main())
 ```
 
+**Async Benefits:**
+- ✅ Non-blocking I/O operations
+- ✅ Concurrent execution with `asyncio.gather()`
+- ✅ Perfect for FastAPI, aiohttp, and async frameworks
+- ✅ Same transaction guarantees as sync version
+
 ### Snapshot Management
 
+Create and manage database snapshots. Use `session()` for atomic snapshot + clone operations:
+
 ```python
-# Create a snapshot
+from matrixone import SnapshotLevel
+
+# Single snapshot operation
 snapshot = client.snapshots.create(
     name='my_snapshot',
-    level='cluster',
-    description='Backup before migration'
+    level=SnapshotLevel.DATABASE,
+    database='production'
 )
 
 # List snapshots
@@ -209,12 +395,22 @@ snapshots = client.snapshots.list()
 for snap in snapshots:
     print(f"Snapshot: {snap.name}, Created: {snap.created_at}")
 
-# Clone database from snapshot
-client.clone.clone_database(
-    target_db='new_database',
-    source_db='old_database',
-    snapshot_name='my_snapshot'
-)
+# Atomic snapshot + clone in transaction
+with client.session() as session:
+    # Create snapshot
+    snapshot = session.snapshots.create(
+        name='daily_backup',
+        level=SnapshotLevel.DATABASE,
+        database='production'
+    )
+    
+    # Clone from snapshot atomically
+    session.clone.clone_database(
+        target_db='production_copy',
+        source_db='production',
+        snapshot_name='daily_backup'
+    )
+    # Both operations commit together
 ```
 
 ### Vector Search
@@ -306,6 +502,51 @@ results = client.query(
         .must_not('basic')
 ).execute()
 ```
+
+### Data Loading with Stages
+
+Load data from external sources using stages. Use `session()` for atomic multi-file loading:
+
+```python
+from matrixone.orm import Base, Column, Integer, String
+
+# Define ORM model
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(255))
+
+# Create S3 stage using simple interface
+client.stage.create_s3(
+    name='data_stage',
+    bucket='my-bucket',
+    path='data/',
+    aws_key_id='your_key',
+    aws_secret_key='your_secret',
+    region='us-east-1'
+)
+
+# Load data from stage using ORM model
+client.load_data.from_stage_csv('data_stage', 'users.csv', User)
+
+# Atomic multi-file loading in transaction
+with client.session() as session:
+    # Create local stage
+    session.stage.create_local('import_stage', '/data/imports/')
+    
+    # Load multiple files atomically
+    session.load_data.from_csv('/data/users.csv', User)
+    session.load_data.from_csv('/data/orders.csv', Order)
+    
+    # All loads commit together
+```
+
+**Stage Benefits:**
+- ✅ Centralized data source configuration
+- ✅ Support for S3, local filesystem, and cloud storage
+- ✅ Automatic path resolution
+- ✅ Transaction support for atomic operations
 
 ### Metadata Analysis
 
@@ -825,6 +1066,56 @@ subscription = client.pubsub.create_subscription(
 )
 ```
 
+### Stage Management
+
+```python
+# Create a local file system stage (simplified)
+stage = client.stage.create_local('my_data_stage', './data/', comment='Main data import stage')
+
+# Or use the full method with explicit URL
+stage = client.stage.create('my_data_stage', 'file:///path/to/data/', comment='Main data import stage')
+
+# Create an S3 stage with simplified credentials
+s3_stage = client.stage.create_s3(
+    'production_stage',
+    'my-bucket/data/',
+    aws_key='AKIAIOSFODNN7EXAMPLE',
+    aws_secret='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    aws_region='us-east-1',
+    comment='Production data stage'
+)
+
+# Or use environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+s3_stage = client.stage.create_s3('production_stage', 'my-bucket/data/')
+
+# List all stages
+stages = client.stage.list()
+for stage in stages:
+    print(f"{stage.name}: {stage.url}")
+
+# Load data from stage (Method 1: via client.load_data)
+client.load_data.from_stage_csv('my_data_stage', 'users.csv', User)
+
+# Load data from stage (Method 2: via stage object - simpler!)
+stage = client.stage.get('my_data_stage')
+stage.load_csv('users.csv', User)
+stage.load_json('events.jsonl', Event)
+stage.load_parquet('orders.parq', Order)
+
+# Batch load multiple files
+results = stage.load_files({
+    'users.csv': User,
+    'events.jsonl': Event,
+    'orders.parq': Order
+})
+
+# Modify stage
+client.stage.alter('my_data_stage', comment='Updated comment')
+
+# Drop stage
+client.stage.drop('my_data_stage')
+```
+
 
 ## Advanced Features
 
@@ -916,6 +1207,12 @@ Check out the `examples/` directory for comprehensive usage examples:
 - `example_24_query_update.py` - Query and update operations
 - `example_25_metadata_operations.py` - Table metadata analysis and statistics
 
+**Load Data Examples:**
+- `example_23_load_data_operations.py` - Comprehensive LOAD DATA operations (CSV, TSV, JSONLINE, Parquet, Inline, Stage)
+
+**Stage Management Examples:**
+- `example_26_stage_operations.py` - External stage management and data loading from stages
+
 **Specialized Examples:**
 - `example_connection_hooks.py` - Connection hooks for custom initialization
 - `example_dynamic_logging.py` - Dynamic logging configuration
@@ -945,6 +1242,12 @@ python examples/example_03_async_operations.py
 python examples/example_12_vector_basics.py
 python examples/example_13_vector_indexes.py
 python examples/example_14_vector_search.py
+
+# Load Data examples
+python examples/example_23_load_data_operations.py
+
+# Stage management examples
+python examples/example_26_stage_operations.py
 
 # Metadata and advanced examples
 python examples/example_25_metadata_operations.py
@@ -1020,8 +1323,14 @@ make test-matrix           # Test both SQLAlchemy versions
 # Check environment requirements
 make check-env
 
-# Setup development environment
+# Setup development environment (includes all dev dependencies)
 make dev-setup
+
+# Install specific dependency sets
+make install-deps-dev      # Install development dependencies
+make install-deps-test     # Install test dependencies  
+make install-sqlalchemy14  # Install SQLAlchemy 1.4.x dependencies
+make install-sqlalchemy20  # Install SQLAlchemy 2.0.x dependencies
 
 # Run all tests
 make test
@@ -1030,6 +1339,12 @@ make test
 make examples
 ```
 
+**Dependency Management:**
+- `make install-deps-dev`: Installs all development dependencies including `pyarrow`, `Faker`, `pytest`, etc.
+- `make install-deps-test`: Installs testing dependencies including `pyarrow` (required for Parquet)
+- `make install-sqlalchemy14/20`: Installs version-specific SQLAlchemy dependencies
+
+**Important**: `pyarrow>=10.0.0` is required for LOAD DATA Parquet functionality. Install via `make dev-setup`, `make install-deps-dev`, or `make install-deps-test`.
 For detailed testing instructions, environment setup, and troubleshooting, see [TESTING.md](TESTING.md).
 
 

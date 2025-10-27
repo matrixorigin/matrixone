@@ -399,7 +399,7 @@ func DefaultSnapshotGCConfig() SnapshotGCConfig {
 	return SnapshotGCConfig{
 		Enabled:              true,
 		GCInterval:           30 * time.Minute,
-		MaxAge:               5 * time.Hour,
+		MaxAge:               1 * time.Hour,
 		MaxSnapshotsPerTable: 20,
 		MaxTotalSnapshots:    1000,
 	}

@@ -139,8 +139,21 @@ install: ## Install development environment (dependencies + tools)
 .PHONY: dev-setup
 dev-setup: install ## Setup complete development environment
 	@echo "$(BLUE)Setting up development environment...$(NC)"
-	$(PIP) install -e .
+	$(PIP) install -e '.[dev]'
 	@echo "$(GREEN)Development environment setup complete!$(NC)"
+	@echo "$(YELLOW)Note: pyarrow and Faker are now installed for LOAD DATA functionality$(NC)"
+
+.PHONY: install-deps-dev
+install-deps-dev: ## Install development dependencies (pyarrow, Faker, pytest, etc.)
+	@echo "$(BLUE)Installing development dependencies...$(NC)"
+	$(PIP) install -e '.[dev]'
+	@echo "$(GREEN)Development dependencies installed!$(NC)"
+
+.PHONY: install-deps-test
+install-deps-test: ## Install test dependencies (pyarrow, Faker, pytest)
+	@echo "$(BLUE)Installing test dependencies...$(NC)"
+	$(PIP) install -e '.[test]'
+	@echo "$(GREEN)Test dependencies installed!$(NC)"
 
 .PHONY: install-sqlalchemy14
 install-sqlalchemy14: ## Install SQLAlchemy 1.4.x test dependencies
