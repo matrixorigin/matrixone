@@ -63,15 +63,15 @@ type CheckpointBasedGCJob struct {
 		coarseProbility    float64
 		canGCCacheSize     int
 	}
-	sourcer          engine.BaseReader
-	snapshotMeta     *logtail.SnapshotMeta
-	accountSnapshots map[uint32][]types.TS
-	iscpTables       map[uint64]types.TS
-	pitr             *logtail.PitrInfo
-	ts               *types.TS
-	globalCkpLoc     objectio.Location
-	globalCkpVer     uint32
-	checkpointCli    checkpoint.Runner // Added to access catalog
+	sourcer       engine.BaseReader
+	snapshotMeta  *logtail.SnapshotMeta
+	snapshots     *logtail.SnapshotInfo
+	iscpTables    map[uint64]types.TS
+	pitr          *logtail.PitrInfo
+	ts            *types.TS
+	globalCkpLoc  objectio.Location
+	globalCkpVer  uint32
+	checkpointCli checkpoint.Runner // Added to access catalog
 
 	result struct {
 		vecToGC    *vector.Vector
@@ -85,7 +85,7 @@ func NewCheckpointBasedGCJob(
 	gckpVersion uint32,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
 	iscpTables map[uint64]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
 	checkpointCli checkpoint.Runner,
@@ -97,15 +97,15 @@ func NewCheckpointBasedGCJob(
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
-		sourcer:          sourcer,
-		snapshotMeta:     snapshotMeta,
-		accountSnapshots: accountSnapshots,
-		pitr:             pitr,
-		ts:               ts,
-		globalCkpLoc:     globalCkpLoc,
-		globalCkpVer:     gckpVersion,
-		iscpTables:       iscpTables,
-		checkpointCli:    checkpointCli,
+		sourcer:       sourcer,
+		snapshotMeta:  snapshotMeta,
+		snapshots:     snapshots,
+		pitr:          pitr,
+		ts:            ts,
+		globalCkpLoc:  globalCkpLoc,
+		globalCkpVer:  gckpVersion,
+		iscpTables:    iscpTables,
+		checkpointCli: checkpointCli,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -121,7 +121,7 @@ func (e *CheckpointBasedGCJob) Close() error {
 		e.sourcer = nil
 	}
 	e.snapshotMeta = nil
-	e.accountSnapshots = nil
+	e.snapshots = nil
 	e.pitr = nil
 	e.ts = nil
 	e.globalCkpLoc = nil
@@ -171,7 +171,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 
 	fineFilter, err := MakeSnapshotAndPitrFineFilter(
 		e.ts,
-		e.accountSnapshots,
+		e.snapshots,
 		e.pitr,
 		e.snapshotMeta,
 		transObjects,
@@ -356,7 +356,7 @@ func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli ch
 
 func MakeSnapshotAndPitrFineFilter(
 	ts *types.TS,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
@@ -373,7 +373,7 @@ func MakeSnapshotAndPitrFineFilter(
 	}
 
 	tableSnapshots, tablePitrs := snapshotMeta.AccountToTableSnapshots(
-		accountSnapshots,
+		snapshots,
 		pitrs,
 	)
 	return func(
@@ -393,7 +393,7 @@ func MakeSnapshotAndPitrFineFilter(
 			createTS := createTSs[i]
 			deleteTS := deleteTSs[i]
 
-			snapshots := tableSnapshots[tableID]
+			sp := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
 			if transObjects[name] != nil {
@@ -407,7 +407,7 @@ func MakeSnapshotAndPitrFineFilter(
 					}
 
 					if !logtail.ObjectIsSnapshotRefers(
-						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
+						entry.stats, pitr, &entry.createTS, &entry.dropTS, sp,
 					) {
 						if iscpTables == nil {
 							bm.Add(uint64(i))
@@ -436,7 +436,7 @@ func MakeSnapshotAndPitrFineFilter(
 				continue
 			}
 			if !logtail.ObjectIsSnapshotRefers(
-				&stats, pitr, &createTS, &deleteTS, snapshots,
+				&stats, pitr, &createTS, &deleteTS, sp,
 			) {
 				if iscpTables == nil {
 					bm.Add(uint64(i))

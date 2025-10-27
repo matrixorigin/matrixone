@@ -61,7 +61,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
 
-	runtime.ServiceRuntime(s.service).Logger().Info("task schedule query tasks",
+	runtime.ServiceRuntime(s.service).Logger().Debug("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(tasks) == 0 {

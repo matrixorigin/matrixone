@@ -115,13 +115,16 @@ func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
-	if start {
-		s.activeRunners[key].CreateAt = time.Now()
-		s.activeRunners[key].FromTs = fromTs
-		s.activeRunners[key].ToTs = toTs
-		s.activeRunners[key].EndAt = time.Time{}
-	} else {
-		s.activeRunners[key].EndAt = time.Now()
+	runner := s.activeRunners[key]
+	if runner != nil {
+		if start {
+			runner.CreateAt = time.Now()
+			runner.FromTs = fromTs
+			runner.ToTs = toTs
+			runner.EndAt = time.Time{}
+		} else {
+			runner.EndAt = time.Now()
+		}
 	}
 }
 

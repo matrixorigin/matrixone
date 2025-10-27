@@ -507,6 +507,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			c.proc.Ctx,
 			qry.TableDef.TblId,
 			stmt.(*tree.AlterTable).PartitionOption.(*tree.AlterPartitionAddPartitionClause).Partitions,
+			qry.AlterPartition.PartitionDefs,
 			c.proc.GetTxnOperator(),
 		)
 	case plan.AlterPartitionType_DropPartitionTables:

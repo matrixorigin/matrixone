@@ -28,14 +28,14 @@ import (
 )
 
 // give blob
-func mock_runSql_streaming(
+func mock_runSql(
 	sqlproc *sqlexec.SqlProcess,
 	sql string,
 ) (executor.Result, error) {
 	return executor.Result{}, nil
 }
 
-func mock_runSql_streaming_parser_error(
+func mock_runSql_parser_error(
 	sqlproc *sqlexec.SqlProcess,
 	sql string,
 ) (executor.Result, error) {
@@ -44,7 +44,7 @@ func mock_runSql_streaming_parser_error(
 
 func TestIvfSearchRace(t *testing.T) {
 
-	runSql = mock_runSql_streaming
+	runSql = mock_runSql
 
 	var idxcfg vectorindex.IndexConfig
 	var tblcfg vectorindex.IndexTableConfig
@@ -61,13 +61,13 @@ func TestIvfSearchRace(t *testing.T) {
 	idx := &IvfflatSearchIndex[float32]{}
 
 	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
-	require.NotNil(t, err)
+	require.Nil(t, err)
 
 }
 
 func TestIvfSearchParserError(t *testing.T) {
 
-	runSql = mock_runSql_streaming_parser_error
+	runSql = mock_runSql_parser_error
 
 	var idxcfg vectorindex.IndexConfig
 	var tblcfg vectorindex.IndexTableConfig
