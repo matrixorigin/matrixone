@@ -292,13 +292,14 @@ class TestTransactionSnapshot(unittest.TestCase):
         mock_transaction = Mock()
         mock_transaction.execute = Mock()
 
+        # Create SnapshotManager with transaction as executor
+        tx_snapshot_manager = SnapshotManager(self.mock_client, executor=mock_transaction)
+
         # Mock snapshot creation
         mock_snapshot = Snapshot("tx_snap", SnapshotLevel.TABLE, datetime.now(), database="test_db", table="test_table")
 
-        with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
-            result = self.snapshot_manager.create(
-                "tx_snap", SnapshotLevel.TABLE, database="test_db", table="test_table", executor=mock_transaction
-            )
+        with patch.object(tx_snapshot_manager, 'get', return_value=mock_snapshot):
+            result = tx_snapshot_manager.create("tx_snap", SnapshotLevel.TABLE, database="test_db", table="test_table")
 
             mock_transaction.execute.assert_called_once_with("CREATE SNAPSHOT tx_snap FOR TABLE test_db test_table")
             self.assertEqual(result, mock_snapshot)
@@ -309,8 +310,11 @@ class TestTransactionSnapshot(unittest.TestCase):
         mock_transaction = Mock()
         mock_transaction.execute.side_effect = Exception("Transaction failed")
 
+        # Create SnapshotManager with failing transaction as executor
+        tx_snapshot_manager = SnapshotManager(self.mock_client, executor=mock_transaction)
+
         with self.assertRaises(SnapshotError):
-            self.snapshot_manager.create("rollback_snap", SnapshotLevel.CLUSTER, executor=mock_transaction)
+            tx_snapshot_manager.create("rollback_snap", SnapshotLevel.CLUSTER)
 
     def test_snapshot_isolation_levels(self):
         """Test snapshot with different isolation levels"""

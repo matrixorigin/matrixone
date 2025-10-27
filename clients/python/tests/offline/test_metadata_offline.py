@@ -19,8 +19,7 @@ Offline tests for MatrixOne metadata operations
 import asyncio
 import unittest
 from unittest.mock import Mock, patch, AsyncMock
-from matrixone.metadata import MetadataManager, TransactionMetadataManager
-from matrixone.async_metadata_manager import AsyncMetadataManager, AsyncTransactionMetadataManager
+from matrixone.metadata import MetadataManager, AsyncMetadataManager
 
 
 class TestMetadataManager(unittest.TestCase):
@@ -304,33 +303,34 @@ class TestMetadataManager(unittest.TestCase):
         self.assertEqual(obj2["compress_size"], "1 MB")
 
 
-class TestTransactionMetadataManager(unittest.TestCase):
-    """Test TransactionMetadataManager class"""
+class TestSessionMetadataManager(unittest.TestCase):
+    """Test MetadataManager with session executor"""
 
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = Mock()
-        self.mock_transaction = Mock()
-        self.metadata_manager = TransactionMetadataManager(self.mock_client, self.mock_transaction)
+        self.mock_session = Mock()
+        self.metadata_manager = MetadataManager(self.mock_client, executor=self.mock_session)
 
     def test_init(self):
-        """Test TransactionMetadataManager initialization"""
+        """Test MetadataManager with session initialization"""
         self.assertEqual(self.metadata_manager.client, self.mock_client)
-        self.assertEqual(self.metadata_manager.transaction_wrapper, self.mock_transaction)
+        self.assertEqual(self.metadata_manager.executor, self.mock_session)
+        self.assertEqual(self.metadata_manager._get_executor(), self.mock_session)
 
-    def test_scan_uses_transaction(self):
-        """Test that scan uses transaction wrapper"""
+    def test_scan_uses_session(self):
+        """Test that scan uses session executor"""
         mock_result = Mock()
         mock_result.fetchall.return_value = []
-        self.mock_transaction.execute.return_value = mock_result
+        self.mock_session.execute.return_value = mock_result
 
         result = self.metadata_manager.scan("test_db", "test_table")
 
-        # Verify transaction.execute was called
-        self.mock_transaction.execute.assert_called_once()
+        # Verify session.execute was called
+        self.mock_session.execute.assert_called_once()
 
-    def test_get_table_brief_stats_uses_transaction(self):
-        """Test that get_table_brief_stats uses transaction wrapper"""
+    def test_get_table_brief_stats_uses_session(self):
+        """Test that get_table_brief_stats uses session executor"""
         mock_result = Mock()
         mock_result.fetchall.return_value = [
             Mock(
@@ -343,16 +343,16 @@ class TestTransactionMetadataManager(unittest.TestCase):
                 }
             )
         ]
-        self.mock_transaction.execute.return_value = mock_result
+        self.mock_session.execute.return_value = mock_result
 
         stats = self.metadata_manager.get_table_brief_stats("test_db", "test_table")
 
-        # Verify transaction.execute was called
-        self.mock_transaction.execute.assert_called_once()
+        # Verify session.execute was called
+        self.mock_session.execute.assert_called_once()
         self.assertIn("test_table", stats)
 
-    def test_get_table_detail_stats_uses_transaction(self):
-        """Test that get_table_detail_stats uses transaction wrapper"""
+    def test_get_table_detail_stats_uses_session(self):
+        """Test that get_table_detail_stats uses session executor"""
         mock_result = Mock()
         mock_result.fetchall.return_value = [
             Mock(
@@ -367,12 +367,12 @@ class TestTransactionMetadataManager(unittest.TestCase):
                 }
             )
         ]
-        self.mock_transaction.execute.return_value = mock_result
+        self.mock_session.execute.return_value = mock_result
 
         stats = self.metadata_manager.get_table_detail_stats("test_db", "test_table")
 
-        # Verify transaction.execute was called
-        self.mock_transaction.execute.assert_called_once()
+        # Verify session.execute was called
+        self.mock_session.execute.assert_called_once()
         self.assertIn("test_table", stats)
 
 
@@ -469,37 +469,38 @@ class TestAsyncMetadataManager(unittest.TestCase):
         asyncio.run(_test())
 
 
-class TestAsyncTransactionMetadataManager(unittest.TestCase):
-    """Test AsyncTransactionMetadataManager class"""
+class TestAsyncSessionMetadataManager(unittest.TestCase):
+    """Test AsyncMetadataManager with async session executor"""
 
     def setUp(self):
         """Set up test fixtures"""
         self.mock_client = AsyncMock()
-        self.mock_transaction = AsyncMock()
-        self.metadata_manager = AsyncTransactionMetadataManager(self.mock_client, self.mock_transaction)
+        self.mock_session = AsyncMock()
+        self.metadata_manager = AsyncMetadataManager(self.mock_client, executor=self.mock_session)
 
     def test_init(self):
-        """Test AsyncTransactionMetadataManager initialization"""
+        """Test AsyncMetadataManager with async session initialization"""
         self.assertEqual(self.metadata_manager.client, self.mock_client)
-        self.assertEqual(self.metadata_manager.transaction_wrapper, self.mock_transaction)
+        self.assertEqual(self.metadata_manager.executor, self.mock_session)
+        self.assertEqual(self.metadata_manager._get_executor(), self.mock_session)
 
-    def test_scan_uses_transaction(self):
-        """Test that async scan uses transaction wrapper"""
+    def test_scan_uses_session(self):
+        """Test that async scan uses session executor"""
 
         async def _test():
             mock_result = Mock()
             mock_result.fetchall.return_value = []
-            self.mock_transaction.execute.return_value = mock_result
+            self.mock_session.execute.return_value = mock_result
 
             result = await self.metadata_manager.scan("test_db", "test_table")
 
-            # Verify transaction.execute was called
-            self.mock_transaction.execute.assert_called_once()
+            # Verify session.execute was called
+            self.mock_session.execute.assert_called_once()
 
         asyncio.run(_test())
 
-    def test_get_table_brief_stats_uses_transaction(self):
-        """Test that async get_table_brief_stats uses transaction wrapper"""
+    def test_get_table_brief_stats_uses_session(self):
+        """Test that async get_table_brief_stats uses session executor"""
 
         async def _test():
             mock_result = Mock()
@@ -514,18 +515,18 @@ class TestAsyncTransactionMetadataManager(unittest.TestCase):
                     }
                 )
             ]
-            self.mock_transaction.execute.return_value = mock_result
+            self.mock_session.execute.return_value = mock_result
 
             stats = await self.metadata_manager.get_table_brief_stats("test_db", "test_table")
 
-            # Verify transaction.execute was called
-            self.mock_transaction.execute.assert_called_once()
+            # Verify session.execute was called
+            self.mock_session.execute.assert_called_once()
             self.assertIn("test_table", stats)
 
         asyncio.run(_test())
 
-    def test_get_table_detail_stats_uses_transaction(self):
-        """Test that async get_table_detail_stats uses transaction wrapper"""
+    def test_get_table_detail_stats_uses_session(self):
+        """Test that async get_table_detail_stats uses session executor"""
 
         async def _test():
             mock_result = Mock()
@@ -542,15 +543,180 @@ class TestAsyncTransactionMetadataManager(unittest.TestCase):
                     }
                 )
             ]
-            self.mock_transaction.execute.return_value = mock_result
+            self.mock_session.execute.return_value = mock_result
 
             stats = await self.metadata_manager.get_table_detail_stats("test_db", "test_table")
 
-            # Verify transaction.execute was called
-            self.mock_transaction.execute.assert_called_once()
+            # Verify session.execute was called
+            self.mock_session.execute.assert_called_once()
             self.assertIn("test_table", stats)
 
         asyncio.run(_test())
+
+
+class TestMetadataSQLConsistency(unittest.TestCase):
+    """Test that sync/async/session generate identical SQL"""
+
+    def test_scan_sql_consistency(self):
+        """Test scan() SQL consistency across all contexts"""
+        # Setup mocks
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        # Create managers
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        # Execute scan
+        sync_manager.scan("test_db", "test_table")
+        session_manager.scan("test_db", "test_table")
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table")
+            await async_session_manager.scan("test_db", "test_table")
+
+        asyncio.run(_test())
+
+        # Extract SQL
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        # Verify all SQL is identical
+        expected_sql = "SELECT * FROM metadata_scan('test_db.test_table', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    def test_scan_with_index_sql_consistency(self):
+        """Test scan with index SQL consistency"""
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        sync_manager.scan("test_db", "test_table", indexname="idx_test")
+        session_manager.scan("test_db", "test_table", indexname="idx_test")
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table", indexname="idx_test")
+            await async_session_manager.scan("test_db", "test_table", indexname="idx_test")
+
+        asyncio.run(_test())
+
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        expected_sql = "SELECT * FROM metadata_scan('test_db.test_table.?idx_test', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    def test_scan_with_tombstone_sql_consistency(self):
+        """Test scan with tombstone SQL consistency"""
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        sync_manager.scan("test_db", "test_table", is_tombstone=True)
+        session_manager.scan("test_db", "test_table", is_tombstone=True)
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table", is_tombstone=True)
+            await async_session_manager.scan("test_db", "test_table", is_tombstone=True)
+
+        asyncio.run(_test())
+
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        expected_sql = "SELECT * FROM metadata_scan('test_db.test_table.#', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
+
+    def test_scan_with_distinct_sql_consistency(self):
+        """Test scan with distinct_object_name SQL consistency"""
+        mock_client = Mock()
+        mock_session = Mock()
+        mock_async_client = AsyncMock()
+        mock_async_session = AsyncMock()
+
+        mock_result = Mock()
+        mock_result.fetchall.return_value = []
+        mock_client.execute.return_value = mock_result
+        mock_session.execute.return_value = mock_result
+        mock_async_client.execute.return_value = mock_result
+        mock_async_session.execute.return_value = mock_result
+
+        sync_manager = MetadataManager(mock_client)
+        session_manager = MetadataManager(mock_client, executor=mock_session)
+        async_manager = AsyncMetadataManager(mock_async_client)
+        async_session_manager = AsyncMetadataManager(mock_async_client, executor=mock_async_session)
+
+        sync_manager.scan("test_db", "test_table", distinct_object_name=True)
+        session_manager.scan("test_db", "test_table", distinct_object_name=True)
+
+        async def _test():
+            await async_manager.scan("test_db", "test_table", distinct_object_name=True)
+            await async_session_manager.scan("test_db", "test_table", distinct_object_name=True)
+
+        asyncio.run(_test())
+
+        sync_sql = mock_client.execute.call_args[0][0]
+        session_sql = mock_session.execute.call_args[0][0]
+        async_sql = mock_async_client.execute.call_args[0][0]
+        async_session_sql = mock_async_session.execute.call_args[0][0]
+
+        expected_sql = "SELECT DISTINCT(object_name) as object_name, * FROM metadata_scan('test_db.test_table', '*') g"
+        self.assertEqual(sync_sql, expected_sql)
+        self.assertEqual(session_sql, expected_sql)
+        self.assertEqual(async_sql, expected_sql)
+        self.assertEqual(async_session_sql, expected_sql)
 
 
 if __name__ == '__main__':

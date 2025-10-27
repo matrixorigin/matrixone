@@ -82,23 +82,6 @@ class IVFVectorIndex(Index):
             name='idx_embedding'
         )
 
-        # Create index within existing transaction
-        with engine.begin() as conn:
-            success = IVFVectorIndex.create_index_in_transaction(
-                connection=conn,
-                table_name='my_table',
-                name='idx_embedding',
-                column='embedding',
-                lists=100
-            )
-
-        # Drop index within existing transaction
-        with engine.begin() as conn:
-            success = IVFVectorIndex.drop_index_in_transaction(
-                connection=conn,
-                table_name='my_table',
-                name='idx_embedding'
-            )
 
     2. Instance Methods (Useful for reusable index configurations):
 
@@ -110,14 +93,6 @@ class IVFVectorIndex(Index):
 
         # Drop index using instance method
         success = index.drop(engine, 'my_table')
-
-        # Create index within existing transaction
-        with engine.begin() as conn:
-            success = index.create_in_transaction(conn, 'my_table')
-
-        # Drop index within existing transaction
-        with engine.begin() as conn:
-            success = index.drop_in_transaction(conn, 'my_table')
 
     3. SQLAlchemy ORM Integration:
 
@@ -140,12 +115,6 @@ class IVFVectorIndex(Index):
 
         # Using client.vector_index.create_ivf() method
         client.vector_index.create_ivf('my_table', 'idx_embedding', 'embedding', lists=100)
-
-        # Using client.vector_index.create_ivf_in_transaction() method
-        with client.transaction() as tx:
-            client.vector_index.create_ivf_in_transaction(
-                'my_table', 'idx_embedding', 'embedding', tx.connection, lists=100
-            )
 
     Parameters:
         name (str): Index name
@@ -268,47 +237,6 @@ class IVFVectorIndex(Index):
             return False
 
     @classmethod
-    def create_index_in_transaction(
-        cls,
-        connection,
-        table_name: str,
-        name: str,
-        column: Union[str, Column],
-        lists: int = 100,
-        op_type: str = VectorOpType.VECTOR_L2_OPS,
-        **kwargs,
-    ) -> bool:
-        """
-        Create an IVFFLAT vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-            name: Name of the index
-            column: Vector column to index
-            lists: Number of lists for IVFFLAT (default: 100)
-            op_type: Vector operation type (default: vector_l2_ops)
-            **kwargs: Additional index parameters
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            index = cls(name, column, lists, op_type, **kwargs)
-            sql = index.create_sql(table_name)
-
-            # Enable IVF indexing
-            _exec_sql_safe(connection, "SET experimental_ivf_index = 1")
-            _exec_sql_safe(connection, "SET probe_limit = 1")
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create IVFFLAT vector index in transaction: {e}")
-            return False
-
-    @classmethod
     def drop_index(cls, engine, table_name: str, name: str) -> bool:
         """
         Drop an IVFFLAT vector index using ORM-style method.
@@ -330,29 +258,6 @@ class IVFVectorIndex(Index):
             return True
         except Exception as e:
             print(f"Failed to drop IVFFLAT vector index: {e}")
-            return False
-
-    @classmethod
-    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
-        """
-        Drop an IVFFLAT vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-            name: Name of the index to drop
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop IVFFLAT vector index in transaction: {e}")
             return False
 
     def create(self, engine, table_name: str) -> bool:
@@ -403,52 +308,6 @@ class IVFVectorIndex(Index):
             print(f"Failed to drop IVFFLAT vector index: {e}")
             return False
 
-    def create_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Create this IVFFLAT vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = self.create_sql(table_name)
-
-            # Enable IVF indexing
-            _exec_sql_safe(connection, "SET experimental_ivf_index = 1")
-            _exec_sql_safe(connection, "SET probe_limit = 1")
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create IVFFLAT vector index in transaction: {e}")
-            return False
-
-    def drop_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Drop this IVFFLAT vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = self.drop_sql(table_name)
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop IVFFLAT vector index in transaction: {e}")
-            return False
-
 
 class HnswVectorIndex(Index):
     """
@@ -479,26 +338,6 @@ class HnswVectorIndex(Index):
             name='idx_embedding'
         )
 
-        # Create index within existing transaction
-        with engine.begin() as conn:
-            success = HnswVectorIndex.create_index_in_transaction(
-                connection=conn,
-                table_name='my_table',
-                name='idx_embedding',
-                column='embedding',
-                m=16,
-                ef_construction=200,
-                ef_search=50
-            )
-
-        # Drop index within existing transaction
-        with engine.begin() as conn:
-            success = HnswVectorIndex.drop_index_in_transaction(
-                connection=conn,
-                table_name='my_table',
-                name='idx_embedding'
-            )
-
     2. Instance Methods (Useful for reusable index configurations):
 
         # Create index object
@@ -509,14 +348,6 @@ class HnswVectorIndex(Index):
 
         # Drop index using instance method
         success = index.drop(engine, 'my_table')
-
-        # Create index within existing transaction
-        with engine.begin() as conn:
-            success = index.create_in_transaction(conn, 'my_table')
-
-        # Drop index within existing transaction
-        with engine.begin() as conn:
-            success = index.drop_in_transaction(conn, 'my_table')
 
     3. SQLAlchemy ORM Integration:
 
@@ -539,12 +370,6 @@ class HnswVectorIndex(Index):
 
         # Using client.vector_index.create_hnsw() method
         client.vector_index.create_hnsw('my_table', 'idx_embedding', 'embedding', m=16, ef_construction=200)
-
-        # Using client.vector_index.create_hnsw_in_transaction() method
-        with client.transaction() as tx:
-            client.vector_index.create_hnsw_in_transaction(
-                'my_table', 'idx_embedding', 'embedding', tx.connection, m=16
-            )
 
     Parameters:
         name (str): Index name
@@ -683,50 +508,6 @@ class HnswVectorIndex(Index):
             return False
 
     @classmethod
-    def create_index_in_transaction(
-        cls,
-        connection,
-        table_name: str,
-        name: str,
-        column: Union[str, Column],
-        m: int = 16,
-        ef_construction: int = 200,
-        ef_search: int = 50,
-        op_type: str = VectorOpType.VECTOR_L2_OPS,
-        **kwargs,
-    ) -> bool:
-        """
-        Create an HNSW vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-            name: Name of the index
-            column: Vector column to index
-            m: Number of bi-directional links for HNSW (default: 16)
-            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (default: vector_l2_ops)
-            **kwargs: Additional index parameters
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            index = cls(name, column, m, ef_construction, ef_search, op_type, **kwargs)
-            sql = index.create_sql(table_name)
-
-            # Enable HNSW indexing
-            _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create HNSW vector index in transaction: {e}")
-            return False
-
-    @classmethod
     def drop_index(cls, engine, table_name: str, name: str) -> bool:
         """
         Drop an HNSW vector index using ORM-style method.
@@ -748,29 +529,6 @@ class HnswVectorIndex(Index):
             return True
         except Exception as e:
             print(f"Failed to drop HNSW vector index: {e}")
-            return False
-
-    @classmethod
-    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
-        """
-        Drop an HNSW vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-            name: Name of the index to drop
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop HNSW vector index in transaction: {e}")
             return False
 
     def create(self, engine, table_name: str) -> bool:
@@ -818,51 +576,6 @@ class HnswVectorIndex(Index):
             return True
         except Exception as e:
             print(f"Failed to drop HNSW vector index: {e}")
-            return False
-
-    def create_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Create this HNSW vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = self.create_sql(table_name)
-
-            # Enable HNSW indexing
-            _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create HNSW vector index in transaction: {e}")
-            return False
-
-    def drop_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Drop this HNSW vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection object
-            table_name: Name of the table
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = self.drop_sql(table_name)
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop HNSW vector index in transaction: {e}")
             return False
 
 
@@ -1115,121 +828,6 @@ class VectorIndex(Index):
             bool: True if successful, False otherwise
         """
         return self.__class__.drop_index(engine, table_name, self.name)
-
-    @classmethod
-    def create_index_in_transaction(
-        cls,
-        connection,
-        table_name: str,
-        name: str,
-        column: Union[str, Column],
-        index_type: str = VectorIndexType.IVFFLAT,
-        lists: Optional[int] = None,
-        op_type: str = VectorOpType.VECTOR_L2_OPS,
-        # HNSW parameters
-        m: Optional[int] = None,
-        ef_construction: Optional[int] = None,
-        ef_search: Optional[int] = None,
-        **kwargs,
-    ) -> bool:
-        """
-        Create a vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection (within a transaction)
-            table_name: Name of the table
-            name: Name of the index
-            column: Vector column to index
-            index_type: Type of vector index (ivfflat, hnsw, etc.)
-            lists: Number of lists for IVFFLAT (optional)
-            op_type: Vector operation type
-            m: Number of bi-directional links for HNSW (optional)
-            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
-            ef_search: Size of dynamic candidate list for HNSW search (optional)
-            **kwargs: Additional index parameters
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            index = cls(name, column, index_type, lists, op_type, m, ef_construction, ef_search, **kwargs)
-            sql = index.create_sql(table_name)
-
-            # Note: Indexing should be enabled before calling this method
-            # The SET statements are removed to avoid interfering with transaction rollback
-
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create vector index in transaction: {e}")
-            # Re-raise the exception to ensure transaction rollback
-            raise
-
-    @classmethod
-    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
-        """
-        Drop a vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection (within a transaction)
-            table_name: Name of the table
-            name: Name of the index to drop
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop vector index in transaction: {e}")
-            return False
-
-    def create_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Create this vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection (within a transaction)
-            table_name: Name of the table
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        return self.__class__.create_index_in_transaction(
-            connection,
-            table_name,
-            self.name,
-            self._column_name,
-            self.index_type,
-            self.lists,
-            self.op_type,
-            self.m,
-            self.ef_construction,
-            self.ef_search,
-        )
-
-    def drop_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Drop this vector index within an existing transaction.
-
-        Args::
-
-            connection: SQLAlchemy connection (within a transaction)
-            table_name: Name of the table
-
-        Returns::
-
-            bool: True if successful, False otherwise
-        """
-        return self.__class__.drop_index_in_transaction(connection, table_name, self.name)
 
 
 class CreateVectorIndex(DDLElement):

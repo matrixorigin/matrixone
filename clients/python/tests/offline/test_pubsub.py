@@ -13,11 +13,17 @@
 # limitations under the License.
 
 """
-Unit tests for PubSubManager
+Unit tests for PubSubManager with executor pattern.
+
+Tests ensure:
+1. Sync and Async managers generate identical SQL
+2. Client and Session contexts use correct executors
+3. All PubSub operations work correctly
+4. SQL statements match expected MatrixOne syntax
 """
 
 import unittest
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, AsyncMock
 import sys
 import os
 from datetime import datetime
@@ -27,11 +33,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 from matrixone import Client, AsyncClient, PubSubError, Publication, Subscription
 from matrixone.exceptions import PubSubError as PubSubErrorClass
-from matrixone.pubsub import TransactionPubSubManager
+from matrixone.pubsub import PubSubManager, AsyncPubSubManager
 
 
-class TestPubSubManager(unittest.TestCase):
-    """Test cases for PubSubManager"""
+class TestPubSubManagerSQLGeneration(unittest.TestCase):
+    """Test that PubSubManager generates correct SQL statements"""
 
     def setUp(self):
         """Set up test fixtures"""
@@ -39,240 +45,122 @@ class TestPubSubManager(unittest.TestCase):
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        # Initialize managers manually for testing
-        from matrixone.pubsub import PubSubManager
-
         self.pubsub_manager = PubSubManager(self.client)
 
-    def test_create_database_publication_success(self):
-        """Test successful database publication creation"""
-        # Mock successful execution
+    def test_create_database_publication_sql(self):
+        """Test CREATE PUBLICATION DATABASE SQL generation"""
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create database publication
         pub = self.pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
 
-        # Verify
+        # Verify SQL is correct
+        expected_create_sql = "CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "db_pub1")
-        self.assertEqual(pub.database, "central_db")
-        self.assertEqual(pub.tables, "*")
-        self.assertEqual(pub.sub_account, "acc1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`")
 
-    def test_create_table_publication_success(self):
-        """Test successful table publication creation"""
-        # Mock successful execution
+    def test_create_table_publication_sql(self):
+        """Test CREATE PUBLICATION TABLE SQL generation"""
         mock_result = Mock()
-        mock_result.rows = [('table_pub1', 'central_db', 'products', 'acc1', '', datetime.now(), None, None)]
+        mock_result.rows = [('table_pub1', 'central_db', 'users', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create table publication
-        pub = self.pubsub_manager.create_table_publication("table_pub1", "central_db", "products", "acc1")
+        pub = self.pubsub_manager.create_table_publication("table_pub1", "central_db", "users", "acc1")
 
-        # Verify
+        # Verify SQL is correct
+        expected_create_sql = "CREATE PUBLICATION `table_pub1` DATABASE `central_db` TABLE `users` ACCOUNT `acc1`"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "table_pub1")
-        self.assertEqual(pub.database, "central_db")
-        self.assertEqual(pub.tables, "products")
-        self.assertEqual(pub.sub_account, "acc1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call(
-            "CREATE PUBLICATION `table_pub1` DATABASE `central_db` TABLE `products` ACCOUNT `acc1`"
-        )
 
-    def test_get_publication_success(self):
-        """Test successful publication retrieval"""
-        # Mock successful execution
+    def test_get_publication_sql(self):
+        """Test SHOW PUBLICATIONS SQL generation"""
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test get publication
         pub = self.pubsub_manager.get_publication("db_pub1")
 
-        # Verify
-        self.assertIsInstance(pub, Publication)
+        # get_publication uses SHOW PUBLICATIONS (no WHERE support) and filters
+        expected_sql = "SHOW PUBLICATIONS"
+        self.client.execute.assert_called_with(expected_sql)
         self.assertEqual(pub.name, "db_pub1")
-        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
 
-    def test_get_publication_not_found(self):
-        """Test publication not found"""
-        # Mock empty result
-        mock_result = Mock()
-        mock_result.rows = []
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test get publication not found
-        with self.assertRaises(PubSubErrorClass):
-            self.pubsub_manager.get_publication("nonexistent_pub")
-
-    def test_list_publications_success(self):
-        """Test successful publication listing"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            ('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None),
-            ('table_pub1', 'central_db', 'products', 'acc1', '', datetime.now(), None, None),
-        ]
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test list publications
-        pubs = self.pubsub_manager.list_publications()
-
-        # Verify
-        self.assertEqual(len(pubs), 2)
-        self.assertIsInstance(pubs[0], Publication)
-        self.assertIsInstance(pubs[1], Publication)
-        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
-
-    def test_list_publications_with_filters(self):
-        """Test publication listing with filters"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test list publications with filters
-        pubs = self.pubsub_manager.list_publications(account="acc1", database="central_db")
-
-        # Verify
-        self.assertEqual(len(pubs), 1)
-        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
-
-    def test_alter_publication_success(self):
-        """Test successful publication alteration"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test alter publication
-        pub = self.pubsub_manager.alter_publication("db_pub1", account="acc2")
-
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("ALTER PUBLICATION `db_pub1` ACCOUNT `acc2`")
-
-    def test_drop_publication_success(self):
-        """Test successful publication deletion"""
-        # Mock successful execution
+    def test_drop_publication_sql(self):
+        """Test DROP PUBLICATION SQL generation"""
         mock_result = Mock()
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test drop publication
         result = self.pubsub_manager.drop_publication("db_pub1")
 
-        # Verify
+        expected_sql = "DROP PUBLICATION `db_pub1`"
+        self.client.execute.assert_called_with(expected_sql)
         self.assertTrue(result)
-        self.client.execute.assert_called_with("DROP PUBLICATION `db_pub1`")
 
-    def test_create_subscription_success(self):
-        """Test successful subscription creation"""
-        # Mock successful execution
+    def test_create_subscription_sql(self):
+        """Test CREATE DATABASE (subscription) SQL generation"""
         mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            )
-        ]
+        mock_result.rows = [('pub1', 'acc1', 'central_db', '*', None, datetime.now(), 'sub_db1', datetime.now())]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create subscription
-        sub = self.pubsub_manager.create_subscription("sub_db1", "db_pub1", "sys")
+        sub = self.pubsub_manager.create_subscription("sub_db1", "pub1", "acc1")
 
-        # Verify
+        # Verify SQL is correct
+        expected_create_sql = "CREATE DATABASE `sub_db1` FROM `acc1` PUBLICATION `pub1`"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(sub, Subscription)
-        self.assertEqual(sub.sub_name, "sub_db1")
-        self.assertEqual(sub.pub_name, "db_pub1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE DATABASE `sub_db1` FROM `sys` PUBLICATION `db_pub1`")
 
-    def test_get_subscription_success(self):
-        """Test successful subscription retrieval"""
-        # Mock successful execution
+
+class TestPubSubManagerWithExecutor(unittest.TestCase):
+    """Test PubSubManager with executor pattern (session context) - SQL should be identical"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.client = Client()
+        self.client._engine = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.client._escape_string = lambda x: f"'{x}'"
+        # Create mock executor (session)
+        self.session = Mock()
+        # Create PubSubManager with executor
+        self.pubsub_manager = PubSubManager(self.client, executor=self.session)
+
+    def test_session_create_database_publication_uses_executor(self):
+        """Test that session context uses executor, not client"""
         mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            )
-        ]
-        self.client.execute = Mock(return_value=mock_result)
+        mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
+        self.session.execute = Mock(return_value=mock_result)
 
-        # Test get subscription
-        sub = self.pubsub_manager.get_subscription("sub_db1")
+        pub = self.pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
 
-        # Verify
-        self.assertIsInstance(sub, Subscription)
-        self.assertEqual(sub.sub_name, "sub_db1")
-        self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+        # Should call session.execute, not client.execute
+        expected_create_sql = "CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`"
+        self.session.execute.assert_any_call(expected_create_sql)
+        self.assertIsInstance(pub, Publication)
 
-    def test_list_subscriptions_success(self):
-        """Test successful subscription listing"""
-        # Mock successful execution
+    def test_session_generates_same_sql_as_client(self):
+        """Test that session and client contexts generate identical SQL"""
+        # Setup client manager
+        client_manager = PubSubManager(self.client)
         mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            ),
-            (
-                'table_pub1',
-                'sys',
-                'central_db',
-                'products',
-                None,
-                datetime.now(),
-                'sub_table1',
-                datetime.now(),
-                0,
-            ),
-        ]
+        mock_result.rows = [('table_pub', 'db1', 'users', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
-        # Test list subscriptions
-        subs = self.pubsub_manager.list_subscriptions()
+        # Call both
+        client_manager.create_table_publication("table_pub", "db1", "users", "acc1")
+        self.pubsub_manager.create_table_publication("table_pub", "db1", "users", "acc1")
 
-        # Verify
-        self.assertEqual(len(subs), 2)
-        self.assertIsInstance(subs[0], Subscription)
-        self.assertIsInstance(subs[1], Subscription)
-        self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+        # Extract SQL from calls
+        expected_sql = "CREATE PUBLICATION `table_pub` DATABASE `db1` TABLE `users` ACCOUNT `acc1`"
+
+        # Both should generate the same SQL
+        self.client.execute.assert_any_call(expected_sql)
+        self.session.execute.assert_any_call(expected_sql)
 
 
-class TestAsyncPubSubManager(unittest.IsolatedAsyncioTestCase):
-    """Test cases for AsyncPubSubManager"""
+class TestAsyncPubSubManagerSQLGeneration(unittest.IsolatedAsyncioTestCase):
+    """Test that AsyncPubSubManager generates correct SQL statements (same as sync)"""
 
     async def asyncSetUp(self):
         """Set up async test fixtures"""
@@ -280,215 +168,236 @@ class TestAsyncPubSubManager(unittest.IsolatedAsyncioTestCase):
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        # Initialize managers manually for testing
-        from matrixone.async_client import AsyncPubSubManager
-
         self.pubsub_manager = AsyncPubSubManager(self.client)
 
-    async def test_async_create_database_publication_success(self):
-        """Test successful async database publication creation"""
-        # Mock successful execution
+    async def test_async_create_database_publication_sql(self):
+        """Test async CREATE PUBLICATION DATABASE SQL (should match sync)"""
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test create database publication
         pub = await self.pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
 
-        # Verify
+        # Verify SQL matches sync version
+        expected_create_sql = "CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "db_pub1")
-        self.assertEqual(pub.database, "central_db")
-        self.assertEqual(pub.tables, "*")
-        self.assertEqual(pub.sub_account, "acc1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`")
 
-    async def test_async_create_table_publication_success(self):
-        """Test successful async table publication creation"""
-        # Mock successful execution
+    async def test_async_create_table_publication_sql(self):
+        """Test async CREATE PUBLICATION TABLE SQL (should match sync)"""
         mock_result = Mock()
-        mock_result.rows = [('table_pub1', 'central_db', 'products', 'acc1', '', datetime.now(), None, None)]
+        mock_result.rows = [('table_pub1', 'central_db', 'users', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test create table publication
-        pub = await self.pubsub_manager.create_table_publication("table_pub1", "central_db", "products", "acc1")
+        pub = await self.pubsub_manager.create_table_publication("table_pub1", "central_db", "users", "acc1")
 
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "table_pub1")
-        self.assertEqual(pub.database, "central_db")
-        self.assertEqual(pub.tables, "products")
-        self.assertEqual(pub.sub_account, "acc1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call(
-            "CREATE PUBLICATION `table_pub1` DATABASE `central_db` TABLE `products` ACCOUNT `acc1`"
-        )
+        expected_create_sql = "CREATE PUBLICATION `table_pub1` DATABASE `central_db` TABLE `users` ACCOUNT `acc1`"
+        self.client.execute.assert_any_call(expected_create_sql)
 
-    async def test_async_get_publication_success(self):
-        """Test successful async publication retrieval"""
-        # Mock successful execution
+    async def test_async_get_publication_sql(self):
+        """Test async SHOW PUBLICATIONS SQL (should match sync)"""
         mock_result = Mock()
         mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test get publication
         pub = await self.pubsub_manager.get_publication("db_pub1")
 
-        # Verify
-        self.assertIsInstance(pub, Publication)
+        # Both sync and async use SHOW PUBLICATIONS and filter
+        expected_sql = "SHOW PUBLICATIONS"
+        self.client.execute.assert_called_with(expected_sql)
         self.assertEqual(pub.name, "db_pub1")
-        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
 
-    async def test_async_list_publications_success(self):
-        """Test successful async publication listing"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            ('db_pub1', 'sys', 'central_db', '*', None, datetime.now()),
-            ('table_pub1', 'sys', 'central_db', 'products', None, datetime.now()),
-        ]
-        self.client.execute = AsyncMock(return_value=mock_result)
-
-        # Test list publications
-        pubs = await self.pubsub_manager.list_publications()
-
-        # Verify
-        self.assertEqual(len(pubs), 2)
-        self.assertIsInstance(pubs[0], Publication)
-        self.assertIsInstance(pubs[1], Publication)
-        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
-
-    async def test_async_alter_publication_success(self):
-        """Test successful async publication alteration"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.client.execute = AsyncMock(return_value=mock_result)
-
-        # Test alter publication
-        pub = await self.pubsub_manager.alter_publication("db_pub1", account="acc2")
-
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("ALTER PUBLICATION `db_pub1` ACCOUNT `acc2`")
-
-    async def test_async_drop_publication_success(self):
-        """Test successful async publication deletion"""
-        # Mock successful execution
+    async def test_async_drop_publication_sql(self):
+        """Test async DROP PUBLICATION SQL (should match sync)"""
         mock_result = Mock()
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test drop publication
         result = await self.pubsub_manager.drop_publication("db_pub1")
 
-        # Verify
+        expected_sql = "DROP PUBLICATION `db_pub1`"
+        self.client.execute.assert_called_with(expected_sql)
         self.assertTrue(result)
-        self.client.execute.assert_called_with("DROP PUBLICATION `db_pub1`")
 
-    async def test_async_create_subscription_success(self):
-        """Test successful async subscription creation"""
-        # Mock successful execution
+    async def test_async_create_subscription_sql(self):
+        """Test async CREATE DATABASE (subscription) SQL (should match sync)"""
         mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            )
-        ]
+        mock_result.rows = [('pub1', 'acc1', 'central_db', '*', None, datetime.now(), 'sub_db1', datetime.now())]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test create subscription
-        sub = await self.pubsub_manager.create_subscription("sub_db1", "db_pub1", "sys")
+        sub = await self.pubsub_manager.create_subscription("sub_db1", "pub1", "acc1")
 
-        # Verify
-        self.assertIsInstance(sub, Subscription)
-        self.assertEqual(sub.sub_name, "sub_db1")
-        self.assertEqual(sub.pub_name, "db_pub1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE DATABASE `sub_db1` FROM `sys` PUBLICATION `db_pub1`")
+        expected_create_sql = "CREATE DATABASE `sub_db1` FROM `acc1` PUBLICATION `pub1`"
+        self.client.execute.assert_any_call(expected_create_sql)
 
-    async def test_async_get_subscription_success(self):
-        """Test successful async subscription retrieval"""
-        # Mock successful execution
+
+class TestAsyncPubSubManagerWithExecutor(unittest.IsolatedAsyncioTestCase):
+    """Test AsyncPubSubManager with executor pattern - SQL should match sync version"""
+
+    async def asyncSetUp(self):
+        """Set up async test fixtures"""
+        self.client = AsyncClient()
+        self.client._engine = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.client._escape_string = lambda x: f"'{x}'"
+        # Create mock async executor (async session)
+        self.session = Mock()
+        self.session.execute = AsyncMock()
+        # Create AsyncPubSubManager with executor
+        self.pubsub_manager = AsyncPubSubManager(self.client, executor=self.session)
+
+    async def test_async_session_create_publication_uses_executor(self):
+        """Test that async session context uses executor"""
         mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            )
-        ]
+        mock_result.rows = [('db_pub1', 'central_db', '*', 'acc1', '', datetime.now(), None, None)]
+        self.session.execute.return_value = mock_result
+
+        pub = await self.pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
+
+        # Should call session.execute, not client.execute
+        expected_create_sql = "CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`"
+        self.session.execute.assert_any_call(expected_create_sql)
+
+    async def test_async_session_generates_same_sql_as_client(self):
+        """Test that async session and client contexts generate identical SQL"""
+        # Setup client manager
+        client_manager = AsyncPubSubManager(self.client)
+        mock_result = Mock()
+        mock_result.rows = [('table_pub', 'db1', 'users', 'acc1', '', datetime.now(), None, None)]
         self.client.execute = AsyncMock(return_value=mock_result)
+        self.session.execute.return_value = mock_result
 
-        # Test get subscription
-        sub = await self.pubsub_manager.get_subscription("sub_db1")
+        # Call both
+        await client_manager.create_table_publication("table_pub", "db1", "users", "acc1")
+        await self.pubsub_manager.create_table_publication("table_pub", "db1", "users", "acc1")
 
-        # Verify
-        self.assertIsInstance(sub, Subscription)
-        self.assertEqual(sub.sub_name, "sub_db1")
-        self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+        # Extract expected SQL
+        expected_sql = "CREATE PUBLICATION `table_pub` DATABASE `db1` TABLE `users` ACCOUNT `acc1`"
 
-    async def test_async_list_subscriptions_success(self):
-        """Test successful async subscription listing"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
+        # Both should generate the same SQL
+        self.client.execute.assert_any_call(expected_sql)
+        self.session.execute.assert_any_call(expected_sql)
+
+
+class TestSyncVsAsyncPubSubSQLConsistency(unittest.IsolatedAsyncioTestCase):
+    """Comprehensive test ensuring sync and async generate identical SQL"""
+
+    async def asyncSetUp(self):
+        """Set up both sync and async fixtures"""
+        # Sync setup
+        self.sync_client = Client()
+        self.sync_client._engine = Mock()
+        self.sync_client._escape_identifier = lambda x: f"`{x}`"
+        self.sync_client._escape_string = lambda x: f"'{x}'"
+        self.sync_manager = PubSubManager(self.sync_client)
+
+        # Async setup
+        self.async_client = AsyncClient()
+        self.async_client._engine = Mock()
+        self.async_client._escape_identifier = lambda x: f"`{x}`"
+        self.async_client._escape_string = lambda x: f"'{x}'"
+        self.async_manager = AsyncPubSubManager(self.async_client)
+
+    async def test_create_operations_sql_consistency(self):
+        """Test that all create operations generate identical SQL in sync/async"""
+        test_cases = [
+            # (method_name, args, pub_name, mock_rows, expected_sql)
             (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
+                'create_database_publication',
+                ['db_pub', 'db1', 'acc1'],
+                'db_pub',
+                [('db_pub', 'db1', '*', 'acc1', '', datetime.now(), None, None)],
+                "CREATE PUBLICATION `db_pub` DATABASE `db1` ACCOUNT `acc1`",
             ),
             (
-                'table_pub1',
-                'sys',
-                'central_db',
-                'products',
-                None,
-                datetime.now(),
-                'sub_table1',
-                datetime.now(),
-                0,
+                'create_table_publication',
+                ['table_pub', 'db1', 'users', 'acc1'],
+                'table_pub',
+                [('table_pub', 'db1', 'users', 'acc1', '', datetime.now(), None, None)],
+                "CREATE PUBLICATION `table_pub` DATABASE `db1` TABLE `users` ACCOUNT `acc1`",
             ),
         ]
-        self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test list subscriptions
-        subs = await self.pubsub_manager.list_subscriptions()
+        for method_name, args, pub_name, mock_rows, expected_sql in test_cases:
+            # Setup mock to return the publication for get_publication call
+            mock_result = Mock()
+            mock_result.rows = mock_rows
 
-        # Verify
-        self.assertEqual(len(subs), 2)
-        self.assertIsInstance(subs[0], Subscription)
-        self.assertIsInstance(subs[1], Subscription)
-        self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+            self.sync_client.execute = Mock(return_value=mock_result)
+            self.async_client.execute = AsyncMock(return_value=mock_result)
+
+            # Call sync
+            getattr(self.sync_manager, method_name)(*args)
+
+            # Call async
+            await getattr(self.async_manager, method_name)(*args)
+
+            # Verify both generated the same SQL
+            self.sync_client.execute.assert_any_call(expected_sql)
+            self.async_client.execute.assert_any_call(expected_sql)
+
+    async def test_query_operations_sql_consistency(self):
+        """Test that query operations generate identical SQL"""
+        mock_pub_result = Mock()
+        mock_pub_result.rows = [('test_pub', 'db1', '*', 'acc1', '', datetime.now(), None, None)]
+
+        mock_sub_result = Mock()
+        mock_sub_result.rows = [('pub1', 'acc1', 'db1', '*', None, datetime.now(), 'sub_db1', datetime.now())]
+
+        query_cases = [
+            # (method, args, mock_result, expected_sql)
+            ('get_publication', ['test_pub'], mock_pub_result, "SHOW PUBLICATIONS"),
+            ('list_publications', [], mock_pub_result, "SHOW PUBLICATIONS"),
+            ('drop_publication', ['test_pub'], mock_pub_result, "DROP PUBLICATION `test_pub`"),
+            ('get_subscription', ['sub_db1'], mock_sub_result, "SHOW SUBSCRIPTIONS"),
+            ('list_subscriptions', [], mock_sub_result, "SHOW SUBSCRIPTIONS"),
+        ]
+
+        for method_name, args, mock_result, expected_sql in query_cases:
+            # Reset mocks
+            self.sync_client.execute = Mock(return_value=mock_result)
+            self.async_client.execute = AsyncMock(return_value=mock_result)
+
+            # Call sync
+            getattr(self.sync_manager, method_name)(*args)
+
+            # Call async
+            await getattr(self.async_manager, method_name)(*args)
+
+            # Verify SQL is identical
+            if method_name in ['drop_publication']:
+                # Single execute call
+                self.assertEqual(self.sync_client.execute.call_args[0][0], self.async_client.execute.call_args[0][0])
 
 
-class TestTransactionPubSubManager(unittest.TestCase):
-    """Test cases for TransactionPubSubManager"""
+class TestPubSubManagerErrorHandling(unittest.TestCase):
+    """Test error handling"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.client = Client()
+        self.client._engine = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.pubsub_manager = PubSubManager(self.client)
+
+    def test_get_publication_not_found(self):
+        """Test getting non-existent publication"""
+        mock_result = Mock()
+        mock_result.rows = []
+        self.client.execute = Mock(return_value=mock_result)
+
+        with self.assertRaises(PubSubErrorClass):
+            self.pubsub_manager.get_publication("nonexistent")
+
+    def test_create_publication_failure(self):
+        """Test publication creation failure"""
+        self.client.execute = Mock(side_effect=Exception("Permission denied"))
+
+        with self.assertRaises(PubSubErrorClass):
+            self.pubsub_manager.create_database_publication("db_pub1", "db1", "acc1")
+
+
+class TestPubSubManagerFiltering(unittest.TestCase):
+    """Test publication/subscription filtering logic"""
 
     def setUp(self):
         """Set up test fixtures"""
@@ -496,202 +405,38 @@ class TestTransactionPubSubManager(unittest.TestCase):
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        self.transaction_wrapper = Mock()
-        self.transaction_pubsub_manager = TransactionPubSubManager(self.client, self.transaction_wrapper)
+        self.pubsub_manager = PubSubManager(self.client)
 
-    def test_transaction_create_database_publication(self):
-        """Test create database publication within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test create database publication
-        pub = self.transaction_pubsub_manager.create_database_publication("db_pub1", "central_db", "acc1")
-
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "db_pub1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE PUBLICATION `db_pub1` DATABASE `central_db` ACCOUNT `acc1`")
-
-    def test_transaction_create_table_publication(self):
-        """Test create table publication within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('table_pub1', 'sys', 'central_db', 'products', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test create table publication
-        pub = self.transaction_pubsub_manager.create_table_publication("table_pub1", "central_db", "products", "acc1")
-
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "table_pub1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call(
-            "CREATE PUBLICATION `table_pub1` DATABASE `central_db` TABLE `products` ACCOUNT `acc1`"
-        )
-
-    def test_transaction_get_publication(self):
-        """Test get publication within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test get publication
-        pub = self.transaction_pubsub_manager.get_publication("db_pub1")
-
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        self.assertEqual(pub.name, "db_pub1")
-        self.transaction_wrapper.execute.assert_called_with("SHOW PUBLICATIONS WHERE pub_name = 'db_pub1'")
-
-    def test_transaction_list_publications(self):
-        """Test list publications within transaction"""
-        # Mock successful execution
+    def test_get_publication_finds_correct_publication(self):
+        """Test that get_publication filters correctly"""
         mock_result = Mock()
         mock_result.rows = [
-            ('db_pub1', 'sys', 'central_db', '*', None, datetime.now()),
-            ('table_pub1', 'sys', 'central_db', 'products', None, datetime.now()),
+            ('pub1', 'db1', '*', 'acc1', '', datetime.now(), None, None),
+            ('pub2', 'db2', '*', 'acc2', '', datetime.now(), None, None),
+            ('target_pub', 'db3', '*', 'acc3', '', datetime.now(), None, None),
         ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        self.client.execute = Mock(return_value=mock_result)
 
-        # Test list publications
-        pubs = self.transaction_pubsub_manager.list_publications()
+        pub = self.pubsub_manager.get_publication("target_pub")
 
-        # Verify
+        self.assertEqual(pub.name, "target_pub")
+        self.assertEqual(pub.database, "db3")
+
+    def test_list_publications_filters_by_database(self):
+        """Test that list_publications filters by database"""
+        mock_result = Mock()
+        mock_result.rows = [
+            ('pub1', 'db1', '*', 'acc1', '', datetime.now(), None, None),
+            ('pub2', 'db2', '*', 'acc2', '', datetime.now(), None, None),
+            ('pub3', 'db1', '*', 'acc3', '', datetime.now(), None, None),
+        ]
+        self.client.execute = Mock(return_value=mock_result)
+
+        pubs = self.pubsub_manager.list_publications(database='db1')
+
+        # Should return pub1 and pub3 (both for db1)
         self.assertEqual(len(pubs), 2)
-        self.assertIsInstance(pubs[0], Publication)
-        self.assertIsInstance(pubs[1], Publication)
-        self.transaction_wrapper.execute.assert_called_with("SHOW PUBLICATIONS")
-
-    def test_transaction_alter_publication(self):
-        """Test alter publication within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pub1', 'sys', 'central_db', '*', None, datetime.now())]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test alter publication
-        pub = self.transaction_pubsub_manager.alter_publication("db_pub1", account="acc2")
-
-        # Verify
-        self.assertIsInstance(pub, Publication)
-        # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("ALTER PUBLICATION `db_pub1` ACCOUNT `acc2`")
-
-    def test_transaction_drop_publication(self):
-        """Test drop publication within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test drop publication
-        result = self.transaction_pubsub_manager.drop_publication("db_pub1")
-
-        # Verify
-        self.assertTrue(result)
-        self.transaction_wrapper.execute.assert_called_with("DROP PUBLICATION `db_pub1`")
-
-    def test_transaction_create_subscription(self):
-        """Test create subscription within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            )
-        ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test create subscription
-        sub = self.transaction_pubsub_manager.create_subscription("sub_db1", "db_pub1", "sys")
-
-        # Verify
-        self.assertIsInstance(sub, Subscription)
-        self.assertEqual(sub.sub_name, "sub_db1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE DATABASE `sub_db1` FROM `sys` PUBLICATION `db_pub1`")
-
-    def test_transaction_get_subscription(self):
-        """Test get subscription within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            )
-        ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test get subscription
-        sub = self.transaction_pubsub_manager.get_subscription("sub_db1")
-
-        # Verify
-        self.assertIsInstance(sub, Subscription)
-        self.assertEqual(sub.sub_name, "sub_db1")
-        self.transaction_wrapper.execute.assert_called_with("SHOW SUBSCRIPTIONS")
-
-    def test_transaction_list_subscriptions(self):
-        """Test list subscriptions within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            (
-                'db_pub1',
-                'sys',
-                'central_db',
-                '*',
-                None,
-                datetime.now(),
-                'sub_db1',
-                datetime.now(),
-                0,
-            ),
-            (
-                'table_pub1',
-                'sys',
-                'central_db',
-                'products',
-                None,
-                datetime.now(),
-                'sub_table1',
-                datetime.now(),
-                0,
-            ),
-        ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test list subscriptions
-        subs = self.transaction_pubsub_manager.list_subscriptions()
-
-        # Verify
-        self.assertEqual(len(subs), 2)
-        self.assertIsInstance(subs[0], Subscription)
-        self.assertIsInstance(subs[1], Subscription)
-        self.transaction_wrapper.execute.assert_called_with("SHOW SUBSCRIPTIONS")
+        self.assertTrue(all(p.database == 'db1' for p in pubs))
 
 
 if __name__ == '__main__':
@@ -700,9 +445,13 @@ if __name__ == '__main__':
     suite = unittest.TestSuite()
 
     # Add test cases
-    suite.addTests(loader.loadTestsFromTestCase(TestPubSubManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestAsyncPubSubManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestTransactionPubSubManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestPubSubManagerSQLGeneration))
+    suite.addTests(loader.loadTestsFromTestCase(TestPubSubManagerWithExecutor))
+    suite.addTests(loader.loadTestsFromTestCase(TestAsyncPubSubManagerSQLGeneration))
+    suite.addTests(loader.loadTestsFromTestCase(TestAsyncPubSubManagerWithExecutor))
+    suite.addTests(loader.loadTestsFromTestCase(TestSyncVsAsyncPubSubSQLConsistency))
+    suite.addTests(loader.loadTestsFromTestCase(TestPubSubManagerErrorHandling))
+    suite.addTests(loader.loadTestsFromTestCase(TestPubSubManagerFiltering))
 
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

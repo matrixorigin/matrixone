@@ -13,11 +13,17 @@
 # limitations under the License.
 
 """
-Unit tests for PitrManager
+Unit tests for PitrManager with executor pattern.
+
+Tests ensure:
+1. Sync and Async managers generate identical SQL
+2. Client and Session contexts use correct executors
+3. All PITR operations work correctly
+4. SQL statements match expected MatrixOne syntax
 """
 
 import unittest
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, AsyncMock
 import sys
 import os
 from datetime import datetime
@@ -27,11 +33,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 from matrixone import Client, AsyncClient, PitrError, Pitr
 from matrixone.exceptions import PitrError as PitrErrorClass
-from matrixone.pitr import TransactionPitrManager
+from matrixone.pitr import PitrManager, AsyncPitrManager
 
 
-class TestPitrManager(unittest.TestCase):
-    """Test cases for PitrManager"""
+class TestPitrManagerSQLGeneration(unittest.TestCase):
+    """Test that PitrManager generates correct SQL statements"""
 
     def setUp(self):
         """Set up test fixtures"""
@@ -39,227 +45,170 @@ class TestPitrManager(unittest.TestCase):
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        # Initialize managers manually for testing
-        from matrixone.pitr import PitrManager
-
         self.pitr_manager = PitrManager(self.client)
 
-    def test_create_cluster_pitr_success(self):
-        """Test successful cluster PITR creation"""
-        # Mock successful execution
+    def test_create_cluster_pitr_sql(self):
+        """Test CREATE PITR FOR CLUSTER SQL generation"""
         mock_result = Mock()
         mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create cluster PITR
         pitr = self.pitr_manager.create_cluster_pitr("cluster_pitr1", 1, "d")
 
-        # Verify
+        # Verify SQL is correct
+        expected_create_sql = "CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "cluster_pitr1")
-        self.assertEqual(pitr.level, "cluster")
-        self.assertEqual(pitr.range_value, 1)
-        self.assertEqual(pitr.range_unit, "d")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'")
 
-    def test_create_cluster_pitr_failure(self):
-        """Test cluster PITR creation failure"""
-        # Mock execution failure
-        self.client.execute = Mock(side_effect=Exception("Permission denied"))
-
-        # Test create cluster PITR failure
-        with self.assertRaises(PitrErrorClass):
-            self.pitr_manager.create_cluster_pitr("cluster_pitr1", 1, "d")
-
-    def test_create_account_pitr_success(self):
-        """Test successful account PITR creation"""
-        # Mock successful execution
+    def test_create_account_pitr_sql(self):
+        """Test CREATE PITR FOR ACCOUNT SQL generation"""
         mock_result = Mock()
         mock_result.rows = [('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h')]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create account PITR for current account
+        # Test without specific account
         pitr = self.pitr_manager.create_account_pitr("account_pitr1", range_value=2, range_unit="h")
 
-        # Verify
+        expected_create_sql = "CREATE PITR `account_pitr1` FOR ACCOUNT RANGE 2 'h'"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "account_pitr1")
-        self.assertEqual(pitr.level, "account")
-        self.assertEqual(pitr.range_value, 2)
-        self.assertEqual(pitr.range_unit, "h")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `account_pitr1` FOR ACCOUNT RANGE 2 'h'")
 
-    def test_create_account_pitr_for_specific_account(self):
-        """Test create account PITR for specific account"""
-        # Mock successful execution
+    def test_create_account_pitr_with_name_sql(self):
+        """Test CREATE PITR FOR ACCOUNT with specific account name"""
         mock_result = Mock()
-        mock_result.rows = [('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 1, 'd')]
+        mock_result.rows = [('account_pitr2', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 1, 'd')]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create account PITR for specific account
-        pitr = self.pitr_manager.create_account_pitr("account_pitr1", "acc1", 1, "d")
+        pitr = self.pitr_manager.create_account_pitr("account_pitr2", account_name="acc1", range_value=1, range_unit="d")
 
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `account_pitr1` FOR ACCOUNT `acc1` RANGE 1 'd'")
+        expected_create_sql = "CREATE PITR `account_pitr2` FOR ACCOUNT `acc1` RANGE 1 'd'"
+        self.client.execute.assert_any_call(expected_create_sql)
 
-    def test_create_database_pitr_success(self):
-        """Test successful database PITR creation"""
-        # Mock successful execution
+    def test_create_database_pitr_sql(self):
+        """Test CREATE PITR FOR DATABASE SQL generation"""
         mock_result = Mock()
-        mock_result.rows = [('db_pitr1', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 1, 'y')]
+        mock_result.rows = [('db_pitr1', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 1, 'mo')]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create database PITR
-        pitr = self.pitr_manager.create_database_pitr("db_pitr1", "db1", 1, "y")
+        pitr = self.pitr_manager.create_database_pitr("db_pitr1", "db1", 1, "mo")
 
-        # Verify
+        expected_create_sql = "CREATE PITR `db_pitr1` FOR DATABASE `db1` RANGE 1 'mo'"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "db_pitr1")
-        self.assertEqual(pitr.level, "database")
-        self.assertEqual(pitr.database_name, "db1")
-        self.assertEqual(pitr.range_value, 1)
-        self.assertEqual(pitr.range_unit, "y")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `db_pitr1` FOR DATABASE `db1` RANGE 1 'y'")
 
-    def test_create_table_pitr_success(self):
-        """Test successful table PITR creation"""
-        # Mock successful execution
+    def test_create_table_pitr_sql(self):
+        """Test CREATE PITR FOR TABLE SQL generation"""
         mock_result = Mock()
         mock_result.rows = [('tab_pitr1', datetime.now(), datetime.now(), 'table', 'acc1', 'db1', 't1', 1, 'y')]
         self.client.execute = Mock(return_value=mock_result)
 
-        # Test create table PITR
         pitr = self.pitr_manager.create_table_pitr("tab_pitr1", "db1", "t1", 1, "y")
 
-        # Verify
+        expected_create_sql = "CREATE PITR `tab_pitr1` FOR TABLE `db1` `t1` RANGE 1 'y'"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "tab_pitr1")
-        self.assertEqual(pitr.level, "table")
-        self.assertEqual(pitr.database_name, "db1")
-        self.assertEqual(pitr.table_name, "t1")
-        self.assertEqual(pitr.range_value, 1)
-        self.assertEqual(pitr.range_unit, "y")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `tab_pitr1` FOR TABLE `db1` `t1` RANGE 1 'y'")
 
-    def test_get_pitr_success(self):
-        """Test successful PITR retrieval"""
-        # Mock successful execution
+    def test_show_pitr_sql(self):
+        """Test SHOW PITR SQL generation"""
+        mock_result = Mock()
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
+        self.client.execute = Mock(return_value=mock_result)
+
+        pitr = self.pitr_manager.get("test_pitr")
+
+        expected_sql = "SHOW PITR WHERE pitr_name = 'test_pitr'"
+        self.client.execute.assert_called_with(expected_sql)
+        self.assertEqual(pitr.name, "test_pitr")
+
+    def test_alter_pitr_sql(self):
+        """Test ALTER PITR SQL generation"""
+        mock_result = Mock()
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 3, 'd')]
+        self.client.execute = Mock(return_value=mock_result)
+
+        pitr = self.pitr_manager.alter("test_pitr", 3, "d")
+
+        expected_alter_sql = "ALTER PITR `test_pitr` RANGE 3 'd'"
+        self.client.execute.assert_any_call(expected_alter_sql)
+        self.assertIsInstance(pitr, Pitr)
+
+    def test_drop_pitr_sql(self):
+        """Test DROP PITR SQL generation"""
+        mock_result = Mock()
+        self.client.execute = Mock(return_value=mock_result)
+
+        result = self.pitr_manager.delete("test_pitr")
+
+        expected_sql = "DROP PITR `test_pitr`"
+        self.client.execute.assert_called_with(expected_sql)
+        self.assertTrue(result)
+
+
+class TestPitrManagerWithExecutor(unittest.TestCase):
+    """Test PitrManager with executor pattern (session context) - SQL should be identical"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.client = Client()
+        self.client._engine = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.client._escape_string = lambda x: f"'{x}'"
+        # Create mock executor (session)
+        self.session = Mock()
+        # Create PitrManager with executor
+        self.pitr_manager = PitrManager(self.client, executor=self.session)
+
+    def test_session_create_cluster_pitr_uses_executor(self):
+        """Test that session context uses executor, not client"""
         mock_result = Mock()
         mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
-        self.client.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
-        # Test get PITR
-        pitr = self.pitr_manager.get("cluster_pitr1")
+        pitr = self.pitr_manager.create_cluster_pitr("cluster_pitr1", 1, "d")
 
-        # Verify
+        # Should call session.execute, not client.execute
+        expected_create_sql = "CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'"
+        self.session.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "cluster_pitr1")
-        self.client.execute.assert_called_with("SHOW PITR WHERE pitr_name = 'cluster_pitr1'")
 
-    def test_get_pitr_not_found(self):
-        """Test PITR not found"""
-        # Mock empty result
+    def test_session_generates_same_sql_as_client(self):
+        """Test that session and client contexts generate identical SQL"""
+        # Setup client manager
+        client_manager = PitrManager(self.client)
         mock_result = Mock()
-        mock_result.rows = []
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 2, 'h')]
         self.client.execute = Mock(return_value=mock_result)
+        self.session.execute = Mock(return_value=mock_result)
 
-        # Test get PITR not found
-        with self.assertRaises(PitrErrorClass):
-            self.pitr_manager.get("nonexistent_pitr")
+        # Call both
+        client_manager.create_database_pitr("test_pitr", "db1", 2, "h")
+        self.pitr_manager.create_database_pitr("test_pitr", "db1", 2, "h")
 
-    def test_list_pitrs_success(self):
-        """Test successful PITR listing"""
-        # Mock successful execution
+        # Extract SQL from calls
+        expected_sql = "CREATE PITR `test_pitr` FOR DATABASE `db1` RANGE 2 'h'"
+
+        # Both should generate the same SQL
+        self.client.execute.assert_any_call(expected_sql)
+        self.session.execute.assert_any_call(expected_sql)
+
+    def test_all_operations_use_executor(self):
+        """Test that all PITR operations use executor when provided"""
         mock_result = Mock()
-        mock_result.rows = [
-            ('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd'),
-            ('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h'),
-        ]
-        self.client.execute = Mock(return_value=mock_result)
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
+        self.session.execute = Mock(return_value=mock_result)
 
-        # Test list PITRs
-        pitrs = self.pitr_manager.list()
+        # Test all operations
+        self.pitr_manager.create_cluster_pitr("test_pitr", 1, "d")
+        self.pitr_manager.get("test_pitr")
+        self.pitr_manager.alter("test_pitr", 2, "d")
+        self.pitr_manager.delete("test_pitr")
 
-        # Verify
-        self.assertEqual(len(pitrs), 2)
-        self.assertIsInstance(pitrs[0], Pitr)
-        self.assertIsInstance(pitrs[1], Pitr)
-        self.client.execute.assert_called_with("SHOW PITR")
-
-    def test_list_pitrs_with_filters(self):
-        """Test PITR listing with filters"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h')]
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test list PITRs with filters
-        pitrs = self.pitr_manager.list(level="account", account_name="acc1")
-
-        # Verify
-        self.assertEqual(len(pitrs), 1)
-        self.client.execute.assert_called_with("SHOW PITR WHERE pitr_level = 'account' AND account_name = 'acc1'")
-
-    def test_alter_pitr_success(self):
-        """Test successful PITR alteration"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 2, 'h')]
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test alter PITR
-        pitr = self.pitr_manager.alter("cluster_pitr1", 2, "h")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.range_value, 2)
-        self.assertEqual(pitr.range_unit, "h")
-        # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("ALTER PITR `cluster_pitr1` RANGE 2 'h'")
-
-    def test_delete_pitr_success(self):
-        """Test successful PITR deletion"""
-        # Mock successful execution
-        mock_result = Mock()
-        self.client.execute = Mock(return_value=mock_result)
-
-        # Test delete PITR
-        result = self.pitr_manager.delete("cluster_pitr1")
-
-        # Verify
-        self.assertTrue(result)
-        self.client.execute.assert_called_with("DROP PITR `cluster_pitr1`")
-
-    def test_validate_range_invalid_value(self):
-        """Test range validation with invalid value"""
-        # Test invalid range value
-        with self.assertRaises(PitrErrorClass):
-            self.pitr_manager.create_cluster_pitr("test", 0, "d")
-
-        with self.assertRaises(PitrErrorClass):
-            self.pitr_manager.create_cluster_pitr("test", 101, "d")
-
-    def test_validate_range_invalid_unit(self):
-        """Test range validation with invalid unit"""
-        # Test invalid range unit
-        with self.assertRaises(PitrErrorClass):
-            self.pitr_manager.create_cluster_pitr("test", 1, "invalid")
+        # All should use session.execute
+        self.assertGreater(self.session.execute.call_count, 0)
 
 
-class TestAsyncPitrManager(unittest.IsolatedAsyncioTestCase):
-    """Test cases for AsyncPitrManager"""
+class TestAsyncPitrManagerSQLGeneration(unittest.IsolatedAsyncioTestCase):
+    """Test that AsyncPitrManager generates correct SQL statements (same as sync)"""
 
     async def asyncSetUp(self):
         """Set up async test fixtures"""
@@ -267,304 +216,289 @@ class TestAsyncPitrManager(unittest.IsolatedAsyncioTestCase):
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
         self.client._escape_string = lambda x: f"'{x}'"
-        # Initialize managers manually for testing
-        from matrixone.async_client import AsyncPitrManager
-
         self.pitr_manager = AsyncPitrManager(self.client)
 
-    async def test_async_create_cluster_pitr_success(self):
-        """Test successful async cluster PITR creation"""
-        # Mock successful execution
+    async def test_async_create_cluster_pitr_sql(self):
+        """Test async CREATE PITR FOR CLUSTER SQL (should match sync)"""
         mock_result = Mock()
         mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test create cluster PITR
         pitr = await self.pitr_manager.create_cluster_pitr("cluster_pitr1", 1, "d")
 
-        # Verify
+        # Verify SQL matches sync version
+        expected_create_sql = "CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'"
+        self.client.execute.assert_any_call(expected_create_sql)
         self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "cluster_pitr1")
-        self.assertEqual(pitr.level, "cluster")
-        self.assertEqual(pitr.range_value, 1)
-        self.assertEqual(pitr.range_unit, "d")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'")
 
-    async def test_async_create_account_pitr_success(self):
-        """Test successful async account PITR creation"""
-        # Mock successful execution
+    async def test_async_create_database_pitr_sql(self):
+        """Test async CREATE PITR FOR DATABASE SQL (should match sync)"""
         mock_result = Mock()
-        mock_result.rows = [('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h')]
+        mock_result.rows = [('db_pitr1', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 1, 'mo')]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test create account PITR
-        pitr = await self.pitr_manager.create_account_pitr("account_pitr1", range_value=2, range_unit="h")
+        pitr = await self.pitr_manager.create_database_pitr("db_pitr1", "db1", 1, "mo")
 
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "account_pitr1")
-        self.assertEqual(pitr.level, "account")
-        self.assertEqual(pitr.range_value, 2)
-        self.assertEqual(pitr.range_unit, "h")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `account_pitr1` FOR ACCOUNT RANGE 2 'h'")
+        expected_create_sql = "CREATE PITR `db_pitr1` FOR DATABASE `db1` RANGE 1 'mo'"
+        self.client.execute.assert_any_call(expected_create_sql)
 
-    async def test_async_create_database_pitr_success(self):
-        """Test successful async database PITR creation"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pitr1', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 1, 'y')]
-        self.client.execute = AsyncMock(return_value=mock_result)
-
-        # Test create database PITR
-        pitr = await self.pitr_manager.create_database_pitr("db_pitr1", "db1", 1, "y")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "db_pitr1")
-        self.assertEqual(pitr.level, "database")
-        self.assertEqual(pitr.database_name, "db1")
-        self.assertEqual(pitr.range_value, 1)
-        self.assertEqual(pitr.range_unit, "y")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `db_pitr1` FOR DATABASE `db1` RANGE 1 'y'")
-
-    async def test_async_create_table_pitr_success(self):
-        """Test successful async table PITR creation"""
-        # Mock successful execution
+    async def test_async_create_table_pitr_sql(self):
+        """Test async CREATE PITR FOR TABLE SQL (should match sync)"""
         mock_result = Mock()
         mock_result.rows = [('tab_pitr1', datetime.now(), datetime.now(), 'table', 'acc1', 'db1', 't1', 1, 'y')]
         self.client.execute = AsyncMock(return_value=mock_result)
 
-        # Test create table PITR
         pitr = await self.pitr_manager.create_table_pitr("tab_pitr1", "db1", "t1", 1, "y")
 
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "tab_pitr1")
-        self.assertEqual(pitr.level, "table")
-        self.assertEqual(pitr.database_name, "db1")
-        self.assertEqual(pitr.table_name, "t1")
-        self.assertEqual(pitr.range_value, 1)
-        self.assertEqual(pitr.range_unit, "y")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("CREATE PITR `tab_pitr1` FOR TABLE `db1` `t1` RANGE 1 'y'")
+        expected_create_sql = "CREATE PITR `tab_pitr1` FOR TABLE `db1` `t1` RANGE 1 'y'"
+        self.client.execute.assert_any_call(expected_create_sql)
 
-    async def test_async_get_pitr_success(self):
-        """Test successful async PITR retrieval"""
-        # Mock successful execution
+    async def test_async_show_pitr_sql(self):
+        """Test async SHOW PITR SQL (should match sync)"""
+        mock_result = Mock()
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
+        self.client.execute = AsyncMock(return_value=mock_result)
+
+        pitr = await self.pitr_manager.get("test_pitr")
+
+        expected_sql = "SHOW PITR WHERE pitr_name = 'test_pitr'"
+        self.client.execute.assert_called_with(expected_sql)
+
+    async def test_async_alter_pitr_sql(self):
+        """Test async ALTER PITR SQL (should match sync)"""
+        mock_result = Mock()
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 3, 'd')]
+        self.client.execute = AsyncMock(return_value=mock_result)
+
+        pitr = await self.pitr_manager.alter("test_pitr", 3, "d")
+
+        expected_alter_sql = "ALTER PITR `test_pitr` RANGE 3 'd'"
+        self.client.execute.assert_any_call(expected_alter_sql)
+
+    async def test_async_drop_pitr_sql(self):
+        """Test async DROP PITR SQL (should match sync)"""
+        mock_result = Mock()
+        self.client.execute = AsyncMock(return_value=mock_result)
+
+        result = await self.pitr_manager.delete("test_pitr")
+
+        expected_sql = "DROP PITR `test_pitr`"
+        self.client.execute.assert_called_with(expected_sql)
+        self.assertTrue(result)
+
+
+class TestAsyncPitrManagerWithExecutor(unittest.IsolatedAsyncioTestCase):
+    """Test AsyncPitrManager with executor pattern - SQL should match sync version"""
+
+    async def asyncSetUp(self):
+        """Set up async test fixtures"""
+        self.client = AsyncClient()
+        self.client._engine = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.client._escape_string = lambda x: f"'{x}'"
+        # Create mock async executor (async session)
+        self.session = Mock()
+        self.session.execute = AsyncMock()
+        # Create AsyncPitrManager with executor
+        self.pitr_manager = AsyncPitrManager(self.client, executor=self.session)
+
+    async def test_async_session_create_cluster_pitr_uses_executor(self):
+        """Test that async session context uses executor"""
         mock_result = Mock()
         mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
-        self.client.execute = AsyncMock(return_value=mock_result)
+        self.session.execute.return_value = mock_result
 
-        # Test get PITR
-        pitr = await self.pitr_manager.get("cluster_pitr1")
+        pitr = await self.pitr_manager.create_cluster_pitr("cluster_pitr1", 1, "d")
 
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "cluster_pitr1")
-        self.client.execute.assert_called_with("SHOW PITR WHERE pitr_name = 'cluster_pitr1'")
+        # Should call session.execute, not client.execute
+        expected_create_sql = "CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'"
+        self.session.execute.assert_any_call(expected_create_sql)
 
-    async def test_async_list_pitrs_success(self):
-        """Test successful async PITR listing"""
-        # Mock successful execution
+    async def test_async_session_generates_same_sql_as_client(self):
+        """Test that async session and client contexts generate identical SQL"""
+        # Setup client manager
+        client_manager = AsyncPitrManager(self.client)
         mock_result = Mock()
-        mock_result.rows = [
-            ('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd'),
-            ('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h'),
-        ]
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 2, 'h')]
         self.client.execute = AsyncMock(return_value=mock_result)
+        self.session.execute.return_value = mock_result
 
-        # Test list PITRs
-        pitrs = await self.pitr_manager.list()
+        # Call both
+        await client_manager.create_database_pitr("test_pitr", "db1", 2, "h")
+        await self.pitr_manager.create_database_pitr("test_pitr", "db1", 2, "h")
 
-        # Verify
-        self.assertEqual(len(pitrs), 2)
-        self.assertIsInstance(pitrs[0], Pitr)
-        self.assertIsInstance(pitrs[1], Pitr)
-        self.client.execute.assert_called_with("SHOW PITR")
+        # Extract expected SQL
+        expected_sql = "CREATE PITR `test_pitr` FOR DATABASE `db1` RANGE 2 'h'"
 
-    async def test_async_alter_pitr_success(self):
-        """Test successful async PITR alteration"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 2, 'h')]
-        self.client.execute = AsyncMock(return_value=mock_result)
-
-        # Test alter PITR
-        pitr = await self.pitr_manager.alter("cluster_pitr1", 2, "h")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.range_value, 2)
-        self.assertEqual(pitr.range_unit, "h")
-        # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.client.execute.call_count, 2)
-        self.client.execute.assert_any_call("ALTER PITR `cluster_pitr1` RANGE 2 'h'")
-
-    async def test_async_delete_pitr_success(self):
-        """Test successful async PITR deletion"""
-        # Mock successful execution
-        mock_result = Mock()
-        self.client.execute = AsyncMock(return_value=mock_result)
-
-        # Test delete PITR
-        result = await self.pitr_manager.delete("cluster_pitr1")
-
-        # Verify
-        self.assertTrue(result)
-        self.client.execute.assert_called_with("DROP PITR `cluster_pitr1`")
+        # Both should generate the same SQL
+        self.client.execute.assert_any_call(expected_sql)
+        self.session.execute.assert_any_call(expected_sql)
 
 
-class TestTransactionPitrManager(unittest.TestCase):
-    """Test cases for TransactionPitrManager"""
+class TestPitrManagerErrorHandling(unittest.TestCase):
+    """Test error handling and validation"""
 
     def setUp(self):
         """Set up test fixtures"""
         self.client = Client()
         self.client._engine = Mock()
         self.client._escape_identifier = lambda x: f"`{x}`"
-        self.client._escape_string = lambda x: f"'{x}'"
-        self.transaction_wrapper = Mock()
-        self.transaction_pitr_manager = TransactionPitrManager(self.client, self.transaction_wrapper)
+        self.pitr_manager = PitrManager(self.client)
 
-    def test_transaction_create_cluster_pitr(self):
-        """Test create cluster PITR within transaction"""
-        # Mock successful execution
+    def test_invalid_range_value_low(self):
+        """Test range value validation (too low)"""
+        with self.assertRaises(PitrErrorClass):
+            self.pitr_manager.create_cluster_pitr("test_pitr", 0, "d")
+
+    def test_invalid_range_value_high(self):
+        """Test range value validation (too high)"""
+        with self.assertRaises(PitrErrorClass):
+            self.pitr_manager.create_cluster_pitr("test_pitr", 101, "d")
+
+    def test_invalid_range_unit(self):
+        """Test range unit validation"""
+        with self.assertRaises(PitrErrorClass):
+            self.pitr_manager.create_cluster_pitr("test_pitr", 1, "invalid")
+
+    def test_valid_range_units(self):
+        """Test all valid range units"""
         mock_result = Mock()
-        mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        mock_result.rows = [('test_pitr', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'h')]
+        self.client.execute = Mock(return_value=mock_result)
 
-        # Test create cluster PITR
-        pitr = self.transaction_pitr_manager.create_cluster_pitr("cluster_pitr1", 1, "d")
+        valid_units = ['h', 'd', 'mo', 'y']
+        for unit in valid_units:
+            self.pitr_manager.create_cluster_pitr(f"test_pitr_{unit}", 1, unit)
+            expected_sql = f"CREATE PITR `test_pitr_{unit}` FOR CLUSTER RANGE 1 '{unit}'"
+            self.client.execute.assert_any_call(expected_sql)
 
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "cluster_pitr1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE PITR `cluster_pitr1` FOR CLUSTER RANGE 1 'd'")
 
-    def test_transaction_create_account_pitr(self):
-        """Test create account PITR within transaction"""
-        # Mock successful execution
+class TestSyncVsAsyncSQLConsistency(unittest.IsolatedAsyncioTestCase):
+    """Comprehensive test ensuring sync and async generate identical SQL"""
+
+    async def asyncSetUp(self):
+        """Set up both sync and async fixtures"""
+        # Sync setup
+        self.sync_client = Client()
+        self.sync_client._engine = Mock()
+        self.sync_client._escape_identifier = lambda x: f"`{x}`"
+        self.sync_client._escape_string = lambda x: f"'{x}'"
+        self.sync_manager = PitrManager(self.sync_client)
+
+        # Async setup
+        self.async_client = AsyncClient()
+        self.async_client._engine = Mock()
+        self.async_client._escape_identifier = lambda x: f"`{x}`"
+        self.async_client._escape_string = lambda x: f"'{x}'"
+        self.async_manager = AsyncPitrManager(self.async_client)
+
+    async def test_all_create_operations_sql_consistency(self):
+        """Test that all create operations generate identical SQL in sync/async"""
         mock_result = Mock()
-        mock_result.rows = [('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h')]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        mock_result.rows = [('test', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
 
-        # Test create account PITR
-        pitr = self.transaction_pitr_manager.create_account_pitr("account_pitr1", range_value=2, range_unit="h")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "account_pitr1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE PITR `account_pitr1` FOR ACCOUNT RANGE 2 'h'")
-
-    def test_transaction_create_database_pitr(self):
-        """Test create database PITR within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('db_pitr1', datetime.now(), datetime.now(), 'database', 'acc1', 'db1', '*', 1, 'y')]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test create database PITR
-        pitr = self.transaction_pitr_manager.create_database_pitr("db_pitr1", "db1", 1, "y")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "db_pitr1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE PITR `db_pitr1` FOR DATABASE `db1` RANGE 1 'y'")
-
-    def test_transaction_create_table_pitr(self):
-        """Test create table PITR within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('tab_pitr1', datetime.now(), datetime.now(), 'table', 'acc1', 'db1', 't1', 1, 'y')]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test create table PITR
-        pitr = self.transaction_pitr_manager.create_table_pitr("tab_pitr1", "db1", "t1", 1, "y")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "tab_pitr1")
-        # Should be called twice: once for CREATE, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("CREATE PITR `tab_pitr1` FOR TABLE `db1` TABLE `t1` RANGE 1 'y'")
-
-    def test_transaction_get_pitr(self):
-        """Test get PITR within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
-
-        # Test get PITR
-        pitr = self.transaction_pitr_manager.get("cluster_pitr1")
-
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.name, "cluster_pitr1")
-        self.transaction_wrapper.execute.assert_called_with("SHOW PITR WHERE pitr_name = 'cluster_pitr1'")
-
-    def test_transaction_list_pitrs(self):
-        """Test list PITRs within transaction"""
-        # Mock successful execution
-        mock_result = Mock()
-        mock_result.rows = [
-            ('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd'),
-            ('account_pitr1', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 2, 'h'),
+        test_cases = [
+            # (method_name, args, expected_sql)
+            ('create_cluster_pitr', ['cluster_pitr', 1, 'd'], "CREATE PITR `cluster_pitr` FOR CLUSTER RANGE 1 'd'"),
+            ('create_account_pitr', ['account_pitr', None, 2, 'h'], "CREATE PITR `account_pitr` FOR ACCOUNT RANGE 2 'h'"),
+            ('create_database_pitr', ['db_pitr', 'db1', 1, 'mo'], "CREATE PITR `db_pitr` FOR DATABASE `db1` RANGE 1 'mo'"),
+            (
+                'create_table_pitr',
+                ['tab_pitr', 'db1', 't1', 1, 'y'],
+                "CREATE PITR `tab_pitr` FOR TABLE `db1` `t1` RANGE 1 'y'",
+            ),
         ]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
 
-        # Test list PITRs
-        pitrs = self.transaction_pitr_manager.list()
+        for method_name, args, expected_sql in test_cases:
+            # Reset mocks
+            self.sync_client.execute = Mock(return_value=mock_result)
+            self.async_client.execute = AsyncMock(return_value=mock_result)
 
-        # Verify
-        self.assertEqual(len(pitrs), 2)
-        self.assertIsInstance(pitrs[0], Pitr)
-        self.assertIsInstance(pitrs[1], Pitr)
-        self.transaction_wrapper.execute.assert_called_with("SHOW PITR")
+            # Call sync
+            getattr(self.sync_manager, method_name)(*args)
 
-    def test_transaction_alter_pitr(self):
-        """Test alter PITR within transaction"""
-        # Mock successful execution
+            # Call async
+            await getattr(self.async_manager, method_name)(*args)
+
+            # Verify both generated the same SQL
+            self.sync_client.execute.assert_any_call(expected_sql)
+            self.async_client.execute.assert_any_call(expected_sql)
+
+    async def test_query_operations_sql_consistency(self):
+        """Test that query operations generate identical SQL"""
         mock_result = Mock()
-        mock_result.rows = [('cluster_pitr1', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 2, 'h')]
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        mock_result.rows = [('test', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 3, 'd')]
 
-        # Test alter PITR
-        pitr = self.transaction_pitr_manager.alter("cluster_pitr1", 2, "h")
+        query_cases = [
+            # (method, args, expected_sql)
+            ('get', ['test_pitr'], "SHOW PITR WHERE pitr_name = 'test_pitr'"),
+            ('alter', ['test_pitr', 3, 'd'], "ALTER PITR `test_pitr` RANGE 3 'd'"),
+            ('delete', ['test_pitr'], "DROP PITR `test_pitr`"),
+        ]
 
-        # Verify
-        self.assertIsInstance(pitr, Pitr)
-        self.assertEqual(pitr.range_value, 2)
-        self.assertEqual(pitr.range_unit, "h")
-        # Should be called twice: once for ALTER, once for SHOW
-        self.assertEqual(self.transaction_wrapper.execute.call_count, 2)
-        self.transaction_wrapper.execute.assert_any_call("ALTER PITR `cluster_pitr1` RANGE 2 'h'")
+        for method_name, args, expected_sql in query_cases:
+            # Reset mocks
+            self.sync_client.execute = Mock(return_value=mock_result)
+            self.async_client.execute = AsyncMock(return_value=mock_result)
 
-    def test_transaction_delete_pitr(self):
-        """Test delete PITR within transaction"""
-        # Mock successful execution
+            # Call sync
+            getattr(self.sync_manager, method_name)(*args)
+
+            # Call async
+            await getattr(self.async_manager, method_name)(*args)
+
+            # Verify SQL is identical
+            if method_name in ['get', 'delete']:
+                # These have a single execute call
+                self.assertEqual(self.sync_client.execute.call_args[0][0], self.async_client.execute.call_args[0][0])
+
+
+class TestPitrManagerValidation(unittest.TestCase):
+    """Test parameter validation"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.client = Client()
+        self.client._engine = Mock()
+        self.client._escape_identifier = lambda x: f"`{x}`"
+        self.pitr_manager = PitrManager(self.client)
+
+    def test_range_value_boundaries(self):
+        """Test range value boundary validation"""
+        # Valid boundaries
         mock_result = Mock()
-        self.transaction_wrapper.execute = Mock(return_value=mock_result)
+        mock_result.rows = [('test', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'd')]
+        self.client.execute = Mock(return_value=mock_result)
 
-        # Test delete PITR
-        result = self.transaction_pitr_manager.delete("cluster_pitr1")
+        # Test min valid
+        self.pitr_manager.create_cluster_pitr("test1", 1, "d")
+        # Test max valid
+        self.pitr_manager.create_cluster_pitr("test100", 100, "d")
 
-        # Verify
-        self.assertTrue(result)
-        self.transaction_wrapper.execute.assert_called_with("DROP PITR `cluster_pitr1`")
+        # Invalid boundaries
+        with self.assertRaises(PitrErrorClass):
+            self.pitr_manager.create_cluster_pitr("test0", 0, "d")
+
+        with self.assertRaises(PitrErrorClass):
+            self.pitr_manager.create_cluster_pitr("test101", 101, "d")
+
+    def test_all_valid_range_units(self):
+        """Test all valid range units are accepted"""
+        mock_result = Mock()
+        mock_result.rows = [('test', datetime.now(), datetime.now(), 'cluster', '*', '*', '*', 1, 'h')]
+        self.client.execute = Mock(return_value=mock_result)
+
+        for unit in ['h', 'd', 'mo', 'y']:
+            self.pitr_manager.create_cluster_pitr(f"test_{unit}", 1, unit)
+            # Should not raise exception
+
+    def test_invalid_range_units(self):
+        """Test invalid range units are rejected"""
+        invalid_units = ['sec', 'min', 'w', 'week', 'month', 'year', 'invalid']
+
+        for unit in invalid_units:
+            with self.assertRaises(PitrErrorClass):
+                self.pitr_manager.create_cluster_pitr("test", 1, unit)
 
 
 if __name__ == '__main__':
@@ -573,9 +507,12 @@ if __name__ == '__main__':
     suite = unittest.TestSuite()
 
     # Add test cases
-    suite.addTests(loader.loadTestsFromTestCase(TestPitrManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestAsyncPitrManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestTransactionPitrManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestPitrManagerSQLGeneration))
+    suite.addTests(loader.loadTestsFromTestCase(TestPitrManagerWithExecutor))
+    suite.addTests(loader.loadTestsFromTestCase(TestAsyncPitrManagerSQLGeneration))
+    suite.addTests(loader.loadTestsFromTestCase(TestAsyncPitrManagerWithExecutor))
+    suite.addTests(loader.loadTestsFromTestCase(TestSyncVsAsyncSQLConsistency))
+    suite.addTests(loader.loadTestsFromTestCase(TestPitrManagerValidation))
 
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

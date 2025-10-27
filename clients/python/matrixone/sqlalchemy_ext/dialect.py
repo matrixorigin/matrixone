@@ -17,7 +17,6 @@ MatrixOne SQLAlchemy dialect support.
 """
 
 import sqlalchemy
-from sqlalchemy.dialects.mysql import VARCHAR
 from sqlalchemy.dialects.mysql.base import MySQLDialect
 
 
@@ -61,11 +60,16 @@ class MatrixOneDialect(MySQLDialect):
     """
 
     name = "matrixone"
+    driver = "pymysql"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Initialize missing MySQL dialect attributes
         self._connection_charset = "utf8mb4"
+        # Set MySQL dialect compatibility flags
+        # This flag is used by MySQL dialect to handle foreign key reflection quirks
+        # For MatrixOne, we set it to False as we don't have those specific MySQL bugs
+        self._needs_correct_for_88718_96365 = False
 
     def _extract_error_code(self, exception):
         """Extract error code from MatrixOne exceptions."""
@@ -158,8 +162,9 @@ class MatrixOneDialect(MySQLDialect):
 
     def type_descriptor(self, type_):
         """Handle MatrixOne specific types."""
+        # Don't convert VectorType - let it pass through to the type compiler
         if hasattr(type_, "__visit_name__") and type_.__visit_name__ == "VECTOR":
-            return VARCHAR(65535)  # Use VARCHAR for vector storage
+            return type_  # Return the VectorType itself, don't convert to VARCHAR
         return super().type_descriptor(type_)
 
 
@@ -296,6 +301,10 @@ if SA_VERSION >= (2, 0):
 
         def visit_type_decorator(self, type_, **kw):
             """Handle TypeDecorator type compilation."""
+            # Check if this is a Vectorf32/Vectorf64 type by checking for get_col_spec
+            if hasattr(type_, 'get_col_spec'):
+                return type_.get_col_spec(**kw)
+
             # For MatrixOne vector types, handle them directly
             if hasattr(type_, 'type_engine'):
                 actual_type = type_.type_engine(self.dialect)

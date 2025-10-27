@@ -138,7 +138,7 @@ class TestAsyncClientOnline:
         """Test async transaction operations"""
         test_db, test_table = test_database
 
-        async with test_async_client.transaction() as tx:
+        async with test_async_client.session() as tx:
             # Insert within transaction
             await tx.execute(f"INSERT INTO {test_db}.{test_table} VALUES (5, 'async_test5', 500, NOW())")
 
@@ -154,7 +154,7 @@ class TestAsyncClientOnline:
 
         # Test transaction rollback
         try:
-            async with test_async_client.transaction() as tx:
+            async with test_async_client.session() as tx:
                 await tx.execute(f"INSERT INTO {test_db}.{test_table} VALUES (6, 'async_test6', 600, NOW())")
                 # Force rollback by raising exception
                 raise Exception("Test rollback")
