@@ -94,7 +94,6 @@ select * from users;
 
 
 -- verify that the rewrite rules support complex queries such as aggregation and grouping
--- @bvt:issue#22662
 drop table if exists sales;
 create table sales (
     sale_id int primary key,
@@ -120,7 +119,7 @@ select * from hint_test.sales_summary where total_quantity > 20;
 -- 1          | 25             | 2
 -- 2          | 45             | 2
 -- 3          | 30             | 1
-drop table sales_summary;
+drop table sales;
 
 
 
@@ -205,12 +204,13 @@ insert into customer_orders values
 select customer_name, order_count, total_spent
 from high_value_customers
 order by total_spent desc;
-drop table high_value_customers;
+drop table customer_orders;
 
 
 
 
 -- window function rewrite
+-- @bvt:issue#22688
 drop table if exists employee_sales;
 create table employee_sales (
         emp_id int,
@@ -235,6 +235,7 @@ from dept_rankings
 where dept_rank <= 2
 order by department, dept_rank;
 drop table employee_sales;
+-- @bvt:issue
 
 
 
@@ -252,10 +253,23 @@ insert into sales values
 (3, 2, 20, '2025-01-01'),
 (4, 2, 25, '2025-01-03'),
 (5, 3, 30, '2025-01-02');
+
+create table products (
+    product_id int primary key,
+    product_name varchar(50),
+    price decimal(10,2),
+    category varchar(30)
+);
+
+insert into products values
+(1, 'Laptop', 5000.00, 'Electronics'),
+(2, 'Mouse', 50.00, 'Electronics'),
+(3, 'Desk', 800.00, 'Furniture'),
+(4, 'Chair', 600.00, 'Furniture');
 /*+ {
-        "rewrites": {
-            "hint_test.top_products": "SELECT product_id, product_name, category, (SELECT AVG(quantity) FROM sales s2 WHERE s2.category = s1.category) as category_avg_qty, quantity FROM sales s1 WHERE quantity > (SELECT AVG(quantity) FROM sales s3 WHERE s3.category = s1.category)"
-        }
+    "rewrites": {
+        "hint_test.top_products": "WITH category_avg AS (SELECT p.category, AVG(s.quantity) as avg_qty FROM sales s JOIN products p ON s.product_id = p.product_id GROUP BY p.category) SELECT p.product_id, p.product_name, p.category, ca.avg_qty as category_avg_qty, s.quantity FROM sales s JOIN products p ON s.product_id = p.product_id JOIN category_avg ca ON p.category = ca.category WHERE s.quantity > ca.avg_qty"
+    }
 } */
 select product_name, category, quantity, category_avg_qty
 from top_products
@@ -331,7 +345,6 @@ from sales_segments
 where product_variety >= 2
 order by category;
 drop table sales;
--- @bvt:issue
 
 
 
@@ -518,7 +531,7 @@ drop database hint_test;
 
 
 -- performance testing
--- @bvt:issue#22662
+-- @bvt:issue#22688
 -- @session:id=1&user=acc01:test_account&password=111
 set enable_remap_hint = 1;
 drop database if exists acc01_test;
