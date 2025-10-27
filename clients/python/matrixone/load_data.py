@@ -696,32 +696,45 @@ class LoadDataManager(BaseLoadDataManager):
         Returns:
             ResultSet: Load results with affected_rows
 
-        Important - MatrixOne Parquet Requirements:
-            MatrixOne currently has specific requirements for Parquet files.
+        MatrixOne Parquet 支持说明:
 
-            Currently NOT Supported (as of this version):
-                ❌ Nullable columns (INT64(optional), STRING(optional), etc.)
-                ❌ Dictionary encoding (indexed pages)
-                ❌ Parquet 2.0 features
-                ❌ Column statistics metadata
-                ❌ Compressed Parquet files (GZIP, SNAPPY, etc.)
+            ✅ 完全支持的特性:
+                ✅ 所有压缩格式 (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
+                ✅ Parquet 1.0 和 2.0 格式
+                ✅ 列统计信息 (write_statistics=True/False 都可以)
+                ✅ 可空列 (nullable=True/False, NULL 值支持)
+                ✅ 大文件、宽表、空文件
 
-            If you encounter errors like:
+            ✅ 支持的数据类型:
+                ✅ INT32/INT64/UINT32 → INT/BIGINT/INT UNSIGNED
+                ✅ FLOAT32/FLOAT64 → FLOAT/DOUBLE
+                ✅ STRING → VARCHAR (不要用 TEXT!)
+                ✅ BOOLEAN → BOOL
+                ✅ DATE32/DATE64 → DATE
+                ✅ TIME32/TIME64 → TIME
+                ✅ TIMESTAMP(tz='UTC') → TIMESTAMP (必须指定 UTC 时区!)
+
+            ❌ 不支持的特性:
+                ❌ 字典编码 (use_dictionary 必须为 False)
+                ❌ INT8/INT16 类型 (用 INT32 或 INT64)
+                ❌ large_string 类型 (用 pa.string())
+                ❌ TIMESTAMP 不带时区 (必须加 tz='UTC')
+                ❌ BINARY, DECIMAL 类型
+                ❌ 复杂类型 (List, Struct, Map)
+
+            推荐设置:
+                compression='snappy'        # 启用压缩
+                use_dictionary=False        # 必须禁用字典编码
+                write_statistics=True       # 启用统计信息
+                data_page_version='2.0'     # 使用 Parquet 2.0
+
+            常见错误:
                 - "indexed INT64 page is not yet implemented"
-                - "load INT64(optional) to BIGINT NULL is not yet implemented"
-
-            You must generate Parquet files with the following PyArrow settings:
-
-            Required Settings (Mandatory):
-                1. Schema columns must be non-nullable: nullable=False
-                2. Disable dictionary encoding: use_dictionary=False
-                3. Disable compression: compression='none'
-                4. Disable statistics: write_statistics=False
-                5. Use Parquet 1.0 format: data_page_version='1.0'
-
-            Note: These limitations are temporary. Support for nullable columns, dictionary
-            encoding, compression, and Parquet 2.0 features is planned for future releases.
-            Stay tuned for updates!
+                  → 设置 use_dictionary=False
+                - "load STRING(required) to TEXT NULL is not yet implemented"
+                  → 表定义用 VARCHAR 不要用 TEXT
+                - "load TIMESTAMP(isAdjustedToUTC=false..."
+                  → 使用 pa.timestamp('ms', tz='UTC')
 
             Example::
 
@@ -740,13 +753,13 @@ class LoadDataManager(BaseLoadDataManager):
                     'name': pa.array(['Alice', 'Bob', 'Charlie'], type=pa.string())
                 }, schema=schema)
 
-                # Write with MatrixOne-compatible options (REQUIRED)
+                # Write with MatrixOne-compatible options (Verified 2025)
                 pq.write_table(
                     table, 'data.parq',
-                    compression='none',          # REQUIRED
-                    use_dictionary=False,        # REQUIRED
-                    write_statistics=False,      # REQUIRED
-                    data_page_version='1.0'      # REQUIRED
+                    compression='snappy',        # ✅ All compression supported!
+                    use_dictionary=False,        # ⚠️ Required! Dict not supported
+                    write_statistics=True,       # ✅ Supported! (Double-checked)
+                    data_page_version='2.0'      # ✅ Parquet 2.0 supported!
                 )
 
                 # Now load the file
@@ -1195,32 +1208,45 @@ class LoadDataManager(BaseLoadDataManager):
         Returns:
             ResultSet: Load results with affected_rows
 
-        Important - MatrixOne Parquet Requirements:
-            MatrixOne currently has specific requirements for Parquet files.
+        MatrixOne Parquet 支持说明:
 
-            Currently NOT Supported (as of this version):
-                ❌ Nullable columns (INT64(optional), STRING(optional), etc.)
-                ❌ Dictionary encoding (indexed pages)
-                ❌ Parquet 2.0 features
-                ❌ Column statistics metadata
-                ❌ Compressed Parquet files (GZIP, SNAPPY, etc.)
+            ✅ 完全支持的特性:
+                ✅ 所有压缩格式 (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
+                ✅ Parquet 1.0 和 2.0 格式
+                ✅ 列统计信息 (write_statistics=True/False 都可以)
+                ✅ 可空列 (nullable=True/False, NULL 值支持)
+                ✅ 大文件、宽表、空文件
 
-            If you encounter errors like:
+            ✅ 支持的数据类型:
+                ✅ INT32/INT64/UINT32 → INT/BIGINT/INT UNSIGNED
+                ✅ FLOAT32/FLOAT64 → FLOAT/DOUBLE
+                ✅ STRING → VARCHAR (不要用 TEXT!)
+                ✅ BOOLEAN → BOOL
+                ✅ DATE32/DATE64 → DATE
+                ✅ TIME32/TIME64 → TIME
+                ✅ TIMESTAMP(tz='UTC') → TIMESTAMP (必须指定 UTC 时区!)
+
+            ❌ 不支持的特性:
+                ❌ 字典编码 (use_dictionary 必须为 False)
+                ❌ INT8/INT16 类型 (用 INT32 或 INT64)
+                ❌ large_string 类型 (用 pa.string())
+                ❌ TIMESTAMP 不带时区 (必须加 tz='UTC')
+                ❌ BINARY, DECIMAL 类型
+                ❌ 复杂类型 (List, Struct, Map)
+
+            推荐设置:
+                compression='snappy'        # 启用压缩
+                use_dictionary=False        # 必须禁用字典编码
+                write_statistics=True       # 启用统计信息
+                data_page_version='2.0'     # 使用 Parquet 2.0
+
+            常见错误:
                 - "indexed INT64 page is not yet implemented"
-                - "load INT64(optional) to BIGINT NULL is not yet implemented"
-
-            You must generate Parquet files with the following PyArrow settings:
-
-            Required Settings (Mandatory):
-                1. Schema columns must be non-nullable: nullable=False
-                2. Disable dictionary encoding: use_dictionary=False
-                3. Disable compression: compression='none'
-                4. Disable statistics: write_statistics=False
-                5. Use Parquet 1.0 format: data_page_version='1.0'
-
-            Note: These limitations are temporary. Support for nullable columns, dictionary
-            encoding, compression, and Parquet 2.0 features is planned for future releases.
-            Stay tuned for updates!
+                  → 设置 use_dictionary=False
+                - "load STRING(required) to TEXT NULL is not yet implemented"
+                  → 表定义用 VARCHAR 不要用 TEXT
+                - "load TIMESTAMP(isAdjustedToUTC=false..."
+                  → 使用 pa.timestamp('ms', tz='UTC')
 
             Example::
 
@@ -1233,14 +1259,14 @@ class LoadDataManager(BaseLoadDataManager):
                     pa.field('name', pa.string(), nullable=False)
                 ])
 
-                # Create and write table with MatrixOne-compatible options
+                # Create and write table with MatrixOne-compatible options (Verified 2025)
                 table = pa.table({'id': [1, 2], 'name': ['A', 'B']}, schema=schema)
                 pq.write_table(
                     table, 'data.parq',
-                    compression='none',          # REQUIRED
-                    use_dictionary=False,        # REQUIRED
-                    write_statistics=False,      # REQUIRED
-                    data_page_version='1.0'      # REQUIRED
+                    compression='snappy',        # ✅ All compression supported!
+                    use_dictionary=False,        # ⚠️ Required! Dict not supported
+                    write_statistics=True,       # ✅ Supported! (Double-checked)
+                    data_page_version='2.0'      # ✅ Parquet 2.0 supported!
                 )
 
         Example:
