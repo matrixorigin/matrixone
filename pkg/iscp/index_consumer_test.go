@@ -276,7 +276,7 @@ func TestIvfSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, len(sqls), 1)
 		sql := sqls[0]
-		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,'[0.1, 0.2]'),ROW(2,'[0.3, 0.4]'))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
+		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,CAST('[0.1, 0.2]' as VECF32(2))),ROW(2,CAST('[0.3, 0.4]' as VECF32(2))))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
 
 		require.Equal(t, string(sql), expected)
 

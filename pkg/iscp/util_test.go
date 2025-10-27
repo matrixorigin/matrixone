@@ -62,7 +62,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 		v32 := []float32{0, 1, 2}
 		vector.AppendArray[float32](bat.Vecs[i], v32, false, proc.Mp())
-		res[i] = "'[0, 1, 2]'"
+		res[i] = "CAST('[0, 1, 2]' as VECF32(3))"
 		i += 1
 	}
 
@@ -71,7 +71,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float64, 3, 0)) // float32 array [3]float64
 		v64 := []float64{0, 1, 2}
 		vector.AppendArray[float64](bat.Vecs[i], v64, false, proc.Mp())
-		res[i] = "'[0, 1, 2]'"
+		res[i] = "CAST('[0, 1, 2]' as VECF64(3))"
 		i += 1
 	}
 
