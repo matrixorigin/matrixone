@@ -30,14 +30,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 type internalExecResult struct {
@@ -400,21 +406,19 @@ func GetTestISCPExecutorOption() *iscp.ISCPExecutorOption {
 	}
 }
 
-func CheckTableData(
+func CheckTableDataWithName(
 	t *testing.T,
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
-	dbName string,
-	tableName string,
-	tableID uint64,
-	indexName string,
+	srcDB string,
+	srcTable string,
+	destDB string,
+	destTable string,
 ) {
-	asyncIndexDBName := iscp.TargetDbName
-	asyncIndexTableName := fmt.Sprintf("test_table_%d_%v", tableID, indexName)
 	sql1 := fmt.Sprintf(
 		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",
-		dbName, tableName,
-		asyncIndexDBName, asyncIndexTableName,
+		srcDB, srcTable,
+		destDB, destTable,
 	)
 	result1, err := execSql(de, ctx, sql1)
 	assert.NoError(t, err)
@@ -428,8 +432,8 @@ func CheckTableData(
 
 	sql2 := fmt.Sprintf(
 		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",
-		asyncIndexDBName, asyncIndexTableName,
-		dbName, tableName,
+		destDB, destTable,
+		srcDB, srcTable,
 	)
 	result2, err := execSql(de, ctx, sql2)
 	assert.NoError(t, err)
@@ -440,6 +444,20 @@ func CheckTableData(
 		return true
 	})
 	assert.Equal(t, rowCount, 0)
+}
+
+func CheckTableData(
+	t *testing.T,
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	dbName string,
+	tableName string,
+	tableID uint64,
+	indexName string,
+) {
+	asyncIndexDBName := iscp.TargetDbName
+	asyncIndexTableName := fmt.Sprintf("test_table_%d_%v", tableID, indexName)
+	CheckTableDataWithName(t, de, ctx, dbName, tableName, asyncIndexDBName, asyncIndexTableName)
 }
 
 type MockEngineSink struct {
@@ -706,4 +724,183 @@ func (m *MockWatermarkUpdater) ClearStats() {
 	m.UpdateErrMsgCount = 0
 	m.RemoveCachedCount = 0
 	m.ForceFlushCount = 0
+}
+
+func StubCDCSinkAndWatermarkUpdater(
+	engine *testutil.TestDisttaeEngine,
+	accountId uint32,
+) (
+	*gostub.Stubs,
+	*gostub.Stubs,
+	*gostub.Stubs,
+	*gostub.Stubs,
+	*MockWatermarkUpdater,
+	chan string,
+) {
+	errChan := make(chan string, 10)
+	mockWatermarkUpdater := NewMockWatermarkUpdater()
+	stub1 := gostub.Stub(
+		&cdc.GetCDCWatermarkUpdater,
+		func(
+			cnUUID string,
+			executor ie.InternalExecutor,
+		) cdc.WatermarkUpdater {
+			return mockWatermarkUpdater
+		},
+	)
+	stub2 := gostub.Stub(
+		&cdc.NewMysqlSink,
+		func(
+			user, password string,
+			ip string, port int,
+			retryTimes int,
+			retryDuration time.Duration,
+			timeout string,
+			doRecord bool,
+		) (cdc.Sink, error) {
+			return NewMockEngineSink(engine, accountId), nil
+		},
+	)
+	stub3 := gostub.Stub(
+		&frontend.UpdateErrMsg,
+		func(ctx context.Context, exec *frontend.CDCTaskExecutor, errMsg string) error {
+			errChan <- errMsg
+			return nil
+		},
+	)
+	stub4 := gostub.Stub(
+		&frontend.RetrieveCdcTask,
+		MockRetrieveCdcTask,
+	)
+	return stub1, stub2, stub3, stub4, mockWatermarkUpdater, errChan
+}
+
+// MockRetrieveCdcTask mocks the retrieveCdcTask function for testing
+func MockRetrieveCdcTask(ctx context.Context, exec *frontend.CDCTaskExecutor) error {
+	// Set sinkUri with Console type (no external sink needed for testing)
+	exec.SetSinkUri(cdc.UriInfo{
+		SinkTyp: cdc.CDCSinkType_Console,
+	})
+
+	// Note: tables are already set in NewMockCDCExecutor, so we don't override them here
+
+	// Set exclude to nil (no exclusion pattern)
+	exec.SetExclude(nil)
+
+	// Set startTs to zero (start from beginning)
+	exec.SetStartTs(types.TS{})
+
+	// Set endTs to max (no end time)
+	exec.SetEndTs(types.BuildTS(1<<63-1, 0))
+
+	// Set noFull to false (include full snapshot)
+	exec.SetNoFull(false)
+
+	// Set additionalConfig with default values
+	exec.SetAdditionalConfig(map[string]interface{}{
+		cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(1024 * 1024),
+		cdc.CDCTaskExtraOptions_SendSqlTimeout:       "5s",
+		cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: false,
+		cdc.CDCTaskExtraOptions_Frequency:            "",
+	})
+
+	return nil
+}
+
+// NewMockCDCExecutor creates a CDC executor for testing with mock components
+func NewMockCDCExecutor(
+	t *testing.T,
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	accountId uint32,
+	taskId string,
+	taskName string,
+	tables cdc.PatternTuples,
+) *frontend.CDCTaskExecutor {
+
+	// Create CDC task spec
+	spec := &task.CreateCdcDetails{
+		TaskId:   taskId,
+		TaskName: taskName,
+		Accounts: []*task.Account{
+			{
+				Id: uint64(accountId),
+			},
+		},
+	}
+
+	// Create mock internal executor
+	mockIE := &mockCDCIE{de: de}
+
+	// Create CDC executor
+	cnUUID := de.Engine.GetService()
+	cdcExecutor := frontend.NewCDCTaskExecutor(
+		logutil.GetGlobalLogger(),
+		mockIE,
+		spec,
+		cnUUID,
+		de.Engine.FS(),
+		de.GetTxnClient(),
+		de.Engine,
+		common.DebugAllocator,
+	)
+	cdcExecutor.SetActiveRoutine(cdc.NewCdcActiveRoutine())
+
+	// Set tables that will be used by the mocked RetrieveCdcTask
+	cdcExecutor.SetTables(tables)
+
+	return cdcExecutor
+}
+
+// SetupMockCDCExecutorFields sets up internal fields for CDC executor testing
+func SetupMockCDCExecutorFields(
+	cdcExecutor *frontend.CDCTaskExecutor,
+	tables cdc.PatternTuples,
+) {
+	// Use reflection or accessor methods if available
+	// For now, we'll rely on the retrieveCdcTask being mocked via the IE
+}
+
+// CreateDBAndTableForCDC creates a database and table for CDC testing
+func CreateDBAndTableForCDC(
+	t *testing.T,
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	rowCount int,
+) *containers.Batch {
+	createDBSql := fmt.Sprintf("create database if not exists %s", databaseName)
+	createTableSql := fmt.Sprintf(
+		`create table %s.%s (
+		id int primary key,
+		name varchar(100),
+		age int,
+		created_at timestamp
+		)`, databaseName, tableName)
+
+	v, ok := moruntime.ServiceRuntime("").
+		GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing SQL executor")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	_, err := exec.Exec(ctx, createDBSql, executor.Options{})
+	assert.NoError(t, err)
+	_, err = exec.Exec(ctx, createTableSql, executor.Options{})
+	assert.NoError(t, err)
+
+	return containers.MockBatchWithAttrs(
+		[]types.Type{
+			types.T_int32.ToType(),
+			types.T_varchar.ToType(),
+			types.T_int32.ToType(),
+			types.T_timestamp.ToType(),
+		},
+		[]string{"id", "name", "age", "created_at"},
+		rowCount,
+		0,
+		nil,
+	)
 }

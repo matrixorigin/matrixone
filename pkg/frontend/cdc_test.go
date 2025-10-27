@@ -2428,7 +2428,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 				activeRoutine:    tt.fields.activeRoutine,
 				watermarkUpdater: tt.fields.sunkWatermarkUpdater,
 			}
-			err := cdc.retrieveCdcTask(tt.args.ctx)
+			err := RetrieveCdcTask(tt.args.ctx, cdc)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
 		})
 	}
