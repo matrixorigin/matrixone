@@ -87,7 +87,7 @@ func (jobEntry *JobEntry) update(
 				[]uint64{jobEntry.jobID},
 				[]uint64{jobStatus.LSN},
 				[]*JobStatus{jobStatus},
-				watermark,
+				types.MaxTs(),
 				errMsg,
 				[]uint64{jobEntry.currentLSN},
 			)
@@ -110,7 +110,8 @@ func (jobEntry *JobEntry) UpdateWatermark(
 	if from.GE(&to) {
 		return
 	}
-	if !jobEntry.watermark.EQ(&from) {
+	expectedFrom := jobEntry.watermark.Next()
+	if !expectedFrom.EQ(&from) {
 		FlushPermanentErrorMessage(
 			jobEntry.tableInfo.exec.ctx,
 			jobEntry.tableInfo.exec.cnUUID,
@@ -122,8 +123,8 @@ func (jobEntry *JobEntry) UpdateWatermark(
 			[]uint64{jobEntry.jobID},
 			[]uint64{jobEntry.currentLSN},
 			[]*JobStatus{{}},
-			jobEntry.watermark,
-			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), jobEntry.watermark.ToString()),
+			types.MaxTs(),
+			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), expectedFrom.ToString()),
 			[]uint64{jobEntry.currentLSN},
 		)
 	}

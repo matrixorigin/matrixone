@@ -193,7 +193,7 @@ func TestFlushErrorMsg(t *testing.T) {
 		[]uint64{1},
 		[]uint64{1},
 		[]*iscp.JobStatus{{}},
-		types.TS{},
+		types.MaxTs(),
 		"test",
 		[]uint64{1},
 	)
