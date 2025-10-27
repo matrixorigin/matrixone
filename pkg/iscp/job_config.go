@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -25,6 +26,10 @@ const (
 	TriggerType_Default
 	TriggerType_AlwaysUpdate
 	TriggerType_Timed
+)
+
+const (
+	DefaultMaxChangeInterval = time.Minute * 30
 )
 
 func (triggerSpec *TriggerSpec) GetType() uint16 {
@@ -80,11 +85,21 @@ func checkDefaultJobConfig(
 	}
 	// lag behind any other default job
 	if consumer.watermark.LT(&maxTS) {
-		return true, consumer.watermark.Next(), maxTS, true
+		from = consumer.watermark.Next()
+		to = maxTS
+		if maxTS.Physical()-from.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+			to = types.BuildTS(from.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+		}
+		return true, from, to, true
 	} else {
 		// no lagging jobs on the same table
 		if minTS.EQ(&maxTS) {
-			return true, maxTS.Next(), now, true
+			from = maxTS.Next()
+			to = now
+			if to.Physical()-from.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+				to = types.BuildTS(from.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+			}
+			return true, from, to, true
 		}
 		return false, types.TS{}, types.TS{}, false
 	}
