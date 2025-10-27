@@ -420,6 +420,10 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				if iter.toTS.EQ(&maxTS) {
 					iter.toTS = toTS
 				}
+				// if the interval is too long, truncate it to the max change interval
+				if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+					iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
+				}
 				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
 				var ok bool
 				if iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {

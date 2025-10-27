@@ -87,18 +87,12 @@ func checkDefaultJobConfig(
 	if consumer.watermark.LT(&maxTS) {
 		from = consumer.watermark.Next()
 		to = maxTS
-		if maxTS.Physical()-from.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
-			to = types.BuildTS(from.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
-		}
 		return true, from, to, true
 	} else {
 		// no lagging jobs on the same table
 		if minTS.EQ(&maxTS) {
 			from = maxTS.Next()
 			to = now
-			if to.Physical()-from.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
-				to = types.BuildTS(from.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
-			}
 			return true, from, to, true
 		}
 		return false, types.TS{}, types.TS{}, false
