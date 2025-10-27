@@ -269,7 +269,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 // load spilled data from the spill bucket queue.
 func (ctr *container) loadSpilledData(proc *process.Process) (bool, error) {
-	if ctr.spillBkts.Len() == 0 {
+	if ctr.spillBkts == nil || ctr.spillBkts.Len() == 0 {
 		// done
 		return false, nil
 	}
