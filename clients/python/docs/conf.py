@@ -139,28 +139,37 @@ todo_include_todos = True
 latex_engine = 'pdflatex'  # Use pdflatex for compatibility  
 latex_elements = {
     'preamble': r'''
-% Define text replacements for all emoji characters used in documentation
-\DeclareUnicodeCharacter{2705}{\textbf{[YES]}}  % ✅
-\DeclareUnicodeCharacter{274C}{\textbf{[NO]}}   % ❌
-\DeclareUnicodeCharacter{26A0}{\textbf{[WARN]}} % ⚠️
-\DeclareUnicodeCharacter{1F504}{\textbf{[SYNC]}}  % 🔄
-\DeclareUnicodeCharacter{1F4CA}{\textbf{[CHART]}}  % 📊
-\DeclareUnicodeCharacter{1F4DD}{\textbf{[MEMO]}}   % 📝
-\DeclareUnicodeCharacter{1F4C1}{\textbf{[FOLDER]}}  % 📁
-\DeclareUnicodeCharacter{1F50D}{\textbf{[SEARCH]}}  % 🔍
-\DeclareUnicodeCharacter{1F389}{\textbf{[PARTY]}}   % 🎉
-\DeclareUnicodeCharacter{1F4A1}{\textbf{[IDEA]}}    % 💡
-\DeclareUnicodeCharacter{1F6E0}{\textbf{[TOOL]}}    % 🛠
-\DeclareUnicodeCharacter{1F3AF}{\textbf{[TARGET]}}  % 🎯
-\DeclareUnicodeCharacter{1F680}{\textbf{[ROCKET]}}  % 🚀
-\DeclareUnicodeCharacter{1F4E6}{\textbf{[PACKAGE]}} % 📦
-\DeclareUnicodeCharacter{1F527}{\textbf{[WRENCH]}}  % 🔧
+% Define text replacements for all emoji and special characters
+\DeclareUnicodeCharacter{221A}{\ensuremath{\surd}}  % √
+\DeclareUnicodeCharacter{2588}{\rule{0.6em}{1em}}  % █
+\DeclareUnicodeCharacter{2705}{\textbf{[YES]}}     % ✅
+\DeclareUnicodeCharacter{274C}{\textbf{[NO]}}      % ❌
+\DeclareUnicodeCharacter{26A0}{\textbf{[!]}}       % ⚠
+\DeclareUnicodeCharacter{2B50}{\textbf{[*]}}       % ⭐
+\DeclareUnicodeCharacter{FE0F}{}                   % Variation Selector
+% All remaining emoji - convert to generic markers
+\newcommand{\emojimarker}[1]{\textbf{[#1]}}
+\DeclareUnicodeCharacter{1F504}{\emojimarker{SYNC}}
+\DeclareUnicodeCharacter{1F3E2}{\emojimarker{BUILD}}
+\DeclareUnicodeCharacter{1F4A1}{\emojimarker{IDEA}}
+\DeclareUnicodeCharacter{1F4C1}{\emojimarker{FOLDER}}
+\DeclareUnicodeCharacter{1F4CA}{\emojimarker{CHART}}
+\DeclareUnicodeCharacter{1F4DD}{\emojimarker{MEMO}}
+\DeclareUnicodeCharacter{1F4E6}{\emojimarker{PKG}}
+\DeclareUnicodeCharacter{1F50D}{\emojimarker{SEARCH}}
+\DeclareUnicodeCharacter{1F527}{\emojimarker{TOOL}}
+\DeclareUnicodeCharacter{1F389}{\emojimarker{PARTY}}
+\DeclareUnicodeCharacter{1F3AF}{\emojimarker{TARGET}}
+\DeclareUnicodeCharacter{1F680}{\emojimarker{ROCKET}}
+\DeclareUnicodeCharacter{1F6A7}{\emojimarker{WORK}}
+\DeclareUnicodeCharacter{1F6A8}{\emojimarker{ALERT}}
+\DeclareUnicodeCharacter{1F6E0}{\emojimarker{WRENCH}}
 ''',
     'papersize': 'a4paper',
     'pointsize': '10pt',
     'figure_align': 'htbp',
-    'inputenc': '',  # Don't use inputenc with UTF-8
-    'utf8extra': '',  # Don't use utf8extra
+    'inputenc': '',
+    'utf8extra': '',
 }
 
 # -- Custom configuration ----------------------------------------------------
