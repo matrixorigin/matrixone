@@ -170,7 +170,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 	if len(bat.ExtraBuf2) != 0 {
 		var nAggs int32
 		r := bytes.NewReader(bat.ExtraBuf2)
-		nAggs, err = types.ReadInt32(r)
+		nAggs, err := types.ReadInt32(r)
+		if err != nil {
+			return false, err
+		}
 		if int(nAggs) != len(mergeGroup.ctr.spillAggList) {
 			return false, moerr.NewInternalError(proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
 		}

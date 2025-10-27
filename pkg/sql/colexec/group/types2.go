@@ -20,7 +20,6 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -141,11 +140,14 @@ func (ctr *container) freeAggList(proc *process.Process) {
 
 func (ctr *container) freeSpillBkts(proc *process.Process) {
 	// free all spill buckets.
-	ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-		bkt.free(proc)
-		return true
-	})
-	ctr.spillBkts.Clear()
+	if ctr.spillBkts != nil {
+		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
+			bkt.free(proc)
+			return true
+		})
+		ctr.spillBkts.Clear()
+	}
+
 	for _, bkt := range ctr.currentSpillBkt {
 		bkt.free(proc)
 	}
@@ -200,19 +202,10 @@ func (ctr *container) reset(proc *process.Process) {
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
 
-	// FUBAR: check if the grouping flag length is too big,
-	if len(group.ctr.groupByEvaluate.Vec) >= len(group.GroupingFlag) {
-		return moerr.NewInternalErrorNoCtx("grouping flag length too big")
-	}
-
 	// group.
 	for i := range group.ctr.groupByEvaluate.Vec {
-		if i < len(group.GroupingFlag) && !group.GroupingFlag[i] {
-			group.ctr.groupByEvaluate.Vec[i] = vector.NewRollupConst(group.ctr.groupByEvaluate.Typ[i], bat.RowCount(), proc.Mp())
-			continue
-		}
-
-		if group.ctr.groupByEvaluate.Vec[i], err = group.ctr.groupByEvaluate.Executor[i].Eval(proc, input, nil); err != nil {
+		if group.ctr.groupByEvaluate.Vec[i], err =
+			group.ctr.groupByEvaluate.Executor[i].Eval(proc, input, nil); err != nil {
 			return err
 		}
 	}
@@ -220,9 +213,20 @@ func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.
 	// agg args.
 	for i := range group.ctr.aggArgEvaluate {
 		for j := range group.ctr.aggArgEvaluate[i].Vec {
-			if group.ctr.aggArgEvaluate[i].Vec[j], err = group.ctr.aggArgEvaluate[i].Executor[j].Eval(proc, input, nil); err != nil {
+			if group.ctr.aggArgEvaluate[i].Vec[j], err =
+				group.ctr.aggArgEvaluate[i].Executor[j].Eval(proc, input, nil); err != nil {
 				return err
 			}
+		}
+	}
+
+	// grouping flag
+	for i, flag := range group.GroupingFlag {
+		if !flag {
+			group.ctr.groupByEvaluate.Vec[i] = vector.NewRollupConst(
+				group.ctr.groupByEvaluate.Typ[i],
+				group.ctr.groupByEvaluate.Vec[i].Length(),
+				proc.Mp())
 		}
 	}
 
