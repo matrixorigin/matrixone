@@ -172,9 +172,9 @@ If you have existing SQLAlchemy code, you can wrap your sessions to add MatrixOn
        result = mo_session.execute("SELECT * FROM users")
        
        # Now you can also use MatrixOne-specific features
-       mo_session.stage.create_s3('backup_stage', bucket='my-backups')
+       mo_session.stage.create_s3('backup_stage', bucket='my-backups', path='')
        mo_session.snapshots.create('daily_backup', level='database')
-       mo_session.load_data.from_csv('/data/users.csv', 'users')
+       mo_session.load_data.read_csv('/data/users.csv', table='users')
        
        mo_session.commit()
    finally:

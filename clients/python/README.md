@@ -385,9 +385,9 @@ try:
     result = mo_session.execute("SELECT * FROM users")
     
     # Now you can also use MatrixOne-specific features
-    mo_session.stage.create_s3('backup_stage', bucket='my-backups')
+    mo_session.stage.create_s3('backup_stage', bucket='my-backups', path='')
     mo_session.snapshots.create('daily_backup', level='database')
-    mo_session.load_data.from_csv('/data/users.csv', 'users')
+    mo_session.load_data.read_csv('/data/users.csv', table='users')
     
     mo_session.commit()
 finally:
@@ -641,17 +641,17 @@ client.stage.create_s3(
     region='us-east-1'
 )
 
-# Load data from stage using ORM model
-client.load_data.from_stage_csv('data_stage', 'users.csv', User)
+# Load data from stage using ORM model (pandas-style)
+client.load_data.read_csv_stage('data_stage', 'users.csv', table=User)
 
 # Atomic multi-file loading in transaction
 with client.session() as session:
     # Create local stage
     session.stage.create_local('import_stage', '/data/imports/')
     
-    # Load multiple files atomically
-    session.load_data.from_csv('/data/users.csv', User)
-    session.load_data.from_csv('/data/orders.csv', Order)
+    # Load multiple files atomically (pandas-style)
+    session.load_data.read_csv('/data/users.csv', table=User)
+    session.load_data.read_csv('/data/orders.csv', table=Order)
     
     # All loads commit together
 ```
@@ -1207,8 +1207,8 @@ stages = client.stage.list()
 for stage in stages:
     print(f"{stage.name}: {stage.url}")
 
-# Load data from stage (Method 1: via client.load_data)
-client.load_data.from_stage_csv('my_data_stage', 'users.csv', User)
+# Load data from stage (Method 1: via client.load_data, pandas-style)
+client.load_data.read_csv_stage('my_data_stage', 'users.csv', table=User)
 
 # Load data from stage (Method 2: via stage object - simpler!)
 stage = client.stage.get('my_data_stage')
