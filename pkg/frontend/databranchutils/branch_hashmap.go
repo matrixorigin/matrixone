@@ -715,7 +715,8 @@ func (bh *branchHashmap) getPreparedEntryBatch(capacity int) []preparedEntry {
 		capacity = 1
 	}
 	if v := bh.entryBatchPool.Get(); v != nil {
-		batch := v.([]preparedEntry)
+		batchPtr := v.(*[]preparedEntry)
+		batch := *batchPtr
 		if cap(batch) < capacity {
 			return make([]preparedEntry, 0, capacity)
 		}
@@ -729,7 +730,8 @@ func (bh *branchHashmap) putPreparedEntryBatch(batch []preparedEntry) {
 		batch[i].key = nil
 		batch[i].value = nil
 	}
-	bh.entryBatchPool.Put(batch[:0])
+	batch = batch[:0]
+	bh.entryBatchPool.Put(&batch)
 }
 
 func (bh *branchHashmap) hashKey(key []byte) uint64 {
