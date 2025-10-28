@@ -3154,6 +3154,9 @@ class Session(SQLAlchemySession):
         self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
+        from .export import ExportManager
+
+        self.export = ExportManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
