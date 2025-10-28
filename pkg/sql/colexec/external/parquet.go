@@ -185,6 +185,70 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return nil
 		}
+	case types.T_int8:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		// Check if it's a logical INT8 type
+		lt := st.LogicalType()
+		if lt != nil && lt.Integer != nil {
+			intT := lt.Integer
+			if intT.BitWidth == 8 && intT.IsSigned {
+				// Parquet logical type INT(8, signed) -> MatrixOne INT8
+				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+					if page.Dictionary() != nil {
+						return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+					}
+					data := page.Data()
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
+						return int8(v)
+					})
+				}
+				break
+			}
+		}
+		// Fallback: physical INT32 -> MatrixOne INT8
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			if page.Dictionary() != nil {
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+			}
+			data := page.Data()
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
+				return int8(v)
+			})
+		}
+	case types.T_int16:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		// Check if it's a logical INT16 type
+		lt := st.LogicalType()
+		if lt != nil && lt.Integer != nil {
+			intT := lt.Integer
+			if intT.BitWidth == 16 && intT.IsSigned {
+				// Parquet logical type INT(16, signed) -> MatrixOne INT16
+				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+					if page.Dictionary() != nil {
+						return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+					}
+					data := page.Data()
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
+						return int16(v)
+					})
+				}
+				break
+			}
+		}
+		// Fallback: physical INT32 -> MatrixOne INT16
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			if page.Dictionary() != nil {
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+			}
+			data := page.Data()
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
+				return int16(v)
+			})
+		}
 	case types.T_int32:
 		if st.Kind() != parquet.Int32 {
 			break

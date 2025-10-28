@@ -113,6 +113,20 @@ func Test_getMapper(t *testing.T) {
 		{
 			st:          parquet.Int32Type,
 			numValues:   2,
+			values:      encoding.Int32Values([]int32{10, 20}),
+			dt:          types.T_int8,
+			expectedOpt: "[0 10 20 0]-[0 3]",
+		},
+		{
+			st:          parquet.Int32Type,
+			numValues:   2,
+			values:      encoding.Int32Values([]int32{100, 200}),
+			dt:          types.T_int16,
+			expectedOpt: "[0 100 200 0]-[0 3]",
+		},
+		{
+			st:          parquet.Int32Type,
+			numValues:   2,
 			values:      encoding.Int32Values([]int32{1, 5}),
 			dt:          types.T_int32,
 			expectedOpt: "[0 1 5 0]-[0 3]",

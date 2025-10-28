@@ -718,6 +718,8 @@ class LoadDataManager(BaseLoadDataManager):
                 3. Disable compression: compression='none'
                 4. Disable statistics: write_statistics=False
                 5. Use Parquet 1.0 format: data_page_version='1.0'
+                6. For INT8/UINT8/INT16/UINT16: Use pa.int32() as storage type
+                   (MatrixOne will automatically convert to the target type)
 
             Note: These limitations are temporary. Support for nullable columns, dictionary
             encoding, compression, and Parquet 2.0 features is planned for future releases.
@@ -1217,6 +1219,8 @@ class LoadDataManager(BaseLoadDataManager):
                 3. Disable compression: compression='none'
                 4. Disable statistics: write_statistics=False
                 5. Use Parquet 1.0 format: data_page_version='1.0'
+                6. For INT8/UINT8/INT16/UINT16: Use pa.int32() as storage type
+                   (MatrixOne will automatically convert to the target type)
 
             Note: These limitations are temporary. Support for nullable columns, dictionary
             encoding, compression, and Parquet 2.0 features is planned for future releases.
