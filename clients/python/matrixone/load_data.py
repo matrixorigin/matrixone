@@ -696,45 +696,45 @@ class LoadDataManager(BaseLoadDataManager):
         Returns:
             ResultSet: Load results with affected_rows
 
-        MatrixOne Parquet 支持说明:
+        MatrixOne Parquet Support:
 
-            ✅ 完全支持的特性:
-                ✅ 所有压缩格式 (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
-                ✅ Parquet 1.0 和 2.0 格式
-                ✅ 列统计信息 (write_statistics=True/False 都可以)
-                ✅ 可空列 (nullable=True/False, NULL 值支持)
-                ✅ 大文件、宽表、空文件
+            Fully Supported Features:
+                - All compression formats (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
+                - Parquet 1.0 and 2.0 formats
+                - Column statistics (write_statistics=True/False)
+                - Nullable columns (nullable=True/False, NULL values supported)
+                - Large files, wide tables, empty files
 
-            ✅ 支持的数据类型:
-                ✅ INT32/INT64/UINT32 → INT/BIGINT/INT UNSIGNED
-                ✅ FLOAT32/FLOAT64 → FLOAT/DOUBLE
-                ✅ STRING → VARCHAR (不要用 TEXT!)
-                ✅ BOOLEAN → BOOL
-                ✅ DATE32/DATE64 → DATE
-                ✅ TIME32/TIME64 → TIME
-                ✅ TIMESTAMP(tz='UTC') → TIMESTAMP (必须指定 UTC 时区!)
+            Supported Data Types:
+                - INT32/INT64/UINT32 -> INT/BIGINT/INT UNSIGNED
+                - FLOAT32/FLOAT64 -> FLOAT/DOUBLE
+                - STRING -> VARCHAR (not TEXT!)
+                - BOOLEAN -> BOOL
+                - DATE32/DATE64 -> DATE
+                - TIME32/TIME64 -> TIME
+                - TIMESTAMP(tz='UTC') -> TIMESTAMP (UTC timezone required!)
 
-            ❌ 不支持的特性:
-                ❌ 字典编码 (use_dictionary 必须为 False)
-                ❌ INT8/INT16 类型 (用 INT32 或 INT64)
-                ❌ large_string 类型 (用 pa.string())
-                ❌ TIMESTAMP 不带时区 (必须加 tz='UTC')
-                ❌ BINARY, DECIMAL 类型
-                ❌ 复杂类型 (List, Struct, Map)
+            Not Supported:
+                - Dictionary encoding (use_dictionary must be False)
+                - INT8/INT16 types (use INT32 or INT64)
+                - large_string type (use pa.string())
+                - TIMESTAMP without timezone (must add tz='UTC')
+                - BINARY, DECIMAL types
+                - Complex types (List, Struct, Map)
 
-            推荐设置:
-                compression='snappy'        # 启用压缩
-                use_dictionary=False        # 必须禁用字典编码
-                write_statistics=True       # 启用统计信息
-                data_page_version='2.0'     # 使用 Parquet 2.0
+            Recommended Settings:
+                compression='snappy'        # Enable compression
+                use_dictionary=False        # Must disable dictionary encoding
+                write_statistics=True       # Enable statistics
+                data_page_version='2.0'     # Use Parquet 2.0
 
-            常见错误:
+            Common Errors:
                 - "indexed INT64 page is not yet implemented"
-                  → 设置 use_dictionary=False
+                  -> Set use_dictionary=False
                 - "load STRING(required) to TEXT NULL is not yet implemented"
-                  → 表定义用 VARCHAR 不要用 TEXT
+                  -> Use VARCHAR in table definition, not TEXT
                 - "load TIMESTAMP(isAdjustedToUTC=false..."
-                  → 使用 pa.timestamp('ms', tz='UTC')
+                  -> Use pa.timestamp('ms', tz='UTC')
 
             Example::
 
@@ -1208,45 +1208,45 @@ class LoadDataManager(BaseLoadDataManager):
         Returns:
             ResultSet: Load results with affected_rows
 
-        MatrixOne Parquet 支持说明:
+        MatrixOne Parquet Support:
 
-            ✅ 完全支持的特性:
-                ✅ 所有压缩格式 (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
-                ✅ Parquet 1.0 和 2.0 格式
-                ✅ 列统计信息 (write_statistics=True/False 都可以)
-                ✅ 可空列 (nullable=True/False, NULL 值支持)
-                ✅ 大文件、宽表、空文件
+            Fully Supported Features:
+                - All compression formats (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
+                - Parquet 1.0 and 2.0 formats
+                - Column statistics (write_statistics=True/False)
+                - Nullable columns (nullable=True/False, NULL values supported)
+                - Large files, wide tables, empty files
 
-            ✅ 支持的数据类型:
-                ✅ INT32/INT64/UINT32 → INT/BIGINT/INT UNSIGNED
-                ✅ FLOAT32/FLOAT64 → FLOAT/DOUBLE
-                ✅ STRING → VARCHAR (不要用 TEXT!)
-                ✅ BOOLEAN → BOOL
-                ✅ DATE32/DATE64 → DATE
-                ✅ TIME32/TIME64 → TIME
-                ✅ TIMESTAMP(tz='UTC') → TIMESTAMP (必须指定 UTC 时区!)
+            Supported Data Types:
+                - INT32/INT64/UINT32 -> INT/BIGINT/INT UNSIGNED
+                - FLOAT32/FLOAT64 -> FLOAT/DOUBLE
+                - STRING -> VARCHAR (not TEXT!)
+                - BOOLEAN -> BOOL
+                - DATE32/DATE64 -> DATE
+                - TIME32/TIME64 -> TIME
+                - TIMESTAMP(tz='UTC') -> TIMESTAMP (UTC timezone required!)
 
-            ❌ 不支持的特性:
-                ❌ 字典编码 (use_dictionary 必须为 False)
-                ❌ INT8/INT16 类型 (用 INT32 或 INT64)
-                ❌ large_string 类型 (用 pa.string())
-                ❌ TIMESTAMP 不带时区 (必须加 tz='UTC')
-                ❌ BINARY, DECIMAL 类型
-                ❌ 复杂类型 (List, Struct, Map)
+            Not Supported:
+                - Dictionary encoding (use_dictionary must be False)
+                - INT8/INT16 types (use INT32 or INT64)
+                - large_string type (use pa.string())
+                - TIMESTAMP without timezone (must add tz='UTC')
+                - BINARY, DECIMAL types
+                - Complex types (List, Struct, Map)
 
-            推荐设置:
-                compression='snappy'        # 启用压缩
-                use_dictionary=False        # 必须禁用字典编码
-                write_statistics=True       # 启用统计信息
-                data_page_version='2.0'     # 使用 Parquet 2.0
+            Recommended Settings:
+                compression='snappy'        # Enable compression
+                use_dictionary=False        # Must disable dictionary encoding
+                write_statistics=True       # Enable statistics
+                data_page_version='2.0'     # Use Parquet 2.0
 
-            常见错误:
+            Common Errors:
                 - "indexed INT64 page is not yet implemented"
-                  → 设置 use_dictionary=False
+                  -> Set use_dictionary=False
                 - "load STRING(required) to TEXT NULL is not yet implemented"
-                  → 表定义用 VARCHAR 不要用 TEXT
+                  -> Use VARCHAR in table definition, not TEXT
                 - "load TIMESTAMP(isAdjustedToUTC=false..."
-                  → 使用 pa.timestamp('ms', tz='UTC')
+                  -> Use pa.timestamp('ms', tz='UTC')
 
             Example::
 
