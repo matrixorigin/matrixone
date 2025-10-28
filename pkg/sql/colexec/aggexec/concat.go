@@ -97,6 +97,8 @@ func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 	if err != nil {
 		return err
 	}
+	//
+	// exec.ret.setupT()
 	exec.separator = sep[0]
 	return nil
 }

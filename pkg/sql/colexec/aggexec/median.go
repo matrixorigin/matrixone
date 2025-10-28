@@ -101,6 +101,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {

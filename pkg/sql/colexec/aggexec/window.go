@@ -111,6 +111,7 @@ func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MP
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
