@@ -824,6 +824,10 @@ func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
 
 func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 	supp := a.supps[msg.table.ID()]
+	if supp == nil {
+		// this table has been dropped and removed from the priority queue
+		return
+	}
 
 	if msg.vacuum != nil {
 		a.ioChan <- &MMsg{
@@ -834,11 +838,6 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 			},
 		}
 		supp.lastVacuumCheckTime = a.clock.Now()
-	}
-
-	if supp == nil {
-		// TODO(aptend): Add table to the priority queue?
-		return
 	}
 
 	if msg.IsEmptyTrigger() {
