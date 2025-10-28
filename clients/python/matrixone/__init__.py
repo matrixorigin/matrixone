@@ -20,9 +20,10 @@ for database operations, snapshot management, PITR, restore operations,
 table cloning, and mo-ctl integration.
 """
 
-from .account import Account, AccountManager, Grant, Role, TransactionAccountManager, User
+from .account import Account, AccountManager, Grant, Role, User
 from .async_client import AsyncClient, AsyncResultSet
 from .client import Client
+from .session import Session, AsyncSession
 from .exceptions import (
     AccountError,
     CloneError,
@@ -37,11 +38,27 @@ from .exceptions import (
     SnapshotError,
     VersionError,
 )
+from .load_data import (
+    LoadDataManager,
+    AsyncLoadDataManager,
+    LoadDataFormat,
+    CompressionFormat,
+    JsonDataStructure,
+)
+from .export import (
+    ExportManager,
+    TransactionExportManager,
+    AsyncExportManager,
+    AsyncTransactionExportManager,
+    ExportFormat,
+)
 from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
 from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
-from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
+from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
+from .clone import CloneManager
+from .stage import Stage, StageManager, AsyncStageManager
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -76,14 +93,17 @@ from .sqlalchemy_ext import (
     natural_match,
 )
 
-# Import generic logical adapters
-from .sqlalchemy_ext.adapters import logical_and, logical_not, logical_or
 from .version import FeatureRequirement, VersionInfo, VersionManager, requires_version
+
+# Import SQLAlchemy 2.0 select support
+from .sqlalchemy_select import select, compile_select_to_sql
 
 __version__ = "1.0.0"
 __all__ = [
     "Client",
+    "Session",
     "AsyncClient",
+    "AsyncSession",
     "AsyncResultSet",
     "MatrixOneError",
     "ConnectionError",
@@ -112,12 +132,24 @@ __all__ = [
     "User",
     "Role",
     "Grant",
-    "TransactionAccountManager",
+    "LoadDataManager",
+    "AsyncLoadDataManager",
+    "LoadDataFormat",
+    "CompressionFormat",
+    "JsonDataStructure",
+    "ExportManager",
+    "TransactionExportManager",
+    "AsyncExportManager",
+    "AsyncTransactionExportManager",
+    "ExportFormat",
     "VersionError",
     "VersionManager",
     "VersionInfo",
     "FeatureRequirement",
     "requires_version",
+    "Stage",
+    "StageManager",
+    "AsyncStageManager",
     # SQLAlchemy extensions
     "VectorType",
     "Vectorf32",
@@ -148,8 +180,7 @@ __all__ = [
     "group",
     "create_fulltext_index",
     "fulltext_search_builder",
-    # Generic logical adapters
-    "logical_and",
-    "logical_or",
-    "logical_not",
+    # SQLAlchemy 2.0 select support
+    "select",
+    "compile_select_to_sql",
 ]

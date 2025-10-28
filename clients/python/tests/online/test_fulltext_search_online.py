@@ -36,7 +36,9 @@ from matrixone.sqlalchemy_ext.fulltext_search import (
     group,
     FulltextSearchMode,
 )
-from matrixone.sqlalchemy_ext.adapters import logical_and, logical_or, logical_not
+
+# No longer need logical_and/or/not - use SQLAlchemy's and_/or_/not_ directly
+from sqlalchemy import and_, or_, not_
 
 Base = declarative_base()
 
@@ -720,7 +722,7 @@ class TestLogicalAdaptersOnline:
         fulltext_condition = boolean_match("title", "content", "tags").must("python")
         category_condition = Article.category == "Programming"
 
-        query = self.client.query(Article).filter(logical_and(fulltext_condition, category_condition))
+        query = self.client.query(Article).filter(and_(fulltext_condition, category_condition))
         results = query.all()
 
         assert isinstance(results, list)
@@ -735,7 +737,7 @@ class TestLogicalAdaptersOnline:
         programming_condition = Article.category == "Programming"
         ai_condition = Article.category == "AI"
 
-        query = self.client.query(Article).filter(logical_or(programming_condition, ai_condition))
+        query = self.client.query(Article).filter(or_(programming_condition, ai_condition))
         results = query.all()
 
         assert isinstance(results, list)
@@ -750,7 +752,7 @@ class TestLogicalAdaptersOnline:
         # Use simpler approach: test NOT with regular conditions
         category_condition = Article.category == "Programming"
 
-        query = self.client.query(Article).filter(logical_not(category_condition))
+        query = self.client.query(Article).filter(not_(category_condition))
         results = query.all()
 
         assert isinstance(results, list)
@@ -765,7 +767,7 @@ class TestLogicalAdaptersOnline:
         fulltext_condition = boolean_match("title", "content", "tags").must("python")
         category_condition = Article.category == "AI"
 
-        query = self.client.query(Article).filter(logical_and(fulltext_condition, category_condition))
+        query = self.client.query(Article).filter(and_(fulltext_condition, category_condition))
         results = query.all()
 
         assert isinstance(results, list)
@@ -782,7 +784,7 @@ class TestLogicalAdaptersOnline:
         ai_cat = Article.category == "AI"
 
         # Test nested OR with regular conditions
-        final_condition = logical_or(programming_cat, ai_cat)
+        final_condition = or_(programming_cat, ai_cat)
 
         query = self.client.query(Article).filter(final_condition)
         results = query.all()
@@ -810,7 +812,7 @@ class TestLogicalAdaptersOnline:
         fulltext_condition = boolean_match("title", "content", "tags").must("python")
         category_condition = Article.category == "Programming"
 
-        final_condition = logical_and(fulltext_condition, category_condition)
+        final_condition = and_(fulltext_condition, category_condition)
 
         query = self.client.query(Article).filter(final_condition)
         results = query.all()
@@ -828,7 +830,7 @@ class TestLogicalAdaptersOnline:
         category_condition = Article.category == "Programming"
 
         # Test AND combination (supported)
-        combined_condition = logical_and(fulltext_condition, category_condition)
+        combined_condition = and_(fulltext_condition, category_condition)
 
         query = self.client.query(Article).filter(combined_condition)
         results = query.all()

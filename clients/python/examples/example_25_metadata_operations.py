@@ -108,13 +108,26 @@ class MetadataOperationsDemo:
         # Create database and tables
         try:
             self.session.execute(text("CREATE DATABASE IF NOT EXISTS metadata_demo"))
-            self.session.execute(text("USE metadata_demo"))
-            self.Base.metadata.create_all(self.engine)
             self.session.commit()
+            self.session.close()
+
+            # Reconnect with the new database
+            self.client.disconnect()
+            host, port, user, password, _ = self.connection_params
+            self.client.connect(host=host, port=port, user=user, password=password, database='metadata_demo')
+
+            # Recreate engine and session with new database
+            self.engine = self.client.get_sqlalchemy_engine()
+            Session = sessionmaker(bind=self.engine)
+            self.session = Session()
+
+            # Now create tables
+            self.Base.metadata.create_all(self.engine)
             self.logger.info("✓ Created User model with indexes")
             return User
         except SQLAlchemyError as e:
-            self.session.rollback()
+            if self.session:
+                self.session.rollback()
             self.logger.error(f"Failed to create models: {e}")
             raise
 
@@ -327,12 +340,12 @@ class MetadataOperationsDemo:
         self.logger.info("\n=== Transaction-Based Metadata Operations ===")
 
         try:
-            with self.client.transaction() as tx:
-                # Metadata operations within transaction
-                self.logger.info("1. Metadata scan within transaction:")
+            with self.client.session() as tx:
+                # Metadata operations within session
+                self.logger.info("1. Metadata scan within session:")
                 result = tx.metadata.scan("metadata_demo", "users", columns="*")
 
-                self.logger.info(f"  Found {len(result)} metadata entries in transaction")
+                self.logger.info(f"  Found {len(result)} metadata entries in session")
                 for row in result[:2]:
                     self.logger.info(f"    {row.col_name}: {row.rows_cnt} rows")
 

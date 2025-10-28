@@ -70,7 +70,7 @@ class TestJoinMethods(unittest.TestCase):
         self.assertEqual(len(self.query._joins), 1)
         self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
         self.assertIn("addresses", self.query._joins[0])
-        self.assertIn("id = user_id", self.query._joins[0])
+        self.assertIn("users.id = addresses.user_id", self.query._joins[0])
 
     def test_join_with_string_condition(self):
         """Test join with string condition"""
@@ -97,8 +97,8 @@ class TestJoinMethods(unittest.TestCase):
         self.assertEqual(len(self.query._joins), 1)
         self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
         self.assertIn("addresses", self.query._joins[0])
-        # SQLAlchemy expressions get compiled and table prefixes are removed
-        self.assertIn("id = user_id", self.query._joins[0])
+        # SQLAlchemy expressions keep table prefixes to avoid ambiguity
+        self.assertIn("users.id = addresses.user_id", self.query._joins[0])
 
     def test_join_with_model_class_target(self):
         """Test join with model class as target"""

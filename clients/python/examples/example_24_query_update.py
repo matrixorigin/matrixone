@@ -316,25 +316,25 @@ def demo_update_with_transactions():
         ]
         client.batch_insert("example_users_update", users_data)
 
-        # 1. Successful transaction
-        print("1. Successful transaction")
-        with client.transaction() as tx:
+        # 1. Successful session
+        print("1. Successful session")
+        with client.session() as tx:
             query = client.query(User)
-            query.update(status="transaction_test").filter(User.id == 1).execute()
+            query.update(status="session_test").filter(User.id == 1).execute()
 
             query = client.query(User)
-            query.update(status="transaction_test").filter(User.id == 2).execute()
+            query.update(status="session_test").filter(User.id == 2).execute()
 
         # Verify the updates were committed
-        test_users = client.query(User).filter(User.status == "transaction_test").all()
-        print(f"   Transaction test users: {len(test_users)}")
+        test_users = client.query(User).filter(User.status == "session_test").all()
+        print(f"   Session test users: {len(test_users)}")
 
-        # 2. Rollback transaction
-        print("\n2. Rollback transaction")
+        # 2. Rollback session
+        print("\n2. Rollback session")
         original_status = client.query(User).filter(User.id == 1).first().status
 
         try:
-            with client.transaction() as tx:
+            with client.session() as tx:
                 query = client.query(User)
                 query.update(status="rollback_test").filter(User.id == 1).execute()
 

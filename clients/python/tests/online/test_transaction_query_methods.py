@@ -52,7 +52,7 @@ class TestTransactionQueryMethods:
         # Insert test data
         client.execute(
             f"""
-            INSERT INTO {test_db}.test_table (name, age, email) VALUES 
+            INSERT INTO {test_db}.test_table (name, age, email) VALUES
             ('Alice', 25, 'alice@example.com'),
             ('Bob', 30, 'bob@example.com'),
             ('Charlie', 35, 'charlie@example.com')
@@ -96,7 +96,7 @@ class TestTransactionQueryMethods:
         # Insert test data
         await client.execute(
             f"""
-            INSERT INTO {test_db}.test_table (name, age, email) VALUES 
+            INSERT INTO {test_db}.test_table (name, age, email) VALUES
             ('David', 28, 'david@example.com'),
             ('Eve', 32, 'eve@example.com'),
             ('Frank', 38, 'frank@example.com')
@@ -117,33 +117,34 @@ class TestTransactionQueryMethods:
         """Test that query method exists in sync transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test that query method exists
-            assert hasattr(tx, 'query'), "TransactionWrapper should have query method"
+            assert hasattr(tx, 'query'), "Session should have query method"
 
             # Test that query method is callable
-            assert callable(tx.query), "TransactionWrapper.query should be callable"
+            assert callable(tx.query), "Session.query should be callable"
 
     @pytest.mark.asyncio
     async def test_async_transaction_query_method_exists(self, async_client_setup):
         """Test that query method exists in async transaction context"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test that query method exists
-            assert hasattr(tx, 'query'), "AsyncTransactionWrapper should have query method"
+            assert hasattr(tx, 'query'), "AsyncSession should have query method"
 
             # Test that query method is callable
-            assert callable(tx.query), "AsyncTransactionWrapper.query should be callable"
+            assert callable(tx.query), "AsyncSession.query should be callable"
 
     def test_sync_transaction_query_with_simple_select(self, sync_client_setup):
         """Test query method with simple SELECT in sync transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test simple query using execute (since we don't have ORM models in this test)
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 3
+            rows = result.fetchall()
+            assert rows[0][0] == 3
 
             # Test that we can insert and query within the same transaction
             tx.execute(
@@ -152,17 +153,19 @@ class TestTransactionQueryMethods:
 
             # Verify the insert
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 4
+            rows = result.fetchall()
+            assert rows[0][0] == 4
 
     @pytest.mark.asyncio
     async def test_async_transaction_query_with_simple_select(self, async_client_setup):
         """Test query method with simple SELECT in async transaction context"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test simple query using execute (since we don't have ORM models in this test)
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 3
+            rows = result.fetchall()
+            assert rows[0][0] == 3
 
             # Test that we can insert and query within the same transaction
             await tx.execute(
@@ -171,14 +174,15 @@ class TestTransactionQueryMethods:
 
             # Verify the insert
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 4
+            rows = result.fetchall()
+            assert rows[0][0] == 4
 
     def test_sync_transaction_query_rollback(self, sync_client_setup):
         """Test that query operations are rolled back on transaction failure"""
         client, test_db = sync_client_setup
 
         try:
-            with client.transaction() as tx:
+            with client.session() as tx:
                 # Insert data
                 tx.execute(
                     f"INSERT INTO {test_db}.test_table (name, age, email) VALUES ('Rollback Test', 50, 'rollback@example.com')"
@@ -203,7 +207,7 @@ class TestTransactionQueryMethods:
         client, test_db = async_client_setup
 
         try:
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 # Insert data
                 await tx.execute(
                     f"INSERT INTO {test_db}.test_table (name, age, email) VALUES ('Async Rollback Test', 52, 'async_rollback@example.com')"
@@ -226,10 +230,11 @@ class TestTransactionQueryMethods:
         """Test mixing query, insert, and batch_insert in sync transaction"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Query initial count
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            initial_count = result.rows[0][0]
+            rows = result.fetchall()
+            initial_count = rows[0][0]
             assert initial_count == 3
 
             # Insert single record
@@ -239,12 +244,13 @@ class TestTransactionQueryMethods:
 
             # Query count after insert
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == initial_count + 1
+            rows = result.fetchall()
+            assert rows[0][0] == initial_count + 1
 
             # Insert multiple records
             tx.execute(
                 f"""
-                INSERT INTO {test_db}.test_table (name, age, email) VALUES 
+                INSERT INTO {test_db}.test_table (name, age, email) VALUES
                 ('Mixed Test 2', 46, 'mixed2@example.com'),
                 ('Mixed Test 3', 47, 'mixed3@example.com')
             """
@@ -252,17 +258,19 @@ class TestTransactionQueryMethods:
 
             # Query final count
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == initial_count + 3
+            rows = result.fetchall()
+            assert rows[0][0] == initial_count + 3
 
     @pytest.mark.asyncio
     async def test_async_transaction_mixed_operations(self, async_client_setup):
         """Test mixing query, insert, and batch_insert in async transaction"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Query initial count
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            initial_count = result.rows[0][0]
+            rows = result.fetchall()
+            initial_count = rows[0][0]
             assert initial_count == 3
 
             # Insert single record
@@ -272,12 +280,13 @@ class TestTransactionQueryMethods:
 
             # Query count after insert
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == initial_count + 1
+            rows = result.fetchall()
+            assert rows[0][0] == initial_count + 1
 
             # Insert multiple records
             await tx.execute(
                 f"""
-                INSERT INTO {test_db}.test_table (name, age, email) VALUES 
+                INSERT INTO {test_db}.test_table (name, age, email) VALUES
                 ('Async Mixed Test 2', 49, 'async_mixed2@example.com'),
                 ('Async Mixed Test 3', 50, 'async_mixed3@example.com')
             """
@@ -285,4 +294,5 @@ class TestTransactionQueryMethods:
 
             # Query final count
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == initial_count + 3
+            rows = result.fetchall()
+            assert rows[0][0] == initial_count + 3

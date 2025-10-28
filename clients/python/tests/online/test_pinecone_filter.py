@@ -17,12 +17,11 @@ Online tests for Pinecone-compatible filter functionality in vector search.
 """
 
 import pytest
-import asyncio
 from typing import List, Dict, Any
 from matrixone import Client, AsyncClient
 from matrixone.sqlalchemy_ext import create_vector_column
-from sqlalchemy import Column, Integer, String, Float, DateTime, create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy.orm import declarative_base
 from datetime import datetime
 
 Base = declarative_base()
@@ -49,7 +48,18 @@ class TestPineconeFilter:
     @pytest.fixture(scope="class")
     def client(self):
         """Create test client"""
-        return Client(host="127.0.0.1", port=6001, user="dump", password="111", database="test")
+        from .test_config import online_config
+
+        host, port, user, password, database = online_config.get_connection_params()
+        client = Client()
+        client.connect(host=host, port=port, user=user, password=password, database=database)
+        try:
+            yield client
+        finally:
+            try:
+                client.disconnect()
+            except Exception as e:
+                print(f"Warning: Failed to disconnect client: {e}")
 
     @pytest.fixture(scope="class")
     def async_client(self):
@@ -80,11 +90,13 @@ class TestPineconeFilter:
         client.vector_ops.enable_ivf()
 
         # Create vector index
+        from matrixone.sqlalchemy_ext import VectorOpType
+
         client.vector_ops.create_ivf(
             "test_movies",
             name="movies_ivf_index",
             column="embedding",
-            op_type="vector_l2_ops",
+            op_type=VectorOpType.VECTOR_L2_OPS,
         )
 
         # Insert test data

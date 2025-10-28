@@ -33,24 +33,24 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from .account import Account, User
-from .async_metadata_manager import AsyncMetadataManager
-from .async_vector_index_manager import AsyncVectorManager
+from .account import AsyncAccountManager
+from .fulltext_manager import AsyncFulltextIndexManager
+from .metadata import AsyncMetadataManager
+from .session import AsyncSession
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
+from .load_data import AsyncLoadDataManager
+from .stage import AsyncStageManager
 from .exceptions import (
-    AccountError,
     ConnectionError,
     MoCtlError,
-    PitrError,
-    PubSubError,
     QueryError,
     RestoreError,
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
-from .pitr import Pitr
-from .pubsub import Publication, Subscription
+from .pitr import AsyncPitrManager
+from .pubsub import AsyncPubSubManager
 from .snapshot import Snapshot, SnapshotLevel
 
 
@@ -270,457 +270,6 @@ class AsyncCloneManager:
         await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
-class AsyncPubSubManager:
-    """Async manager for publish-subscribe operations"""
-
-    def __init__(self, client):
-        self.client = client
-
-    async def create_database_publication(self, name: str, database: str, account: str) -> Publication:
-        """Create database-level publication asynchronously"""
-        try:
-            sql = (
-                f"CREATE PUBLICATION {self.client._escape_identifier(name)} "
-                f"DATABASE {self.client._escape_identifier(database)} "
-                f"ACCOUNT {self.client._escape_identifier(account)}"
-            )
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create database publication '{name}'")
-
-            return await self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create database publication '{name}': {e}")
-
-    async def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
-        """Create table-level publication asynchronously"""
-        try:
-            sql = (
-                f"CREATE PUBLICATION {self.client._escape_identifier(name)} "
-                f"DATABASE {self.client._escape_identifier(database)} "
-                f"TABLE {self.client._escape_identifier(table)} "
-                f"ACCOUNT {self.client._escape_identifier(account)}"
-            )
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create table publication '{name}'")
-
-            return await self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create table publication '{name}': {e}")
-
-    async def get_publication(self, name: str) -> Publication:
-        """Get publication by name asynchronously"""
-        try:
-            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
-            sql = "SHOW PUBLICATIONS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
-
-            # Find publication with matching name
-            for row in result.rows:
-                if row[0] == name:  # publication name is in first column
-                    return self._row_to_publication(row)
-
-            raise PubSubError(f"Publication '{name}' not found")
-
-        except Exception as e:
-            raise PubSubError(f"Failed to get publication '{name}': {e}")
-
-    async def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
-        """List publications with optional filters asynchronously"""
-        try:
-            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
-            sql = "SHOW PUBLICATIONS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            publications = []
-            for row in result.rows:
-                pub = self._row_to_publication(row)
-
-                # Apply filters
-                if account and account not in pub.sub_account:
-                    continue
-                if database and pub.database != database:
-                    continue
-
-                publications.append(pub)
-
-            return publications
-
-        except Exception as e:
-            raise PubSubError(f"Failed to list publications: {e}")
-
-    async def alter_publication(
-        self,
-        name: str,
-        account: Optional[str] = None,
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-    ) -> Publication:
-        """Alter publication asynchronously"""
-        try:
-            # Build ALTER PUBLICATION statement
-            parts = [f"ALTER PUBLICATION {self.client._escape_identifier(name)}"]
-
-            if account:
-                parts.append(f"ACCOUNT {self.client._escape_identifier(account)}")
-            if database:
-                parts.append(f"DATABASE {self.client._escape_identifier(database)}")
-            if table:
-                parts.append(f"TABLE {self.client._escape_identifier(table)}")
-
-            sql = " ".join(parts)
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to alter publication '{name}'")
-
-            return await self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to alter publication '{name}': {e}")
-
-    async def drop_publication(self, name: str) -> bool:
-        """Drop publication asynchronously"""
-        try:
-            sql = f"DROP PUBLICATION {self.client._escape_identifier(name)}"
-            result = await self.client.execute(sql)
-            return result is not None
-
-        except Exception as e:
-            raise PubSubError(f"Failed to drop publication '{name}': {e}")
-
-    async def show_create_publication(self, name: str) -> str:
-        """Show CREATE PUBLICATION statement for a publication asynchronously"""
-        try:
-            sql = f"SHOW CREATE PUBLICATION {self.client._escape_identifier(name)}"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
-
-            # The result should contain the CREATE statement
-            # Assuming the CREATE statement is in the first column
-            return result.rows[0][0]
-
-        except Exception as e:
-            raise PubSubError(f"Failed to show create publication '{name}': {e}")
-
-    async def create_subscription(
-        self, subscription_name: str, publication_name: str, publisher_account: str
-    ) -> Subscription:
-        """Create subscription from publication asynchronously"""
-        try:
-            sql = (
-                f"CREATE DATABASE {self.client._escape_identifier(subscription_name)} "
-                f"FROM {self.client._escape_identifier(publisher_account)} "
-                f"PUBLICATION {self.client._escape_identifier(publication_name)}"
-            )
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create subscription '{subscription_name}'")
-
-            return await self.get_subscription(subscription_name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}")
-
-    async def get_subscription(self, name: str) -> Subscription:
-        """Get subscription by name asynchronously"""
-        try:
-            # SHOW SUBSCRIPTIONS doesn't support WHERE clause, so we need to list all and filter
-            sql = "SHOW SUBSCRIPTIONS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Subscription '{name}' not found")
-
-            # Find subscription with matching name
-            for row in result.rows:
-                if row[6] == name:  # sub_name is in 7th column (index 6)
-                    return self._row_to_subscription(row)
-
-            raise PubSubError(f"Subscription '{name}' not found")
-
-        except Exception as e:
-            raise PubSubError(f"Failed to get subscription '{name}': {e}")
-
-    async def list_subscriptions(
-        self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
-    ) -> List[Subscription]:
-        """List subscriptions with optional filters asynchronously"""
-        try:
-            conditions = []
-
-            if pub_account:
-                conditions.append(f"pub_account = {self.client._escape_string(pub_account)}")
-            if pub_database:
-                conditions.append(f"pub_database = {self.client._escape_string(pub_database)}")
-
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-
-            sql = f"SHOW SUBSCRIPTIONS{where_clause}"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_subscription(row) for row in result.rows]
-
-        except Exception as e:
-            raise PubSubError(f"Failed to list subscriptions: {e}")
-
-    def _row_to_publication(self, row: tuple) -> Publication:
-        """Convert database row to Publication object"""
-        # Expected columns: publication, database, tables, sub_account, subscribed_accounts,
-        # create_time, update_time, comments
-        # Based on MatrixOne official documentation:
-        # https://docs.matrixorigin.cn/en/v25.2.2.2/MatrixOne/Reference/SQL-Reference/Other/SHOW-Statements/show-publications/
-        return Publication(
-            name=row[0],  # publication
-            database=row[1],  # database
-            tables=row[2],  # tables
-            sub_account=row[3],  # sub_account
-            subscribed_accounts=row[4],  # subscribed_accounts
-            created_time=row[5] if len(row) > 5 else None,  # create_time
-            update_time=row[6] if len(row) > 6 else None,  # update_time
-            comments=row[7] if len(row) > 7 else None,  # comments
-        )
-
-    def _row_to_subscription(self, row: tuple) -> Subscription:
-        """Convert database row to Subscription object"""
-        # Expected columns: pub_name, pub_account, pub_database, pub_tables, pub_comment,
-        # pub_time, sub_name, sub_time, status
-        return Subscription(
-            pub_name=row[0],
-            pub_account=row[1],
-            pub_database=row[2],
-            pub_tables=row[3],
-            pub_comment=row[4] if len(row) > 4 else None,
-            pub_time=row[5] if len(row) > 5 else None,
-            sub_name=row[6] if len(row) > 6 else None,
-            sub_time=row[7] if len(row) > 7 else None,
-            status=row[8] if len(row) > 8 else 0,
-        )
-
-
-class AsyncPitrManager:
-    """Async manager for PITR operations"""
-
-    def __init__(self, client):
-        self.client = client
-
-    async def create_cluster_pitr(self, name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
-        """Create cluster-level PITR asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create cluster PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
-
-    async def create_account_pitr(
-        self,
-        name: str,
-        account_name: Optional[str] = None,
-        range_value: int = 1,
-        range_unit: str = "d",
-    ) -> Pitr:
-        """Create account-level PITR asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            if account_name:
-                sql = (
-                    f"CREATE PITR {self.client._escape_identifier(name)} "
-                    f"FOR ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"RANGE {range_value} '{range_unit}'"
-                )
-            else:
-                sql = (
-                    f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
-                )
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create account PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create account PITR '{name}': {e}")
-
-    async def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
-        """Create database-level PITR asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = (
-                f"CREATE PITR {self.client._escape_identifier(name)} "
-                f"FOR DATABASE {self.client._escape_identifier(database_name)} "
-                f"RANGE {range_value} '{range_unit}'"
-            )
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create database PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create database PITR '{name}': {e}")
-
-    async def create_table_pitr(
-        self,
-        name: str,
-        database_name: str,
-        table_name: str,
-        range_value: int = 1,
-        range_unit: str = "d",
-    ) -> Pitr:
-        """Create table-level PITR asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = (
-                f"CREATE PITR {self.client._escape_identifier(name)} "
-                f"FOR TABLE {self.client._escape_identifier(database_name)} "
-                f"{self.client._escape_identifier(table_name)} "
-                f"RANGE {range_value} '{range_unit}'"
-            )
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create table PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create table PITR '{name}': {e}")
-
-    async def get(self, name: str) -> Pitr:
-        """Get PITR by name asynchronously"""
-        try:
-            sql = f"SHOW PITR WHERE pitr_name = {self.client._escape_string(name)}"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                raise PitrError(f"PITR '{name}' not found")
-
-            row = result.rows[0]
-            return self._row_to_pitr(row)
-
-        except Exception as e:
-            raise PitrError(f"Failed to get PITR '{name}': {e}")
-
-    async def list(
-        self,
-        level: Optional[str] = None,
-        account_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        table_name: Optional[str] = None,
-    ) -> List[Pitr]:
-        """List PITRs with optional filters asynchronously"""
-        try:
-            conditions = []
-
-            if level:
-                conditions.append(f"pitr_level = {self.client._escape_string(level)}")
-            if account_name:
-                conditions.append(f"account_name = {self.client._escape_string(account_name)}")
-            if database_name:
-                conditions.append(f"database_name = {self.client._escape_string(database_name)}")
-            if table_name:
-                conditions.append(f"table_name = {self.client._escape_string(table_name)}")
-
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-
-            sql = f"SHOW PITR{where_clause}"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_pitr(row) for row in result.rows]
-
-        except Exception as e:
-            raise PitrError(f"Failed to list PITRs: {e}")
-
-    async def alter(self, name: str, range_value: int, range_unit: str) -> Pitr:
-        """Alter PITR range asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = f"ALTER PITR {self.client._escape_identifier(name)} " f"RANGE {range_value} '{range_unit}'"
-
-            result = await self.client.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to alter PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to alter PITR '{name}': {e}")
-
-    async def delete(self, name: str) -> bool:
-        """Delete PITR asynchronously"""
-        try:
-            sql = f"DROP PITR {self.client._escape_identifier(name)}"
-            result = await self.client.execute(sql)
-            return result is not None
-
-        except Exception as e:
-            raise PitrError(f"Failed to delete PITR '{name}': {e}")
-
-    def _validate_range(self, range_value: int, range_unit: str) -> None:
-        """Validate PITR range parameters"""
-        if not (1 <= range_value <= 100):
-            raise PitrError("Range value must be between 1 and 100")
-
-        valid_units = ["h", "d", "mo", "y"]
-        if range_unit not in valid_units:
-            raise PitrError(f"Range unit must be one of: {', '.join(valid_units)}")
-
-    def _row_to_pitr(self, row: tuple) -> Pitr:
-        """Convert database row to Pitr object"""
-        # Expected columns: pitr_name, created_time, modified_time, pitr_level,
-        # account_name, database_name, table_name, pitr_length, pitr_unit
-        return Pitr(
-            name=row[0],
-            created_time=row[1],
-            modified_time=row[2],
-            level=row[3],
-            account_name=row[4] if row[4] != "*" else None,
-            database_name=row[5] if row[5] != "*" else None,
-            table_name=row[6] if row[6] != "*" else None,
-            range_value=row[7],
-            range_unit=row[8],
-        )
-
-
 class AsyncRestoreManager:
     """Async manager for restore operations"""
 
@@ -868,440 +417,6 @@ class AsyncMoCtlManager:
     async def global_checkpoint(self) -> Dict[str, Any]:
         """Force global checkpoint asynchronously"""
         return await self._execute_moctl("dn", "globalcheckpoint", "")
-
-
-class AsyncAccountManager:
-    """Async manager for MatrixOne account operations"""
-
-    def __init__(self, client):
-        self.client = client
-
-    async def create_account(
-        self,
-        account_name: str,
-        admin_name: str,
-        password: str,
-        comment: Optional[str] = None,
-        admin_comment: Optional[str] = None,
-        admin_host: str = "%",
-        admin_identified_by: Optional[str] = None,
-    ) -> Account:
-        """Create a new account asynchronously"""
-        try:
-            sql_parts = [f"CREATE ACCOUNT {self.client._escape_identifier(account_name)}"]
-            sql_parts.append(f"ADMIN_NAME {self.client._escape_string(admin_name)}")
-            sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
-
-            if admin_host != "%":
-                sql_parts.append(f"ADMIN_HOST {self.client._escape_string(admin_host)}")
-
-            if comment:
-                sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-
-            if admin_comment:
-                sql_parts.append(f"ADMIN_COMMENT {self.client._escape_string(admin_comment)}")
-
-            if admin_identified_by:
-                sql_parts.append(f"ADMIN_IDENTIFIED BY {self.client._escape_string(admin_identified_by)}")
-
-            sql = " ".join(sql_parts)
-            await self.client.execute(sql)
-
-            return await self.get_account(account_name)
-
-        except Exception as e:
-            raise AccountError(f"Failed to create account '{account_name}': {e}")
-
-    async def drop_account(self, account_name: str) -> None:
-        """Drop an account asynchronously"""
-        try:
-            sql = f"DROP ACCOUNT {self.client._escape_identifier(account_name)}"
-            await self.client.execute(sql)
-        except Exception as e:
-            raise AccountError(f"Failed to drop account '{account_name}': {e}")
-
-    async def alter_account(
-        self,
-        account_name: str,
-        comment: Optional[str] = None,
-        suspend: Optional[bool] = None,
-        suspend_reason: Optional[str] = None,
-    ) -> Account:
-        """Alter an account asynchronously"""
-        try:
-            sql_parts = [f"ALTER ACCOUNT {self.client._escape_identifier(account_name)}"]
-
-            if comment is not None:
-                sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-
-            if suspend is not None:
-                if suspend:
-                    if suspend_reason:
-                        sql_parts.append(f"SUSPEND COMMENT {self.client._escape_string(suspend_reason)}")
-                    else:
-                        sql_parts.append("SUSPEND")
-                else:
-                    sql_parts.append("OPEN")
-
-            sql = " ".join(sql_parts)
-            await self.client.execute(sql)
-
-            return await self.get_account(account_name)
-
-        except Exception as e:
-            raise AccountError(f"Failed to alter account '{account_name}': {e}")
-
-    async def get_account(self, account_name: str) -> Account:
-        """Get account by name asynchronously"""
-        try:
-            sql = "SHOW ACCOUNTS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                raise AccountError(f"Account '{account_name}' not found")
-
-            for row in result.rows:
-                if row[0] == account_name:
-                    return self._row_to_account(row)
-
-            raise AccountError(f"Account '{account_name}' not found")
-
-        except Exception as e:
-            raise AccountError(f"Failed to get account '{account_name}': {e}")
-
-    async def list_accounts(self) -> List[Account]:
-        """List all accounts asynchronously"""
-        try:
-            sql = "SHOW ACCOUNTS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_account(row) for row in result.rows]
-
-        except Exception as e:
-            raise AccountError(f"Failed to list accounts: {e}")
-
-    async def create_user(self, user_name: str, password: str, comment: Optional[str] = None) -> User:
-        """
-        Create a new user asynchronously according to MatrixOne CREATE USER syntax:
-        CREATE USER [IF NOT EXISTS] user auth_option [, user auth_option] ...
-        [DEFAULT ROLE rolename] [COMMENT 'comment_string' | ATTRIBUTE 'json_object']
-
-        Args::
-
-            user_name: Name of the user to create
-            password: Password for the user
-            comment: Comment for the user (not supported in MatrixOne)
-
-        Returns::
-
-            User: Created user object
-        """
-        try:
-            # Build CREATE USER statement according to MatrixOne syntax
-            # MatrixOne syntax: CREATE USER user_name IDENTIFIED BY 'password'
-            sql_parts = [f"CREATE USER {self.client._escape_identifier(user_name)}"]
-
-            sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
-
-            # Note: MatrixOne doesn't support COMMENT or ATTRIBUTE clauses in CREATE USER
-            # if comment:
-            #     sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-            # if identified_by:
-            #     sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(identified_by)}")
-
-            sql = " ".join(sql_parts)
-            await self.client.execute(sql)
-
-            # Return a User object with current account context
-            return User(
-                name=user_name,
-                host="%",  # Default host
-                account="sys",  # Default account
-                created_time=datetime.now(),
-                status="ACTIVE",
-                comment=comment,
-            )
-
-        except Exception as e:
-            raise AccountError(f"Failed to create user '{user_name}': {e}")
-
-    async def drop_user(self, user_name: str, if_exists: bool = False) -> None:
-        """
-        Drop a user asynchronously according to MatrixOne DROP USER syntax:
-        DROP USER [IF EXISTS] user [, user] ...
-
-        Args::
-
-            user_name: Name of the user to drop
-            if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
-        """
-        try:
-            sql_parts = ["DROP USER"]
-            if if_exists:
-                sql_parts.append("IF EXISTS")
-
-            sql_parts.append(self.client._escape_identifier(user_name))
-            sql = " ".join(sql_parts)
-            await self.client.execute(sql)
-
-        except Exception as e:
-            raise AccountError(f"Failed to drop user '{user_name}': {e}")
-
-    async def alter_user(
-        self,
-        user_name: str,
-        password: Optional[str] = None,
-        comment: Optional[str] = None,
-        lock: Optional[bool] = None,
-        lock_reason: Optional[str] = None,
-    ) -> User:
-        """Alter a user asynchronously"""
-        try:
-            sql_parts = [f"ALTER USER {self.client._escape_identifier(user_name)}"]
-
-            if password is not None:
-                sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
-
-            if comment is not None:
-                sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-
-            if lock is not None:
-                if lock:
-                    if lock_reason:
-                        sql_parts.append(f"ACCOUNT LOCK COMMENT {self.client._escape_string(lock_reason)}")
-                    else:
-                        sql_parts.append("ACCOUNT LOCK")
-                else:
-                    sql_parts.append("ACCOUNT UNLOCK")
-
-            sql = " ".join(sql_parts)
-            await self.client.execute(sql)
-
-            return await self.get_user(user_name)
-
-        except Exception as e:
-            raise AccountError(f"Failed to alter user '{user_name}': {e}")
-
-    async def get_user(self, user_name: str) -> User:
-        """Get user by name asynchronously"""
-        try:
-            sql = "SHOW GRANTS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                raise AccountError(f"User '{user_name}' not found")
-
-            for row in result.rows:
-                if row[0] == user_name:
-                    return self._row_to_user(row)
-
-            raise AccountError(f"User '{user_name}' not found")
-
-        except Exception as e:
-            raise AccountError(f"Failed to get user '{user_name}': {e}")
-
-    async def list_users(self, account_name: Optional[str] = None) -> List[User]:
-        """List users with optional account filter asynchronously"""
-        try:
-            sql = "SHOW GRANTS"
-            result = await self.client.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            users = [self._row_to_user(row) for row in result.rows]
-
-            if account_name:
-                users = [user for user in users if user.account == account_name]
-
-            return users
-
-        except Exception as e:
-            raise AccountError(f"Failed to list users: {e}")
-
-    def _row_to_account(self, row: tuple) -> Account:
-        """Convert database row to Account object"""
-        return Account(
-            name=row[0],
-            admin_name=row[1],
-            created_time=row[2] if len(row) > 2 else None,
-            status=row[3] if len(row) > 3 else None,
-            comment=row[4] if len(row) > 4 else None,
-            suspended_time=row[5] if len(row) > 5 else None,
-            suspended_reason=row[6] if len(row) > 6 else None,
-        )
-
-    def _row_to_user(self, row: tuple) -> User:
-        """Convert database row to User object"""
-        return User(
-            name=row[0],
-            host=row[1],
-            account=row[2],
-            created_time=row[3] if len(row) > 3 else None,
-            status=row[4] if len(row) > 4 else None,
-            comment=row[5] if len(row) > 5 else None,
-            locked_time=row[6] if len(row) > 6 else None,
-            locked_reason=row[7] if len(row) > 7 else None,
-        )
-
-
-class AsyncFulltextIndexManager:
-    """Async fulltext index manager for client chain operations"""
-
-    def __init__(self, client: "AsyncClient"):
-        """Initialize async fulltext index manager"""
-        self.client = client
-
-    async def create(
-        self, table_name_or_model, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
-    ) -> "AsyncFulltextIndexManager":
-        """
-            Create a fulltext index using chain operations.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Index name
-                columns: Column(s) to index
-                algorithm: Fulltext algorithm type (TF-IDF or BM25)
-
-            Returns::
-
-                AsyncFulltextIndexManager: Self for chaining
-
-            Example
-
-        # Create fulltext index by table name
-                await client.fulltext_index.create("articles", name="idx_content", columns=["title", "content"])
-
-                # Create fulltext index by model class
-                await client.fulltext_index.create(ArticleModel, name="idx_content", columns=["title", "content"])
-        """
-        from sqlalchemy import text
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        try:
-            if isinstance(columns, str):
-                columns = [columns]
-
-            columns_str = ", ".join(columns)
-            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
-
-            async with self.client.get_sqlalchemy_engine().begin() as conn:
-                await conn.execute(text(sql))
-
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to create fulltext index {name} on table {table_name}: {e}")
-
-    async def drop(self, table_name_or_model, name: str) -> "AsyncFulltextIndexManager":
-        """
-            Drop a fulltext index using chain operations.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Index name
-
-            Returns::
-
-                AsyncFulltextIndexManager: Self for chaining
-
-            Example
-
-        # Drop fulltext index by table name
-                await client.fulltext_index.drop("articles", "idx_content")
-
-                # Drop fulltext index by model class
-                await client.fulltext_index.drop(ArticleModel, "idx_content")
-        """
-        from sqlalchemy import text
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-
-            async with self.client.get_sqlalchemy_engine().begin() as conn:
-                await conn.execute(text(sql))
-
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
-
-    async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
-        """
-        Enable fulltext indexing with chain operations.
-
-        Returns::
-
-            AsyncFulltextIndexManager: Self for chaining
-        """
-        try:
-            await self.client.execute("SET experimental_fulltext_index = 1")
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to enable fulltext indexing: {e}")
-
-    async def disable_fulltext(self) -> "AsyncFulltextIndexManager":
-        """
-        Disable fulltext indexing with chain operations.
-
-        Returns::
-
-            AsyncFulltextIndexManager: Self for chaining
-        """
-        try:
-            await self.client.execute("SET experimental_fulltext_index = 0")
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to disable fulltext indexing: {e}")
-
-
-class AsyncTransactionFulltextIndexManager(AsyncFulltextIndexManager):
-    """Async fulltext index manager that executes operations within a transaction"""
-
-    def __init__(self, client: "AsyncClient", transaction_wrapper):
-        """Initialize async transaction fulltext index manager"""
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def create(
-        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
-    ) -> "AsyncTransactionFulltextIndexManager":
-        """Create a fulltext index within transaction"""
-        try:
-            if isinstance(columns, str):
-                columns = [columns]
-
-            columns_str = ", ".join(columns)
-            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
-
-            await self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to create fulltext index {name} on table {table_name} in transaction: {e}")
-
-    async def drop(self, table_name: str, name: str) -> "AsyncTransactionFulltextIndexManager":
-        """Drop a fulltext index within transaction"""
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-            await self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")
 
 
 class AsyncClientExecutor(BaseMatrixOneExecutor):
@@ -1485,6 +600,8 @@ class AsyncClient(BaseMatrixOneClient):
         self._account = AsyncAccountManager(self)
         self._fulltext_index = None
         self._metadata = None
+        self._load_data = None
+        self._stage = None
 
     async def connect(
         self,
@@ -1767,7 +884,7 @@ class AsyncClient(BaseMatrixOneClient):
     def _initialize_vector_managers(self) -> None:
         """Initialize vector managers after successful connection"""
         try:
-            from .async_vector_index_manager import AsyncVectorManager
+            from .vector_manager import AsyncVectorManager
 
             self._vector = AsyncVectorManager(self)
             self._fulltext_index = AsyncFulltextIndexManager(self)
@@ -1915,7 +1032,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         Note:
 
-            This method is used internally by AsyncVectorManager, AsyncTransactionWrapper,
+            This method is used internally by AsyncVectorManager, AsyncSession,
             and other SDK components. External users should use execute() instead.
         """
         import time
@@ -1951,18 +1068,262 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise
 
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
+    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> AsyncResultSet:
         """
-        Execute SQL query asynchronously using SQLAlchemy async engine
+        Execute SQL query or SQLAlchemy statement asynchronously without transaction isolation.
 
-        Args::
+        This method executes queries asynchronously using the connection pool, without wrapping
+        them in a transaction. Each statement executes independently with auto-commit enabled.
+        For atomic multi-statement operations, use `async with client.session()` instead.
 
-            sql: SQL query string
-            params: Query parameters
+        The method supports both SQLAlchemy ORM-style statements (recommended) and string SQL
+        with parameter binding. It's ideal for single-statement async operations like SELECT
+        queries, simple INSERT/UPDATE/DELETE, or DDL statements.
 
-        Returns::
+        Key Features:
 
-            AsyncResultSet with query results
+        - **Async/await support**: Non-blocking execution using async/await patterns
+        - **ORM-style statements**: Full support for SQLAlchemy select(), insert(), update(), delete()
+        - **Parameter binding**: Automatic escaping of parameters to prevent SQL injection
+        - **Query logging**: Integrated async logging with performance tracking
+        - **Auto-commit**: Each statement commits immediately (no transaction isolation)
+        - **Connection pooling**: Efficient async connection reuse from pool
+
+        Args:
+            sql_or_stmt (str | SQLAlchemy statement): The SQL query to execute. Can be:
+                - SQLAlchemy select() statement (recommended)
+                - SQLAlchemy insert() statement (recommended)
+                - SQLAlchemy update() statement (recommended)
+                - SQLAlchemy delete() statement (recommended)
+                - String SQL with '?' placeholders for parameters
+                - SQLAlchemy text() statement
+
+            params (Optional[Tuple]): Query parameters for string SQL only. Values are
+                substituted for '?' placeholders in order. Automatically escaped to prevent
+                SQL injection. Ignored for SQLAlchemy statements.
+
+            _log_mode (Optional[str]): Override SQL logging mode for this query only.
+                Options: 'off', 'simple', 'full'. If None, uses client's global sql_log_mode
+                setting. Useful for debugging or disabling logs for frequently-executed queries.
+
+        Returns:
+            AsyncResultSet: Async query result object with:
+                - columns: List[str] - Column names
+                - rows: List[Tuple] - Row data as tuples
+                - affected_rows: int - Number of rows affected by DML operations
+                - fetchall() -> List[Row] - Get all rows as list
+                - fetchone() -> Optional[Row] - Get next row or None
+                - fetchmany(size) -> List[Row] - Get next N rows
+
+        Raises:
+            ConnectionError: If not connected to database
+            QueryError: If query execution fails or SQL syntax is invalid
+
+        Usage Examples::
+
+            from matrixone import AsyncClient
+            from sqlalchemy import select, insert, update, delete, and_, or_, func
+            from sqlalchemy.orm import declarative_base
+            import asyncio
+
+            Base = declarative_base()
+
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+                status = Column(String(20))
+
+            class Order(Base):
+                __tablename__ = 'orders'
+                id = Column(Integer, primary_key=True)
+                user_id = Column(Integer)
+                amount = Column(Float)
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+                # ========================================
+                # SQLAlchemy SELECT Statements (Recommended)
+                # ========================================
+
+                # Basic SELECT with WHERE clause
+                stmt = select(User).where(User.age > 25)
+                result = await client.execute(stmt)
+                for user in result.fetchall():
+                    print(f"User: {user.name}, Age: {user.age}")
+
+                # SELECT specific columns
+                stmt = select(User.name, User.email).where(User.status == 'active')
+                result = await client.execute(stmt)
+                for name, email in result.fetchall():
+                    print(f"{name}: {email}")
+
+                # Complex WHERE with AND/OR
+                stmt = select(User).where(
+                    and_(
+                        User.age > 18,
+                        or_(
+                            User.status == 'active',
+                            User.status == 'pending'
+                        )
+                    )
+                )
+                result = await client.execute(stmt)
+
+                # SELECT with JOIN
+                stmt = select(User, Order).join(Order, User.id == Order.user_id)
+                result = await client.execute(stmt)
+                for user, order in result.fetchall():
+                    print(f"{user.name} ordered ${order.amount}")
+
+                # SELECT with aggregation
+                stmt = select(func.count(User.id), func.avg(User.age)).where(User.status == 'active')
+                result = await client.execute(stmt)
+                count, avg_age = result.fetchone()
+                print(f"Active users: {count}, Average age: {avg_age}")
+
+                # ========================================
+                # SQLAlchemy INSERT Statements (Recommended)
+                # ========================================
+
+                # Single INSERT
+                stmt = insert(User).values(name='John', email='john@example.com', age=30)
+                result = await client.execute(stmt)
+                print(f"Inserted {result.affected_rows} rows")
+
+                # Bulk INSERT
+                stmt = insert(User).values([
+                    {'name': 'Alice', 'email': 'alice@example.com', 'age': 28},
+                    {'name': 'Bob', 'email': 'bob@example.com', 'age': 35},
+                    {'name': 'Carol', 'email': 'carol@example.com', 'age': 42}
+                ])
+                result = await client.execute(stmt)
+                print(f"Inserted {result.affected_rows} rows")
+
+                # ========================================
+                # SQLAlchemy UPDATE Statements (Recommended)
+                # ========================================
+
+                # Simple UPDATE
+                stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+                result = await client.execute(stmt)
+                print(f"Updated {result.affected_rows} rows")
+
+                # Conditional UPDATE
+                stmt = update(User).where(User.age < 18).values(status='minor')
+                result = await client.execute(stmt)
+
+                # UPDATE with expressions
+                stmt = update(Order).values(total=Order.quantity * Order.price)
+                result = await client.execute(stmt)
+
+                # ========================================
+                # SQLAlchemy DELETE Statements (Recommended)
+                # ========================================
+
+                # Simple DELETE
+                stmt = delete(User).where(User.id == 1)
+                result = await client.execute(stmt)
+                print(f"Deleted {result.affected_rows} rows")
+
+                # Conditional DELETE
+                stmt = delete(User).where(User.status == 'deleted')
+                result = await client.execute(stmt)
+
+                # DELETE with complex condition
+                stmt = delete(User).where(
+                    and_(
+                        User.age < 18,
+                        User.status == 'inactive'
+                    )
+                )
+                result = await client.execute(stmt)
+
+                # ========================================
+                # Concurrent Execution with asyncio.gather
+                # ========================================
+
+                # Execute multiple independent queries concurrently
+                user_stmt = select(User).where(User.age > 25)
+                order_stmt = select(Order).where(Order.amount > 100)
+
+                user_result, order_result = await asyncio.gather(
+                    client.execute(user_stmt),
+                    client.execute(order_stmt)
+                )
+
+                print(f"Users: {len(user_result.fetchall())}")
+                print(f"Orders: {len(order_result.fetchall())}")
+
+                # ========================================
+                # String SQL with Parameters (Alternative)
+                # ========================================
+
+                # SELECT with parameters
+                result = await client.execute(
+                    "SELECT * FROM users WHERE age > ? AND status = ?",
+                    (25, 'active')
+                )
+
+                # INSERT with parameters
+                result = await client.execute(
+                    "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+                    ('David', 'david@example.com', 28)
+                )
+
+                # UPDATE with parameters
+                result = await client.execute(
+                    "UPDATE users SET status = ? WHERE age < ?",
+                    ('minor', 18)
+                )
+
+                # ========================================
+                # Query Logging Control
+                # ========================================
+
+                # Disable logging for frequently executed query
+                result = await client.execute(
+                    select(User).where(User.id == 1),
+                    _log_mode='off'
+                )
+
+                # Force full SQL logging for debugging
+                result = await client.execute(
+                    select(User).where(User.name.like('%test%')),
+                    _log_mode='full'
+                )
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        Important Notes:
+
+        - **No transaction isolation**: Each execute() call commits immediately
+        - **Use session() for transactions**: For atomic multi-statement operations
+        - **ORM-style preferred**: Use SQLAlchemy statements for better type safety
+        - **Auto-commit behavior**: Changes are permanent immediately after execute()
+        - **Non-blocking**: Uses async/await and doesn't block event loop
+        - **Concurrent execution**: Use asyncio.gather() for parallel queries
+
+        Best Practices:
+
+        1. **Prefer ORM-style statements**: Use select(), insert(), update(), delete()
+        2. **Use parameters**: Always use parameter binding to prevent SQL injection
+        3. **Session for transactions**: Use client.session() for atomic operations
+        4. **Use asyncio.gather()**: For concurrent independent queries
+        5. **Disable logging in production**: Use _log_mode='off' for hot paths
+        6. **Handle exceptions**: Wrap execute() in try-except for error handling
+
+        See Also:
+
+            - AsyncClient.session(): For transaction-aware async operations
+            - AsyncSession.execute(): Execute within async transaction context
+            - Client.execute(): Synchronous version
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -1972,8 +1333,42 @@ class AsyncClient(BaseMatrixOneClient):
         start_time = time.time()
 
         try:
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self._substitute_parameters(sql, params)
+            # Check if this is a SQLAlchemy statement
+            if not isinstance(sql_or_stmt, str):
+                # SQLAlchemy statement - delegate to session for consistent behavior
+                async with self.session() as session:
+                    result = await session.execute(sql_or_stmt, params)
+
+                    # Convert SQLAlchemy result to AsyncResultSet
+                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                        # SELECT query
+                        columns = list(result.keys())
+                        rows = result.fetchall()
+                        async_result = AsyncResultSet(columns, rows)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            len(rows),
+                            success=True,
+                            override_sql_log_mode=_log_mode,
+                        )
+                        return async_result
+                    else:
+                        # INSERT/UPDATE/DELETE query
+                        async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            result.rowcount,
+                            success=True,
+                            override_sql_log_mode=_log_mode,
+                        )
+                        return async_result
+
+            # String SQL - original implementation
+            final_sql = self._substitute_parameters(sql_or_stmt, params)
 
             async with self._engine.begin() as conn:
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
@@ -1994,11 +1389,15 @@ class AsyncClient(BaseMatrixOneClient):
                     rows = result.fetchall()
                     columns = list(result.keys()) if hasattr(result, "keys") else []
                     async_result = AsyncResultSet(columns, rows)
-                    self.logger.log_query(final_sql, execution_time, len(rows), success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
+                    )
                     return async_result
                 else:
                     async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(final_sql, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
+                    )
                     return async_result
 
         except Exception as e:
@@ -2007,7 +1406,8 @@ class AsyncClient(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                self.logger.log_query(final_sql, execution_time, success=False)
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Async query execution")
             except Exception as log_err:
                 # If logging fails, print to stderr as fallback but continue with error handling
@@ -2370,36 +1770,267 @@ class AsyncClient(BaseMatrixOneClient):
         return await executor.batch_insert(table_name, data_list)
 
     @asynccontextmanager
-    async def transaction(self):
+    async def session(self):
         """
-        Async transaction context manager
+        Create an async transaction-aware session for atomic database operations.
 
-        Usage
+        This method returns an AsyncSession that extends SQLAlchemy AsyncSession with
+        MatrixOne-specific features. All operations within the session are executed
+        atomically using async/await patterns - they either all succeed or all fail together.
 
-            async with client.transaction() as tx:
-            await tx.execute("INSERT INTO users ...")
-            await tx.execute("UPDATE users ...")
-            # Snapshot and clone operations within transaction
-            await tx.snapshots.create("snap1", "table", database="db1", table="t1")
-            await tx.clone.clone_database("target_db", "source_db")
+        The session is an async context manager that automatically handles transaction lifecycle:
+        - Commits the transaction when the context exits normally
+        - Rolls back the transaction if any exception occurs
+        - Cleans up database resources automatically
+        - Enables non-blocking concurrent operations
+
+        Key Features:
+
+        - **Full async SQLAlchemy ORM**: All standard async Session methods with await
+        - **Atomic transactions**: Multiple async operations commit or rollback together
+        - **Async MatrixOne managers**: All MatrixOne operations available asynchronously
+        - **Concurrent execution**: Use asyncio.gather() for parallel operations
+        - **Non-blocking**: All operations use async/await and don't block event loop
+        - **ORM-style operations**: Use SQLAlchemy select(), insert(), update(), delete()
+
+        Available Async Managers (transaction-aware):
+
+        - session.snapshots: AsyncSnapshotManager for async snapshot operations
+        - session.clone: AsyncCloneManager for async clone operations
+        - session.restore: AsyncRestoreManager for async restore operations
+        - session.pitr: AsyncPitrManager for async point-in-time recovery
+        - session.pubsub: AsyncPubSubManager for async publish-subscribe
+        - session.account: AsyncAccountManager for async account management
+        - session.vector_ops: AsyncVectorManager for async vector operations
+        - session.fulltext_index: AsyncFulltextIndexManager for async fulltext search
+        - session.metadata: AsyncMetadataManager for async metadata analysis
+        - session.load_data: AsyncLoadDataManager for async bulk loading
+        - session.stage: AsyncStageManager for async stage management
+
+        Returns:
+            AsyncContextManager[AsyncSession]: Async context manager yielding AsyncSession
+
+        Raises:
+            ConnectionError: If client is not connected to database
+
+        Usage Examples::
+
+            from matrixone import AsyncClient
+            from sqlalchemy import select, insert, update, delete
+            from sqlalchemy.orm import declarative_base
+            import asyncio
+
+            Base = declarative_base()
+
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+
+            class Order(Base):
+                __tablename__ = 'orders'
+                id = Column(Integer, primary_key=True)
+                user_id = Column(Integer)
+                amount = Column(Float)
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+                # ========================================
+                # Example 1: Basic Async Transaction with ORM-style SQL
+                # ========================================
+                async with client.session() as session:
+                    # Insert using SQLAlchemy insert()
+                    await session.execute(insert(User).values(name='John', email='john@example.com', age=30))
+
+                    # Update using SQLAlchemy update()
+                    await session.execute(update(User).where(User.age < 18).values(status='minor'))
+
+                    # Select using SQLAlchemy select()
+                    stmt = select(User).where(User.age > 25)
+                    result = await session.execute(stmt)
+                    for user in result.scalars():
+                        print(f"User: {user.name}")
+
+                    # Delete using SQLAlchemy delete()
+                    await session.execute(delete(User).where(User.status == 'inactive'))
+                    # All operations commit atomically
+
+                # ========================================
+                # Example 2: Async ORM Operations
+                # ========================================
+                async with client.session() as session:
+                    # Create new objects
+                    user1 = User(name='Alice', email='alice@example.com', age=28)
+                    user2 = User(name='Bob', email='bob@example.com', age=35)
+
+                    # Add to session
+                    session.add(user1)
+                    session.add(user2)
+
+                    # Query using ORM
+                    stmt = select(User).where(User.name == 'Alice')
+                    result = await session.execute(stmt)
+                    alice = result.scalar_one()
+
+                    # Update object
+                    alice.email = 'newemail@example.com'
+
+                    # Commit
+                    await session.commit()
+
+                # ========================================
+                # Example 3: Concurrent Operations with asyncio.gather
+                # ========================================
+                async with client.session() as session:
+                    # Execute multiple queries concurrently
+                    user_task = session.execute(select(User).where(User.age > 25))
+                    order_task = session.execute(select(Order).where(Order.amount > 100))
+
+                    user_result, order_result = await asyncio.gather(user_task, order_task)
+
+                    users = user_result.scalars().all()
+                    orders = order_result.scalars().all()
+
+                    print(f"Found {len(users)} users and {len(orders)} orders")
+
+                # ========================================
+                # Example 4: Async MatrixOne Managers
+                # ========================================
+                async with client.session() as session:
+                    from matrixone import SnapshotLevel
+
+                    # Create snapshot asynchronously
+                    snapshot = await session.snapshots.create(
+                        name='daily_backup',
+                        level=SnapshotLevel.DATABASE,
+                        database='production'
+                    )
+
+                    # Clone database asynchronously
+                    await session.clone.clone_database(
+                        target_db='prod_copy',
+                        source_db='production',
+                        snapshot_name='daily_backup'
+                    )
+                    # Both operations commit atomically
+
+                # ========================================
+                # Example 5: Async Data Loading with Stages
+                # ========================================
+                async with client.session() as session:
+                    # Create S3 stage using simple interface
+                    await session.stage.create_s3(
+                        name='import_stage',
+                        bucket='my-bucket',
+                        path='imports/',
+                        aws_key_id='key',
+                        aws_secret_key='secret'
+                    )
+
+                    # Load data from stage using ORM model
+                    await session.load_data.from_stage_csv('import_stage', 'users.csv', User)
+
+                    # Update statistics
+                    await session.execute("ANALYZE TABLE users")
+                    # All operations are atomic
+
+                # ========================================
+                # Example 6: Error Handling and Rollback
+                # ========================================
+                try:
+                    async with client.session() as session:
+                        await session.execute(insert(User).values(name='Charlie', age=40))
+                        await session.execute(insert(InvalidTable).values(data='test'))  # Fails
+                        # Transaction automatically rolls back - Charlie is NOT inserted
+                except Exception as e:
+                    print(f"Transaction failed and rolled back: {e}")
+
+                # ========================================
+                # Example 7: Complex Multi-Manager Transaction
+                # ========================================
+                async with client.session() as session:
+                    # Create publication
+                    await session.pubsub.create_database_publication(
+                        name='analytics_pub',
+                        database='analytics',
+                        account='subscriber_account'
+                    )
+
+                    # Create local stage
+                    await session.stage.create_local('export_stage', '/exports/')
+
+                    # Load data using ORM model
+                    await session.load_data.from_csv('/data/latest.csv', Analytics)
+
+                    # Create snapshot
+                    await session.snapshots.create(
+                        name='post_load_snapshot',
+                        level=SnapshotLevel.DATABASE,
+                        database='analytics'
+                    )
+                    # All operations commit together
+
+                # ========================================
+                # Example 8: High-Performance Concurrent Loading
+                # ========================================
+                async with client.session() as session:
+                    # Load multiple files concurrently
+                    await asyncio.gather(
+                        session.load_data.from_csv('/data/users.csv', User),
+                        session.load_data.from_csv('/data/orders.csv', Order),
+                        session.load_data.from_csv('/data/products.csv', Product)
+                    )
+                    # All loads commit atomically
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        Best Practices:
+
+        1. **Always use async with**: Use `async with client.session()` for automatic cleanup
+        2. **Await all operations**: All execute/manager operations must be awaited
+        3. **Use asyncio.gather()**: For concurrent operations within session
+        4. **Keep transactions short**: Long transactions can block other operations
+        5. **Handle exceptions**: Wrap session code in try-except for error handling
+        6. **Use ORM-style SQL**: Prefer SQLAlchemy insert(), update(), select(), delete()
+
+        See Also:
+
+            - AsyncSession: The async session class returned by this method
+            - Client.session(): Synchronous version
+            - AsyncClient.execute(): Non-transactional async query execution
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
         tx_wrapper = None
         try:
-            # Use SQLAlchemy async engine for transaction
-            async with self._engine.begin() as conn:
-                tx_wrapper = AsyncTransactionWrapper(conn, self)
-                yield tx_wrapper
+            # Create async session from engine (standard SQLAlchemy async pattern)
+            # Session will automatically acquire connection from pool
+            tx_wrapper = AsyncSession(bind=self._engine, client=self)
+
+            # Begin transaction explicitly
+            await tx_wrapper.begin()
+
+            yield tx_wrapper
+
+            # Commit the transaction on success
+            await tx_wrapper.commit()
 
         except Exception as e:
-            # Transaction will be automatically rolled back by SQLAlchemy
+            # Rollback on error
+            if tx_wrapper:
+                await tx_wrapper.rollback()
             raise e
         finally:
-            # Clean up transaction wrapper
+            # Close session (returns connection to pool)
             if tx_wrapper:
-                await tx_wrapper.close_sqlalchemy()
+                await tx_wrapper.close()
 
     @property
     def snapshots(self) -> AsyncSnapshotManager:
@@ -2850,1193 +2481,16 @@ class AsyncClient(BaseMatrixOneClient):
         """Get metadata manager for table metadata operations"""
         return self._metadata
 
-
-class AsyncTransactionVectorIndexManager(AsyncVectorManager):
-    """Async transaction-aware vector index manager"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """Execute SQL within transaction"""
-        return await self.transaction_wrapper.execute(sql, params)
-
-    async def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
-        """
-            Get IVF index statistics for a table within transaction.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                column_name: Name of the vector column (optional, will be inferred if not provided)
-
-            Returns::
-
-                Dict containing IVF index statistics including:
-                - index_tables: Dictionary mapping table types to table names
-                - distribution: Dictionary containing bucket distribution data
-                - database: Database name
-                - table_name: Table name
-                - column_name: Vector column name
-
-            Raises::
-
-                Exception: If IVF index is not found or if there are errors retrieving stats
-
-            Examples
-
-        # Get stats for a table with vector column within transaction
-                async with client.transaction() as tx:
-                    stats = await tx.vector_ops.get_ivf_stats("my_table", "embedding")
-                    print(f"Index tables: {stats['index_tables']}")
-                    print(f"Distribution: {stats['distribution']}")
-        """
-        from sqlalchemy import text
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Get database name from connection params
-        database = self.client._connection_params.get('database')
-        if not database:
-            raise Exception("No database connection found. Please connect to a database first.")
-
-        # If column_name is not provided, try to infer it
-        if not column_name:
-            # Query the table schema to find vector columns using transaction connection
-            schema_sql = text(
-                f"""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = '{database}'
-                AND table_name = '{table_name}'
-                AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
-            """
-            )
-            result = await self.transaction_wrapper.execute(schema_sql)
-            vector_columns = result.fetchall()
-
-            if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
-            elif len(vector_columns) == 1:
-                column_name = vector_columns[0][0]
-            else:
-                # Multiple vector columns found, raise error asking user to specify
-                column_names = [col[0] for col in vector_columns]
-                raise Exception(
-                    f"Multiple vector columns found in table {table_name}: {column_names}. "
-                    f"Please specify the column_name parameter."
-                )
-
-        # Get connection from transaction wrapper
-        connection = self.transaction_wrapper.connection
-
-        # Get IVF index table names
-        index_tables = await self._get_ivf_index_table_names(database, table_name, column_name, connection)
-
-        if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
-
-        # Get the entries table name for distribution analysis
-        entries_table = index_tables.get('entries')
-        if not entries_table:
-            raise Exception("No entries table found in IVF index")
-
-        # Get bucket distribution
-        distribution = await self._get_ivf_buckets_distribution(database, entries_table, connection)
-
-        return {
-            'index_tables': index_tables,
-            'distribution': distribution,
-            'database': database,
-            'table_name': table_name,
-            'column_name': column_name,
-        }
-
-
-class AsyncTransactionWrapper:
-    """Async transaction wrapper for executing queries within a transaction"""
-
-    def __init__(self, connection, client):
-        self.connection = connection
-        self.client = client
-        # Create snapshot, clone, restore, PITR, pubsub, account, and fulltext managers that use this transaction
-        self.snapshots = AsyncTransactionSnapshotManager(client, self)
-        self.clone = AsyncTransactionCloneManager(client, self)
-        self.restore = AsyncTransactionRestoreManager(client, self)
-        self.pitr = AsyncTransactionPitrManager(client, self)
-        self.pubsub = AsyncTransactionPubSubManager(client, self)
-        self.account = AsyncTransactionAccountManager(self)
-        self.vector_ops = AsyncTransactionVectorIndexManager(client, self)
-        self.fulltext_index = AsyncTransactionFulltextIndexManager(client, self)
-        # SQLAlchemy integration
-        self._sqlalchemy_session = None
-        self._sqlalchemy_engine = None
-
-    async def execute(self, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
-        """Execute SQL within transaction asynchronously"""
-        import time
-
-        start_time = time.time()
-
-        try:
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self.client._substitute_parameters(sql, params)
-            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-            # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-            if hasattr(self.connection, 'exec_driver_sql'):
-                # Escape % to %% for pymysql's format string handling
-                escaped_sql = final_sql.replace('%', '%%')
-                result = await self.connection.exec_driver_sql(escaped_sql)
-            else:
-                # Fallback for testing or older SQLAlchemy versions
-                from sqlalchemy import text
-
-                result = await self.connection.execute(text(final_sql))
-            execution_time = time.time() - start_time
-
-            if result.returns_rows:
-                rows = result.fetchall()
-                columns = list(result.keys()) if hasattr(result, "keys") else []
-                self.client.logger.log_query(sql, execution_time, len(rows), success=True)
-                return AsyncResultSet(columns, rows)
-            else:
-                self.client.logger.log_query(sql, execution_time, result.rowcount, success=True)
-                return AsyncResultSet([], [], affected_rows=result.rowcount)
-
-        except Exception as e:
-            execution_time = time.time() - start_time
-            self.client.logger.log_query(sql, execution_time, success=False)
-            self.client.logger.log_error(e, context="Async transaction query execution")
-            raise QueryError(f"Transaction query execution failed: {e}")
-
-    def get_connection(self):
-        """
-        Get the underlying SQLAlchemy async connection for direct use
-
-        Returns::
-
-            SQLAlchemy AsyncConnection instance bound to this transaction
-        """
-        return self.connection
-
-    async def get_sqlalchemy_session(self):
-        """
-        Get async SQLAlchemy session that uses the same transaction asynchronously
-
-        Returns::
-
-            Async SQLAlchemy Session instance bound to this transaction
-        """
-        if self._sqlalchemy_session is None:
-            try:
-                from sqlalchemy.ext.asyncio import (
-                    AsyncSession,
-                    async_sessionmaker,
-                    create_async_engine,
-                )
-            except ImportError:
-                # Fallback for older SQLAlchemy versions
-                from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-                from sqlalchemy.orm import sessionmaker as sync_sessionmaker
-
-                # Create a simple async sessionmaker equivalent
-                def async_sessionmaker(bind=None, **kwargs):
-                    # Remove class_ from kwargs if present to avoid conflicts
-                    kwargs.pop('class_', None)
-                    return sync_sessionmaker(bind=bind, class_=AsyncSession, **kwargs)
-
-            # Create engine using the same connection parameters
-            if not self.client._connection_params:
-                raise ConnectionError("Not connected to database")
-
-            connection_string = (
-                f"mysql+aiomysql://{self.client._connection_params['user']}:"
-                f"{self.client._connection_params['password']}@"
-                f"{self.client._connection_params['host']}:"
-                f"{self.client._connection_params['port']}/"
-                f"{self.client._connection_params['database']}"
-            )
-
-            # Create async engine that will use the same connection
-            self._sqlalchemy_engine = create_async_engine(connection_string, pool_pre_ping=True, pool_recycle=300)
-
-            # Create async session factory
-            AsyncSessionLocal = async_sessionmaker(bind=self._sqlalchemy_engine, class_=AsyncSession, expire_on_commit=False)
-            self._sqlalchemy_session = AsyncSessionLocal()
-
-            # Begin async SQLAlchemy transaction
-            await self._sqlalchemy_session.begin()
-
-        return self._sqlalchemy_session
-
-    async def commit_sqlalchemy(self):
-        """Commit async SQLAlchemy session asynchronously"""
-        if self._sqlalchemy_session:
-            await self._sqlalchemy_session.commit()
-
-    async def rollback_sqlalchemy(self):
-        """Rollback async SQLAlchemy session asynchronously"""
-        if self._sqlalchemy_session:
-            await self._sqlalchemy_session.rollback()
-
-    async def close_sqlalchemy(self):
-        """Close async SQLAlchemy session asynchronously"""
-        if self._sqlalchemy_session:
-            await self._sqlalchemy_session.close()
-            self._sqlalchemy_session = None
-        if self._sqlalchemy_engine:
-            await self._sqlalchemy_engine.dispose()
-            self._sqlalchemy_engine = None
-
-    async def insert(self, table_name_or_model, data: dict) -> AsyncResultSet:
-        """
-        Insert data into a table within transaction asynchronously.
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            data: Data to insert (dict with column names as keys)
-
-        Returns::
-
-            AsyncResultSet object
-        """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
-
-        sql = self.client._build_insert_sql(table_name, data)
-        return await self.execute(sql)
-
-    async def batch_insert(self, table_name_or_model, data_list: list) -> AsyncResultSet:
-        """
-        Batch insert data into a table within transaction asynchronously.
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            data_list: List of data dictionaries to insert
-
-        Returns::
-
-            AsyncResultSet object
-        """
-        if not data_list:
-            return AsyncResultSet([], [], affected_rows=0)
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
-
-        sql = self.client._build_batch_insert_sql(table_name, data_list)
-        return await self.execute(sql)
-
-    def query(self, *columns, snapshot: str = None):
-        """Get async MatrixOne query builder within transaction - SQLAlchemy style
-
-        Args::
-
-            *columns: Can be:
-                - Single model class: query(Article) - returns all columns from model
-                - Multiple columns: query(Article.id, Article.title) - returns specific columns
-                - Mixed: query(Article, Article.id, some_expression.label('alias')) - model + additional columns
-            snapshot: Optional snapshot name for snapshot queries
-
-        Returns::
-
-            AsyncMatrixOneQuery instance configured for the specified columns within transaction
-        """
-        from .async_orm import AsyncMatrixOneQuery
-
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return AsyncMatrixOneQuery(column, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return AsyncMatrixOneQuery(column, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression - need to handle specially
-                # For now, we'll create a query that can handle column selections
-                query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = AsyncMatrixOneQuery(model_class, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            # For "db.table.column" format, use "db.table"
-                            # For "table.column" format, use "table"
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
-
-
-class AsyncTransactionSnapshotManager(AsyncSnapshotManager):
-    """Async snapshot manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def create(
-        self,
-        name: str,
-        level: Union[str, SnapshotLevel],
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> Snapshot:
-        """Create snapshot within transaction asynchronously"""
-        return await super().create(name, level, database, table, description)
-
-    async def get(self, name: str) -> Snapshot:
-        """Get snapshot within transaction asynchronously"""
-        return await super().get(name)
-
-    async def delete(self, name: str) -> None:
-        """Delete snapshot within transaction asynchronously"""
-        return await super().delete(name)
-
-
-class AsyncTransactionPubSubManager(AsyncPubSubManager):
-    """Async publish-subscribe manager for use within transactions"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def create_database_publication(self, name: str, database: str, account: str) -> Publication:
-        """Create database publication within transaction asynchronously"""
-        try:
-            sql = (
-                f"CREATE PUBLICATION {self.client._escape_identifier(name)} "
-                f"DATABASE {self.client._escape_identifier(database)} "
-                f"ACCOUNT {self.client._escape_identifier(account)}"
-            )
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create database publication '{name}'")
-
-            return await self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create database publication '{name}': {e}")
-
-    async def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
-        """Create table publication within transaction asynchronously"""
-        try:
-            sql = (
-                f"CREATE PUBLICATION {self.client._escape_identifier(name)} "
-                f"DATABASE {self.client._escape_identifier(database)} "
-                f"TABLE {self.client._escape_identifier(table)} "
-                f"ACCOUNT {self.client._escape_identifier(account)}"
-            )
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create table publication '{name}'")
-
-            return await self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create table publication '{name}': {e}")
-
-    async def get_publication(self, name: str) -> Publication:
-        """Get publication within transaction asynchronously"""
-        try:
-            sql = f"SHOW PUBLICATIONS WHERE pub_name = {self.client._escape_string(name)}"
-            result = await self.transaction_wrapper.execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
-
-            row = result.rows[0]
-            return self._row_to_publication(row)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to get publication '{name}': {e}")
-
-    async def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
-        """List publications within transaction asynchronously"""
-        try:
-            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
-            sql = "SHOW PUBLICATIONS"
-            result = await self.transaction_wrapper.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            publications = []
-            for row in result.rows:
-                pub = self._row_to_publication(row)
-
-                # Apply filters
-                if account and account not in pub.sub_account:
-                    continue
-                if database and pub.database != database:
-                    continue
-
-                publications.append(pub)
-
-            return publications
-
-        except Exception as e:
-            raise PubSubError(f"Failed to list publications: {e}")
-
-    async def alter_publication(
-        self,
-        name: str,
-        account: Optional[str] = None,
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-    ) -> Publication:
-        """Alter publication within transaction asynchronously"""
-        try:
-            # Build ALTER PUBLICATION statement
-            parts = [f"ALTER PUBLICATION {self.client._escape_identifier(name)}"]
-
-            if account:
-                parts.append(f"ACCOUNT {self.client._escape_identifier(account)}")
-            if database:
-                parts.append(f"DATABASE {self.client._escape_identifier(database)}")
-            if table:
-                parts.append(f"TABLE {self.client._escape_identifier(table)}")
-
-            sql = " ".join(parts)
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to alter publication '{name}'")
-
-            return await self.get_publication(name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to alter publication '{name}': {e}")
-
-    async def drop_publication(self, name: str) -> bool:
-        """Drop publication within transaction asynchronously"""
-        try:
-            sql = f"DROP PUBLICATION {self.client._escape_identifier(name)}"
-            result = await self.transaction_wrapper.execute(sql)
-            return result is not None
-
-        except Exception as e:
-            raise PubSubError(f"Failed to drop publication '{name}': {e}")
-
-    async def create_subscription(
-        self, subscription_name: str, publication_name: str, publisher_account: str
-    ) -> Subscription:
-        """Create subscription within transaction asynchronously"""
-        try:
-            sql = (
-                f"CREATE DATABASE {self.client._escape_identifier(subscription_name)} "
-                f"FROM {self.client._escape_identifier(publisher_account)} "
-                f"PUBLICATION {self.client._escape_identifier(publication_name)}"
-            )
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PubSubError(f"Failed to create subscription '{subscription_name}'")
-
-            return await self.get_subscription(subscription_name)
-
-        except Exception as e:
-            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}")
-
-    async def get_subscription(self, name: str) -> Subscription:
-        """Get subscription within transaction asynchronously"""
-        try:
-            # SHOW SUBSCRIPTIONS doesn't support WHERE clause, so we need to list all and filter
-            sql = "SHOW SUBSCRIPTIONS"
-            result = await self.transaction_wrapper.execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Subscription '{name}' not found")
-
-            # Find subscription with matching name
-            for row in result.rows:
-                if row[6] == name:  # sub_name is in 7th column (index 6)
-                    return self._row_to_subscription(row)
-
-            raise PubSubError(f"Subscription '{name}' not found")
-
-        except Exception as e:
-            raise PubSubError(f"Failed to get subscription '{name}': {e}")
-
-    async def list_subscriptions(
-        self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
-    ) -> List[Subscription]:
-        """List subscriptions within transaction asynchronously"""
-        try:
-            conditions = []
-
-            if pub_account:
-                conditions.append(f"pub_account = {self.client._escape_string(pub_account)}")
-            if pub_database:
-                conditions.append(f"pub_database = {self.client._escape_string(pub_database)}")
-
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-
-            sql = f"SHOW SUBSCRIPTIONS{where_clause}"
-            result = await self.transaction_wrapper.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_subscription(row) for row in result.rows]
-
-        except Exception as e:
-            raise PubSubError(f"Failed to list subscriptions: {e}")
-
-
-class AsyncTransactionPitrManager(AsyncPitrManager):
-    """Async PITR manager for use within transactions"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def create_cluster_pitr(self, name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
-        """Create cluster PITR within transaction asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create cluster PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
-
-    async def create_account_pitr(
-        self,
-        name: str,
-        account_name: Optional[str] = None,
-        range_value: int = 1,
-        range_unit: str = "d",
-    ) -> Pitr:
-        """Create account PITR within transaction asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            if account_name:
-                sql = (
-                    f"CREATE PITR {self.client._escape_identifier(name)} "
-                    f"FOR ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"RANGE {range_value} '{range_unit}'"
-                )
-            else:
-                sql = (
-                    f"CREATE PITR {self.client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
-                )
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create account PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create account PITR '{name}': {e}")
-
-    async def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
-        """Create database PITR within transaction asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = (
-                f"CREATE PITR {self.client._escape_identifier(name)} "
-                f"FOR DATABASE {self.client._escape_identifier(database_name)} "
-                f"RANGE {range_value} '{range_unit}'"
-            )
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create database PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create database PITR '{name}': {e}")
-
-    async def create_table_pitr(
-        self,
-        name: str,
-        database_name: str,
-        table_name: str,
-        range_value: int = 1,
-        range_unit: str = "d",
-    ) -> Pitr:
-        """Create table PITR within transaction asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = (
-                f"CREATE PITR {self.client._escape_identifier(name)} "
-                f"FOR TABLE {self.client._escape_identifier(database_name)} "
-                f"{self.client._escape_identifier(table_name)} "
-                f"RANGE {range_value} '{range_unit}'"
-            )
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to create table PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to create table PITR '{name}': {e}")
-
-    async def get(self, name: str) -> Pitr:
-        """Get PITR within transaction asynchronously"""
-        try:
-            sql = f"SHOW PITR WHERE pitr_name = {self.client._escape_string(name)}"
-            result = await self.transaction_wrapper.execute(sql)
-
-            if not result or not result.rows:
-                raise PitrError(f"PITR '{name}' not found")
-
-            row = result.rows[0]
-            return self._row_to_pitr(row)
-
-        except Exception as e:
-            raise PitrError(f"Failed to get PITR '{name}': {e}")
-
-    async def list(
-        self,
-        level: Optional[str] = None,
-        account_name: Optional[str] = None,
-        database_name: Optional[str] = None,
-        table_name: Optional[str] = None,
-    ) -> List[Pitr]:
-        """List PITRs within transaction asynchronously"""
-        try:
-            conditions = []
-
-            if level:
-                conditions.append(f"pitr_level = {self.client._escape_string(level)}")
-            if account_name:
-                conditions.append(f"account_name = {self.client._escape_string(account_name)}")
-            if database_name:
-                conditions.append(f"database_name = {self.client._escape_string(database_name)}")
-            if table_name:
-                conditions.append(f"table_name = {self.client._escape_string(table_name)}")
-
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-
-            sql = f"SHOW PITR{where_clause}"
-            result = await self.transaction_wrapper.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_pitr(row) for row in result.rows]
-
-        except Exception as e:
-            raise PitrError(f"Failed to list PITRs: {e}")
-
-    async def alter(self, name: str, range_value: int, range_unit: str) -> Pitr:
-        """Alter PITR within transaction asynchronously"""
-        try:
-            self._validate_range(range_value, range_unit)
-
-            sql = f"ALTER PITR {self.client._escape_identifier(name)} " f"RANGE {range_value} '{range_unit}'"
-
-            result = await self.transaction_wrapper.execute(sql)
-            if result is None:
-                raise PitrError(f"Failed to alter PITR '{name}'")
-
-            return await self.get(name)
-
-        except Exception as e:
-            raise PitrError(f"Failed to alter PITR '{name}': {e}")
-
-    async def delete(self, name: str) -> bool:
-        """Delete PITR within transaction asynchronously"""
-        try:
-            sql = f"DROP PITR {self.client._escape_identifier(name)}"
-            result = await self.transaction_wrapper.execute(sql)
-            return result is not None
-
-        except Exception as e:
-            raise PitrError(f"Failed to delete PITR '{name}': {e}")
-
-
-class AsyncTransactionRestoreManager(AsyncRestoreManager):
-    """Async restore manager for use within transactions"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def restore_cluster(self, snapshot_name: str) -> bool:
-        """Restore cluster within transaction asynchronously"""
-        try:
-            sql = f"RESTORE CLUSTER FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-            result = await self.transaction_wrapper.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}")
-
-    async def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
-        """Restore tenant within transaction asynchronously"""
-        try:
-            if to_account:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
-                    f"TO ACCOUNT {self.client._escape_identifier(to_account)}"
-                )
-            else:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-                )
-
-            result = await self.transaction_wrapper.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
-
-    async def restore_database(
-        self,
-        snapshot_name: str,
-        account_name: str,
-        database_name: str,
-        to_account: Optional[str] = None,
-    ) -> bool:
-        """Restore database within transaction asynchronously"""
-        try:
-            if to_account:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
-                    f"TO ACCOUNT {self.client._escape_identifier(to_account)}"
-                )
-            else:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-                )
-
-            result = await self.transaction_wrapper.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}")
-
-    async def restore_table(
-        self,
-        snapshot_name: str,
-        account_name: str,
-        database_name: str,
-        table_name: str,
-        to_account: Optional[str] = None,
-    ) -> bool:
-        """Restore table within transaction asynchronously"""
-        try:
-            if to_account:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"TABLE {self.client._escape_identifier(table_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
-                    f"TO ACCOUNT {self.client._escape_identifier(to_account)}"
-                )
-            else:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"TABLE {self.client._escape_identifier(table_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-                )
-
-            result = await self.transaction_wrapper.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}")
-
-
-class AsyncTransactionCloneManager(AsyncCloneManager):
-    """Async clone manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    async def clone_database(
-        self,
-        target_db: str,
-        source_db: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone database within transaction asynchronously"""
-        return await super().clone_database(target_db, source_db, snapshot_name, if_not_exists)
-
-    async def clone_table(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone table within transaction asynchronously"""
-        return await super().clone_table(target_table, source_table, snapshot_name, if_not_exists)
-
-    async def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone table with snapshot within transaction asynchronously"""
-        return await super().clone_table_with_snapshot(target_table, source_table, snapshot_name, if_not_exists)
-
-
-class AsyncTransactionAccountManager:
-    """Async transaction-scoped account manager"""
-
-    def __init__(self, transaction):
-        self.transaction = transaction
-        self.client = transaction.client
-
-    async def create_account(
-        self,
-        account_name: str,
-        admin_name: str,
-        password: str,
-        comment: Optional[str] = None,
-        admin_comment: Optional[str] = None,
-        admin_host: str = "%",
-        admin_identified_by: Optional[str] = None,
-    ) -> Account:
-        """Create account within async transaction"""
-        try:
-            sql_parts = [f"CREATE ACCOUNT {self.client._escape_identifier(account_name)}"]
-            sql_parts.append(f"ADMIN_NAME {self.client._escape_string(admin_name)}")
-            sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
-
-            if admin_host != "%":
-                sql_parts.append(f"ADMIN_HOST {self.client._escape_string(admin_host)}")
-
-            if comment:
-                sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-
-            if admin_comment:
-                sql_parts.append(f"ADMIN_COMMENT {self.client._escape_string(admin_comment)}")
-
-            if admin_identified_by:
-                sql_parts.append(f"ADMIN_IDENTIFIED BY {self.client._escape_string(admin_identified_by)}")
-
-            sql = " ".join(sql_parts)
-            await self.transaction.execute(sql)
-
-            return await self.get_account(account_name)
-
-        except Exception as e:
-            raise AccountError(f"Failed to create account '{account_name}': {e}")
-
-    async def drop_account(self, account_name: str) -> None:
-        """Drop account within async transaction"""
-        try:
-            sql = f"DROP ACCOUNT {self.client._escape_identifier(account_name)}"
-            await self.transaction.execute(sql)
-        except Exception as e:
-            raise AccountError(f"Failed to drop account '{account_name}': {e}")
-
-    async def alter_account(
-        self,
-        account_name: str,
-        comment: Optional[str] = None,
-        suspend: Optional[bool] = None,
-        suspend_reason: Optional[str] = None,
-    ) -> Account:
-        """Alter account within async transaction"""
-        try:
-            sql_parts = [f"ALTER ACCOUNT {self.client._escape_identifier(account_name)}"]
-
-            if comment is not None:
-                sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-
-            if suspend is not None:
-                if suspend:
-                    if suspend_reason:
-                        sql_parts.append(f"SUSPEND COMMENT {self.client._escape_string(suspend_reason)}")
-                    else:
-                        sql_parts.append("SUSPEND")
-                else:
-                    sql_parts.append("OPEN")
-
-            sql = " ".join(sql_parts)
-            await self.transaction.execute(sql)
-
-            return await self.get_account(account_name)
-
-        except Exception as e:
-            raise AccountError(f"Failed to alter account '{account_name}': {e}")
-
-    async def get_account(self, account_name: str) -> Account:
-        """Get account within async transaction"""
-        try:
-            sql = "SHOW ACCOUNTS"
-            result = await self.transaction.execute(sql)
-
-            if not result or not result.rows:
-                raise AccountError(f"Account '{account_name}' not found")
-
-            for row in result.rows:
-                if row[0] == account_name:
-                    return self._row_to_account(row)
-
-            raise AccountError(f"Account '{account_name}' not found")
-
-        except Exception as e:
-            raise AccountError(f"Failed to get account '{account_name}': {e}")
-
-    async def list_accounts(self) -> List[Account]:
-        """List accounts within async transaction"""
-        try:
-            sql = "SHOW ACCOUNTS"
-            result = await self.transaction.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_account(row) for row in result.rows]
-
-        except Exception as e:
-            raise AccountError(f"Failed to list accounts: {e}")
-
-    async def create_user(self, user_name: str, password: str, comment: Optional[str] = None) -> User:
-        """
-        Create user within async transaction according to MatrixOne CREATE USER syntax:
-        CREATE USER [IF NOT EXISTS] user auth_option [, user auth_option] ...
-        [DEFAULT ROLE rolename] [COMMENT 'comment_string' | ATTRIBUTE 'json_object']
-
-        Args::
-
-            user_name: Name of the user to create
-            password: Password for the user
-            comment: Comment for the user (not supported in MatrixOne)
-
-        Returns::
-
-            User: Created user object
-        """
-        try:
-            # Build CREATE USER statement according to MatrixOne syntax
-            # MatrixOne syntax: CREATE USER user_name IDENTIFIED BY 'password'
-            sql_parts = [f"CREATE USER {self.client._escape_identifier(user_name)}"]
-
-            sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
-
-            # Note: MatrixOne doesn't support COMMENT or ATTRIBUTE clauses in CREATE USER
-            # sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
-            # if comment:
-            #     sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-            # if identified_by:
-            #     sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(identified_by)}")
-
-            sql = " ".join(sql_parts)
-            await self.transaction.execute(sql)
-
-            # Return a User object with current account context
-            return User(
-                name=user_name,
-                host="%",  # Default host
-                account="sys",  # Default account
-                created_time=datetime.now(),
-                status="ACTIVE",
-                comment=comment,
-            )
-
-        except Exception as e:
-            raise AccountError(f"Failed to create user '{user_name}': {e}")
-
-    async def drop_user(self, user_name: str, if_exists: bool = False) -> None:
-        """
-        Drop user within async transaction according to MatrixOne DROP USER syntax:
-        DROP USER [IF EXISTS] user [, user] ...
-
-        Args::
-
-            user_name: Name of the user to drop
-            if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
-        """
-        try:
-            sql_parts = ["DROP USER"]
-            if if_exists:
-                sql_parts.append("IF EXISTS")
-
-            sql_parts.append(self.client._escape_identifier(user_name))
-            sql = " ".join(sql_parts)
-            await self.transaction.execute(sql)
-
-        except Exception as e:
-            raise AccountError(f"Failed to drop user '{user_name}': {e}")
-
-    async def alter_user(
-        self,
-        user_name: str,
-        password: Optional[str] = None,
-        comment: Optional[str] = None,
-        lock: Optional[bool] = None,
-        lock_reason: Optional[str] = None,
-    ) -> User:
-        """Alter user within async transaction"""
-        try:
-            sql_parts = [f"ALTER USER {self.client._escape_identifier(user_name)}"]
-
-            if password is not None:
-                sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
-
-            if comment is not None:
-                sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
-
-            if lock is not None:
-                if lock:
-                    if lock_reason:
-                        sql_parts.append(f"ACCOUNT LOCK COMMENT {self.client._escape_string(lock_reason)}")
-                    else:
-                        sql_parts.append("ACCOUNT LOCK")
-                else:
-                    sql_parts.append("ACCOUNT UNLOCK")
-
-            sql = " ".join(sql_parts)
-            await self.transaction.execute(sql)
-
-            return await self.get_user(user_name)
-
-        except Exception as e:
-            raise AccountError(f"Failed to alter user '{user_name}': {e}")
-
-    async def get_user(self, user_name: str) -> User:
-        """Get user within async transaction"""
-        try:
-            sql = "SHOW GRANTS"
-            result = await self.transaction.execute(sql)
-
-            if not result or not result.rows:
-                raise AccountError(f"User '{user_name}' not found")
-
-            for row in result.rows:
-                if row[0] == user_name:
-                    return self._row_to_user(row)
-
-            raise AccountError(f"User '{user_name}' not found")
-
-        except Exception as e:
-            raise AccountError(f"Failed to get user '{user_name}': {e}")
-
-    async def list_users(self, account_name: Optional[str] = None) -> List[User]:
-        """List users within async transaction"""
-        try:
-            sql = "SHOW GRANTS"
-            result = await self.transaction.execute(sql)
-
-            if not result or not result.rows:
-                return []
-
-            users = [self._row_to_user(row) for row in result.rows]
-
-            if account_name:
-                users = [user for user in users if user.account == account_name]
-
-            return users
-
-        except Exception as e:
-            raise AccountError(f"Failed to list users: {e}")
-
-    def _row_to_account(self, row: tuple) -> Account:
-        """Convert database row to Account object"""
-        return Account(
-            name=row[0],
-            admin_name=row[1],
-            created_time=row[2] if len(row) > 2 else None,
-            status=row[3] if len(row) > 3 else None,
-            comment=row[4] if len(row) > 4 else None,
-            suspended_time=row[5] if len(row) > 5 else None,
-            suspended_reason=row[6] if len(row) > 6 else None,
-        )
-
-    def _row_to_user(self, row: tuple) -> User:
-        """Convert database row to User object"""
-        return User(
-            name=row[0],
-            host=row[1],
-            account=row[2],
-            created_time=row[3] if len(row) > 3 else None,
-            status=row[4] if len(row) > 4 else None,
-            comment=row[5] if len(row) > 5 else None,
-            locked_time=row[6] if len(row) > 6 else None,
-            locked_reason=row[7] if len(row) > 7 else None,
-        )
+    @property
+    def load_data(self) -> Optional["AsyncLoadDataManager"]:
+        """Get async load data manager for bulk data loading operations"""
+        if self._load_data is None:
+            self._load_data = AsyncLoadDataManager(self)
+        return self._load_data
+
+    @property
+    def stage(self) -> Optional["AsyncStageManager"]:
+        """Get async stage manager for external stage operations"""
+        if self._stage is None:
+            self._stage = AsyncStageManager(self)
+        return self._stage

@@ -1,0 +1,28 @@
+[flake8]
+max-line-length = 120
+ignore = E203, W503
+exclude = 
+    .git,
+    __pycache__,
+    .pytest_cache,
+    .tox,
+    .venv,
+    venv,
+    build,
+    dist,
+    *.egg-info,
+    .coverage,
+    htmlcov,
+    .mypy_cache,
+    .DS_Store
+per-file-ignores =
+    # Allow unused imports in __init__.py files
+    __init__.py:F401
+    # Allow long lines in test files
+    tests/*:E501
+    # Allow unused variables in test files
+    tests/*:F841
+    # Allow import * in test files
+    tests/*:F403,F405
+    # Allow long lines in cli_tools.py (print statements and SQL queries)
+    matrixone/cli_tools.py:E501

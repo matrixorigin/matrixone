@@ -14,14 +14,13 @@
 
 """
 Test that main interfaces work in both transaction contexts:
-1. MatrixOne Client transaction context: with client.transaction() as tx:
+1. MatrixOne Client transaction context: with client.session() as tx:
 2. SQLAlchemy transaction context: with client.get_sqlalchemy_engine().begin() as conn:
 """
 
 import pytest
 import pytest_asyncio
 from matrixone import Client, AsyncClient
-from contextlib import contextmanager
 from .test_config import online_config
 from matrixone.sqlalchemy_ext import boolean_match
 
@@ -92,32 +91,28 @@ class TestSyncTransactionContexts:
         """Test sync client transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test basic execute
             result = tx.execute("SELECT COUNT(*) FROM sync_tx_docs")
-            assert result.rows[0][0] == 5
+            assert result.fetchall()[0][0] == 5
 
             # Test fulltext search
             result = tx.query(
                 "sync_tx_docs.title", "sync_tx_docs.content", boolean_match("title", "content").encourage("python")
             ).execute()
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
 
             # Test snapshot operations (commented out as MatrixOne doesn't support snapshots in transactions)
             # tx.snapshots.create("test_snap", "table", database=test_db, table="sync_tx_docs")
 
             # Test SQLAlchemy session
-            session = tx.get_sqlalchemy_session()
+            session = tx
             assert session is not None
 
-            # Test get_connection for direct connection access
-            conn = tx.get_connection()
-            assert conn is not None
-
-            # Test direct connection usage
+            # Test direct SQL execution via session
             from sqlalchemy import text
 
-            result = conn.execute(text("SELECT COUNT(*) FROM sync_tx_docs"))
+            result = tx.execute(text("SELECT COUNT(*) FROM sync_tx_docs"))
             rows = result.fetchall()
             assert rows[0][0] == 5
 
@@ -229,32 +224,30 @@ class TestAsyncTransactionContexts:
         """Test async client transaction context"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test basic execute
             result = await tx.execute("SELECT COUNT(*) FROM async_tx_docs")
-            assert result.rows[0][0] == 5
+            assert result.fetchall()[0][0] == 5
 
             # Test fulltext search
             result = await tx.query(
                 "async_tx_docs.title", "async_tx_docs.content", boolean_match("title", "content").encourage("python")
             ).execute()
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
 
             # Test snapshot operations (commented out as MatrixOne doesn't support snapshots in transactions)
             # await tx.snapshots.create("test_snap", "table", database=test_db, table="async_tx_docs")
 
             # Test SQLAlchemy session
-            session = await tx.get_sqlalchemy_session()
+            session = tx
             assert session is not None
 
             # Test get_connection for direct connection access
-            conn = tx.get_connection()
-            assert conn is not None
 
             # Test direct connection usage
             from sqlalchemy import text
 
-            result = await conn.execute(text("SELECT COUNT(*) FROM async_tx_docs"))
+            result = await tx.execute(text("SELECT COUNT(*) FROM async_tx_docs"))
             rows = result.fetchall()
             assert rows[0][0] == 5
 
@@ -338,7 +331,7 @@ class TestTransactionContextCompatibility:
         """Test that sync transaction wrapper has all necessary managers"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Check that all managers are available
             assert hasattr(tx, 'execute')
             assert hasattr(tx, 'snapshots')
@@ -349,7 +342,7 @@ class TestTransactionContextCompatibility:
             assert hasattr(tx, 'account')
             assert hasattr(tx, 'vector_ops')
             assert hasattr(tx, 'fulltext_index')
-            assert hasattr(tx, 'get_sqlalchemy_session')
+            # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that fulltext_index has create and drop methods
             assert hasattr(tx.fulltext_index, 'create')
@@ -357,7 +350,7 @@ class TestTransactionContextCompatibility:
 
             # Test that query method works in transaction context
             result = tx.query("compat_tx_docs.title", "compat_tx_docs.content").execute()
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
 
     @pytest.mark.asyncio
     async def test_async_transaction_wrapper_has_all_managers(self):
@@ -392,7 +385,7 @@ class TestTransactionContextCompatibility:
             # Create fulltext index
             await client.fulltext_index.create("async_compat_tx_docs", "ftidx_async_compat", ["title", "content"])
 
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 # Check that all managers are available
                 assert hasattr(tx, 'execute')
                 assert hasattr(tx, 'snapshots')
@@ -402,7 +395,7 @@ class TestTransactionContextCompatibility:
                 assert hasattr(tx, 'pubsub')
                 assert hasattr(tx, 'account')
                 assert hasattr(tx, 'fulltext_index')
-                assert hasattr(tx, 'get_sqlalchemy_session')
+                # AsyncSession now IS a SQLAlchemy AsyncSession, no need for get_sqlalchemy_session()
 
                 # Test that fulltext_index has create and drop methods
                 assert hasattr(tx.fulltext_index, 'create')
@@ -410,7 +403,7 @@ class TestTransactionContextCompatibility:
 
                 # Test that query method works in transaction context
                 result = await tx.query("async_compat_tx_docs.title", "async_compat_tx_docs.content").execute()
-                assert len(result.rows) > 0
+                assert len(result.fetchall()) > 0
 
         finally:
             # Cleanup
@@ -488,12 +481,12 @@ class TestTransactionContextFeatures:
         """Test fulltext features in sync transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test basic search
             result = tx.query(
                 "features_tx_docs.title", "features_tx_docs.content", boolean_match("title", "content").encourage("feature")
             ).execute()
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
 
             # Test with score
             result = tx.query(
@@ -501,15 +494,15 @@ class TestTransactionContextFeatures:
                 "features_tx_docs.content",
                 boolean_match("title", "content").encourage("test").label("score"),
             ).execute()
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
             # Check that score column is present
-            assert len(result.columns) > 2  # title, content, score
+            assert len(list(result.keys())) > 2  # title, content, score
 
             # Test boolean mode
             result = tx.query(
                 "features_tx_docs.title", "features_tx_docs.content", boolean_match("title", "content").must("feature")
             ).execute()
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
 
             # Test with WHERE conditions
             result = (
@@ -517,7 +510,7 @@ class TestTransactionContextFeatures:
                 .filter(boolean_match("title", "content").encourage("test"), "features_tx_docs.category = 'Category1'")
                 .execute()
             )
-            assert len(result.rows) > 0
+            assert len(result.fetchall()) > 0
 
             # Test ordering and limit
             result = (
@@ -530,7 +523,7 @@ class TestTransactionContextFeatures:
                 .limit(2)
                 .execute()
             )
-            assert len(result.rows) <= 2
+            assert len(result.fetchall()) <= 2
 
     @pytest.mark.asyncio
     async def test_async_fulltext_features_in_transaction(self):
@@ -578,14 +571,14 @@ class TestTransactionContextFeatures:
             # Create fulltext index
             await client.fulltext_index.create("async_features_tx_docs", "ftidx_async_features", ["title", "content"])
 
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 # Test basic search
                 result = await tx.query(
                     "async_features_tx_docs.title",
                     "async_features_tx_docs.content",
                     boolean_match("title", "content").encourage("async"),
                 ).execute()
-                assert len(result.rows) > 0
+                assert len(result.fetchall()) > 0
 
                 # Test with score
                 result = await tx.query(
@@ -593,9 +586,9 @@ class TestTransactionContextFeatures:
                     "async_features_tx_docs.content",
                     boolean_match("title", "content").encourage("test").label("score"),
                 ).execute()
-                assert len(result.rows) > 0
+                assert len(result.fetchall()) > 0
                 # Check that score column is present
-                assert len(result.columns) > 2  # title, content, score
+                assert len(list(result.keys())) > 2  # title, content, score
 
                 # Test boolean mode
                 result = await tx.query(
@@ -603,7 +596,7 @@ class TestTransactionContextFeatures:
                     "async_features_tx_docs.content",
                     boolean_match("title", "content").must("async"),
                 ).execute()
-                assert len(result.rows) > 0
+                assert len(result.fetchall()) > 0
 
                 # Test with WHERE conditions
                 result = (
@@ -613,7 +606,7 @@ class TestTransactionContextFeatures:
                     )
                     .execute()
                 )
-                assert len(result.rows) > 0
+                assert len(result.fetchall()) > 0
 
                 # Test ordering and limit
                 result = (
@@ -626,7 +619,7 @@ class TestTransactionContextFeatures:
                     .limit(2)
                     .execute()
                 )
-                assert len(result.rows) <= 2
+                assert len(result.fetchall()) <= 2
 
         finally:
             # Cleanup
@@ -697,20 +690,18 @@ class TestGetConnectionInterface:
         """Test basic usage of get_connection in sync transaction"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Get connection
-            conn = tx.get_connection()
-            assert conn is not None
 
             # Test basic query execution
             from sqlalchemy import text
 
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             rows = result.fetchall()
             assert rows[0][0] == 3
 
             # Test parameterized query
-            result = conn.execute(
+            result = tx.execute(
                 text(f"SELECT * FROM {test_db}.get_conn_docs WHERE title LIKE :pattern"),
                 {"pattern": "%Test 1%"},
             )
@@ -724,33 +715,32 @@ class TestGetConnectionInterface:
 
         # First, verify initial state
         result = client.execute(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs")
-        initial_count = result.rows[0][0]
+        initial_count = result.fetchall()[0][0]
 
-        with client.transaction() as tx:
-            conn = tx.get_connection()
+        with client.session() as tx:
 
             # Insert a new record within transaction
             from sqlalchemy import text
 
-            conn.execute(
+            tx.execute(
                 text(
                     f"INSERT INTO {test_db}.get_conn_docs (title, content) VALUES ('Transaction Test', 'Content in transaction')"
                 )
             )
 
             # Verify record exists within transaction
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             count_in_tx = result.scalar()
             assert count_in_tx == initial_count + 1
 
             # Verify record doesn't exist outside transaction (from another connection)
             result = client.execute(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs")
-            count_outside = result.rows[0][0]
+            count_outside = result.fetchall()[0][0]
             assert count_outside == initial_count  # Should still be original count
 
         # After transaction commit, verify record exists
         result = client.execute(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs")
-        final_count = result.rows[0][0]
+        final_count = result.fetchall()[0][0]
         assert final_count == initial_count + 1
 
     @pytest.mark.asyncio
@@ -793,20 +783,18 @@ class TestGetConnectionInterface:
                 """
                 )
 
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 # Get connection
-                conn = tx.get_connection()
-                assert conn is not None
 
                 # Test basic query execution
                 from sqlalchemy import text
 
-                result = await conn.execute(text("SELECT COUNT(*) FROM async_get_conn_docs"))
+                result = await tx.execute(text("SELECT COUNT(*) FROM async_get_conn_docs"))
                 rows = result.fetchall()
                 assert rows[0][0] == 3
 
                 # Test parameterized query
-                result = await conn.execute(
+                result = await tx.execute(
                     text("SELECT * FROM async_get_conn_docs WHERE title LIKE :pattern"),
                     {"pattern": "%Test 1%"},
                 )
@@ -828,25 +816,24 @@ class TestGetConnectionInterface:
         """Test that get_connection works alongside other transaction managers"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test that we can use both get_connection and other managers
-            conn = tx.get_connection()
 
             # Use connection directly
             from sqlalchemy import text
 
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             direct_count = result.scalar()
 
             # Use transaction wrapper execute
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs")
-            wrapper_count = result.rows[0][0]
+            wrapper_count = result.fetchall()[0][0]
 
             # Both should return the same result
             assert direct_count == wrapper_count
 
             # Test that both are in the same transaction
-            conn.execute(
+            tx.execute(
                 text(
                     f"INSERT INTO {test_db}.get_conn_docs (title, content) VALUES ('Direct Insert', 'Using connection directly')"
                 )
@@ -856,7 +843,7 @@ class TestGetConnectionInterface:
             )
 
             # Both inserts should be visible within the transaction
-            result = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
+            result = tx.execute(text(f"SELECT COUNT(*) FROM {test_db}.get_conn_docs"))
             final_count = result.scalar()
             assert final_count == direct_count + 2
 
@@ -970,7 +957,7 @@ class TestAsyncTransactionManagerConsistency:
         """Test that all expected transaction managers are available in sync client"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test that all expected managers are available
             assert hasattr(tx, 'snapshots')
             assert hasattr(tx, 'clone')
@@ -980,36 +967,35 @@ class TestAsyncTransactionManagerConsistency:
             assert hasattr(tx, 'account')
             assert hasattr(tx, 'vector_ops')
             assert hasattr(tx, 'fulltext_index')
-            assert hasattr(tx, 'get_connection')
-            assert hasattr(tx, 'get_sqlalchemy_session')
+            # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that managers are the correct types
+            from matrixone.snapshot import SnapshotManager
+            from matrixone.clone import CloneManager
+            from matrixone.restore import RestoreManager
+            from matrixone.pitr import PitrManager
+            from matrixone.pubsub import PubSubManager
+            from matrixone.account import AccountManager
             from matrixone.client import (
-                TransactionSnapshotManager,
-                TransactionCloneManager,
-                TransactionRestoreManager,
-                TransactionPitrManager,
-                TransactionPubSubManager,
-                TransactionAccountManager,
-                TransactionVectorIndexManager,
-                TransactionFulltextIndexManager,
+                VectorManager,
+                FulltextIndexManager,
             )
 
-            assert isinstance(tx.snapshots, TransactionSnapshotManager)
-            assert isinstance(tx.clone, TransactionCloneManager)
-            assert isinstance(tx.restore, TransactionRestoreManager)
-            assert isinstance(tx.pitr, TransactionPitrManager)
-            assert isinstance(tx.pubsub, TransactionPubSubManager)
-            assert isinstance(tx.account, TransactionAccountManager)
-            assert isinstance(tx.vector_ops, TransactionVectorIndexManager)
-            assert isinstance(tx.fulltext_index, TransactionFulltextIndexManager)
+            assert isinstance(tx.snapshots, SnapshotManager)
+            assert isinstance(tx.clone, CloneManager)
+            assert isinstance(tx.restore, RestoreManager)
+            assert isinstance(tx.pitr, PitrManager)
+            assert isinstance(tx.pubsub, PubSubManager)
+            assert isinstance(tx.account, AccountManager)
+            assert isinstance(tx.vector_ops, VectorManager)
+            assert isinstance(tx.fulltext_index, FulltextIndexManager)
 
     @pytest.mark.asyncio
     async def test_async_transaction_managers_availability(self, async_client_setup):
         """Test that all expected transaction managers are available in async client"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test that all expected managers are available
             assert hasattr(tx, 'snapshots')
             assert hasattr(tx, 'clone')
@@ -1019,72 +1005,71 @@ class TestAsyncTransactionManagerConsistency:
             assert hasattr(tx, 'account')
             assert hasattr(tx, 'vector_ops')
             assert hasattr(tx, 'fulltext_index')
-            assert hasattr(tx, 'get_connection')
-            assert hasattr(tx, 'get_sqlalchemy_session')
+            # Session now IS a SQLAlchemy session, no need for get_sqlalchemy_session()
 
             # Test that managers are the correct types
-            from matrixone.async_client import (
-                AsyncTransactionSnapshotManager,
-                AsyncTransactionCloneManager,
-                AsyncTransactionRestoreManager,
-                AsyncTransactionPitrManager,
-                AsyncTransactionPubSubManager,
-                AsyncTransactionAccountManager,
-                AsyncTransactionVectorIndexManager,
-                AsyncTransactionFulltextIndexManager,
-            )
+            from matrixone.snapshot import AsyncSnapshotManager
+            from matrixone.clone import AsyncCloneManager
+            from matrixone.restore import AsyncRestoreManager
+            from matrixone.pitr import AsyncPitrManager
+            from matrixone.pubsub import AsyncPubSubManager
+            from matrixone.account import AsyncAccountManager
+            from matrixone.vector_manager import AsyncVectorManager
+            from matrixone.fulltext_manager import AsyncFulltextIndexManager
 
-            assert isinstance(tx.snapshots, AsyncTransactionSnapshotManager)
-            assert isinstance(tx.clone, AsyncTransactionCloneManager)
-            assert isinstance(tx.restore, AsyncTransactionRestoreManager)
-            assert isinstance(tx.pitr, AsyncTransactionPitrManager)
-            assert isinstance(tx.pubsub, AsyncTransactionPubSubManager)
-            assert isinstance(tx.account, AsyncTransactionAccountManager)
-            assert isinstance(tx.vector_ops, AsyncTransactionVectorIndexManager)
-            assert isinstance(tx.fulltext_index, AsyncTransactionFulltextIndexManager)
+            assert isinstance(tx.snapshots, AsyncSnapshotManager)
+            assert isinstance(tx.clone, AsyncCloneManager)
+            assert isinstance(tx.restore, AsyncRestoreManager)
+            assert isinstance(tx.pitr, AsyncPitrManager)
+            assert isinstance(tx.pubsub, AsyncPubSubManager)
+            assert isinstance(tx.account, AsyncAccountManager)
+            assert isinstance(tx.vector_ops, AsyncVectorManager)
+            assert isinstance(tx.fulltext_index, AsyncFulltextIndexManager)
 
     def test_sync_vector_ops_transaction_behavior(self, sync_client_setup):
         """Test sync vector_ops manager behavior in transaction"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
-            # Test that vector_ops manager has execute method
-            assert hasattr(tx.vector_ops, 'execute')
+        with client.session() as tx:
+            # Test that vector_ops manager has executor (new executor pattern)
+            assert hasattr(tx.vector_ops, 'executor')
 
-            # Test basic query execution through vector_ops
-            result = tx.vector_ops.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
-            assert result.rows[0][0] == 3
+            # Vector managers use the executor pattern, so SQL is executed via tx.execute()
+            # Test basic query execution
+            result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
+            assert result.fetchall()[0][0] == 3
 
-            # Test that vector_ops uses the same transaction
-            tx.vector_ops.execute(
+            # Test that operations use the same transaction
+            tx.execute(
                 f"INSERT INTO {test_db}.consistency_docs (title, content, category, priority) VALUES ('Vector Ops Test', 'Content from vector ops', 'Vector', 1)"
             )
 
             # Verify the insert is visible within the transaction
-            result = tx.vector_ops.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
-            assert result.rows[0][0] == 4
+            result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
+            assert result.fetchall()[0][0] == 4
 
     @pytest.mark.asyncio
     async def test_async_vector_ops_transaction_behavior(self, async_client_setup):
         """Test async vector_ops manager behavior in transaction"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
-            # Test that vector_ops manager has execute method
-            assert hasattr(tx.vector_ops, 'execute')
+        async with client.session() as tx:
+            # Test that vector_ops manager has executor (new executor pattern)
+            assert hasattr(tx.vector_ops, 'executor')
 
-            # Test basic query execution through vector_ops
-            result = await tx.vector_ops.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
-            assert result.rows[0][0] == 3
+            # Vector managers use the executor pattern, so SQL is executed via tx.execute()
+            # Test basic query execution
+            result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
+            assert result.fetchall()[0][0] == 3
 
-            # Test that vector_ops uses the same transaction
-            await tx.vector_ops.execute(
+            # Test that operations use the same transaction
+            await tx.execute(
                 f"INSERT INTO {test_db}.async_consistency_docs (title, content, category, priority) VALUES ('Async Vector Ops Test', 'Content from async vector ops', 'Vector', 1)"
             )
 
             # Verify the insert is visible within the transaction
-            result = await tx.vector_ops.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
-            assert result.rows[0][0] == 4
+            result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
+            assert result.fetchall()[0][0] == 4
 
     def test_sync_transaction_isolation_consistency(self, sync_client_setup):
         """Test that sync transaction managers maintain proper isolation"""
@@ -1092,24 +1077,24 @@ class TestAsyncTransactionManagerConsistency:
 
         # Get initial count
         result = client.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
-        initial_count = result.rows[0][0]
+        initial_count = result.fetchall()[0][0]
 
-        with client.transaction() as tx:
-            # Use different managers to perform operations
-            tx.vector_ops.execute(
+        with client.session() as tx:
+            # Use tx.execute() for all operations (executor pattern)
+            tx.execute(
                 f"INSERT INTO {test_db}.consistency_docs (title, content, category, priority) VALUES ('Vector Ops Insert', 'Content', 'Test', 1)"
             )
             tx.execute(
                 f"INSERT INTO {test_db}.consistency_docs (title, content, category, priority) VALUES ('Direct Insert', 'Content', 'Test', 1)"
             )
 
-            # All managers should see the same data within transaction
-            result1 = tx.vector_ops.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
+            # Check count within transaction
+            result1 = tx.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
             result2 = tx.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
 
             expected_count = initial_count + 2
-            assert result1.rows[0][0] == expected_count
-            assert result2.rows[0][0] == expected_count
+            assert result1.fetchall()[0][0] == expected_count
+            assert result2.fetchall()[0][0] == expected_count
 
             # Outside transaction should not see the changes yet
             result_outside = client.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
@@ -1126,24 +1111,24 @@ class TestAsyncTransactionManagerConsistency:
 
         # Get initial count
         result = await client.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
-        initial_count = result.rows[0][0]
+        initial_count = result.fetchall()[0][0]
 
-        async with client.transaction() as tx:
-            # Use different managers to perform operations
-            await tx.vector_ops.execute(
+        async with client.session() as tx:
+            # Use tx.execute() for all operations (executor pattern)
+            await tx.execute(
                 f"INSERT INTO {test_db}.async_consistency_docs (title, content, category, priority) VALUES ('Async Vector Ops Insert', 'Content', 'Test', 1)"
             )
             await tx.execute(
                 f"INSERT INTO {test_db}.async_consistency_docs (title, content, category, priority) VALUES ('Async Direct Insert', 'Content', 'Test', 1)"
             )
 
-            # All managers should see the same data within transaction
-            result1 = await tx.vector_ops.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
+            # Check count within transaction
+            result1 = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
             result2 = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
 
             expected_count = initial_count + 2
-            assert result1.rows[0][0] == expected_count
-            assert result2.rows[0][0] == expected_count
+            assert result1.fetchall()[0][0] == expected_count
+            assert result2.fetchall()[0][0] == expected_count
 
             # Outside transaction should not see the changes yet
             result_outside = await client.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
@@ -1159,31 +1144,28 @@ class TestAsyncTransactionManagerConsistency:
 
         # Get initial count first
         result = client.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
-        initial_count = result.rows[0][0]
+        initial_count = result.fetchall()[0][0]
 
-        with client.transaction() as tx:
-            # Test that all managers can execute queries
-            managers_to_test = [
-                ('vector_ops', tx.vector_ops),
-                ('direct', tx),
-            ]
+        with client.session() as tx:
+            # All operations use tx.execute() (executor pattern)
+            # Vector managers use the executor internally, not by exposing execute()
 
-            for i, (manager_name, manager) in enumerate(managers_to_test):
-                # Check current count (should be initial + number of previous inserts)
-                expected_count = initial_count + i
-                result = manager.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
-                assert (
-                    result.rows[0][0] == expected_count
-                ), f"Manager {manager_name} returned unexpected count {result.rows[0][0]}, expected {expected_count}"
+            # Test that vector_ops manager exists and has executor
+            assert hasattr(tx, 'vector_ops')
+            assert hasattr(tx.vector_ops, 'executor')
 
-                # Test insert through each manager
-                manager.execute(
-                    f"INSERT INTO {test_db}.consistency_docs (title, content, category, priority) VALUES ('{manager_name} Test', 'Content', 'Test', 1)"
-                )
+            # Check initial count
+            result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
+            assert result.fetchall()[0][0] == initial_count
 
-                # Verify insert is visible
-                result = manager.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
-                assert result.rows[0][0] == expected_count + 1, f"Manager {manager_name} did not see its own insert"
+            # Test insert
+            tx.execute(
+                f"INSERT INTO {test_db}.consistency_docs (title, content, category, priority) VALUES ('Consistency Test', 'Content', 'Test', 1)"
+            )
+
+            # Verify insert is visible
+            result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.consistency_docs")
+            assert result.fetchall()[0][0] == initial_count + 1
 
     @pytest.mark.asyncio
     async def test_async_async_behavior_consistency(self, async_client_setup):
@@ -1192,28 +1174,25 @@ class TestAsyncTransactionManagerConsistency:
 
         # Get initial count first
         result = await client.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
-        initial_count = result.rows[0][0]
+        initial_count = result.fetchall()[0][0]
 
-        async with client.transaction() as tx:
-            # Test that all managers can execute queries
-            managers_to_test = [
-                ('vector_ops', tx.vector_ops),
-                ('direct', tx),
-            ]
+        async with client.session() as tx:
+            # All operations use tx.execute() (executor pattern)
+            # Vector managers use the executor internally, not by exposing execute()
 
-            for i, (manager_name, manager) in enumerate(managers_to_test):
-                # Check current count (should be initial + number of previous inserts)
-                expected_count = initial_count + i
-                result = await manager.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
-                assert (
-                    result.rows[0][0] == expected_count
-                ), f"Manager {manager_name} returned unexpected count {result.rows[0][0]}, expected {expected_count}"
+            # Test that vector_ops manager exists and has executor
+            assert hasattr(tx, 'vector_ops')
+            assert hasattr(tx.vector_ops, 'executor')
 
-                # Test insert through each manager
-                await manager.execute(
-                    f"INSERT INTO {test_db}.async_consistency_docs (title, content, category, priority) VALUES ('{manager_name} Test', 'Content', 'Test', 1)"
-                )
+            # Check initial count
+            result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
+            assert result.fetchall()[0][0] == initial_count
 
-                # Verify insert is visible
-                result = await manager.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
-                assert result.rows[0][0] == expected_count + 1, f"Manager {manager_name} did not see its own insert"
+            # Test insert
+            await tx.execute(
+                f"INSERT INTO {test_db}.async_consistency_docs (title, content, category, priority) VALUES ('Async Consistency Test', 'Content', 'Test', 1)"
+            )
+
+            # Verify insert is visible
+            result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.async_consistency_docs")
+            assert result.fetchall()[0][0] == initial_count + 1

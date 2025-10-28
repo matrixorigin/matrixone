@@ -23,10 +23,10 @@ ResultSet Class
    :undoc-members:
    :show-inheritance:
 
-TransactionWrapper Class
-------------------------
+Session Class
+-------------
 
-.. autoclass:: matrixone.client.TransactionWrapper
+.. autoclass:: matrixone.session.Session
    :members:
    :undoc-members:
    :show-inheritance:

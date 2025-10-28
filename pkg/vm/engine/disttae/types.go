@@ -244,14 +244,9 @@ type Engine struct {
 	catalog atomic.Pointer[cache.CatalogCache]
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
-	//snapshot partitions
-	mu struct {
-		sync.Mutex
-		snapParts map[[2]uint64]*struct {
-			sync.Mutex
-			snaps []*logtailreplay.Partition
-		}
-	}
+
+	//snapshot partitions manager
+	snapshotMgr *SnapshotManager
 
 	packerPool *fileservice.Pool[*types.Packer]
 

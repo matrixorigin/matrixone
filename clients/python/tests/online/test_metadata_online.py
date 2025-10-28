@@ -29,6 +29,7 @@ This test suite demonstrates and validates:
 
 import asyncio
 import unittest
+import pytest
 from matrixone import Client, AsyncClient
 from matrixone.metadata import MetadataColumn, MetadataRow
 from matrixone.config import get_connection_kwargs
@@ -286,7 +287,7 @@ class TestMetadataOnline(unittest.TestCase):
 
     def test_transaction_metadata_operations(self):
         """Test metadata operations within transactions"""
-        with self.client.transaction() as tx:
+        with self.client.session() as tx:
             # Metadata scan within transaction
             result = tx.metadata.scan("test_metadata_db", "test_users", columns="*")
             rows = list(result)
@@ -571,6 +572,231 @@ class TestAsyncMetadataOnline(unittest.TestCase):
 
             # Just verify the call doesn't fail, distinct object names might be empty
             self.assertIsInstance(object_names, set)
+
+        asyncio.run(_test())
+
+
+class TestMetadataSession(unittest.TestCase):
+    """Test metadata operations in session context"""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up test database connection"""
+        cls.connection_params = get_connection_kwargs()
+        filtered_params = {
+            'host': cls.connection_params['host'],
+            'port': cls.connection_params['port'],
+            'user': cls.connection_params['user'],
+            'password': cls.connection_params['password'],
+            'database': cls.connection_params['database'],
+        }
+        cls.client = Client()
+        cls.client.connect(**filtered_params)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up"""
+        try:
+            cls.client.disconnect()
+        except Exception:
+            pass
+
+    def test_session_scan(self):
+        """Test scan in session context"""
+        with self.client.session() as session:
+            result = session.metadata.scan("test_metadata_db", "test_users")
+            rows = result.fetchall()
+            self.assertGreater(len(rows), 0)
+
+    def test_session_scan_with_columns(self):
+        """Test scan with column selection in session"""
+        with self.client.session() as session:
+            rows = session.metadata.scan(
+                "test_metadata_db", "test_users", columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT]
+            )
+            self.assertGreater(len(rows), 0)
+            for row in rows:
+                self.assertIn('col_name', row)
+                self.assertIn('rows_cnt', row)
+
+    def test_session_brief_stats(self):
+        """Test get_table_brief_stats in session"""
+        with self.client.session() as session:
+            stats = session.metadata.get_table_brief_stats("test_metadata_db", "test_users")
+            self.assertIn("test_users", stats)
+            self.assertIn("row_cnt", stats["test_users"])
+
+    def test_session_detail_stats(self):
+        """Test get_table_detail_stats in session"""
+        with self.client.session() as session:
+            stats = session.metadata.get_table_detail_stats("test_metadata_db", "test_users")
+            self.assertIn("test_users", stats)
+            self.assertGreater(len(stats["test_users"]), 0)
+
+    def test_session_with_tombstone(self):
+        """Test scan with tombstone in session"""
+        with self.client.session() as session:
+            result = session.metadata.scan("test_metadata_db", "test_users", is_tombstone=True)
+            # Tombstone might be empty, just verify no error
+            rows = result.fetchall()
+            self.assertIsInstance(rows, list)
+
+    def test_session_with_distinct(self):
+        """Test scan with distinct_object_name in session"""
+        with self.client.session() as session:
+            result = session.metadata.scan("test_metadata_db", "test_users", distinct_object_name=True)
+            rows = result.fetchall()
+            self.assertIsInstance(rows, list)
+
+
+class TestAsyncMetadataSession(unittest.TestCase):
+    """Test async metadata operations in session context"""
+
+    def setUp(self):
+        """Set up async client"""
+        self.connection_params = get_connection_kwargs()
+        self.async_client = AsyncClient()
+
+    def tearDown(self):
+        """Clean up"""
+        try:
+            asyncio.run(self.async_client.disconnect())
+        except Exception:
+            pass
+
+    def test_async_session_scan(self):
+        """Test async scan in session context"""
+
+        async def _test():
+            filtered_params = {
+                'host': self.connection_params['host'],
+                'port': self.connection_params['port'],
+                'user': self.connection_params['user'],
+                'password': self.connection_params['password'],
+                'database': self.connection_params['database'],
+            }
+            await self.async_client.connect(**filtered_params)
+
+            async with self.async_client.session() as session:
+                result = await session.metadata.scan("test_metadata_db", "test_users")
+                rows = result.fetchall()
+                self.assertGreater(len(rows), 0)
+
+            await self.async_client.disconnect()
+
+        asyncio.run(_test())
+
+    def test_async_session_scan_with_columns(self):
+        """Test async scan with column selection in session"""
+
+        async def _test():
+            filtered_params = {
+                'host': self.connection_params['host'],
+                'port': self.connection_params['port'],
+                'user': self.connection_params['user'],
+                'password': self.connection_params['password'],
+                'database': self.connection_params['database'],
+            }
+            await self.async_client.connect(**filtered_params)
+
+            async with self.async_client.session() as session:
+                rows = await session.metadata.scan(
+                    "test_metadata_db", "test_users", columns=[MetadataColumn.COL_NAME, MetadataColumn.ROWS_CNT]
+                )
+                self.assertGreater(len(rows), 0)
+                for row in rows:
+                    self.assertIn('col_name', row)
+                    self.assertIn('rows_cnt', row)
+
+            await self.async_client.disconnect()
+
+        asyncio.run(_test())
+
+    def test_async_session_brief_stats(self):
+        """Test async get_table_brief_stats in session"""
+
+        async def _test():
+            filtered_params = {
+                'host': self.connection_params['host'],
+                'port': self.connection_params['port'],
+                'user': self.connection_params['user'],
+                'password': self.connection_params['password'],
+                'database': self.connection_params['database'],
+            }
+            await self.async_client.connect(**filtered_params)
+
+            async with self.async_client.session() as session:
+                stats = await session.metadata.get_table_brief_stats("test_metadata_db", "test_users")
+                self.assertIn("test_users", stats)
+                self.assertIn("row_cnt", stats["test_users"])
+
+            await self.async_client.disconnect()
+
+        asyncio.run(_test())
+
+    def test_async_session_detail_stats(self):
+        """Test async get_table_detail_stats in session"""
+
+        async def _test():
+            filtered_params = {
+                'host': self.connection_params['host'],
+                'port': self.connection_params['port'],
+                'user': self.connection_params['user'],
+                'password': self.connection_params['password'],
+                'database': self.connection_params['database'],
+            }
+            await self.async_client.connect(**filtered_params)
+
+            async with self.async_client.session() as session:
+                stats = await session.metadata.get_table_detail_stats("test_metadata_db", "test_users")
+                self.assertIn("test_users", stats)
+                self.assertGreater(len(stats["test_users"]), 0)
+
+            await self.async_client.disconnect()
+
+        asyncio.run(_test())
+
+    def test_async_session_with_tombstone(self):
+        """Test async scan with tombstone in session"""
+
+        async def _test():
+            filtered_params = {
+                'host': self.connection_params['host'],
+                'port': self.connection_params['port'],
+                'user': self.connection_params['user'],
+                'password': self.connection_params['password'],
+                'database': self.connection_params['database'],
+            }
+            await self.async_client.connect(**filtered_params)
+
+            async with self.async_client.session() as session:
+                result = await session.metadata.scan("test_metadata_db", "test_users", is_tombstone=True)
+                rows = result.fetchall()
+                self.assertIsInstance(rows, list)
+
+            await self.async_client.disconnect()
+
+        asyncio.run(_test())
+
+    def test_async_session_with_distinct(self):
+        """Test async scan with distinct_object_name in session"""
+
+        async def _test():
+            filtered_params = {
+                'host': self.connection_params['host'],
+                'port': self.connection_params['port'],
+                'user': self.connection_params['user'],
+                'password': self.connection_params['password'],
+                'database': self.connection_params['database'],
+            }
+            await self.async_client.connect(**filtered_params)
+
+            async with self.async_client.session() as session:
+                result = await session.metadata.scan("test_metadata_db", "test_users", distinct_object_name=True)
+                rows = result.fetchall()
+                self.assertIsInstance(rows, list)
+
+            await self.async_client.disconnect()
 
         asyncio.run(_test())
 

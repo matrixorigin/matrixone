@@ -60,6 +60,8 @@ type memThrottler struct {
 
 	lastRefresh atomic.Int64
 
+	mergeAvailDebounce atomic.Int64
+
 	options struct {
 		acquirePolicy func(*memThrottler, int64) (int64, bool)
 
@@ -68,6 +70,8 @@ type memThrottler struct {
 		// if false, the acquiring fails if
 		// the wanted memory exceeds the available.
 		allowOutOfMemoryAcquire bool
+
+		specializedForMerge bool
 	}
 }
 
@@ -177,17 +181,30 @@ func (m *memThrottler) Available() int64 {
 		actualMaxMemory = int64(m.actualTotalMemory.Load())
 	)
 
+	if m.options.specializedForMerge {
+		now := time.Now().UnixNano()
+		if time.Duration(now-m.mergeAvailDebounce.Load()) > time.Second {
+			m.mergeAvailDebounce.Store(now)
+			if m.proc == nil {
+				m.proc, _ = process.NewProcess(int32(os.Getpid()))
+			}
+
+			if info, err := m.proc.MemoryInfo(); err == nil {
+				rss = int64(info.RSS)
+				m.rss.Store(rss)
+			}
+		}
+
+		return max(0, limit-rss-reserved)
+	}
+
 	if actualMaxMemory-rss >= limit {
 		avail = limit - reserved
 	} else {
 		avail = actualMaxMemory - rss - reserved
 	}
 
-	if avail < 0 {
-		avail = 0
-	}
-
-	return avail
+	return max(0, avail)
 }
 
 func (m *memThrottler) PrintUsage() {
@@ -288,6 +305,12 @@ func WithAllowOutOfLimitAcquire() MemThrottlerOption {
 func WithConstLimit(constLimit int64) MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.constLimit = constLimit
+	}
+}
+
+func WithSpecializedForMerge() MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.specializedForMerge = true
 	}
 }
 

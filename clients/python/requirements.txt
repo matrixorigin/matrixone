@@ -27,6 +27,10 @@ prompt_toolkit>=3.0.0
 # Optional: Performance monitoring
 # psutil>=5.8.0
 
+# Development/Testing dependencies
+# pyarrow>=10.0.0  # For Parquet file generation in tests/examples (optional)
+# Faker>=10.0.0  # For generating test data (optional)
+
 # Documentation generation (for development)
 # sphinx>=4.0.0
 # sphinx-rtd-theme>=1.0.0

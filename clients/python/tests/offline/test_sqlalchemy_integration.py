@@ -66,12 +66,11 @@ def teardown_sqlalchemy_mocks():
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
-from matrixone.snapshot import SnapshotLevel, Snapshot, SnapshotManager, CloneManager
+from matrixone.snapshot import SnapshotLevel, Snapshot, SnapshotManager
+from matrixone.clone import CloneManager
 from matrixone.client import (
     Client,
-    TransactionWrapper,
-    TransactionSnapshotManager,
-    TransactionCloneManager,
+    Session,
 )
 from matrixone.exceptions import SnapshotError, CloneError
 
@@ -147,23 +146,23 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
         mock_client.execute.assert_called_once_with(expected_sql)
 
     def test_transaction_wrapper(self):
-        """Test TransactionWrapper with snapshots and clones"""
+        """Test Session with snapshots and clones"""
         mock_client = Mock()
         mock_client._connection = Mock()
-        mock_tx = TransactionWrapper(mock_client._connection, mock_client)
+        mock_tx = Session(mock_client._connection, mock_client)
 
         # Test that transaction wrapper has snapshot and clone managers
-        self.assertIsInstance(mock_tx.snapshots, TransactionSnapshotManager)
-        self.assertIsInstance(mock_tx.clone, TransactionCloneManager)
+        self.assertIsInstance(mock_tx.snapshots, SnapshotManager)
+        self.assertIsInstance(mock_tx.clone, CloneManager)
 
     def test_transaction_snapshot_manager(self):
-        """Test TransactionSnapshotManager"""
+        """Test SessionSnapshotManager"""
         mock_client = Mock()
         mock_client._connection = Mock()
         mock_tx = Mock()
         mock_tx.execute = Mock()
 
-        tx_snapshots = TransactionSnapshotManager(mock_client, mock_tx)
+        tx_snapshots = SnapshotManager(mock_client, executor=mock_tx)
 
         # Mock get method
         mock_snapshot = Snapshot("test_snap", SnapshotLevel.CLUSTER, datetime.now())
@@ -174,13 +173,13 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
             mock_tx.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR CLUSTER")
 
     def test_transaction_clone_manager(self):
-        """Test TransactionCloneManager"""
+        """Test SessionCloneManager"""
         mock_client = Mock()
         mock_client._connection = Mock()
         mock_tx = Mock()
         mock_tx.execute = Mock()
 
-        tx_clone = TransactionCloneManager(mock_client, mock_tx)
+        tx_clone = CloneManager(mock_client, executor=mock_tx)
 
         # Test database clone
         tx_clone.clone_database("target_db", "source_db")
@@ -216,42 +215,41 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
         mock_client._connection = Mock()
 
         # Test the integration pattern
-        session = MockSession()
+        mock_session = MockSession()
 
         try:
-            # Simulate MatrixOne transaction
-            with patch.object(mock_client, 'transaction') as mock_transaction:
-                mock_tx = Mock()
-                mock_tx.execute = Mock()
+            # Simulate MatrixOne session
+            with patch.object(mock_client, 'session') as mock_transaction:
+                mock_tx = mock_session  # Use our MockSession as the transaction
                 mock_tx.snapshots = Mock()
                 mock_tx.clone = Mock()
 
                 mock_transaction.return_value.__enter__ = Mock(return_value=mock_tx)
                 mock_transaction.return_value.__exit__ = Mock(return_value=None)
 
-                with mock_client.transaction() as tx:
-                    # Simulate SQLAlchemy operations
-                    session.add("user1")
-                    session.add("user2")
-                    session.commit()
+                with mock_client.session() as tx:
+                    # Simulate SQLAlchemy operations (tx is now our MockSession)
+                    tx.add("user1")
+                    tx.add("user2")
+                    tx.commit()
 
                     # Simulate MatrixOne operations
                     tx.snapshots.create("test_snapshot", SnapshotLevel.DATABASE, database="test")
                     tx.clone.clone_database("backup", "test")
 
                 # Verify SQLAlchemy operations
-                self.assertTrue(session.committed)
-                self.assertEqual(len(session.data), 2)
+                self.assertTrue(mock_session.committed)
+                self.assertEqual(len(mock_session.data), 2)
 
                 # Verify MatrixOne operations were called
                 tx.snapshots.create.assert_called_once()
                 tx.clone.clone_database.assert_called_once()
 
         except Exception as e:
-            session.rollback()
+            mock_session.rollback()
             raise
         finally:
-            session.close()
+            mock_session.close()
 
     def test_error_handling_pattern(self):
         """Test error handling pattern"""
@@ -291,7 +289,7 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
                 mock_transaction.return_value.__enter__ = Mock(return_value=mock_tx)
                 mock_transaction.return_value.__exit__ = Mock(return_value=None)
 
-                with mock_client.transaction() as tx:
+                with mock_client.session() as tx:
                     # This will cause an error
                     session.add("error_item")
                     session.commit()

@@ -1,12 +1,21 @@
-Transaction Wrapper
-===================
+Session Classes
+===============
 
-This section documents the transaction wrapper classes that provide transaction management capabilities.
+This section documents the Session and AsyncSession classes that provide transaction management capabilities.
 
-TransactionWrapper
-------------------
+Session
+-------
 
-.. autoclass:: matrixone.client.TransactionWrapper
+.. autoclass:: matrixone.session.Session
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+AsyncSession
+------------
+
+.. autoclass:: matrixone.session.AsyncSession
    :members:
    :undoc-members:
    :show-inheritance:

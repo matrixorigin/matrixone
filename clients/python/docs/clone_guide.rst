@@ -15,6 +15,117 @@ MatrixOne's cloning system provides:
 * **Cross-Database Cloning**: Clone between different databases
 * **Incremental Cloning**: Clone only changes since last clone
 * **Async Operations**: Full async/await support for large-scale operations
+* **Transaction Support**: Atomic clone operations with ``session()``
+
+Transaction-Aware Clone Operations (Recommended)
+-------------------------------------------------
+
+Use ``client.session()`` for atomic clone operations with snapshots:
+
+Atomic Clone with Snapshot
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client, SnapshotLevel
+   from matrixone.orm import Base, Column, Integer, String
+   from sqlalchemy import select, insert
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Atomic snapshot + clone
+   with client.session() as session:
+       # Create snapshot first
+       snapshot = session.snapshots.create(
+           name='pre_clone_snapshot',
+           level=SnapshotLevel.DATABASE,
+           database='production'
+       )
+       
+       # Clone from snapshot atomically
+       session.clone.clone_database(
+           target_db='production_copy',
+           source_db='production',
+           snapshot_name='pre_clone_snapshot'
+       )
+       
+       # Both operations succeed or fail together
+   
+   client.disconnect()
+
+Clone Multiple Tables Atomically
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Clone multiple tables in one transaction
+   with client.session() as session:
+       # Clone tables atomically
+       session.clone.clone_table(
+           target_table='users_backup',
+           source_table='users',
+           source_db='production',
+           target_db='backup'
+       )
+       
+       session.clone.clone_table(
+           target_table='orders_backup',
+           source_table='orders',
+           source_db='production',
+           target_db='backup'
+       )
+       
+       # Verify clone
+       stmt = select(func.count()).select_from(text('users_backup'))
+       count = session.execute(stmt).scalar()
+       print(f"Cloned {count} users")
+       
+       # All clones commit together
+   
+   client.disconnect()
+
+Cross-Database Clone with Verification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select, func, text
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Clone with verification in transaction
+   with client.session() as session:
+       # Clone database
+       session.clone.clone_database(
+           target_db='analytics_copy',
+           source_db='analytics'
+       )
+       
+       # Verify row counts match
+       source_count = session.execute(
+           select(func.count()).select_from(text('analytics.users'))
+       ).scalar()
+       
+       target_count = session.execute(
+           select(func.count()).select_from(text('analytics_copy.users'))
+       ).scalar()
+       
+       if source_count != target_count:
+           raise Exception(f"Clone verification failed: {source_count} != {target_count}")
+       
+       print(f"Clone verified: {source_count} rows")
+       # Commits only if verification passes
+   
+   client.disconnect()
 
 Getting Started
 ---------------
