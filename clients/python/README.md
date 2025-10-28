@@ -40,6 +40,12 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Load data from stages with automatic path resolution
   - Stage-scoped load operations for convenience
   - Transaction support for atomic stage operations
+- 📤 **Data Export**: Pandas-style data export with intuitive interface
+  - ``to_csv()`` and ``to_jsonl()`` methods (pandas-compatible API)
+  - Export to local files or external stages (``stage://`` protocol)
+  - Support for raw SQL, SQLAlchemy select(), and MatrixOne queries
+  - Customizable CSV options (sep, quotechar, lineterminator)
+  - Transaction-aware exports for data consistency
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
@@ -240,6 +246,47 @@ client.disconnect()
 - ✅ Automatic rollback on errors
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
 - ✅ Full SQLAlchemy ORM support
+
+### Data Export (Pandas-Style)
+
+Export query results to CSV or JSONL with pandas-compatible API:
+
+```python
+from matrixone import Client
+from sqlalchemy import select
+
+client = Client()
+client.connect(database='test')
+
+# Basic CSV export (pandas-style)
+client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+
+# With custom separator
+client.export.to_csv('/tmp/users.tsv', "SELECT * FROM users", sep='\t')
+
+# Export with SQLAlchemy
+stmt = select(User).where(User.age > 25)
+client.export.to_csv('/tmp/adults.csv', stmt, sep='|')
+
+# Export to JSONL
+client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
+
+# Export to external stage
+client.export.to_csv('stage://s3_stage/backup.csv', stmt)
+
+# Export within transaction
+with client.session() as session:
+    stmt = select(Product).where(Product.stock > 0)
+    session.export.to_csv('/tmp/in_stock.csv', stmt)
+
+client.disconnect()
+```
+
+**Key Features:**
+- ✅ Pandas-compatible API (``to_csv()``, ``to_jsonl()``)
+- ✅ Support for raw SQL, SQLAlchemy, and MatrixOne queries
+- ✅ Export to local files or external stages (``stage://`` protocol)
+- ✅ Customizable CSV options (sep, quotechar, lineterminator)
 
 ### Wrapping Existing SQLAlchemy Sessions (For Legacy Projects)
 

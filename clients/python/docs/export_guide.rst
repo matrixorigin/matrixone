@@ -1,175 +1,161 @@
 Data Export Guide
 ==================
 
-This guide covers data export operations in MatrixOne, including exporting query results to files, stages, and various formats.
+This guide covers data export operations in MatrixOne using the pandas-style interface for exporting query results to files and stages.
 
 Overview
 --------
 
-MatrixOne's export functionality provides:
+MatrixOne's export functionality provides a **pandas-style interface** with these key features:
 
-* **Query Result Export**: Export SELECT query results to external files
-* **Multiple Formats**: CSV, JSONLINE, TSV, and custom delimited formats
-* **Stage Integration**: Export directly to external stages (S3, local filesystem)
-* **ORM-Style Export**: Chainable export methods with query builder
-* **Transaction Support**: Export operations within transactions
-* **Custom Options**: Configurable delimiters, enclosures, and headers
+* **Pandas-Compatible API**: Methods like ``to_csv()`` and ``to_jsonl()`` match pandas naming
+* **Multiple Formats**: CSV, TSV, pipe-delimited, and JSONL formats
+* **Stage Integration**: Export directly to external stages using ``stage://`` protocol
+* **Query Flexibility**: Support for raw SQL, SQLAlchemy select(), and MatrixOne queries
+* **Transaction Support**: Export within atomic transactions
+* **Custom Options**: Configurable separators, quotes, and line terminators
 
-Transaction-Aware Export Operations (Recommended)
---------------------------------------------------
+Basic CSV Export
+-----------------
 
-Use ``client.session()`` for atomic export operations:
-
-Export with Data Transformation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from matrixone import Client, ExportFormat
-   from matrixone.orm import Base, Column, Integer, String, Decimal
-   from sqlalchemy import select, insert, func
-   
-   # Define ORM model
-   Base = declarative_base()
-   
-   class Sale(Base):
-       __tablename__ = 'sales'
-       id = Column(Integer, primary_key=True)
-       product = Column(String(100))
-       category = Column(String(50))
-       amount = Column(Decimal(10, 2))
-       quantity = Column(Integer)
-   
-   client = Client()
-   client.connect(database='test')
-   
-   # Atomic data processing and export
-   with client.session() as session:
-       # Insert data
-       session.execute(
-           insert(Sale).values([
-               {'product': 'Laptop', 'category': 'Electronics', 'amount': 999.99, 'quantity': 5},
-               {'product': 'Phone', 'category': 'Electronics', 'amount': 699.99, 'quantity': 10}
-           ])
-       )
-       
-       # Export query results to file
-       stmt = select(Sale).where(Sale.category == 'Electronics')
-       session.export.from_query(
-           stmt,
-           output_file='/tmp/electronics.csv',
-           format=ExportFormat.CSV
-       )
-       
-       # All operations commit together
-   
-   client.disconnect()
-
-Export with Aggregation
-~~~~~~~~~~~~~~~~~~~~~~~~
+The simplest way to export data to CSV:
 
 .. code-block:: python
 
    from matrixone import Client
-   from sqlalchemy import select, func
    
    client = Client()
    client.connect(database='test')
    
-   # Export aggregated results
-   with client.session() as session:
-       # Aggregate query
-       stmt = select(
-           Sale.category,
-           func.sum(Sale.amount).label('total_amount'),
-           func.count(Sale.id).label('order_count')
-       ).group_by(Sale.category)
-       
-       # Export aggregated results
-       session.export.from_query(
-           stmt,
-           output_file='/tmp/category_summary.csv',
-           format=ExportFormat.CSV,
-           header=True
-       )
+   # Basic CSV export (pandas-style)
+   client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+   
+   # With custom separator
+   client.export.to_csv('/tmp/users.tsv', "SELECT * FROM users", sep='\t')
+   
+   # Pipe-delimited
+   client.export.to_csv('/tmp/users.txt', "SELECT * FROM users", sep='|')
    
    client.disconnect()
 
-Export to External Stages (Recommended)
-----------------------------------------
+Export with SQLAlchemy
+-----------------------
 
-Export directly to external stages for backup or data sharing:
-
-Export to S3 Stage
-~~~~~~~~~~~~~~~~~~
+Use SQLAlchemy select() statements for type-safe exports:
 
 .. code-block:: python
 
-   from matrixone import Client, ExportFormat
+   from matrixone import Client
+   from matrixone.orm import declarative_base
+   from sqlalchemy import Column, Integer, String, Decimal, select
+   
+   Base = declarative_base()
+   
+   class Product(Base):
+       __tablename__ = 'products'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       category = Column(String(50))
+       price = Column(Decimal(10, 2))
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Export with filter (pandas-style)
+   stmt = select(Product).where(Product.category == 'Electronics')
+   client.export.to_csv('/tmp/electronics.csv', stmt)
+   
+   # Export with aggregation
+   from sqlalchemy import func
+   stmt = select(
+       Product.category,
+       func.count(Product.id).label('count'),
+       func.avg(Product.price).label('avg_price')
+   ).group_by(Product.category)
+   client.export.to_csv('/tmp/category_stats.csv', stmt, sep=',')
+   
+   client.disconnect()
+
+Export with MatrixOne Query Builder
+-------------------------------------
+
+Use MatrixOne's ORM-style query builder:
+
+.. code-block:: python
+
+   from matrixone import Client
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Build query then export (pandas-style)
+   query = client.query(Product).filter(Product.price > 100)
+   client.export.to_csv('/tmp/expensive.csv', query)
+   
+   # Chain filters
+   query = (client.query(Product)
+       .filter(Product.category == 'Electronics')
+       .filter(Product.price < 500))
+   client.export.to_csv('/tmp/affordable_electronics.csv', query, sep='|')
+   
+   client.disconnect()
+
+JSONL Export
+-------------
+
+Export data in JSON Lines format (one JSON object per line):
+
+.. code-block:: python
+
+   from matrixone import Client
    from sqlalchemy import select
    
    client = Client()
    client.connect(database='test')
    
-   # Atomic stage creation and export
-   with client.session() as session:
-       # Create S3 stage
-       session.stage.create_s3(
-           name='export_stage',
-           bucket='backups',
-           path='daily/',
-           aws_key_id='key',
-           aws_secret_key='secret'
-       )
-       
-       # Export to stage
-       stmt = select(Sale)
-       session.export.to_stage(
-           stmt,
-           stage_name='export_stage',
-           filename='sales_backup.csv',
-           format=ExportFormat.CSV
-       )
-       
-       # Both operations atomic
+   # JSONL export (pandas-style)
+   client.export.to_jsonl('/tmp/products.jsonl', "SELECT * FROM products")
+   
+   # With SQLAlchemy
+   stmt = select(Product).where(Product.stock > 0)
+   client.export.to_jsonl('/tmp/in_stock.jsonl', stmt)
+   
+   client.disconnect()
+
+Export to External Stages
+---------------------------
+
+Export directly to S3, local, or other external stages using ``stage://`` protocol:
+
+Export to S3 Stage
+~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Create S3 stage
+   client.stage.create_s3(
+       name='backup_stage',
+       bucket='my-backups',
+       path='exports/',
+       aws_key_id='AKIAIOSFODNN7EXAMPLE',
+       aws_secret_key='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+   )
+   
+   # Export to stage using stage:// protocol (pandas-style)
+   client.export.to_csv(
+       'stage://backup_stage/daily_export.csv',
+       "SELECT * FROM sales WHERE date = CURDATE()"
+   )
    
    client.disconnect()
 
 Export to Local Stage
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from matrixone import Client
-   from sqlalchemy import select
-   
-   client = Client()
-   client.connect(database='test')
-   
-   # Export to local filesystem stage
-   with client.session() as session:
-       # Create local stage
-       session.stage.create_local('local_export', '/exports/')
-       
-       # Export data
-       stmt = select(Sale).where(Sale.amount > 100)
-       session.export.to_stage(
-           stmt,
-           stage_name='local_export',
-           filename='high_value_sales.csv',
-           format=ExportFormat.CSV,
-           header=True
-       )
-   
-   client.disconnect()
-
-ORM-Style Export (Recommended)
--------------------------------
-
-Use query builder with chainable export methods:
-
-Basic ORM Export
-~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -178,128 +164,91 @@ Basic ORM Export
    client = Client()
    client.connect(database='test')
    
-   # Chainable query and export
-   result = (
-       client.query(Sale)
-       .filter(Sale.category == 'Electronics')
-       .export_to_file('/tmp/electronics.csv', format='csv')
+   # Create local filesystem stage
+   client.stage.create_local('local_stage', '/exports/')
+   
+   # Export to local stage (pandas-style)
+   client.export.to_csv(
+       'stage://local_stage/backup.csv',
+       "SELECT * FROM products"
    )
    
-   print(f"Exported {result.row_count} rows")
-   
-   client.disconnect()
-
-Export with Filters and Ordering
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from matrixone import Client
-   
-   client = Client()
-   client.connect(database='test')
-   
-   # Complex query with export
-   result = (
-       client.query(Sale)
-       .filter(Sale.amount > 500)
-       .filter(Sale.quantity > 5)
-       .order_by(Sale.amount.desc())
-       .export_to_stage(
-           stage_name='export_stage',
-           filename='premium_sales.csv'
-       )
+   # JSONL to stage
+   client.export.to_jsonl(
+       'stage://local_stage/backup.jsonl',
+       "SELECT * FROM products"
    )
    
    client.disconnect()
 
-Export Formats and Options
+Transaction-Aware Exports
 ---------------------------
 
-Supported Export Formats
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from matrixone import Client, ExportFormat
-   from sqlalchemy import select
-   
-   client = Client()
-   client.connect(database='test')
-   
-   stmt = select(Sale)
-   
-   # CSV format (default)
-   client.export.from_query(
-       stmt,
-       output_file='/tmp/data.csv',
-       format=ExportFormat.CSV,
-       delimiter=',',
-       header=True
-   )
-   
-   # TSV format
-   client.export.from_query(
-       stmt,
-       output_file='/tmp/data.tsv',
-       format=ExportFormat.TSV,
-       header=True
-   )
-   
-   # JSONLINE format (one JSON object per line)
-   client.export.from_query(
-       stmt,
-       output_file='/tmp/data.jsonl',
-       format=ExportFormat.JSONLINE
-   )
-   
-   # Custom delimiter
-   client.export.from_query(
-       stmt,
-       output_file='/tmp/data.txt',
-       format=ExportFormat.CSV,
-       delimiter='|',
-       enclosed_by='"',
-       header=True
-   )
-   
-   client.disconnect()
-
-Export with Custom Options
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Export within transactions for data consistency:
 
 .. code-block:: python
 
    from matrixone import Client
-   from sqlalchemy import select
+   from sqlalchemy import select, insert
    
    client = Client()
    client.connect(database='test')
    
-   stmt = select(Sale)
+   # Export within transaction (pandas-style)
+   with client.session() as session:
+       # Insert new data
+       session.execute(
+           insert(Product).values(
+               name='New Laptop',
+               category='Electronics',
+               price=1299.99
+           )
+       )
+       
+       # Export including new data
+       stmt = select(Product).where(Product.category == 'Electronics')
+       session.export.to_csv('/tmp/updated_electronics.csv', stmt)
+       
+       # Both operations commit together or rollback on error
    
-   # Export with all options
-   client.export.from_query(
-       stmt,
-       output_file='/tmp/custom_export.csv',
-       format=ExportFormat.CSV,
-       delimiter=',',
-       enclosed_by='"',
-       escaped_by='\\',
-       header=True,
-       max_file_size='100MB',  # Split into multiple files if needed
-       compression='gzip'  # Compress output
-   )
+   client.disconnect()
+
+CSV Export Options
+-------------------
+
+Customize CSV export with pandas-compatible parameters:
+
+.. code-block:: python
+
+   from matrixone import Client
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Custom separator (pandas: sep parameter)
+   client.export.to_csv('/tmp/data.csv', query, sep=',')
+   
+   # Tab-separated (TSV)
+   client.export.to_csv('/tmp/data.tsv', query, sep='\t')
+   
+   # Pipe-delimited
+   client.export.to_csv('/tmp/data.txt', query, sep='|')
+   
+   # With quote character (pandas: quotechar parameter)
+   client.export.to_csv('/tmp/data.csv', query, quotechar='"')
+   
+   # Custom line terminator (pandas: lineterminator parameter)
+   client.export.to_csv('/tmp/data.csv', query, lineterminator='\r\n')
+   
+   # Note: header=True is not yet supported by MatrixOne
+   # client.export.to_csv('/tmp/data.csv', query, header=True)  # Will warn
    
    client.disconnect()
 
 Async Export Operations
-------------------------
+-------------------------
 
 Full async/await support for non-blocking exports:
-
-Async Export to File
-~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -311,48 +260,40 @@ Async Export to File
        client = AsyncClient()
        await client.connect(database='test')
        
-       # Async export
-       stmt = select(Sale).where(Sale.category == 'Electronics')
-       await client.export.from_query(
-           stmt,
-           output_file='/tmp/async_export.csv',
-           format=ExportFormat.CSV
-       )
+       # Async CSV export (pandas-style)
+       await client.export.to_csv('/tmp/async_export.csv', "SELECT * FROM sales")
+       
+       # Async JSONL export
+       await client.export.to_jsonl('/tmp/async_export.jsonl', "SELECT * FROM sales")
+       
+       # With SQLAlchemy
+       stmt = select(Product).where(Product.price > 100)
+       await client.export.to_csv('/tmp/expensive.csv', stmt, sep='|')
        
        await client.disconnect()
    
    asyncio.run(async_export_example())
 
-Concurrent Export Operations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Concurrent Exports
+~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    import asyncio
-   from matrixone import AsyncClient, ExportFormat
-   from sqlalchemy import select
+   from matrixone import AsyncClient
    
    async def concurrent_exports():
        client = AsyncClient()
        await client.connect(database='test')
        
-       # Export multiple categories concurrently
+       # Export multiple queries concurrently (pandas-style)
        await asyncio.gather(
-           client.export.from_query(
-               select(Sale).where(Sale.category == 'Electronics'),
-               '/tmp/electronics.csv',
-               ExportFormat.CSV
-           ),
-           client.export.from_query(
-               select(Sale).where(Sale.category == 'Clothing'),
-               '/tmp/clothing.csv',
-               ExportFormat.CSV
-           ),
-           client.export.from_query(
-               select(Sale).where(Sale.category == 'Food'),
-               '/tmp/food.csv',
-               ExportFormat.CSV
-           )
+           client.export.to_csv('/tmp/electronics.csv', 
+               "SELECT * FROM products WHERE category='Electronics'"),
+           client.export.to_csv('/tmp/clothing.csv',
+               "SELECT * FROM products WHERE category='Clothing'"),
+           client.export.to_csv('/tmp/food.csv',
+               "SELECT * FROM products WHERE category='Food'")
        )
        
        await client.disconnect()
@@ -360,7 +301,7 @@ Concurrent Export Operations
    asyncio.run(concurrent_exports())
 
 Async Transaction Export
-~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -372,25 +313,20 @@ Async Transaction Export
        client = AsyncClient()
        await client.connect(database='test')
        
-       # Async transaction with export
+       # Async transaction with export (pandas-style)
        async with client.session() as session:
            # Insert data
            await session.execute(
-               insert(Sale).values(
-                   product='Tablet',
+               insert(Product).values(
+                   name='Tablet',
                    category='Electronics',
-                   amount=399.99,
-                   quantity=3
+                   price=399.99
                )
            )
            
            # Export within transaction
-           stmt = select(Sale)
-           await session.export.from_query(
-               stmt,
-               output_file='/tmp/all_sales.csv',
-               format=ExportFormat.CSV
-           )
+           stmt = select(Product).where(Product.category == 'Electronics')
+           await session.export.to_csv('/tmp/electronics.csv', stmt)
            
            # Both operations commit together
        
@@ -401,89 +337,116 @@ Async Transaction Export
 Best Practices
 --------------
 
-1. **Use Transactions for Consistency**
+1. **Use Pandas-Style API**
    
-   Export within transactions to ensure data consistency
+   The new ``to_csv()`` and ``to_jsonl()`` methods are more intuitive and align with pandas conventions
 
-2. **Use Stages for Large Exports**
+2. **Use Transactions for Consistency**
    
-   Export to external stages for better performance with large datasets
+   Export within ``session()`` context to ensure data consistency
 
-3. **Choose Appropriate Format**
+3. **Use Stages for Large Exports**
+   
+   Export to external stages (``stage://``) for better performance with large datasets
+
+4. **Choose Appropriate Format**
    
    - CSV for structured data and Excel compatibility
-   - JSONLINE for complex nested data
+   - JSONL for complex nested data or streaming
    - TSV for tab-delimited requirements
 
-4. **Compress Large Exports**
+5. **Use SQLAlchemy for Type Safety**
    
-   Use compression for large files to save storage and transfer time
+   Prefer SQLAlchemy ``select()`` statements over raw SQL for better maintainability
 
-5. **Monitor Export Performance**
+6. **Handle Special Characters**
    
-   Track export times and file sizes for optimization
-
-6. **Use ORM-Style Exports**
-   
-   Prefer chainable query builder for type safety
+   Use ``quotechar`` parameter when data contains separators
 
 Common Use Cases
 ----------------
 
-**Data Backup**
+Data Backup
+~~~~~~~~~~~
 
 .. code-block:: python
 
-   with client.session() as session:
-       # Create backup stage
-       session.stage.create_s3('backup_stage', 'backups', 'daily/', 'key', 'secret')
-       
-       # Export all tables
-       for table in [Users, Orders, Products]:
-           stmt = select(table)
-           session.export.to_stage(
-               stmt,
-               stage_name='backup_stage',
-               filename=f'{table.__tablename__}_backup.csv'
-           )
+   from matrixone import Client
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Create backup stage
+   client.stage.create_s3('backup_stage', 'backups', 'daily/', 'key', 'secret')
+   
+   # Export tables to stage (pandas-style)
+   client.export.to_csv('stage://backup_stage/users.csv', "SELECT * FROM users")
+   client.export.to_csv('stage://backup_stage/orders.csv', "SELECT * FROM orders")
+   client.export.to_csv('stage://backup_stage/products.csv', "SELECT * FROM products")
+   
+   client.disconnect()
 
-**Data Sharing**
-
-.. code-block:: python
-
-   with client.session() as session:
-       # Export filtered data for partner
-       stmt = select(Sale).where(Sale.partner_id == 'ABC123')
-       session.export.to_stage(
-           stmt,
-           stage_name='partner_stage',
-           filename='partner_sales.csv',
-           format=ExportFormat.CSV,
-           header=True
-       )
-
-**Analytics Export**
+Analytics Export
+~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   with client.session() as session:
-       # Export aggregated analytics
-       stmt = select(
-           Sale.date,
-           func.sum(Sale.amount).label('daily_revenue')
-       ).group_by(Sale.date)
-       
-       session.export.from_query(
-           stmt,
-           output_file='/reports/daily_revenue.csv',
-           format=ExportFormat.CSV,
-           header=True
-       )
+   from matrixone import Client
+   from sqlalchemy import select, func
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Export aggregated analytics (pandas-style)
+   stmt = select(
+       func.date(Sale.created_at).label('date'),
+       func.sum(Sale.amount).label('daily_revenue'),
+       func.count(Sale.id).label('order_count')
+   ).group_by(func.date(Sale.created_at))
+   
+   client.export.to_csv('/reports/daily_revenue.csv', stmt, sep=',')
+   
+   client.disconnect()
+
+Data Sharing with Partners
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Export filtered data for partner (pandas-style)
+   stmt = select(Sale).where(Sale.partner_id == 'PARTNER123')
+   
+   # Create partner stage
+   client.stage.create_s3('partner_stage', 'partner-data', '', 'key', 'secret')
+   
+   # Export to partner stage
+   client.export.to_csv(
+       'stage://partner_stage/partner_sales.csv',
+       stmt,
+       sep=','
+   )
+   
+   client.disconnect()
+
+MatrixOne Limitations
+----------------------
+
+Current limitations to be aware of:
+
+* **No Simultaneous sep and quotechar**: MatrixOne doesn't support using both ``sep`` and ``quotechar`` at the same time. The SDK will use ``sep`` if both are provided.
+* **No Header Option**: ``header=True`` is not yet supported by MatrixOne's ``INTO OUTFILE``. The SDK will warn if you use it.
+* **Single-Character Separators**: MatrixOne may only support single-character separators. The SDK will warn if you use multi-character ``sep``.
 
 See Also
 --------
 
 * :doc:`stage_guide` - External stage management
-* :doc:`load_data_guide` - Data loading operations
+* :doc:`load_data_guide` - Data loading operations  
 * :doc:`quickstart` - Quick start guide
-
+* :doc:`api/export_manager` - ExportManager API reference

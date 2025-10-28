@@ -34,6 +34,10 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
   - Natural language and boolean search modes
   - Multi-column indexes with relevance scoring
 - 📊 **Metadata Analysis**: Table and column metadata analysis with statistics
+- 📤 **Data Export**: Pandas-style export with intuitive ``to_csv()`` and ``to_jsonl()`` methods
+  - Export to local files or external stages (``stage://`` protocol)
+  - Support for raw SQL, SQLAlchemy, and MatrixOne queries
+  - Transaction-aware exports for consistency
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently
@@ -174,6 +178,36 @@ client.disconnect()
 - ✅ Automatic rollback on errors
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
 - ✅ Full SQLAlchemy ORM support
+
+### Data Export (Pandas-Style)
+
+Export query results with pandas-compatible API:
+
+```python
+from matrixone import Client
+from sqlalchemy import select
+
+client = Client()
+client.connect(database='test')
+
+# CSV export (pandas-style)
+client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+
+# TSV export
+client.export.to_csv('/tmp/users.tsv', "SELECT * FROM users", sep='\t')
+
+# JSONL export
+client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
+
+# Export with SQLAlchemy
+stmt = select(User).where(User.age > 25)
+client.export.to_csv('/tmp/adults.csv', stmt)
+
+# Export to external stage
+client.export.to_csv('stage://s3_stage/backup.csv', stmt)
+
+client.disconnect()
+```
 
 ### Wrapping Existing Sessions (For Legacy Code)
 
