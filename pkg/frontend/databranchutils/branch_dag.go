@@ -60,7 +60,7 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 		node1.CloneTS = row.CloneTS
 		node1.ParentID = row.PTableID
 
-		if node2, ok = dag.nodes[row.PTableID]; !ok {
+		if _, ok = dag.nodes[row.PTableID]; !ok {
 			node2 = &dagNode{
 				TableID: row.PTableID,
 				Depth:   -1, // Initialize depth as -1 to mark it as "not calculated".

@@ -628,10 +628,10 @@ func mergeDiff(
 					// apply into dstRel
 					err = writeOneRow(row)
 				}
-			} else {
-				// diff delete
-				// do nothing
-			}
+			} //else {
+			// diff delete
+			// do nothing
+			//}
 
 			if err != nil {
 				return err
@@ -1032,10 +1032,10 @@ func diff(
 							tarDelsOnLCA = nil
 						}
 
-					} else {
-						// both delete on the LCA
-						// do nothing
-					}
+					} //else {
+					// both delete on the LCA
+					// do nothing
+					//}
 				}
 			}
 		}
@@ -1278,7 +1278,7 @@ func handleDelsOnLCA(
 			bufVals.WriteString("row(")
 			//bufVals.WriteString("(")
 
-			for j, _ := range tuple {
+			for j := range tuple {
 				formatValIntoString(ses, tuple[j], colTypes[pkIdxes[j]], bufVals)
 				if j != len(tuple)-1 {
 					bufVals.WriteString(", ")
@@ -1342,13 +1342,13 @@ func handleDelsOnLCA(
 		for i := range dels.Length() {
 			b := dels.GetRawBytesAt(i)
 			val := types.DecodeValue(b, dels.GetType().Oid)
-			switch val.(type) {
+			switch x := val.(type) {
 			case []byte:
 				buf.WriteString("'")
-				buf.WriteString(string(val.([]byte)))
+				buf.WriteString(string(x))
 				buf.WriteString("'")
 			default:
-				buf.WriteString(fmt.Sprintf("%v", val))
+				buf.WriteString(fmt.Sprintf("%v", x))
 			}
 
 			if i != dels.Length()-1 {
@@ -1452,7 +1452,7 @@ func buildShowDiffSchema(
 ) (mrs *MysqlResultSet, neededColIdxes []int, neededColTypes []types.Type, err error) {
 
 	var (
-		showCols []*MysqlColumn
+		showCols = make([]*MysqlColumn, 0, 2)
 	)
 
 	//  -----------------------------------------
