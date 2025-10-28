@@ -56,12 +56,12 @@ class Stage:
 
     def load_csv(self, filepath: str, table: Any, **kwargs) -> Any:
         """
-        Load CSV file from this stage.
+        Load CSV file from this stage (pandas-style).
 
         Args:
             filepath: File path relative to stage location
             table: SQLAlchemy table model or table name
-            **kwargs: Additional load options
+            **kwargs: Additional load options (sep, skiprows, names, etc.)
 
         Returns:
             ResultSet with load operation results
@@ -70,36 +70,69 @@ class Stage:
             >>> stage = client.stage.get('my_stage')
             >>> result = stage.load_csv('users.csv', User)
             >>> print(f"Loaded {result.affected_rows} rows")
+
+            >>> # With pandas-style options
+            >>> result = stage.load_csv('data.csv', User, sep='|', skiprows=1)
         """
         if self._client is None:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).from_stage_csv(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client).read_csv_stage(self.name, filepath, table, **kwargs)
 
     def load_tsv(self, filepath: str, table: Any, **kwargs) -> Any:
-        """Load TSV file from this stage"""
+        """
+        Load TSV file from this stage (pandas-style).
+
+        Args:
+            filepath: File path relative to stage location
+            table: SQLAlchemy table model or table name
+            **kwargs: Additional load options
+
+        Returns:
+            ResultSet with load operation results
+        """
         if self._client is None:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).from_stage_tsv(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client).read_csv_stage(self.name, filepath, table, sep='\t', **kwargs)
 
     def load_json(self, filepath: str, table: Any, **kwargs) -> Any:
-        """Load JSONLINE file from this stage"""
+        """
+        Load JSON Lines file from this stage (pandas-style).
+
+        Args:
+            filepath: File path relative to stage location
+            table: SQLAlchemy table model or table name
+            **kwargs: Additional load options (orient, compression, etc.)
+
+        Returns:
+            ResultSet with load operation results
+        """
         if self._client is None:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).from_stage_jsonline(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client).read_json_stage(self.name, filepath, table, **kwargs)
 
     def load_parquet(self, filepath: str, table: Any, **kwargs) -> Any:
-        """Load Parquet file from this stage"""
+        """
+        Load Parquet file from this stage (pandas-style).
+
+        Args:
+            filepath: File path relative to stage location
+            table: SQLAlchemy table model or table name
+            **kwargs: Additional load options
+
+        Returns:
+            ResultSet with load operation results
+        """
         if self._client is None:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).from_stage_parquet(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client).read_parquet_stage(self.name, filepath, table, **kwargs)
 
     def load_files(self, file_mappings: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """
@@ -147,64 +180,52 @@ class Stage:
 
         return results
 
-    def export_to(self, query: str, filename: str, **kwargs) -> Any:
+    def export_to_csv(self, filename: str, query: Any, **kwargs) -> Any:
         """
-        Export query results to this stage using SELECT ... INTO STAGE.
-
-        This is a convenience method that exports data directly to the stage.
-        It internally calls ExportManager.to_stage with this stage's name.
+        Export query results to CSV file in this stage (pandas-style).
 
         Args:
-            query: SELECT query to execute (without INTO clause)
             filename: Filename to create in the stage
-            **kwargs: Additional export options (see ExportManager.to_stage for full list)
-                format: Export file format (ExportFormat.CSV or ExportFormat.JSONLINE)
-                fields_terminated_by: Field delimiter
-                fields_enclosed_by: Field enclosure character
-                lines_terminated_by: Line terminator
-                header: Whether to include column headers (default: False)
-                max_file_size: Maximum size per file in bytes
-                force_quote: List of column names/indices to always quote
-                compression: Compression format (e.g., 'gzip', 'bzip2')
+            query: SELECT query (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Additional export options (sep, quotechar, lineterminator, header)
 
         Returns:
             ResultSet with export operation results
 
         Examples:
-            >>> # Get or create a stage
             >>> stage = client.stage.get('s3_backup_stage')
+            >>> stage.export_to_csv('orders.csv', "SELECT * FROM orders")
 
-            >>> # Export orders to CSV with headers and gzip compression
-            >>> stage.export_to(
-            ...     query="SELECT * FROM orders WHERE order_date > '2025-01-01'",
-            ...     filename="orders_2025_q1.csv",
-            ...     format=ExportFormat.CSV,
-            ...     header=True,
-            ...     compression="gzip"
-            ... )
-
-            >>> # Export aggregated data to JSONLINE
-            >>> stage.export_to(
-            ...     query='''
-            ...         SELECT product_id, SUM(quantity) as total_sold
-            ...         FROM sales
-            ...         GROUP BY product_id
-            ...     ''',
-            ...     filename="product_summary.jsonl",
-            ...     format=ExportFormat.JSONLINE
-            ... )
-
-        Note:
-            - The stage must exist and have write permissions
-            - For large exports, consider using max_file_size to split output
-            - Use compression to save storage and transfer costs
+            >>> # With pandas-style options
+            >>> stage.export_to_csv('data.csv', query, sep='|', header=True)
         """
         if self._client is None:
             raise ValueError("Stage object must be associated with a client to export data")
-
         from .export import ExportManager
 
-        return ExportManager(self._client).to_stage(query, self.name, filename, **kwargs)
+        return ExportManager(self._client).to_csv_stage(self.name, filename, query, **kwargs)
+
+    def export_to_jsonl(self, filename: str, query: Any, **kwargs) -> Any:
+        """
+        Export query results to JSONL file in this stage (pandas-style).
+
+        Args:
+            filename: Filename to create in the stage
+            query: SELECT query (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Additional export options
+
+        Returns:
+            ResultSet with export operation results
+
+        Examples:
+            >>> stage = client.stage.get('s3_backup_stage')
+            >>> stage.export_to_jsonl('events.jsonl', "SELECT * FROM events")
+        """
+        if self._client is None:
+            raise ValueError("Stage object must be associated with a client to export data")
+        from .export import ExportManager
+
+        return ExportManager(self._client).to_jsonl_stage(self.name, filename, query, **kwargs)
 
 
 class BaseStageManager:
@@ -887,11 +908,12 @@ class StageManager(BaseStageManager):
     def create_s3(
         self,
         name: str,
-        bucket_path: str,
-        aws_key: Optional[str] = None,
-        aws_secret: Optional[str] = None,
+        bucket: str,
+        path: str = "",
+        aws_key_id: Optional[str] = None,
+        aws_secret_key: Optional[str] = None,
         aws_region: Optional[str] = None,
-        profile: Optional[str] = None,
+        endpoint: Optional[str] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
     ) -> "Stage":
@@ -900,11 +922,12 @@ class StageManager(BaseStageManager):
 
         Args:
             name: Stage name
-            bucket_path: S3 bucket and path (e.g., 'my-bucket/data/')
-            aws_key: AWS access key (optional, can use environment variables)
-            aws_secret: AWS secret key (optional, can use environment variables)
-            aws_region: AWS region (optional, can use environment variables)
-            profile: AWS profile name (optional)
+            bucket: S3 bucket name (e.g., 'my-bucket')
+            path: Path within bucket (default: "")
+            aws_key_id: AWS access key ID (optional, can use environment variables)
+            aws_secret_key: AWS secret key (optional, can use environment variables)
+            aws_region: AWS region (optional)
+            endpoint: S3 endpoint URL for S3-compatible services like MinIO
             comment: Optional comment
             if_not_exists: Create only if not exists
 
@@ -913,43 +936,47 @@ class StageManager(BaseStageManager):
 
         Examples:
             >>> # Using explicit credentials
-            >>> stage = client.stage.create_s3('prod', 'my-bucket/data/',
-            ...                                aws_key='AKIA...', aws_secret='...')
+            >>> stage = client.stage.create_s3(
+            ...     'prod',
+            ...     bucket='my-bucket',
+            ...     path='data/',
+            ...     aws_key_id='AKIA...',
+            ...     aws_secret_key='...'
+            ... )
 
-            >>> # Using environment variables
-            >>> stage = client.stage.create_s3('prod', 'my-bucket/data/')
-
-            >>> # Using AWS profile
-            >>> stage = client.stage.create_s3('prod', 'my-bucket/data/', profile='default')
+            >>> # MinIO (S3-compatible)
+            >>> stage = client.stage.create_s3(
+            ...     'minio',
+            ...     bucket='my-bucket',
+            ...     endpoint='http://localhost:9000',
+            ...     aws_key_id='minioadmin',
+            ...     aws_secret_key='minioadmin'
+            ... )
         """
         import os
 
         # Build S3 URL
-        if not bucket_path.startswith('s3://'):
-            bucket_path = f's3://{bucket_path}'
+        bucket_path = f"s3://{bucket}"
+        if path:
+            bucket_path += f"/{path.strip('/')}"
 
-        credentials = {}
+        # Build credentials
+        credentials = None
 
-        # Handle AWS credentials
-        if aws_key and aws_secret:
-            credentials['AWS_KEY_ID'] = aws_key
-            credentials['AWS_SECRET_KEY'] = aws_secret
-            if aws_region:
-                credentials['AWS_REGION'] = aws_region
-        elif profile:
-            # Use AWS profile (MatrixOne will handle this)
-            credentials['AWS_PROFILE'] = profile
-        else:
-            # Try environment variables
-            aws_key = os.getenv('AWS_ACCESS_KEY_ID') or os.getenv('AWS_KEY_ID')
-            aws_secret = os.getenv('AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_KEY')
-            aws_region = os.getenv('AWS_DEFAULT_REGION') or os.getenv('AWS_REGION')
+        # Use provided credentials or fall back to environment variables
+        final_key_id = aws_key_id or os.getenv('AWS_ACCESS_KEY_ID') or os.getenv('AWS_KEY_ID')
+        final_secret = aws_secret_key or os.getenv('AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_KEY')
+        final_region = aws_region or os.getenv('AWS_DEFAULT_REGION') or os.getenv('AWS_REGION')
 
-            if aws_key and aws_secret:
-                credentials['AWS_KEY_ID'] = aws_key
-                credentials['AWS_SECRET_KEY'] = aws_secret
-                if aws_region:
-                    credentials['AWS_REGION'] = aws_region
+        if final_key_id and final_secret:
+            credentials = {
+                'AWS_KEY_ID': final_key_id,
+                'AWS_SECRET_KEY': final_secret,
+            }
+            if final_region:
+                credentials['AWS_REGION'] = final_region
+            if endpoint:
+                credentials['ENDPOINT'] = endpoint
 
         return self.create(name, bucket_path, credentials=credentials, comment=comment, if_not_exists=if_not_exists)
 
@@ -1252,23 +1279,50 @@ class AsyncStageManager(BaseStageManager):
         aws_key_id: Optional[str] = None,
         aws_secret_key: Optional[str] = None,
         aws_region: Optional[str] = None,
+        endpoint: Optional[str] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
     ) -> Stage:
-        """Create an S3 stage asynchronously"""
+        """
+        Create an S3 stage asynchronously.
+
+        Args:
+            name: Stage name
+            bucket: S3 bucket name
+            path: Path within bucket (default: "")
+            aws_key_id: AWS access key ID
+            aws_secret_key: AWS secret key
+            aws_region: AWS region
+            endpoint: S3 endpoint URL for S3-compatible services like MinIO
+            comment: Optional comment
+            if_not_exists: Create only if not exists
+
+        Returns:
+            Created Stage object
+        """
+        import os
+
         # Build S3 URL
         bucket_path = f"s3://{bucket}"
         if path:
             bucket_path += f"/{path.strip('/')}"
 
-        # Build credentials if provided
+        # Build credentials
         credentials = None
-        if aws_key_id and aws_secret_key:
+
+        # Use provided credentials or fall back to environment variables
+        final_key_id = aws_key_id or os.getenv('AWS_ACCESS_KEY_ID') or os.getenv('AWS_KEY_ID')
+        final_secret = aws_secret_key or os.getenv('AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_KEY')
+        final_region = aws_region or os.getenv('AWS_DEFAULT_REGION') or os.getenv('AWS_REGION')
+
+        if final_key_id and final_secret:
             credentials = {
-                'AWS_KEY_ID': aws_key_id,
-                'AWS_SECRET_KEY': aws_secret_key,
+                'AWS_KEY_ID': final_key_id,
+                'AWS_SECRET_KEY': final_secret,
             }
-            if aws_region:
-                credentials['AWS_REGION'] = aws_region
+            if final_region:
+                credentials['AWS_REGION'] = final_region
+            if endpoint:
+                credentials['ENDPOINT'] = endpoint
 
         return await self.create(name, bucket_path, credentials=credentials, comment=comment, if_not_exists=if_not_exists)
