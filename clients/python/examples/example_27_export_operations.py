@@ -265,11 +265,23 @@ def example_8_export_to_stage(client: Client, tmpdir: str):
 
         print("✓ Export to stage completed")
 
+        # Export to stage using convenience method (pandas-style)
+        print(f"\nExporting to stage using to_csv_stage method")
+        client.export.to_csv_stage(stage_name, 'backup2.csv', "SELECT * FROM export_products")
+
+        print("✓ Export to stage (convenience method) completed")
+
         # Export JSONL to stage
         print(f"\nExporting to stage://{stage_name}/backup.jsonl")
         client.export.to_jsonl(f'stage://{stage_name}/backup.jsonl', "SELECT * FROM export_products")
 
         print("✓ JSONL export to stage completed")
+
+        # Export JSONL to stage using convenience method
+        print(f"\nExporting JSONL to stage using to_jsonl_stage method")
+        client.export.to_jsonl_stage(stage_name, 'backup2.jsonl', "SELECT * FROM export_products")
+
+        print("✓ JSONL export to stage (convenience method) completed")
 
     finally:
         # Clean up stage

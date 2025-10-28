@@ -271,8 +271,11 @@ client.export.to_csv('/tmp/adults.csv', stmt, sep='|')
 # Export to JSONL
 client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
 
-# Export to external stage
+# Export to external stage (using stage:// protocol)
 client.export.to_csv('stage://s3_stage/backup.csv', stmt)
+
+# Export to external stage (using convenience method)
+client.export.to_csv_stage('s3_stage', 'backup2.csv', stmt)
 
 # Export within transaction
 with client.session() as session:
@@ -284,6 +287,7 @@ client.disconnect()
 
 **Key Features:**
 - ✅ Pandas-compatible API (``to_csv()``, ``to_jsonl()``)
+- ✅ Convenience methods for stage exports (``to_csv_stage()``, ``to_jsonl_stage()``)
 - ✅ Support for raw SQL, SQLAlchemy, and MatrixOne queries
 - ✅ Export to local files or external stages (``stage://`` protocol)
 - ✅ Customizable CSV options (sep, quotechar, lineterminator)

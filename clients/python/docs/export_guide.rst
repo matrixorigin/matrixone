@@ -152,6 +152,13 @@ Export to S3 Stage
        "SELECT * FROM sales WHERE date = CURDATE()"
    )
    
+   # Export to stage using convenience method (pandas-style)
+   client.export.to_csv_stage(
+       'backup_stage',
+       'daily_export2.csv',
+       "SELECT * FROM sales WHERE date = CURDATE()"
+   )
+   
    client.disconnect()
 
 Export to Local Stage
@@ -173,9 +180,23 @@ Export to Local Stage
        "SELECT * FROM products"
    )
    
+   # Export to local stage using convenience method
+   client.export.to_csv_stage(
+       'local_stage',
+       'backup2.csv',
+       "SELECT * FROM products"
+   )
+   
    # JSONL to stage
    client.export.to_jsonl(
        'stage://local_stage/backup.jsonl',
+       "SELECT * FROM products"
+   )
+   
+   # JSONL to stage using convenience method
+   client.export.to_jsonl_stage(
+       'local_stage',
+       'backup2.jsonl',
        "SELECT * FROM products"
    )
    

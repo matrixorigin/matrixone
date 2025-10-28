@@ -281,6 +281,11 @@ class TestExportToStage:
 
             assert result is not None
 
+            # Test new to_csv_stage method (pandas-style)
+            result2 = test_client.export.to_csv_stage(stage_name, 'test_export2.csv', "SELECT * FROM export_test_data")
+
+            assert result2 is not None
+
         finally:
             test_client.stage.drop(stage_name, if_exists=True)
             import shutil
@@ -308,6 +313,11 @@ class TestExportToStage:
             result = test_client.export.to_jsonl(f'stage://{stage_name}/test_export.jsonl', "SELECT * FROM export_test_data")
 
             assert result is not None
+
+            # Test new to_jsonl_stage method (pandas-style)
+            result2 = test_client.export.to_jsonl_stage(stage_name, 'test_export2.jsonl', "SELECT * FROM export_test_data")
+
+            assert result2 is not None
 
         finally:
             test_client.stage.drop(stage_name, if_exists=True)

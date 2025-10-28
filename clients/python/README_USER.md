@@ -203,8 +203,11 @@ client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
 stmt = select(User).where(User.age > 25)
 client.export.to_csv('/tmp/adults.csv', stmt)
 
-# Export to external stage
+# Export to external stage (using stage:// protocol)
 client.export.to_csv('stage://s3_stage/backup.csv', stmt)
+
+# Export to external stage (using convenience method)
+client.export.to_csv_stage('s3_stage', 'backup2.csv', stmt)
 
 client.disconnect()
 ```

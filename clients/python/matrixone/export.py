@@ -346,6 +346,111 @@ class ExportManager:
         # Execute export
         return self.client.execute(export_sql)
 
+    def to_csv_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        query: Union[str, Any],
+        *,
+        sep: str = ',',
+        quotechar: Optional[str] = None,
+        lineterminator: str = '\n',
+        header: bool = False,
+        **kwargs,
+    ) -> Any:
+        """
+        Export query results to CSV file in an external stage.
+
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
+
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            sep: Field separator/delimiter (default: ',')
+            quotechar: Character to quote fields containing special characters
+            lineterminator: Line terminator (default: '\\n')
+            header: Include column headers (not yet supported by MatrixOne)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Export to S3 stage
+            client.export.to_csv_stage('s3_stage', 'data.csv', "SELECT * FROM users")
+
+            # With custom separator
+            client.export.to_csv_stage('backup_stage', 'data.tsv', query, sep='\t')
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.active == True)
+            client.export.to_csv_stage('active_stage', 'active_users.csv', stmt)
+
+        Note:
+            - The stage must exist before calling this method
+            - Use client.stage.create_s3() or client.stage.create_local() to create stages
+            - MatrixOne doesn't support using sep and quotechar simultaneously
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to to_csv method
+        return self.to_csv(
+            path=stage_path,
+            query=query,
+            sep=sep,
+            quotechar=quotechar,
+            lineterminator=lineterminator,
+            header=header,
+            **kwargs,
+        )
+
+    def to_jsonl_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        query: Union[str, Any],
+        **kwargs,
+    ) -> Any:
+        """
+        Export query results to JSONL file in an external stage.
+
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
+
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Export to S3 stage
+            client.export.to_jsonl_stage('s3_stage', 'data.jsonl', "SELECT * FROM users")
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.verified == True)
+            client.export.to_jsonl_stage('verified_stage', 'verified.jsonl', stmt)
+
+        Note:
+            - The stage must exist before calling this method
+            - Use client.stage.create_s3() or client.stage.create_local() to create stages
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to to_jsonl method
+        return self.to_jsonl(path=stage_path, query=query, **kwargs)
+
 
 class AsyncExportManager:
     """
@@ -440,3 +545,99 @@ class AsyncExportManager:
 
         # Execute export asynchronously
         return await self.client.execute(export_sql)
+
+    async def to_csv_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        query: Union[str, Any],
+        *,
+        sep: str = ',',
+        quotechar: Optional[str] = None,
+        lineterminator: str = '\n',
+        header: bool = False,
+        **kwargs,
+    ) -> Any:
+        """
+        Async export query results to CSV file in an external stage.
+
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
+
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            sep: Field separator/delimiter (default: ',')
+            quotechar: Character to quote fields containing special characters
+            lineterminator: Line terminator (default: '\\n')
+            header: Include column headers (not yet supported by MatrixOne)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Async export to S3 stage
+            await client.export.to_csv_stage('s3_stage', 'data.csv', "SELECT * FROM users")
+
+            # With custom separator
+            await client.export.to_csv_stage('backup_stage', 'data.tsv', query, sep='\t')
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.active == True)
+            await client.export.to_csv_stage('active_stage', 'active_users.csv', stmt)
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to to_csv method
+        return await self.to_csv(
+            path=stage_path,
+            query=query,
+            sep=sep,
+            quotechar=quotechar,
+            lineterminator=lineterminator,
+            header=header,
+            **kwargs,
+        )
+
+    async def to_jsonl_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        query: Union[str, Any],
+        **kwargs,
+    ) -> Any:
+        """
+        Async export query results to JSONL file in an external stage.
+
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
+
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Async export to S3 stage
+            await client.export.to_jsonl_stage('s3_stage', 'data.jsonl', "SELECT * FROM users")
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.verified == True)
+            await client.export.to_jsonl_stage('verified_stage', 'verified.jsonl', stmt)
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to to_jsonl method
+        return await self.to_jsonl(path=stage_path, query=query, **kwargs)
