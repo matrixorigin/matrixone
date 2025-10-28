@@ -390,7 +390,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return moerr.NewInternalError(proc.Ctx, "unknown unit")
 			}
 		}
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
