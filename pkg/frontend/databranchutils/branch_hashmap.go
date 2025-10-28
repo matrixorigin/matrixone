@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"container/list"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -731,7 +730,6 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 		return nil, nil, err
 	}
 	if buf == nil {
-		fmt.Println("spill")
 		if err := bh.spill(size); err != nil {
 			return nil, nil, err
 		}

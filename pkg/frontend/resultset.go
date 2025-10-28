@@ -491,14 +491,6 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return strconv.FormatUint(uint64(v), 10), nil
 	case types.Rowid:
 		return v.String(), nil
-	case types.Decimal64:
-		return v.Format(0), nil
-	case types.Decimal128:
-		return v.Format(0), nil
-	case types.Decimal256:
-		return v.Format(0), nil
-	case types.Timestamp:
-		return v.String(), nil
 	default:
 		return "", moerr.NewInternalErrorf(ctx, "unsupported type %T ", v)
 	}
