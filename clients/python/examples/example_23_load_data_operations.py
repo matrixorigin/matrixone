@@ -40,7 +40,8 @@ from matrixone import Client, LoadDataFormat, CompressionFormat, JsonDataStructu
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params, print_config
 from matrixone.orm import declarative_base
-from sqlalchemy import Column, Integer, String, DECIMAL, Text
+from sqlalchemy import Column, Integer,SmallInteger, String, DECIMAL, Text
+from sqlalchemy.dialects.mysql import TINYINT
 
 # Create Base for model definitions
 Base = declarative_base()
@@ -955,6 +956,8 @@ class LoadDataOperationsDemo:
                 __tablename__ = 'test_stage_parquet'
                 id = Column(BigInteger, primary_key=True, nullable=False)
                 name = Column(String(100), nullable=False)
+                int8Column = Column(TINYINT, nullable=False)
+                int16Column = Column(SmallInteger, nullable=False)
 
             # Create table
             client.drop_table('test_stage_parquet')
@@ -966,11 +969,13 @@ class LoadDataOperationsDemo:
             parquet_file = os.path.join(tmpfiles_dir, 'test_stage.parq')
 
             # Create parquet data with explicit schema (non-nullable to match table definition)
-            schema = pa.schema([pa.field('id', pa.int64(), nullable=False), pa.field('name', pa.string(), nullable=False)])
+            schema = pa.schema([pa.field('id', pa.int64(), nullable=False), pa.field('name', pa.string(), nullable=False), pa.field('int8column', pa.int8(), nullable=False), pa.field('int16column', pa.int16(), nullable=False)])
             table = pa.table(
                 {
                     'id': pa.array([1, 2, 3, 4, 5], type=pa.int64()),
                     'name': pa.array(['Alice', 'Bob', 'Charlie', 'Diana', 'Eve'], type=pa.string()),
+                    'int8column': pa.array([1, 2, 3, 4, 5], type=pa.int8()),
+                    'int16column': pa.array([100, 200, 300, 400, 500], type=pa.int16()),
                 },
                 schema=schema,
             )
