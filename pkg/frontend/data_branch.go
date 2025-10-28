@@ -267,9 +267,9 @@ func handleDataBranch(
 	case *tree.DataBranchDeleteTable:
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
-		return handleSnapshotDiff(execCtx, ses, st, nil)
+		return handleBranchDiff(execCtx, ses, st, nil)
 	case *tree.DataBranchMerge:
-		return handleSnapshotMerge(execCtx, ses, st)
+		return handleBranchMerge(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
@@ -277,7 +277,7 @@ func handleDataBranch(
 	return nil
 }
 
-func handleSnapshotDiff(
+func handleBranchDiff(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.DataBranchDiff,
@@ -364,7 +364,7 @@ func handleSnapshotDiff(
 	return
 }
 
-func handleSnapshotMerge(
+func handleBranchMerge(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.DataBranchMerge,
@@ -424,7 +424,7 @@ func handleSnapshotMerge(
 		extra.inputArgs.tarSnapshot = tables.tarSnapshot
 		extra.inputArgs.baseSnapshot = tables.baseSnapshot
 
-		if err = handleSnapshotDiff(execCtx, ses, branchDiff, &extra); err != nil {
+		if err = handleBranchDiff(execCtx, ses, branchDiff, &extra); err != nil {
 			return
 		}
 
@@ -500,7 +500,7 @@ func handleSnapshotMerge(
 	extra1.inputArgs.tarSnapshot = tables.tarSnapshot
 	extra1.inputArgs.baseSnapshot = lcaSnapshot
 
-	if err = handleSnapshotDiff(execCtx, ses, branchDiff, &extra1); err != nil {
+	if err = handleBranchDiff(execCtx, ses, branchDiff, &extra1); err != nil {
 		return
 	}
 
@@ -510,7 +510,7 @@ func handleSnapshotMerge(
 	extra2.inputArgs.tarSnapshot = tables.baseSnapshot
 	extra2.inputArgs.baseSnapshot = lcaSnapshot
 
-	if err = handleSnapshotDiff(execCtx, ses, branchDiff, &extra2); err != nil {
+	if err = handleBranchDiff(execCtx, ses, branchDiff, &extra2); err != nil {
 		return
 	}
 
@@ -1752,6 +1752,8 @@ func decideCollectRange(
 		tarCTS  types.TS
 		baseCTS types.TS
 
+		tblCommitTS []types.TS
+
 		tarTableID  = tables.tarRel.GetTableID(ctx)
 		baseTableID = tables.baseRel.GetTableID(ctx)
 
@@ -1772,17 +1774,17 @@ func decideCollectRange(
 		baseSp = types.TimestampToTS(*tables.baseSnapshot.TS)
 	}
 
-	if tarCTS, err = getTableCreationCommitTS(
-		ctx, eng, mp, types.MinTs(), tarSp, txnOp, tables.tarRel,
+	if tblCommitTS, err = getTablesCreationCommitTS(ctx, eng, mp,
+		[]uint64{tables.tarRel.GetTableID(ctx), tables.baseRel.GetTableID(ctx)},
+		[]types.TS{types.MinTs(), types.MinTs()},
+		[]types.TS{tarSp, baseSp},
+		txnOp,
 	); err != nil {
 		return
 	}
 
-	if baseCTS, err = getTableCreationCommitTS(
-		ctx, eng, mp, types.MinTs(), baseSp, txnOp, tables.baseRel,
-	); err != nil {
-		return
-	}
+	tarCTS = tblCommitTS[0]
+	baseCTS = tblCommitTS[1]
 
 	// Note That:
 	// 1. the branchTS+1 cannot skip the cloned data, we need get the clone commitTS (the table creation commitTS)
@@ -1954,15 +1956,15 @@ func decideCollectRange(
 	return
 }
 
-func getTableCreationCommitTS(
+func getTablesCreationCommitTS(
 	ctx context.Context,
 	eng engine.Engine,
 	mp *mpool.MPool,
-	branchTS types.TS,
-	snapshot types.TS,
+	tblIds []uint64,
+	branchTS []types.TS,
+	snapshot []types.TS,
 	txnOp client.TxnOperator,
-	rel engine.Relation,
-) (commitTS types.TS, err error) {
+) (commitTS []types.TS, err error) {
 
 	var (
 		data          *batch.Batch
@@ -1986,20 +1988,26 @@ func getTableCreationCommitTS(
 		return
 	}
 
+	minBranch := slices.MinFunc(branchTS, func(a, b types.TS) int { return a.Compare(&b) })
+	maxSnapshot := slices.MaxFunc(snapshot, func(a, b types.TS) int { return a.Compare(&b) })
+
 	zeroTS := types.MinTs()
-	if branchTS.EQ(&zeroTS) {
+	if minBranch.EQ(&zeroTS) {
 		layout := "2006-01-02 15:04:05"
 		golangZero, _ := time.Parse(layout, layout)
-		branchTS = types.BuildTS(golangZero.UnixNano(), 0)
+		minBranch = types.BuildTS(golangZero.UnixNano(), 0)
 	}
 
 	if moTableHandle, err = moTableRel.CollectChanges(
-		ctx, branchTS, snapshot, true, mp,
+		ctx, minBranch, maxSnapshot, true, mp,
 	); err != nil {
 		return
 	}
 
-	for commitTS.IsEmpty() {
+	commitTS = make([]types.TS, len(tblIds))
+
+	cnt := len(commitTS)
+	for cnt > 0 {
 		if data, tombstone, _, err = moTableHandle.Next(ctx, mp); err != nil {
 			return
 		} else if data == nil && tombstone == nil {
@@ -2014,15 +2022,20 @@ func getTableCreationCommitTS(
 			relIdCol := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
 			commitTSCol := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
 
-			if idx := slices.Index(relIdCol, rel.GetTableID(ctx)); idx != -1 {
-				commitTS = commitTSCol[idx]
+			for i := range commitTS {
+				if commitTS[i].IsEmpty() {
+					if idx := slices.Index(relIdCol, tblIds[i]); idx != -1 {
+						commitTS[i] = commitTSCol[idx]
+						cnt--
+					}
+				}
 			}
 
 			data.Clean(mp)
 		}
 	}
 
-	if commitTS.IsEmpty() {
+	if cnt != 0 {
 		err = moerr.NewInternalErrorNoCtx("cannot find the commit ts of the cloned table")
 	}
 
