@@ -1774,9 +1774,9 @@ func decideCollectRange(
 		baseSp = types.TimestampToTS(*tables.baseSnapshot.TS)
 	}
 
-	if tblCommitTS, err = getTablesCreationCommitTS(ctx, eng, mp,
-		[]uint64{tables.tarRel.GetTableID(ctx), tables.baseRel.GetTableID(ctx)},
-		[]types.TS{types.MinTs(), types.MinTs()},
+	if tblCommitTS, err = getTablesCreationCommitTS(
+		ctx, ses, eng, mp,
+		tables.tarRel, tables.baseRel,
 		[]types.TS{tarSp, baseSp},
 		txnOp,
 	); err != nil {
@@ -1958,19 +1958,24 @@ func decideCollectRange(
 
 func getTablesCreationCommitTS(
 	ctx context.Context,
+	ses *Session,
 	eng engine.Engine,
 	mp *mpool.MPool,
-	tblIds []uint64,
-	branchTS []types.TS,
+	tar engine.Relation,
+	base engine.Relation,
 	snapshot []types.TS,
 	txnOp client.TxnOperator,
 ) (commitTS []types.TS, err error) {
 
 	var (
+		sqlRet        executor.Result
 		data          *batch.Batch
 		tombstone     *batch.Batch
 		moTableRel    engine.Relation
 		moTableHandle engine.ChangesHandle
+
+		from types.TS
+		end  types.TS
 	)
 
 	defer func() {
@@ -1988,26 +1993,52 @@ func getTablesCreationCommitTS(
 		return
 	}
 
-	minBranch := slices.MinFunc(branchTS, func(a, b types.TS) int { return a.Compare(&b) })
-	maxSnapshot := slices.MaxFunc(snapshot, func(a, b types.TS) int { return a.Compare(&b) })
+	buf := acquireBuffer()
+	defer func() {
+		releaseBuffer(buf)
+		sqlRet.Close()
+	}()
 
-	zeroTS := types.MinTs()
-	if minBranch.EQ(&zeroTS) {
-		layout := "2006-01-02 15:04:05"
-		golangZero, _ := time.Parse(layout, layout)
-		minBranch = types.BuildTS(golangZero.UnixNano(), 0)
+	// pk ==> account_id and reldatabase and relname
+	buf.WriteString("select min(created_time) from mo_catalog.mo_tables where ")
+	buf.WriteString(fmt.Sprintf(
+		"(account_id = %d and reldatabase = '%s' and relname = '%s')",
+		ses.accountId, tar.GetTableDef(ctx).DbName, tar.GetTableName(),
+	))
+	buf.WriteString(" OR ")
+	buf.WriteString(fmt.Sprintf(
+		"(account_id = %d and reldatabase = '%s' and relname = '%s')",
+		ses.accountId, base.GetTableDef(ctx).DbName, base.GetTableName(),
+	))
+
+	if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+		return
 	}
 
+	if len(sqlRet.Batches) != 1 && sqlRet.Batches[0].RowCount() != 1 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"get table created time for (%s, %s) failed",
+			tar.GetTableName(), base.GetTableName(),
+		)
+	}
+
+	from = types.BuildTS(
+		vector.GetFixedAtWithTypeCheck[types.Timestamp](
+			sqlRet.Batches[0].Vecs[0], 0).Unix(),
+		0,
+	)
+
+	end = slices.MaxFunc(snapshot, func(a, b types.TS) int { return a.Compare(&b) })
+
 	if moTableHandle, err = moTableRel.CollectChanges(
-		ctx, minBranch, maxSnapshot, true, mp,
+		ctx, from, end, true, mp,
 	); err != nil {
 		return
 	}
 
-	commitTS = make([]types.TS, len(tblIds))
+	commitTS = make([]types.TS, 2)
 
-	cnt := len(commitTS)
-	for cnt > 0 {
+	for commitTS[0].IsEmpty() || commitTS[1].IsEmpty() {
 		if data, tombstone, _, err = moTableHandle.Next(ctx, mp); err != nil {
 			return
 		} else if data == nil && tombstone == nil {
@@ -2022,21 +2053,21 @@ func getTablesCreationCommitTS(
 			relIdCol := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
 			commitTSCol := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
 
-			for i := range commitTS {
-				if commitTS[i].IsEmpty() {
-					if idx := slices.Index(relIdCol, tblIds[i]); idx != -1 {
-						commitTS[i] = commitTSCol[idx]
-						cnt--
-					}
-				}
+			if idx := slices.Index(relIdCol, tar.GetTableID(ctx)); idx != -1 {
+				commitTS[0] = commitTSCol[idx]
+			} else if idx = slices.Index(relIdCol, base.GetTableID(ctx)); idx != -1 {
+				commitTS[1] = commitTSCol[idx]
 			}
 
 			data.Clean(mp)
 		}
 	}
 
-	if cnt != 0 {
-		err = moerr.NewInternalErrorNoCtx("cannot find the commit ts of the cloned table")
+	if commitTS[0].IsEmpty() || commitTS[1].IsEmpty() {
+		err = moerr.NewInternalErrorNoCtxf(
+			"get table created time for (%s, %s) failed",
+			tar.GetTableName(), base.GetTableName(),
+		)
 	}
 
 	return commitTS, err
