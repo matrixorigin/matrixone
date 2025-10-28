@@ -2021,9 +2021,9 @@ func getTablesCreationCommitTS(
 		)
 	}
 
+	ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](sqlRet.Batches[0].Vecs[0], 0)
 	from = types.BuildTS(
-		vector.GetFixedAtWithTypeCheck[types.Timestamp](
-			sqlRet.Batches[0].Vecs[0], 0).Unix(),
+		ts.ToDatetime(ses.timeZone).ConvertToGoTime(ses.timeZone).UnixNano(),
 		0,
 	)
 
@@ -2054,7 +2054,9 @@ func getTablesCreationCommitTS(
 
 			if idx := slices.Index(relIdCol, tar.GetTableID(ctx)); idx != -1 {
 				commitTS[0] = commitTSCol[idx]
-			} else if idx = slices.Index(relIdCol, base.GetTableID(ctx)); idx != -1 {
+			}
+
+			if idx := slices.Index(relIdCol, base.GetTableID(ctx)); idx != -1 {
 				commitTS[1] = commitTSCol[idx]
 			}
 
