@@ -441,6 +441,9 @@ func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *op
 		res = make([]T, cnt)
 		for i := range res {
 			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			if err != nil {
+				return nil, nil, err
+			}
 			if err = res[i].UnmarshalBinary(bs); err != nil {
 				return nil, nil, err
 			}
@@ -512,9 +515,15 @@ func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	ag.extraConfig = make([]byte, exLen)
-	if _, err := io.ReadFull(r, ag.extraConfig); err != nil {
-		return err
+
+	// if exLen is 0, the extra config is nil, we SHOULD NOT create a
+	// zero length slice, which will cause failure later when people
+	// check extraConfig != nil
+	if exLen > 0 {
+		ag.extraConfig = make([]byte, exLen)
+		if _, err := io.ReadFull(r, ag.extraConfig); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -309,6 +309,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) UnmarshalFromReader(reader io.
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return nil
 }

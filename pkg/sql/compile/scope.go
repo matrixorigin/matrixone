@@ -987,7 +987,10 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				s.NodeInfo.Data = newRelData
 				//find the last mergegroup
 				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup == nil {
+				if mergeGroup != nil {
+					mergeGroup.PartialResults = partialResults
+					mergeGroup.PartialResultTypes = partialResultTypes
+				} else {
 					panic("can't find merge group operator for agg optimize!")
 				}
 			}

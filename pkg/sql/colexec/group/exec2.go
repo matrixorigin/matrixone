@@ -103,6 +103,15 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		}
 	}
 
+	if group.ctr.mtyp == H0 {
+		// no group by, only one group, always create the dummy group by batch.
+		if len(group.ctr.groupByBatches) == 0 {
+			group.ctr.groupByBatches = append(group.ctr.groupByBatches,
+				group.ctr.createNewGroupByBatch(proc, group.ctr.groupByEvaluate.Vec, 1))
+			group.ctr.groupByBatches[0].SetRowCount(1)
+		}
+	}
+
 	needMakeAggArg := true
 	if len(group.ctr.aggArgEvaluate) == len(group.Aggs) {
 		needMakeAggArg = false
@@ -200,6 +209,8 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	case vm.Build:
 		// receive all data, loop till exhuasted.
 		for {
+			proc.DebugBreakDump()
+
 			r, err := vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
 			if err != nil {
 				return vm.CancelResult, err
@@ -291,7 +302,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			originGroupCount := group.ctr.hr.Hash.GroupCount()
 
 			// insert the mini batch into the hash table.
-			vals, _, err := group.ctr.hr.Itr.Insert(i, n, bat.Vecs)
+			vals, _, err := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err != nil {
 				return false, err
 			}
@@ -300,7 +311,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 
 			// append the mini batch to the group by batches, return the number of added
 			// groups.
-			more, err := group.ctr.appendGroupByBatch(proc, bat.Vecs, i, insertList)
+			more, err := group.ctr.appendGroupByBatch(proc, group.ctr.groupByEvaluate.Vec, i, insertList)
 			if err != nil {
 				return false, err
 			}
@@ -379,8 +390,10 @@ func (ctr *container) appendGroupByBatch(
 	}
 
 	thisTime := insertList
+	addedRows := toIncrease
 	if toIncrease > spaceLeft {
 		thisTime = insertList[:kth+1]
+		addedRows = spaceLeft
 	}
 
 	// there is enough space in the current batch to insert thisTime.
@@ -390,6 +403,7 @@ func (ctr *container) appendGroupByBatch(
 			return 0, err
 		}
 	}
+	currBatch.AddRowCount(addedRows)
 
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
@@ -439,29 +453,28 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 
 	batch := group.ctr.groupByBatches[curr]
 
-	var buf bytes.Buffer
 	// serialize aggs to ExtraBuf1.
 	if curr == 0 {
-		buf.Write(types.EncodeInt32(&group.ctr.mtyp))
+		var buf1 bytes.Buffer
+		buf1.Write(types.EncodeInt32(&group.ctr.mtyp))
 		nAggs := int32(len(group.Aggs))
-		buf.Write(types.EncodeInt32(&nAggs))
+		buf1.Write(types.EncodeInt32(&nAggs))
 		if nAggs > 0 {
-			buf.Write(types.EncodeInt32(&nAggs))
 			for _, agExpr := range group.Aggs {
-				agExpr.MarshalToBuffer(&buf)
+				agExpr.MarshalToBuffer(&buf1)
 			}
-			batch.ExtraBuf1 = buf.Bytes()
 		}
-		buf.Reset()
+		batch.ExtraBuf1 = buf1.Bytes()
 	}
 
 	// serialize curr chunk of aggList entries to batch
+	var buf2 bytes.Buffer
 	nAggs := int32(len(group.ctr.aggList))
-	buf.Write(types.EncodeInt32(&nAggs))
+	buf2.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf)
+		ag.SaveIntermediateResultOfChunk(curr, &buf2)
 	}
-	batch.ExtraBuf2 = buf.Bytes()
+	batch.ExtraBuf2 = buf2.Bytes()
 
 	res := vm.NewCallResult()
 	res.Batch = batch
