@@ -62,8 +62,8 @@ class TestLoadDataOperations:
             f.write(csv_content)
 
         try:
-            # Load data using simplified CSV interface with model
-            result = test_client.load_data.from_csv(csv_file, User)
+            # Load data using pandas-style CSV interface with model
+            result = test_client.load_data.read_csv(csv_file, table=User)
             assert result.affected_rows == 3
 
             # Verify data using query builder
@@ -99,8 +99,8 @@ class TestLoadDataOperations:
             f.write(csv_content)
 
         try:
-            # Load data with header using simplified CSV interface with model
-            result = test_client.load_data.from_csv(csv_file, Product, ignore_lines=1)
+            # Load data with header using pandas-style CSV interface with model
+            result = test_client.load_data.read_csv(csv_file, table=Product, skiprows=1)
             assert result.affected_rows == 3
 
             # Verify data using count
@@ -138,8 +138,8 @@ class TestLoadDataOperations:
             f.write(pipe_content)
 
         try:
-            # Load data with pipe delimiter using simplified CSV interface with model
-            result = test_client.load_data.from_csv(pipe_file, Order, delimiter='|')
+            # Load data with pipe delimiter using pandas-style CSV interface with model
+            result = test_client.load_data.read_csv(pipe_file, table=Order, sep='|')
             assert result.affected_rows == 2
 
             # Verify data
@@ -174,7 +174,7 @@ class TestLoadDataOperations:
 
         try:
             # Load data with quoted fields using simplified CSV interface with model
-            result = test_client.load_data.from_csv(csv_file, Address, delimiter=',', enclosed_by='"')
+            result = test_client.load_data.read_csv(csv_file, table=Address, sep=',', quotechar='"')
             assert result.affected_rows == 2
 
             # Verify data contains commas using query builder
@@ -209,7 +209,7 @@ class TestLoadDataOperations:
 
         try:
             # Load tab-separated data using simplified TSV interface with model
-            result = test_client.load_data.from_tsv(tsv_file, Log)
+            result = test_client.load_data.read_csv(tsv_file, table=Log, sep='\t')
             assert result.affected_rows == 2
 
         finally:
@@ -241,7 +241,7 @@ class TestLoadDataOperations:
 
         try:
             # Load data into specific columns using simplified CSV interface with model
-            result = test_client.load_data.from_csv(csv_file, Employee, columns=['id', 'name', 'email'])
+            result = test_client.load_data.read_csv(csv_file, table=Employee, names=['id', 'name', 'email'])
             assert result.affected_rows == 2
 
             # Verify department is NULL using query builder
@@ -291,8 +291,8 @@ class TestLoadDataOperations:
             # Load data within transaction
             with test_client.session() as tx:
                 # Load data using simplified CSV interface within transaction with models
-                result1 = tx.load_data.from_csv(accounts_file, Account)
-                result2 = tx.load_data.from_csv(transactions_file, Transaction)
+                result1 = tx.load_data.read_csv(accounts_file, table=Account)
+                result2 = tx.load_data.read_csv(transactions_file, table=Transaction)
 
                 assert result1.rowcount == 2
                 assert result2.rowcount == 2
@@ -331,7 +331,7 @@ class TestLoadDataOperations:
 
         try:
             # Load data from empty file using simplified CSV interface with model
-            result = test_client.load_data.from_csv(empty_file, EmptyTest)
+            result = test_client.load_data.read_csv(empty_file, table=EmptyTest)
             assert result.affected_rows == 0
 
             # Verify table is empty
@@ -363,7 +363,7 @@ class TestLoadDataOperations:
 
         try:
             # Load data using simplified CSV interface with model
-            result = test_client.load_data.from_csv(large_file, LargeData)
+            result = test_client.load_data.read_csv(large_file, table=LargeData)
             assert result.affected_rows == 1000
 
             # Verify count
@@ -445,7 +445,7 @@ class TestLoadDataErrorHandling:
 
         try:
             # Load data with OPTIONALLY ENCLOSED BY
-            result = test_client.load_data.from_csv(csv_file, MixedData, enclosed_by='"', optionally_enclosed=True)
+            result = test_client.load_data.read_csv(csv_file, table=MixedData, quotechar='"', quoting=True)
             assert result.affected_rows == 4
 
             # Verify data loaded correctly
@@ -477,7 +477,7 @@ class TestLoadDataErrorHandling:
         try:
             # Load data from inline CSV string
             csv_data = "1,Alice,value1\n2,Bob,value2\n3,Charlie,value3\n"
-            result = test_client.load_data.from_csv_inline(csv_data, InlineData)
+            result = test_client.load_data.read_csv_inline(csv_data, table=InlineData)
             assert result.affected_rows == 3
 
             # Verify data
@@ -503,9 +503,7 @@ class TestLoadDataErrorHandling:
         try:
             # Load data from inline JSONLINE string
             jsonline_data = '{"id":1,"name":"Alice"}\n{"id":2,"name":"Bob"}\n'
-            result = test_client.load_data.from_jsonline_inline(
-                jsonline_data, InlineJsonData, structure=JsonDataStructure.OBJECT
-            )
+            result = test_client.load_data.read_json_inline(jsonline_data, table=InlineJsonData, orient='records')
             assert result.affected_rows == 2
 
             # Verify data
@@ -549,17 +547,15 @@ class TestLoadDataErrorHandling:
             test_client.execute(f'CREATE STAGE IF NOT EXISTS pytest_stage URL="file://{tmpdir}/"')
 
             # Test from_stage_csv
-            result = test_client.load_data.from_stage_csv('pytest_stage', 'test.csv', StageData)
+            result = test_client.load_data.read_csv_stage('pytest_stage', 'test.csv', table=StageData)
             assert result.affected_rows == 2
 
             # Test from_stage_tsv
-            result = test_client.load_data.from_stage_tsv('pytest_stage', 'test.tsv', StageData)
+            result = test_client.load_data.read_csv_stage('pytest_stage', 'test.tsv', table=StageData, sep='\t')
             assert result.affected_rows == 1
 
             # Test from_stage_jsonline
-            result = test_client.load_data.from_stage_jsonline(
-                'pytest_stage', 'test.jsonl', StageData, structure=JsonDataStructure.OBJECT
-            )
+            result = test_client.load_data.read_json_stage('pytest_stage', 'test.jsonl', table=StageData, orient='records')
             assert result.affected_rows == 1
 
             # Verify data
@@ -620,7 +616,7 @@ class TestLoadDataErrorHandling:
             test_client.execute(f'CREATE STAGE IF NOT EXISTS parquet_stage URL="file://{tmpfiles_dir}/"')
 
             # Test from_stage_parquet
-            result = test_client.load_data.from_stage_parquet('parquet_stage', 'test_stage.parq', ParquetData)
+            result = test_client.load_data.read_parquet_stage('parquet_stage', 'test_stage.parq', table=ParquetData)
             assert result.affected_rows == 5
 
             # Verify data
@@ -660,7 +656,7 @@ class TestLoadDataErrorHandling:
 
         try:
             # Load JSONLINE data using simplified interface with model and enum
-            result = test_client.load_data.from_jsonline(jl_file, JsonlineUser, structure=JsonDataStructure.OBJECT)
+            result = test_client.load_data.read_json(jl_file, table=JsonlineUser, orient='records')
             assert result.affected_rows == 3
 
             # Verify data using query builder
@@ -697,7 +693,7 @@ class TestLoadDataErrorHandling:
 
         try:
             # Load JSONLINE data using simplified interface with model and enum
-            result = test_client.load_data.from_jsonline(jl_file, JsonlineProduct, structure=JsonDataStructure.ARRAY)
+            result = test_client.load_data.read_json(jl_file, table=JsonlineProduct, orient='values')
             assert result.affected_rows == 3
 
             # Verify data using query builder
@@ -733,7 +729,9 @@ class TestLoadDataErrorHandling:
 
         try:
             # Load data with SET clause using simplified CSV interface with model
-            result = test_client.load_data.from_csv(csv_file, CleanedData, set_clause={'status': 'NULLIF(status, "null")'})
+            result = test_client.load_data.read_csv(
+                csv_file, table=CleanedData, set_clause={'status': 'NULLIF(status, "null")'}
+            )
             assert result.affected_rows == 3
 
             # Verify NULL conversion using query builder
@@ -780,7 +778,7 @@ class TestAsyncLoadDataOperations:
 
             try:
                 # Load data using async interface
-                result = await client.load_data.from_csv(csv_file, AsyncUser)
+                result = await client.load_data.read_csv(csv_file, table=AsyncUser)
                 assert result.affected_rows == 3
 
                 # Verify data
@@ -837,8 +835,8 @@ class TestAsyncLoadDataOperations:
             try:
                 # Load data within async transaction
                 async with client.session() as tx:
-                    result1 = await tx.load_data.from_csv(accounts_file, AsyncAccount)
-                    result2 = await tx.load_data.from_csv(transactions_file, AsyncTransaction)
+                    result1 = await tx.load_data.read_csv(accounts_file, table=AsyncAccount)
+                    result2 = await tx.load_data.read_csv(transactions_file, table=AsyncTransaction)
 
                     assert result1.rowcount == 2
                     assert result2.rowcount == 2
@@ -888,7 +886,7 @@ class TestAsyncLoadDataOperations:
 
             try:
                 # Load JSONLINE data using async interface
-                result = await client.load_data.from_jsonline(jl_file, AsyncJsonData, structure=JsonDataStructure.OBJECT)
+                result = await client.load_data.read_json(jl_file, table=AsyncJsonData, orient='records')
                 assert result.affected_rows == 3
 
                 # Verify data
@@ -932,7 +930,7 @@ class TestAsyncLoadDataOperations:
                 await client.execute(f'CREATE STAGE IF NOT EXISTS async_stage URL="file://{tmpdir}/"')
 
                 # Load from stage using async interface
-                result = await client.load_data.from_stage_csv('async_stage', 'async_test.csv', AsyncStageData)
+                result = await client.load_data.read_csv_stage('async_stage', 'async_test.csv', table=AsyncStageData)
                 assert result.affected_rows == 3
 
                 # Verify data
@@ -970,7 +968,7 @@ class TestAsyncLoadDataOperations:
             try:
                 # Load inline CSV data using async interface
                 csv_data = "1,Alice\n2,Bob\n3,Charlie\n"
-                result = await client.load_data.from_csv_inline(csv_data, AsyncInlineData)
+                result = await client.load_data.read_csv_inline(csv_data, table=AsyncInlineData)
                 assert result.affected_rows == 3
 
                 # Verify data

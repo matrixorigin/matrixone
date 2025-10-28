@@ -179,6 +179,43 @@ client.disconnect()
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
 - ✅ Full SQLAlchemy ORM support
 
+### Data Loading (Pandas-Style)
+
+Load bulk data from files with pandas-compatible API:
+
+```python
+from matrixone import Client
+from matrixone.orm import declarative_base, Column, Integer, String
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+
+client = Client()
+client.connect(database='test')
+client.create_table(User)
+
+# CSV loading (pandas-style)
+client.load_data.read_csv('users.csv', table=User, skiprows=1)
+
+# Custom separator (pandas-style)
+client.load_data.read_csv('users.txt', table=User, sep='|')
+
+# JSON Lines (pandas-style)
+client.load_data.read_json('events.jsonl', table='events', lines=True)
+
+# Parquet (pandas-style)
+client.load_data.read_parquet('data.parquet', table=User)
+
+# From stage
+client.load_data.read_csv_stage('s3_stage', 'users.csv', table=User)
+
+client.disconnect()
+```
+
 ### Data Export (Pandas-Style)
 
 Export query results with pandas-compatible API:

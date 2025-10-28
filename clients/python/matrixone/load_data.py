@@ -471,227 +471,296 @@ class LoadDataManager(BaseLoadDataManager):
         """Get the executor for SQL execution (session or client)"""
         return self.executor if self.executor else self.client
 
-    def from_csv(
+    def read_csv(
         self,
-        file_path: str,
-        table_name_or_model,
-        delimiter: str = ",",
-        enclosed_by: Optional[str] = None,
-        optionally_enclosed: bool = False,
-        escaped_by: Optional[str] = None,
-        ignore_lines: int = 0,
-        columns: Optional[List[str]] = None,
-        character_set: Optional[str] = None,
+        filepath_or_buffer: str,
+        table: Union[str, type],
+        sep: str = ",",
+        quotechar: Optional[str] = None,
+        quoting: bool = False,
+        escapechar: Optional[str] = None,
+        skiprows: int = 0,
+        names: Optional[List[str]] = None,
+        encoding: Optional[str] = None,
         parallel: bool = False,
         compression: Optional[Union[str, CompressionFormat]] = None,
         set_clause: Optional[Dict[str, str]] = None,
+        inline: bool = False,
         **kwargs,
     ):
         """
-        Load CSV (Comma-Separated Values) data from a file into a table.
+        Read CSV (Comma-Separated Values) file into MatrixOne table (pandas-style).
 
-        This is the most commonly used data loading interface, providing a simplified
-        API for CSV files with sensible defaults and the most frequently used options.
-
-        CSV Format:
-        -----------
-        CSV is a plain text format where:
-        - Each line represents one row
-        - Fields are separated by a delimiter (default: comma)
-        - Fields may be enclosed in quotes to handle special characters
-
-        Common Use Cases:
-        -----------------
-        - **Data imports**: Import data from Excel, databases, or other sources
-        - **Bulk loading**: Load large datasets efficiently
-        - **ETL pipelines**: Extract-Transform-Load workflows
-        - **Data migration**: Move data between systems
-
-        Simplified interface for CSV files with commonly used options.
+        This method provides a pandas-compatible interface for loading CSV files,
+        with parameter names and behavior matching pandas.read_csv() where applicable.
 
         Args:
-            file_path (str): Path to the CSV file
-            table_name_or_model: Table name (str) or SQLAlchemy model class
-            delimiter (str): Field delimiter. Default: ','
-            enclosed_by (str, optional): Character enclosing field values (e.g. '"')
-            optionally_enclosed (bool): If True, use OPTIONALLY ENCLOSED BY. Default: False
-            escaped_by (str, optional): Escape character
-            ignore_lines (int): Number of header lines to skip. Default: 0
-            columns (list, optional): List of column names to load
-            character_set (str, optional): Character set (e.g. 'utf8')
+            filepath_or_buffer (str): File path, stage path, or inline data
+                - Local path: '/path/to/data.csv'
+                - Stage path: 'stage://stage_name/file.csv'
+                - Inline data: CSV string (requires inline=True)
+            table (str or Model): Table name or SQLAlchemy model class
+            sep (str): Field separator/delimiter. Default: ',' (pandas: sep)
+            quotechar (str, optional): Character for quoting fields (pandas: quotechar)
+            quoting (bool): If True, use OPTIONALLY ENCLOSED BY. Default: False
+            escapechar (str, optional): Escape character (pandas: escapechar)
+            skiprows (int): Number of header lines to skip. Default: 0 (pandas: skiprows)
+            names (list, optional): Column names to load into (pandas: names)
+            encoding (str, optional): Character encoding (pandas: encoding)
             parallel (bool): Enable parallel loading. Default: False
             compression (str or CompressionFormat, optional): Compression format
             set_clause (dict, optional): Column transformations
+            inline (bool): If True, treat filepath_or_buffer as inline data. Default: False
 
         Returns:
             ResultSet: Load results with affected_rows
 
         Examples::
 
-            # Basic CSV
-            >>> client.load_data.from_csv('data.csv', User)
+            # Basic CSV (pandas-style)
+            client.load_data.read_csv('data.csv', table='users')
 
-            # CSV with header
-            >>> client.load_data.from_csv('data.csv', User, ignore_lines=1)
+            # CSV with header (pandas-style)
+            client.load_data.read_csv('data.csv', table='users', skiprows=1)
 
-            # Custom delimiter with quotes
-            >>> client.load_data.from_csv('data.txt', User,
-            ...     delimiter='|', enclosed_by='"')
+            # Custom separator (pandas-style)
+            client.load_data.read_csv('data.txt', table='users', sep='|')
 
-            # Optionally enclosed fields (some fields quoted, some not)
-            >>> client.load_data.from_csv('data.csv', User,
-            ...     enclosed_by='"', optionally_enclosed=True)
+            # With quote character (pandas-style)
+            client.load_data.read_csv('data.csv', table='users',
+                quotechar='"', quoting=True)
+
+            # Load from stage
+            client.load_data.read_csv('stage://s3_stage/data.csv', table='users')
+
+            # Inline CSV
+            csv_data = "1,Alice\\n2,Bob\\n"
+            client.load_data.read_csv(csv_data, table='users', inline=True)
+
+            # With ORM model
+            client.load_data.read_csv('data.csv', table=User, skiprows=1)
         """
+        # Handle inline data
+        if inline:
+            return self.read_csv_inline(data=filepath_or_buffer, table=table, sep=sep, quotechar=quotechar, **kwargs)
+
+        # Call from_file with mapped parameters
         return self.from_file(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
-            fields_terminated_by=delimiter,
-            fields_enclosed_by=enclosed_by,
-            fields_optionally_enclosed=optionally_enclosed,
-            fields_escaped_by=escaped_by,
-            ignore_lines=ignore_lines,
-            columns=columns,
-            character_set=character_set,
+            file_path=filepath_or_buffer,
+            table_name_or_model=table,
+            fields_terminated_by=sep,
+            fields_enclosed_by=quotechar,
+            fields_optionally_enclosed=quoting,
+            fields_escaped_by=escapechar,
+            ignore_lines=skiprows,
+            columns=names,
+            character_set=encoding,
             parallel=parallel,
             compression=compression,
             set_clause=set_clause,
             **kwargs,
         )
 
-    def from_tsv(
-        self, file_path: str, table_name_or_model, ignore_lines: int = 0, columns: Optional[List[str]] = None, **kwargs
-    ):
-        """
-        Load TSV (Tab-Separated Values) data from a file.
-
-        TSV Format:
-        -----------
-        TSV is similar to CSV but uses tab characters ('\\t') as delimiters.
-        It's commonly used for:
-        - **Log files**: Application logs, server logs
-        - **Data exports**: Database exports, system reports
-        - **Scientific data**: Research data, measurements
-        - **Text processing**: NLP datasets, corpus files
-
-        Advantages over CSV:
-        - No need for quoting (tabs rarely appear in data)
-        - Better readability in text editors with tab stops
-        - Standard format for many Unix tools (cut, awk, etc.)
-
-        Args:
-            file_path (str): Path to the TSV file
-            table_name_or_model: Table name (str) or SQLAlchemy model class
-            ignore_lines (int): Number of header lines to skip. Default: 0
-            columns (list, optional): List of column names to load into
-            **kwargs: Additional options
-
-        Returns:
-            ResultSet: Load results with affected_rows
-
-        Examples::
-
-            >>> # Basic TSV loading
-            >>> client.load_data.from_tsv('logs.tsv', Log)
-
-            >>> # TSV with header row
-            >>> client.load_data.from_tsv('data.tsv', User, ignore_lines=1)
-
-            >>> # Load into specific columns
-            >>> client.load_data.from_tsv('data.tsv', User,
-            ...     columns=['id', 'name', 'email'])
-        """
-        return self.from_csv(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
-            delimiter='\\t',
-            ignore_lines=ignore_lines,
-            columns=columns,
-            **kwargs,
-        )
-
-    def from_jsonline(
+    def read_csv_stage(
         self,
-        file_path: str,
-        table_name_or_model,
-        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        stage_name: str,
+        filename: str,
+        table: Union[str, type],
+        sep: str = ",",
+        quotechar: Optional[str] = None,
+        quoting: bool = False,
+        escapechar: Optional[str] = None,
+        skiprows: int = 0,
+        names: Optional[List[str]] = None,
+        encoding: Optional[str] = None,
+        parallel: bool = False,
         compression: Optional[Union[str, CompressionFormat]] = None,
+        set_clause: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         """
-        Load JSONLINE (JSON Lines, also called NDJSON) data from a file.
+        Read CSV file from external stage into MatrixOne table (pandas-style convenience method).
 
-        JSONLINE Format:
-        ----------------
-        JSONLINE is a format where each line is a valid JSON value (usually an object).
-        Unlike regular JSON arrays, JSONLINE is:
-        - **Streamable**: Process one line at a time, no need to load entire file
-        - **Appendable**: Add new records by appending lines
-        - **Fault-tolerant**: One corrupted line doesn't break the entire file
-        - **Efficient**: Suitable for very large datasets
-
-        Common Use Cases:
-        -----------------
-        - **Log aggregation**: Application logs, access logs, event streams
-        - **API responses**: RESTful API data exports
-        - **Big data**: Large datasets from Hadoop, Spark, etc.
-        - **Event sourcing**: Event streams, message queues
-        - **Machine learning**: Training datasets, feature stores
-
-        Two Structure Types:
-        --------------------
-        1. **OBJECT** (default): {"id":1,"name":"Alice","age":30}
-           - Most common and readable
-           - Field names included in each line
-
-        2. **ARRAY**: [1,"Alice",30]
-           - More compact (no field names)
-           - Column order must match table
+        This is a convenience method that doesn't require the 'stage://' protocol prefix.
 
         Args:
-            file_path (str): Path to the JSONLINE file (.jsonl, .ndjson)
-            table_name_or_model: Table name (str) or SQLAlchemy model class
-            structure (str or JsonDataStructure): JSON structure format
-                - JsonDataStructure.OBJECT or 'object': JSON objects (default)
-                - JsonDataStructure.ARRAY or 'array': JSON arrays
+            stage_name (str): Name of the external stage
+            filename (str): Filename within the stage
+            table (str or Model): Table name or SQLAlchemy model class
+            sep (str): Field separator. Default: ','
+            quotechar (str, optional): Character for quoting fields
+            quoting (bool): Use OPTIONALLY ENCLOSED BY. Default: False
+            skiprows (int): Number of header lines to skip. Default: 0
+            names (list, optional): Column names
+            encoding (str, optional): Character encoding
+            parallel (bool): Enable parallel loading
             compression (str or CompressionFormat, optional): Compression format
-            **kwargs: Additional options
+            set_clause (dict, optional): Column transformations
+
+        Returns:
+            ResultSet: Load results
+
+        Examples::
+
+            # Load from S3 stage
+            client.load_data.read_csv_stage('s3_stage', 'data.csv', table='users')
+
+            # With options
+            client.load_data.read_csv_stage('backup_stage', 'data.tsv',
+                table='users', sep='\\t', skiprows=1)
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to read_csv
+        return self.read_csv(
+            filepath_or_buffer=stage_path,
+            table=table,
+            sep=sep,
+            quotechar=quotechar,
+            quoting=quoting,
+            escapechar=escapechar,
+            skiprows=skiprows,
+            names=names,
+            encoding=encoding,
+            parallel=parallel,
+            compression=compression,
+            set_clause=set_clause,
+            **kwargs,
+        )
+
+    def read_csv_inline(
+        self,
+        data: str,
+        table: Union[str, type],
+        sep: str = ",",
+        quotechar: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Read CSV data from inline string into MatrixOne table (pandas-style).
+
+        Args:
+            data (str): CSV data string
+            table (str or Model): Table name or SQLAlchemy model class
+            sep (str): Field separator. Default: ','
+            quotechar (str, optional): Character for quoting fields
+
+        Returns:
+            ResultSet: Load results
+
+        Examples::
+
+            csv_data = "1,Alice\\n2,Bob\\n"
+            client.load_data.read_csv_inline(csv_data, table='users')
+        """
+        # Handle model class input
+        if hasattr(table, '__tablename__'):
+            table_name = table.__tablename__
+        else:
+            table_name = table
+
+        # Build SQL
+        sql = self._build_load_data_inline_sql(
+            data=data,
+            table_name=table_name,
+            format='csv',
+            delimiter=sep,
+            enclosed_by=quotechar,
+        )
+
+        return self._get_executor().execute(sql)
+
+    def read_json(
+        self,
+        filepath_or_buffer: str,
+        table: Union[str, type],
+        lines: bool = True,
+        orient: str = 'records',
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        inline: bool = False,
+        **kwargs,
+    ):
+        """
+        Read JSON file into MatrixOne table (pandas-style).
+
+        This method provides a pandas-compatible interface for loading JSON/JSONL files,
+        matching pandas.read_json() parameter names.
+
+        Args:
+            filepath_or_buffer (str): File path, stage path, or inline data
+                - Local path: '/path/to/data.jsonl'
+                - Stage path: 'stage://stage_name/file.jsonl'
+                - Inline data: JSON string (requires inline=True)
+            table (str or Model): Table name or SQLAlchemy model class
+            lines (bool): If True, read file as JSON Lines (one object per line).
+                Default: True (pandas: lines)
+            orient (str): JSON structure format (pandas: orient)
+                - 'records': List of dicts like [{'col1': val1}, {'col2': val2}]
+                - 'values': List of lists like [[val1, val2], [val3, val4]]
+                Default: 'records'
+            compression (str or CompressionFormat, optional): Compression format
+            inline (bool): If True, treat filepath_or_buffer as inline data. Default: False
 
         Returns:
             ResultSet: Load results with affected_rows
 
         Examples::
 
-            # Object structure (most common)
-            >>> client.load_data.from_jsonline('events.jsonl', Event)
+            # JSON Lines with objects (pandas-style)
+            client.load_data.read_json('events.jsonl', table='events', lines=True)
 
-            # Array structure
-            >>> client.load_data.from_jsonline('data.jsonl', User,
-            ...     structure=JsonDataStructure.ARRAY)
+            # JSON Lines with arrays
+            client.load_data.read_json('data.jsonl', table='users',
+                lines=True, orient='values')
 
-            # Compressed file
-            >>> client.load_data.from_jsonline('events.jsonl.gz', Event,
-            ...     compression=CompressionFormat.GZIP)
+            # From stage
+            client.load_data.read_json('stage://s3/events.jsonl', table='events')
+
+            # Compressed JSON Lines
+            client.load_data.read_json('events.jsonl.gz', table='events',
+                compression='gzip')
+
+            # Inline JSON
+            json_data = '{"id":1,"name":"Alice"}\\n{"id":2,"name":"Bob"}\\n'
+            client.load_data.read_json(json_data, table='users', inline=True)
         """
-        # Convert enum to string if needed
-        structure_str = structure.value if isinstance(structure, JsonDataStructure) else structure
+        # Handle inline data
+        if inline:
+            return self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
+
+        # Map pandas orient to MatrixOne jsondata
+        if orient == 'records':
+            structure_str = 'object'
+        elif orient == 'values':
+            structure_str = 'array'
+        else:
+            structure_str = 'object'  # Default
+
+        # Convert compression enum if needed
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
 
         return self.from_file(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
+            file_path=filepath_or_buffer,
+            table_name_or_model=table,
             format=LoadDataFormat.JSONLINE.value,
             jsondata=structure_str,
             compression=compression_str,
             **kwargs,
         )
 
-    def from_parquet(self, file_path: str, table_name_or_model, **kwargs):
+    def read_parquet(self, filepath_or_buffer: str, table: Union[str, type], **kwargs):
         """
-        Load Parquet data from a file.
+        Read Parquet file into MatrixOne table (pandas-style).
+
+        This method provides a pandas-compatible interface for loading Parquet files,
+        matching pandas.read_parquet() behavior.
 
         Args:
-            file_path (str): Path to the Parquet file
-            table_name_or_model: Table name (str) or SQLAlchemy model class
+            filepath_or_buffer (str): File path or stage path
+                - Local path: '/path/to/data.parquet'
+                - Stage path: 'stage://stage_name/file.parquet'
+            table (str or Model): Table name or SQLAlchemy model class
 
         Returns:
             ResultSet: Load results with affected_rows
@@ -767,12 +836,128 @@ class LoadDataManager(BaseLoadDataManager):
 
         Examples::
 
-            >>> client.load_data.from_parquet('data.parq', 'users')
-            >>> client.load_data.from_parquet('data.parquet', 'sales')
+            # Basic Parquet (pandas-style)
+            client.load_data.read_parquet('data.parquet', table='users')
+
+            # From stage
+            client.load_data.read_parquet('stage://s3/data.parquet', table='users')
+
+            # With ORM model
+            client.load_data.read_parquet('data.parquet', table=User)
         """
         return self.from_file(
-            file_path=file_path, table_name_or_model=table_name_or_model, format=LoadDataFormat.PARQUET.value, **kwargs
+            file_path=filepath_or_buffer, table_name_or_model=table, format=LoadDataFormat.PARQUET.value, **kwargs
         )
+
+    def read_json_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        table: Union[str, type],
+        lines: bool = True,
+        orient: str = 'records',
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """
+        Read JSON file from external stage into MatrixOne table (pandas-style convenience method).
+
+        Args:
+            stage_name (str): Name of the external stage
+            filename (str): Filename within the stage
+            table (str or Model): Table name or SQLAlchemy model class
+            lines (bool): If True, read as JSON Lines. Default: True
+            orient (str): JSON structure. Default: 'records'
+            compression (str or CompressionFormat, optional): Compression format
+
+        Returns:
+            ResultSet: Load results
+
+        Examples::
+
+            client.load_data.read_json_stage('s3_stage', 'events.jsonl', table='events')
+        """
+        stage_path = f"stage://{stage_name}/{filename}"
+        return self.read_json(
+            filepath_or_buffer=stage_path,
+            table=table,
+            lines=lines,
+            orient=orient,
+            compression=compression,
+            **kwargs,
+        )
+
+    def read_parquet_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        table: Union[str, type],
+        **kwargs,
+    ):
+        """
+        Read Parquet file from external stage into MatrixOne table (pandas-style convenience method).
+
+        Args:
+            stage_name (str): Name of the external stage
+            filename (str): Filename within the stage
+            table (str or Model): Table name or SQLAlchemy model class
+
+        Returns:
+            ResultSet: Load results
+
+        Examples::
+
+            client.load_data.read_parquet_stage('s3_stage', 'data.parquet', table='users')
+        """
+        stage_path = f"stage://{stage_name}/{filename}"
+        return self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
+
+    def read_json_inline(
+        self,
+        data: str,
+        table: Union[str, type],
+        orient: str = 'records',
+        **kwargs,
+    ):
+        """
+        Read JSON data from inline string into MatrixOne table (pandas-style).
+
+        Args:
+            data (str): JSON data string
+            table (str or Model): Table name or SQLAlchemy model class
+            orient (str): JSON structure. Default: 'records'
+
+        Returns:
+            ResultSet: Load results
+
+        Examples::
+
+            json_data = '{"id":1,"name":"Alice"}\\n'
+            client.load_data.read_json_inline(json_data, table='users')
+        """
+        # Handle model class input
+        if hasattr(table, '__tablename__'):
+            table_name = table.__tablename__
+        else:
+            table_name = table
+
+        # Map orient to jsontype
+        if orient == 'records':
+            jsontype_str = 'object'
+        elif orient == 'values':
+            jsontype_str = 'array'
+        else:
+            jsontype_str = 'object'
+
+        # Build SQL
+        sql = self._build_load_data_inline_sql(
+            data=data,
+            table_name=table_name,
+            format='jsonline',
+            jsontype=jsontype_str,
+        )
+
+        return self._get_executor().execute(sql)
 
     def from_inline(
         self,
@@ -1734,78 +1919,208 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         """Get the executor for SQL execution (session or client)"""
         return self.executor if self.executor else self.client
 
-    async def from_csv(
+    async def read_csv(
         self,
-        file_path: str,
-        table_name_or_model,
-        delimiter: str = ",",
-        enclosed_by: Optional[str] = None,
-        optionally_enclosed: bool = False,
-        escaped_by: Optional[str] = None,
-        ignore_lines: int = 0,
-        columns: Optional[List[str]] = None,
-        character_set: Optional[str] = None,
+        filepath_or_buffer: str,
+        table: Union[str, type],
+        sep: str = ",",
+        quotechar: Optional[str] = None,
+        quoting: bool = False,
+        escapechar: Optional[str] = None,
+        skiprows: int = 0,
+        names: Optional[List[str]] = None,
+        encoding: Optional[str] = None,
         parallel: bool = False,
         compression: Optional[Union[str, CompressionFormat]] = None,
         set_clause: Optional[Dict[str, str]] = None,
+        inline: bool = False,
         **kwargs,
     ):
-        """Async version of from_csv"""
+        """Async version of read_csv (pandas-style)"""
+        # Handle inline data
+        if inline:
+            return await self.read_csv_inline(data=filepath_or_buffer, table=table, sep=sep, quotechar=quotechar, **kwargs)
+
         return await self.from_file(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
-            fields_terminated_by=delimiter,
-            fields_enclosed_by=enclosed_by,
-            fields_optionally_enclosed=optionally_enclosed,
-            fields_escaped_by=escaped_by,
-            ignore_lines=ignore_lines,
-            columns=columns,
-            character_set=character_set,
+            file_path=filepath_or_buffer,
+            table_name_or_model=table,
+            fields_terminated_by=sep,
+            fields_enclosed_by=quotechar,
+            fields_optionally_enclosed=quoting,
+            fields_escaped_by=escapechar,
+            ignore_lines=skiprows,
+            columns=names,
+            character_set=encoding,
             parallel=parallel,
             compression=compression,
             set_clause=set_clause,
             **kwargs,
         )
 
-    async def from_tsv(
-        self, file_path: str, table_name_or_model, ignore_lines: int = 0, columns: Optional[List[str]] = None, **kwargs
-    ):
-        """Async version of from_tsv"""
-        return await self.from_csv(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
-            delimiter='\t',
-            ignore_lines=ignore_lines,
-            columns=columns,
-            **kwargs,
-        )
-
-    async def from_jsonline(
+    async def read_json(
         self,
-        file_path: str,
-        table_name_or_model,
-        structure: Union[str, JsonDataStructure] = JsonDataStructure.OBJECT,
+        filepath_or_buffer: str,
+        table: Union[str, type],
+        lines: bool = True,
+        orient: str = 'records',
         compression: Optional[Union[str, CompressionFormat]] = None,
+        inline: bool = False,
         **kwargs,
     ):
-        """Async version of from_jsonline"""
-        structure_str = structure.value if isinstance(structure, JsonDataStructure) else structure
+        """Async version of read_json (pandas-style)"""
+        # Handle inline data
+        if inline:
+            return await self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
+
+        # Map pandas orient to MatrixOne jsondata
+        if orient == 'records':
+            structure_str = 'object'
+        elif orient == 'values':
+            structure_str = 'array'
+        else:
+            structure_str = 'object'
+
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
 
         return await self.from_file(
-            file_path=file_path,
-            table_name_or_model=table_name_or_model,
+            file_path=filepath_or_buffer,
+            table_name_or_model=table,
             format=LoadDataFormat.JSONLINE.value,
             jsondata=structure_str,
             compression=compression_str,
             **kwargs,
         )
 
-    async def from_parquet(self, file_path: str, table_name_or_model, **kwargs):
-        """Async version of from_parquet"""
+    async def read_parquet(self, filepath_or_buffer: str, table: Union[str, type], **kwargs):
+        """Async version of read_parquet (pandas-style)"""
         return await self.from_file(
-            file_path=file_path, table_name_or_model=table_name_or_model, format=LoadDataFormat.PARQUET.value, **kwargs
+            file_path=filepath_or_buffer, table_name_or_model=table, format=LoadDataFormat.PARQUET.value, **kwargs
         )
+
+    async def read_csv_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        table: Union[str, type],
+        sep: str = ",",
+        quotechar: Optional[str] = None,
+        quoting: bool = False,
+        escapechar: Optional[str] = None,
+        skiprows: int = 0,
+        names: Optional[List[str]] = None,
+        encoding: Optional[str] = None,
+        parallel: bool = False,
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        set_clause: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        """Async version of read_csv_stage (pandas-style)"""
+        stage_path = f"stage://{stage_name}/{filename}"
+        return await self.read_csv(
+            filepath_or_buffer=stage_path,
+            table=table,
+            sep=sep,
+            quotechar=quotechar,
+            quoting=quoting,
+            escapechar=escapechar,
+            skiprows=skiprows,
+            names=names,
+            encoding=encoding,
+            parallel=parallel,
+            compression=compression,
+            set_clause=set_clause,
+            **kwargs,
+        )
+
+    async def read_json_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        table: Union[str, type],
+        lines: bool = True,
+        orient: str = 'records',
+        compression: Optional[Union[str, CompressionFormat]] = None,
+        **kwargs,
+    ):
+        """Async version of read_json_stage (pandas-style)"""
+        stage_path = f"stage://{stage_name}/{filename}"
+        return await self.read_json(
+            filepath_or_buffer=stage_path,
+            table=table,
+            lines=lines,
+            orient=orient,
+            compression=compression,
+            **kwargs,
+        )
+
+    async def read_parquet_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        table: Union[str, type],
+        **kwargs,
+    ):
+        """Async version of read_parquet_stage (pandas-style)"""
+        stage_path = f"stage://{stage_name}/{filename}"
+        return await self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
+
+    async def read_csv_inline(
+        self,
+        data: str,
+        table: Union[str, type],
+        sep: str = ",",
+        quotechar: Optional[str] = None,
+        **kwargs,
+    ):
+        """Async version of read_csv_inline (pandas-style)"""
+        # Handle model class input
+        if hasattr(table, '__tablename__'):
+            table_name = table.__tablename__
+        else:
+            table_name = table
+
+        # Build SQL
+        sql = self._build_load_data_inline_sql(
+            data=data,
+            table_name=table_name,
+            format='csv',
+            delimiter=sep,
+            enclosed_by=quotechar,
+        )
+
+        return await self._get_executor().execute(sql)
+
+    async def read_json_inline(
+        self,
+        data: str,
+        table: Union[str, type],
+        orient: str = 'records',
+        **kwargs,
+    ):
+        """Async version of read_json_inline (pandas-style)"""
+        # Handle model class input
+        if hasattr(table, '__tablename__'):
+            table_name = table.__tablename__
+        else:
+            table_name = table
+
+        # Map orient to jsontype
+        if orient == 'records':
+            jsontype_str = 'object'
+        elif orient == 'values':
+            jsontype_str = 'array'
+        else:
+            jsontype_str = 'object'
+
+        # Build SQL
+        sql = self._build_load_data_inline_sql(
+            data=data,
+            table_name=table_name,
+            format='jsonline',
+            jsontype=jsontype_str,
+        )
+
+        return await self._get_executor().execute(sql)
 
     async def from_stage(
         self,

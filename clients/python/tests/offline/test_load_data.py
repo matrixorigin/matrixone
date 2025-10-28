@@ -39,16 +39,16 @@ class TestLoadDataSQLConsistency(unittest.TestCase):
         self.sync_manager = LoadDataManager(self.client)
         self.session_manager = LoadDataManager(self.client, executor=self.session)
 
-    def test_from_csv_basic_sql_consistency(self):
-        """Test that from_csv generates identical SQL across client and session"""
+    def test_read_csv_basic_sql_consistency(self):
+        """Test that read_csv generates identical SQL across client and session"""
         self.client.execute = Mock()
         self.session.execute = Mock()
 
-        # Test basic CSV load
-        self.sync_manager.from_csv('/path/to/data.csv', 'test_table')
+        # Test basic CSV load (pandas-style)
+        self.sync_manager.read_csv('/path/to/data.csv', table='test_table')
         sync_sql = self.client.execute.call_args[0][0]
 
-        self.session_manager.from_csv('/path/to/data.csv', 'test_table')
+        self.session_manager.read_csv('/path/to/data.csv', table='test_table')
         session_sql = self.session.execute.call_args[0][0]
 
         # Verify SQL is identical
@@ -57,61 +57,61 @@ class TestLoadDataSQLConsistency(unittest.TestCase):
         self.assertEqual(session_sql, expected_sql)
         self.assertEqual(sync_sql, session_sql)
 
-    def test_from_csv_with_delimiter_sql_consistency(self):
-        """Test from_csv with custom delimiter"""
+    def test_read_csv_with_sep_sql_consistency(self):
+        """Test read_csv with custom separator (pandas-style)"""
         self.client.execute = Mock()
         self.session.execute = Mock()
 
-        self.sync_manager.from_csv('/path/to/data.txt', 'test_table', delimiter='|')
+        self.sync_manager.read_csv('/path/to/data.txt', table='test_table', sep='|')
         sync_sql = self.client.execute.call_args[0][0]
 
-        self.session_manager.from_csv('/path/to/data.txt', 'test_table', delimiter='|')
+        self.session_manager.read_csv('/path/to/data.txt', table='test_table', sep='|')
         session_sql = self.session.execute.call_args[0][0]
 
         expected_sql = "LOAD DATA INFILE '/path/to/data.txt' INTO TABLE test_table FIELDS TERMINATED BY '|'"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
-    def test_from_csv_with_enclosed_by_sql_consistency(self):
-        """Test from_csv with enclosed_by option"""
+    def test_read_csv_with_quotechar_sql_consistency(self):
+        """Test read_csv with quotechar option (pandas-style)"""
         self.client.execute = Mock()
         self.session.execute = Mock()
 
-        self.sync_manager.from_csv('/path/to/data.csv', 'test_table', enclosed_by='"')
+        self.sync_manager.read_csv('/path/to/data.csv', table='test_table', quotechar='"')
         sync_sql = self.client.execute.call_args[0][0]
 
-        self.session_manager.from_csv('/path/to/data.csv', 'test_table', enclosed_by='"')
+        self.session_manager.read_csv('/path/to/data.csv', table='test_table', quotechar='"')
         session_sql = self.session.execute.call_args[0][0]
 
         expected_sql = "LOAD DATA INFILE '/path/to/data.csv' INTO TABLE test_table FIELDS TERMINATED BY ',' ENCLOSED BY '\"'"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
-    def test_from_csv_with_ignore_lines_sql_consistency(self):
-        """Test from_csv with ignore_lines (header skip)"""
+    def test_read_csv_with_skiprows_sql_consistency(self):
+        """Test read_csv with skiprows (header skip) (pandas-style)"""
         self.client.execute = Mock()
         self.session.execute = Mock()
 
-        self.sync_manager.from_csv('/path/to/data.csv', 'test_table', ignore_lines=1)
+        self.sync_manager.read_csv('/path/to/data.csv', table='test_table', skiprows=1)
         sync_sql = self.client.execute.call_args[0][0]
 
-        self.session_manager.from_csv('/path/to/data.csv', 'test_table', ignore_lines=1)
+        self.session_manager.read_csv('/path/to/data.csv', table='test_table', skiprows=1)
         session_sql = self.session.execute.call_args[0][0]
 
         expected_sql = "LOAD DATA INFILE '/path/to/data.csv' INTO TABLE test_table FIELDS TERMINATED BY ',' IGNORE 1 LINES"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
-    def test_from_csv_with_columns_sql_consistency(self):
-        """Test from_csv with specific columns"""
+    def test_read_csv_with_names_sql_consistency(self):
+        """Test read_csv with specific column names (pandas-style)"""
         self.client.execute = Mock()
         self.session.execute = Mock()
 
-        columns = ['id', 'name', 'email']
-        self.sync_manager.from_csv('/path/to/data.csv', 'test_table', columns=columns)
+        names = ['id', 'name', 'email']
+        self.sync_manager.read_csv('/path/to/data.csv', table='test_table', names=names)
         sync_sql = self.client.execute.call_args[0][0]
 
-        self.session_manager.from_csv('/path/to/data.csv', 'test_table', columns=columns)
+        self.session_manager.read_csv('/path/to/data.csv', table='test_table', names=names)
         session_sql = self.session.execute.call_args[0][0]
 
         expected_sql = (
@@ -120,15 +120,15 @@ class TestLoadDataSQLConsistency(unittest.TestCase):
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
-    def test_from_csv_with_parallel_sql_consistency(self):
-        """Test from_csv with parallel loading"""
+    def test_read_csv_with_parallel_sql_consistency(self):
+        """Test read_csv with parallel loading (pandas-style)"""
         self.client.execute = Mock()
         self.session.execute = Mock()
 
-        self.sync_manager.from_csv('/path/to/data.csv', 'test_table', parallel=True)
+        self.sync_manager.read_csv('/path/to/data.csv', table='test_table', parallel=True)
         sync_sql = self.client.execute.call_args[0][0]
 
-        self.session_manager.from_csv('/path/to/data.csv', 'test_table', parallel=True)
+        self.session_manager.read_csv('/path/to/data.csv', table='test_table', parallel=True)
         session_sql = self.session.execute.call_args[0][0]
 
         expected_sql = "LOAD DATA INFILE '/path/to/data.csv' INTO TABLE test_table FIELDS TERMINATED BY ',' PARALLEL 'true'"

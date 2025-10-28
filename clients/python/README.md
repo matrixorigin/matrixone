@@ -40,6 +40,12 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Load data from stages with automatic path resolution
   - Stage-scoped load operations for convenience
   - Transaction support for atomic stage operations
+- 📥 **Data Loading**: Pandas-style bulk data loading with intuitive interface
+  - ``read_csv()``, ``read_json()``, ``read_parquet()`` methods (pandas-compatible API)
+  - Load from local files or external stages (``stage://`` protocol)
+  - Pandas-compatible parameters (``sep``, ``quotechar``, ``skiprows``, ``names``, ``encoding``)
+  - Support for inline data loading and compression
+  - Transaction-aware loading for data consistency
 - 📤 **Data Export**: Pandas-style data export with intuitive interface
   - ``to_csv()`` and ``to_jsonl()`` methods (pandas-compatible API)
   - Export to local files or external stages (``stage://`` protocol)
@@ -246,6 +252,63 @@ client.disconnect()
 - ✅ Automatic rollback on errors
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
 - ✅ Full SQLAlchemy ORM support
+
+### Data Loading (Pandas-Style)
+
+Load bulk data from CSV, JSON, or Parquet files with pandas-compatible API:
+
+```python
+from matrixone import Client
+from matrixone.orm import declarative_base, Column, Integer, String
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(255))
+
+client = Client()
+client.connect(database='test')
+
+# Create table
+client.create_table(User)
+
+# Basic CSV load (pandas-style)
+client.load_data.read_csv('users.csv', table=User)
+
+# CSV with header (pandas-style)
+client.load_data.read_csv('users.csv', table=User, skiprows=1)
+
+# Custom separator (pandas-style)
+client.load_data.read_csv('users.txt', table=User, sep='|')
+
+# Tab-separated (pandas-style)
+client.load_data.read_csv('users.tsv', table=User, sep='\t')
+
+# JSON Lines (pandas-style)
+client.load_data.read_json('events.jsonl', table='events', lines=True, orient='records')
+
+# Parquet (pandas-style)
+client.load_data.read_parquet('data.parquet', table=User)
+
+# Load from stage
+client.load_data.read_csv('stage://s3_stage/users.csv', table=User)
+client.load_data.read_csv_stage('s3_stage', 'users.csv', table=User)
+
+# Inline data
+csv_data = "1,Alice,alice@example.com\\n2,Bob,bob@example.com\\n"
+client.load_data.read_csv(csv_data, table=User, inline=True)
+
+client.disconnect()
+```
+
+**Key Features:**
+- ✅ Pandas-compatible API (``read_csv()``, ``read_json()``, ``read_parquet()``)
+- ✅ Pandas-style parameters (``sep``, ``quotechar``, ``skiprows``, ``names``, ``encoding``)
+- ✅ Load from local files or external stages (``stage://`` protocol)
+- ✅ Support for compression, parallel loading, and inline data
 
 ### Data Export (Pandas-Style)
 

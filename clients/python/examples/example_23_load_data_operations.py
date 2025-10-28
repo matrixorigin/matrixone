@@ -100,7 +100,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample CSV file: {csv_file}")
 
             # Load data using simplified CSV interface with model
-            result = client.load_data.from_csv(csv_file, User)
+            result = client.load_data.read_csv(csv_file, table=User)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'users' table")
 
             # Verify data using query builder
@@ -150,7 +150,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample CSV file with header: {csv_file}")
 
             # Load data, skipping the first line (header)
-            result = client.load_data.from_csv(csv_file, Product, ignore_lines=1)  # Skip header row
+            result = client.load_data.read_csv(csv_file, table=Product, skiprows=1)  # Skip header row
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'products' table (header skipped)")
 
             # Verify data using query builder
@@ -199,7 +199,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample pipe-delimited file: {pipe_file}")
 
             # Load data with pipe delimiter using simplified CSV interface
-            result = client.load_data.from_csv(pipe_file, Order, delimiter='|')  # Use pipe as delimiter
+            result = client.load_data.read_csv(pipe_file, table=Order, sep='|')  # Use pipe as delimiter
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'orders' table")
 
             # Verify data using query builder
@@ -248,8 +248,8 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample CSV with quoted fields: {csv_file}")
 
             # Load data with quoted fields using simplified CSV interface
-            result = client.load_data.from_csv(
-                csv_file, Address, delimiter=',', enclosed_by='"'  # Fields are enclosed in quotes
+            result = client.load_data.read_csv(
+                csv_file, table=Address, sep=',', quotechar='"'  # Fields are enclosed in quotes
             )
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'addresses' table")
 
@@ -299,8 +299,8 @@ class LoadDataOperationsDemo:
 
             self.logger.info(f"✅ Created sample TSV file: {tsv_file}")
 
-            # Load data with tab delimiter
-            result = client.load_data.from_tsv(tsv_file, Log)  # Tab delimiter is automatic
+            # Load data with tab delimiter (pandas-style)
+            result = client.load_data.read_csv(tsv_file, table=Log, sep='\t')
             self.logger.info(f"✅ Loaded {result.affected_rows} rows into 'logs' table")
 
             # Verify data using query builder
@@ -349,8 +349,8 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created sample CSV with 3 columns: {csv_file}")
 
             # Load data into specific columns
-            result = client.load_data.from_csv(
-                csv_file, Employee, columns=['id', 'name', 'email']  # Only load into these columns
+            result = client.load_data.read_csv(
+                csv_file, table=Employee, names=['id', 'name', 'email']  # Only load into these columns
             )
             self.logger.info(
                 f"✅ Loaded {result.affected_rows} rows into specific columns (department and salary will be NULL)"
@@ -424,12 +424,12 @@ class LoadDataOperationsDemo:
 
             # Load data within a session using simplified CSV interface with models
             with client.session() as tx:
-                result1 = tx.load_data.from_csv(accounts_file, Account)
+                result1 = tx.load_data.read_csv(accounts_file, table=Account)
                 # Check for both ResultSet and SQLAlchemy Result
                 affected1 = result1.affected_rows if hasattr(result1, 'affected_rows') else result1.rowcount
                 self.logger.info(f"  ✅ Loaded {affected1} rows into 'accounts' (in session)")
 
-                result2 = tx.load_data.from_csv(transactions_file, Transaction)
+                result2 = tx.load_data.read_csv(transactions_file, table=Transaction)
                 affected2 = result2.affected_rows if hasattr(result2, 'affected_rows') else result2.rowcount
                 self.logger.info(f"  ✅ Loaded {affected2} rows into 'transactions' (in session)")
 
@@ -484,7 +484,7 @@ class LoadDataOperationsDemo:
 
             # Try to load data (may fail depending on MatrixOne's handling of empty strings)
             try:
-                result = client.load_data.from_csv(csv_file, StrictData)
+                result = client.load_data.read_csv(csv_file, table=StrictData)
                 self.logger.info(f"✅ Loaded {result.affected_rows} rows")
 
                 # Verify what was loaded using query builder
@@ -532,7 +532,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created file with 1000 rows: {large_file}")
 
             # Load data using simplified CSV interface
-            result = client.load_data.from_csv(large_file, LargeData)
+            result = client.load_data.read_csv(large_file, table=LargeData)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows")
 
             # Verify count using query builder
@@ -579,7 +579,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
 
             # Load JSONLINE data using simplified interface with enum
-            result = client.load_data.from_jsonline(jl_file, JsonlineUser, structure=JsonDataStructure.OBJECT)
+            result = client.load_data.read_json(jl_file, table=JsonlineUser, orient='records')
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (object format)")
 
             # Verify data
@@ -626,7 +626,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created JSONLINE file: {jl_file}")
 
             # Load JSONLINE data using simplified interface with enum
-            result = client.load_data.from_jsonline(jl_file, JsonlineProduct, structure=JsonDataStructure.ARRAY)
+            result = client.load_data.read_json(jl_file, table=JsonlineProduct, orient='values')
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from JSONLINE (array format)")
 
             # Verify data
@@ -673,7 +673,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created CSV file with 'null' strings: {csv_file}")
 
             # Load data with SET clause using simplified CSV interface
-            result = client.load_data.from_csv(csv_file, CleanedData, set_clause={'status': 'NULLIF(status, "null")'})
+            result = client.load_data.read_csv(csv_file, table=CleanedData, set_clause={'status': 'NULLIF(status, "null")'})
             self.logger.info(f"✅ Loaded {result.affected_rows} rows with SET clause")
 
             # Verify NULL conversion
@@ -724,7 +724,7 @@ class LoadDataOperationsDemo:
             self.logger.info(f"✅ Created CSV with mixed quoted/unquoted fields: {csv_file}")
 
             # Load data with OPTIONALLY ENCLOSED BY
-            result = client.load_data.from_csv(csv_file, MixedData, enclosed_by='"', optionally_enclosed=True)
+            result = client.load_data.read_csv(csv_file, table=MixedData, quotechar='"', quoting=True)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows with OPTIONALLY ENCLOSED BY")
 
             # Verify data
@@ -764,7 +764,7 @@ class LoadDataOperationsDemo:
             csv_data = "1,Alice,value1\n2,Bob,value2\n3,Charlie,value3\n"
 
             # Load data using from_csv_inline
-            result = client.load_data.from_csv_inline(csv_data, InlineData)
+            result = client.load_data.read_csv_inline(csv_data, table=InlineData)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from inline CSV")
 
             # Verify data
@@ -801,7 +801,7 @@ class LoadDataOperationsDemo:
             jsonline_data = '{"id":1,"name":"Alice","age":25}\n{"id":2,"name":"Bob","age":30}\n'
 
             # Load data using from_jsonline_inline
-            result = client.load_data.from_jsonline_inline(jsonline_data, InlineJsonData, structure=JsonDataStructure.OBJECT)
+            result = client.load_data.read_json_inline(jsonline_data, table=InlineJsonData, orient='records')
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from inline JSONLINE")
 
             # Verify data
@@ -895,17 +895,15 @@ class LoadDataOperationsDemo:
             self.logger.info("✅ Created stage successfully")
 
             # Test from_stage_csv
-            result = client.load_data.from_stage_csv('demo_stage', 'test.csv', StageData)
+            result = client.load_data.read_csv_stage('demo_stage', 'test.csv', table=StageData)
             self.logger.info(f"✅ from_stage_csv: Loaded {result.affected_rows} rows")
 
             # Test from_stage_tsv
-            result = client.load_data.from_stage_tsv('demo_stage', 'test.tsv', StageData)
+            result = client.load_data.read_csv_stage('demo_stage', 'test.tsv', table=StageData, sep='\t')
             self.logger.info(f"✅ from_stage_tsv: Loaded {result.affected_rows} rows")
 
             # Test from_stage_jsonline
-            result = client.load_data.from_stage_jsonline(
-                'demo_stage', 'test.jsonl', StageData, structure=JsonDataStructure.OBJECT
-            )
+            result = client.load_data.read_json_stage('demo_stage', 'test.jsonl', table=StageData, orient='records')
             self.logger.info(f"✅ from_stage_jsonline: Loaded {result.affected_rows} rows")
 
             # Verify total data
@@ -991,7 +989,7 @@ class LoadDataOperationsDemo:
             self.logger.info("✅ Created parquet stage successfully")
 
             # Test from_stage_parquet
-            result = client.load_data.from_stage_parquet('parquet_stage', 'test_stage.parq', ParquetData)
+            result = client.load_data.read_parquet_stage('parquet_stage', 'test_stage.parq', table=ParquetData)
             self.logger.info(f"✅ from_stage_parquet: Loaded {result.affected_rows} rows")
 
             # Verify data
