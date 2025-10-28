@@ -16,11 +16,13 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
@@ -480,4 +482,10 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
+}
+
+func (proc *Process) DebugBreakDump() {
+	if proc.Base.SessionInfo.User == "dump" {
+		logutil.GetGlobalLogger().Info("debug break dump")
+	}
 }

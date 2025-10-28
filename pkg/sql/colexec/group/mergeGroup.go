@@ -45,6 +45,8 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
+	proc.DebugBreakDump()
+
 	mergeGroup.OpAnalyzer.Start()
 	defer mergeGroup.OpAnalyzer.Stop()
 
@@ -86,7 +88,21 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 		}
 
+		// has partial results, merge them.
+		if mergeGroup.PartialResults != nil {
+			for i, ag := range mergeGroup.ctr.aggList {
+				proc.DebugBreakDump()
+				if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
+					if err := ag.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {
+						return vm.CancelResult, err
+					}
+				}
+			}
+		}
+
+		// output the final result.
 		return mergeGroup.ctr.outputOneBatchFinal(proc)
+
 	case vm.Eval:
 		return mergeGroup.ctr.outputOneBatchFinal(proc)
 	case vm.End:
@@ -129,19 +145,22 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, err
 		}
 
+		if mergeGroup.ctr.mtyp == H0 {
+			if len(mergeGroup.ctr.groupByBatches) == 0 {
+				gb := mergeGroup.ctr.createNewGroupByBatch(proc, bat.Vecs, 1)
+				gb.SetRowCount(1)
+				mergeGroup.ctr.groupByBatches = append(mergeGroup.ctr.groupByBatches, gb)
+			}
+		}
+
 		nAggs, err := types.ReadInt32(reader)
 		if err != nil {
 			return false, err
 		}
 		if nAggs > 0 && len(mergeGroup.Aggs) == 0 {
-			r := bytes.NewReader(bat.ExtraBuf1)
-			nAggs, err := types.ReadInt32(r)
-			if err != nil {
-				return false, err
-			}
 			for i := int32(0); i < nAggs; i++ {
 				agExpr := aggexec.AggFuncExecExpression{}
-				if err := agExpr.UnmarshalFromReader(r); err != nil {
+				if err := agExpr.UnmarshalFromReader(reader); err != nil {
 					return false, err
 				}
 				mergeGroup.Aggs = append(mergeGroup.Aggs, agExpr)
@@ -234,5 +253,5 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
-	return mergeGroup.ctr.memUsed() > mergeGroup.SpillMem, nil
+	return mergeGroup.ctr.needSpill(), nil
 }

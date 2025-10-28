@@ -255,6 +255,7 @@ func (exec *aggregatorFromFixedToBytes[from]) UnmarshalFromReader(reader io.Read
 	if err != nil {
 		return err
 	}
+	// exec.ret.setupT()
 	exec.execContext.decodeGroupContexts(bs, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return nil
 }

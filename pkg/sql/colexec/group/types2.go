@@ -72,7 +72,7 @@ type spillBucket struct {
 }
 
 func (bkt *spillBucket) free(proc *process.Process) {
-	if bkt.file != nil {
+	if bkt != nil && bkt.file != nil {
 		bkt.file.Close()
 		bkt.file = nil
 	}
@@ -100,7 +100,6 @@ type container struct {
 
 	// aggs, which holds the intermediate state of agg functions.
 	aggList []aggexec.AggFuncExec
-	flushed [][]*vector.Vector
 
 	// spill, agglist to load spilled data.
 	spillMem        int64

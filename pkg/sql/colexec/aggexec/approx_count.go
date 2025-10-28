@@ -84,6 +84,7 @@ func (exec *approxCountFixedExec[T]) UnmarshalFromReader(reader io.Reader, mp *m
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 	exec.groups = groups
 	return nil
 }
@@ -163,6 +164,7 @@ func (exec *approxCountVarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 	exec.groups = groups
 	return nil
 }

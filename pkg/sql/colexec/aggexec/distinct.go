@@ -204,6 +204,18 @@ func (d *distinctHash) marshal() ([]byte, error) {
 }
 
 func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error {
+	var cnt int64
+	if flags == nil {
+		cnt = int64(len(d.maps))
+	} else {
+		for _, f := range flags {
+			if f != 0 {
+				cnt += 1
+			}
+		}
+	}
+
+	types.WriteInt64(buf, cnt)
 	for i := range d.maps {
 		if flags != nil && flags[i] != 0 {
 			if _, err := d.maps[i].WriteTo(buf); err != nil {

@@ -75,6 +75,7 @@ func (exec *countColumnExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 	return nil
 }
 
@@ -324,6 +325,7 @@ func (exec *countStarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool
 	if err != nil {
 		return err
 	}
+	exec.ret.setupT()
 	return nil
 }
 

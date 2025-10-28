@@ -377,7 +377,6 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 
 	if curr == 0 {
 		// flush aggs.   this api is insane
-		ctr.flushed = nil
 		for _, ag := range ctr.aggList {
 			vecs, err := ag.Flush()
 			if err != nil {

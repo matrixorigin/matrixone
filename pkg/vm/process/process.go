@@ -267,17 +267,20 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	return fields
 }
 
-func (proc *Process) GetSpillFileService() (*fileservice.LocalFS, error) {
+func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, error) {
 	local, err := fileservice.Get[fileservice.MutableFileService](proc.Base.FileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	spillfs := fileservice.SubPath(local, defines.SpillFileServiceName)
 
-	// cast spillfs to *LocalFS
-	ret, ok := spillfs.(*fileservice.LocalFS)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("spillfs is not a LocalFS")
+	if err := local.EnsureDir(proc.Ctx, defines.SpillFileServiceName); err != nil {
+		return nil, err
 	}
-	return ret, nil
+
+	subPathFS := fileservice.SubPath(local, defines.SpillFileServiceName)
+	mutablefs, ok := subPathFS.(fileservice.MutableFileService)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("subPathFS is not a MutableFileService")
+	}
+	return mutablefs, nil
 }

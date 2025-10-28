@@ -101,6 +101,9 @@ type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	// the initial value for a new result row.
 	InitialValue T
 
+	// XXX FIXME:
+	// which genius thought of using this?  It MUST be removed.
+	// Use GetValue and SetValue, to directly access the reuslt list.
 	// for easy get from / set to resultList.
 	values [][]T
 }
@@ -121,6 +124,15 @@ func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData, emptyData, di
 		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
 	}
 	return nil
+}
+
+func (r *aggResultWithFixedType[T]) setupT() {
+	if len(r.optSplitResult.resultList) > 0 {
+		r.values = make([][]T, len(r.optSplitResult.resultList))
+		for i := range r.values {
+			r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
+		}
+	}
 }
 
 func (r *aggResultWithFixedType[T]) grows(more int) error {
@@ -329,21 +341,27 @@ func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData 
 
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
 	rvec := vector.NewVec(r.resultType)
-	mvec := vector.NewVec(types.T_bool.ToType())
-
 	for i := range r.resultList {
 		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
-		mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
 	}
-
 	if err := rvec.MarshalBinaryWithBuffer(buf); err != nil {
-		return err
-	}
-	if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
 		return err
 	}
 
 	var cnt int64
+	cnt = int64(len(r.emptyList))
+	buf.Write(types.EncodeInt64(&cnt))
+	if cnt > 0 {
+		mvec := vector.NewVec(types.T_bool.ToType())
+		for i := range r.emptyList {
+			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
+		}
+		if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
+			return err
+		}
+	}
+
+	cnt = 0
 	if len(r.distinct) == 0 {
 		buf.Write(types.EncodeInt64(&cnt))
 	} else {
@@ -364,11 +382,16 @@ func (r *optSplitResult) marshalChunkToBuffer(chunk int, buf *bytes.Buffer) erro
 		return err
 	}
 
-	if err := r.emptyList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
-		return err
+	var cnt int64
+	cnt = int64(len(r.emptyList))
+	buf.Write(types.EncodeInt64(&cnt))
+	if cnt > 0 {
+		if err := r.emptyList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+			return err
+		}
 	}
 
-	var cnt int64
+	cnt = 0
 	if len(r.distinct) == 0 {
 		buf.Write(types.EncodeInt64(&cnt))
 	} else {
@@ -391,8 +414,6 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 	}()
 
 	r.resultList = make([]*vector.Vector, 1)
-	r.emptyList = make([]*vector.Vector, 1)
-	r.bsFromEmptyList = make([][]bool, 1)
 	r.nowIdx1 = 0
 
 	r.resultList[0] = vector.NewOffHeapVecWithType(r.resultType)
@@ -400,13 +421,20 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 		return err
 	}
 
-	r.emptyList[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-	if err = r.emptyList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+	cnt, err := types.ReadInt64(reader)
+	if err != nil {
 		return err
 	}
-	r.bsFromEmptyList[0] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[0])
+	if cnt > 0 {
+		r.emptyList = make([]*vector.Vector, 1)
+		r.bsFromEmptyList = make([][]bool, 1)
+		r.emptyList[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+		if err = r.emptyList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+			return err
+		}
+		r.bsFromEmptyList[0] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[0])
+	}
 
-	var cnt int64
 	cnt, err = types.ReadInt64(reader)
 	if err != nil {
 		return err
