@@ -546,6 +546,18 @@ func (mr *MockTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockTxnOperator)(nil).Debug), ctx, ops)
 }
 
+// Delete mocks base method.
+func (m *MockTxnOperator) Delete(key string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Delete", key)
+}
+
+// Delete indicates an expected call of Delete.
+func (mr *MockTxnOperatorMockRecorder) Delete(key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockTxnOperator)(nil).Delete), key)
+}
+
 // EnterIncrStmt mocks base method.
 func (m *MockTxnOperator) EnterIncrStmt() {
 	m.ctrl.T.Helper()
@@ -616,6 +628,21 @@ func (m *MockTxnOperator) ExitRunSql() {
 func (mr *MockTxnOperatorMockRecorder) ExitRunSql() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRunSql", reflect.TypeOf((*MockTxnOperator)(nil).ExitRunSql))
+}
+
+// Get mocks base method.
+func (m *MockTxnOperator) Get(key string) (any, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Get", key)
+	ret0, _ := ret[0].(any)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// Get indicates an expected call of Get.
+func (mr *MockTxnOperatorMockRecorder) Get(key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockTxnOperator)(nil).Get), key)
 }
 
 // GetOverview mocks base method.
@@ -755,6 +782,18 @@ func (m *MockTxnOperator) Rollback(ctx context.Context) error {
 func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockTxnOperator)(nil).Rollback), ctx)
+}
+
+// Set mocks base method.
+func (m *MockTxnOperator) Set(key string, value any) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Set", key, value)
+}
+
+// Set indicates an expected call of Set.
+func (mr *MockTxnOperatorMockRecorder) Set(key, value interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Set", reflect.TypeOf((*MockTxnOperator)(nil).Set), key, value)
 }
 
 // SetFootPrints mocks base method.

@@ -36,7 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-type Storage struct {
+const (
+	txnBasedMetadataCacheKey = "partitionservice.metadata.%d"
+)
+
+type storage struct {
 	sid  string
 	exec executor.SQLExecutor
 	eng  engine.Engine
@@ -47,14 +51,15 @@ func NewStorage(
 	exec executor.SQLExecutor,
 	eng engine.Engine,
 ) PartitionStorage {
-	return &Storage{
+	s := &storage{
 		sid:  sid,
 		exec: exec,
 		eng:  eng,
 	}
+	return s
 }
 
-func (s *Storage) GetTableDef(
+func (s *storage) GetTableDef(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -70,7 +75,7 @@ func (s *Storage) GetTableDef(
 	return rel.GetTableDef(ctx), nil
 }
 
-func (s *Storage) GetMetadata(
+func (s *storage) GetMetadata(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -80,11 +85,17 @@ func (s *Storage) GetMetadata(
 		return partition.PartitionMetadata{}, false, err
 	}
 
+	key := ""
+
 	opts := executor.Options{}.
 		WithTxn(txnOp).
 		WithDatabase(catalog.MO_CATALOG).
 		WithAccountID(accountID)
 	if txnOp != nil {
+		key = fmt.Sprintf(txnBasedMetadataCacheKey, tableID)
+		if v, ok := txnOp.Get(key); ok {
+			return v.(partition.PartitionMetadata), true, nil
+		}
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -220,10 +231,13 @@ func (s *Storage) GetMetadata(
 		},
 		opts,
 	)
+	if found && txnOp != nil {
+		txnOp.Set(key, metadata)
+	}
 	return metadata, found, err
 }
 
-func (s *Storage) Create(
+func (s *storage) Create(
 	ctx context.Context,
 	def *plan.TableDef,
 	stmt *tree.CreateTable,
@@ -246,6 +260,7 @@ func (s *Storage) Create(
 			},
 		)
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, def.TblId))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -278,7 +293,7 @@ func (s *Storage) Create(
 	)
 }
 
-func (s *Storage) Redefine(
+func (s *storage) Redefine(
 	ctx context.Context,
 	def *plan.TableDef,
 	options *tree.PartitionOption,
@@ -294,6 +309,7 @@ func (s *Storage) Redefine(
 		WithTxn(txnOp).
 		WithAccountID(accountID)
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, def.TblId))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -375,7 +391,7 @@ func (s *Storage) Redefine(
 	)
 }
 
-func (s *Storage) Rename(
+func (s *storage) Rename(
 	ctx context.Context,
 	def *plan.TableDef,
 	oldName, newName string,
@@ -392,6 +408,7 @@ func (s *Storage) Rename(
 		WithAccountID(accountID)
 
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, def.TblId))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -449,7 +466,7 @@ func (s *Storage) Rename(
 	)
 }
 
-func (s *Storage) AddPartitions(
+func (s *storage) AddPartitions(
 	ctx context.Context,
 	def *plan.TableDef,
 	metadata partition.PartitionMetadata,
@@ -472,6 +489,7 @@ func (s *Storage) AddPartitions(
 			},
 		)
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, def.TblId))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -512,7 +530,7 @@ func (s *Storage) AddPartitions(
 	)
 }
 
-func (s *Storage) DropPartitions(
+func (s *storage) DropPartitions(
 	ctx context.Context,
 	def *plan.TableDef,
 	metadata partition.PartitionMetadata,
@@ -529,6 +547,7 @@ func (s *Storage) DropPartitions(
 		WithAccountID(accountID)
 
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, def.TblId))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -615,7 +634,7 @@ func (s *Storage) DropPartitions(
 	)
 }
 
-func (s *Storage) TruncatePartitions(
+func (s *storage) TruncatePartitions(
 	ctx context.Context,
 	def *plan.TableDef,
 	metadata partition.PartitionMetadata,
@@ -639,6 +658,7 @@ func (s *Storage) TruncatePartitions(
 		)
 
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, def.TblId))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -707,7 +727,7 @@ func (s *Storage) TruncatePartitions(
 	)
 }
 
-func (s *Storage) Delete(
+func (s *storage) Delete(
 	ctx context.Context,
 	metadata partition.PartitionMetadata,
 	txnOp client.TxnOperator,
@@ -721,6 +741,7 @@ func (s *Storage) Delete(
 		WithTxn(txnOp).
 		WithAccountID(accountID)
 	if txnOp != nil {
+		txnOp.Delete(fmt.Sprintf(txnBasedMetadataCacheKey, metadata.TableID))
 		opts = opts.WithDisableIncrStatement()
 	}
 
@@ -776,7 +797,7 @@ func (s *Storage) Delete(
 	)
 }
 
-func (s *Storage) createPartitionTable(
+func (s *storage) createPartitionTable(
 	def *plan.TableDef,
 	stmt *tree.CreateTable,
 	metadata partition.PartitionMetadata,
@@ -875,7 +896,7 @@ func (s *Storage) createPartitionTable(
 	return addPartitionMetadata()
 }
 
-func (s *Storage) getTableIDByTableNameAndDatabaseName(
+func (s *storage) getTableIDByTableNameAndDatabaseName(
 	tableName string,
 	databaseName string,
 	txn executor.TxnExecutor,
@@ -905,7 +926,7 @@ func (s *Storage) getTableIDByTableNameAndDatabaseName(
 	return id, nil
 }
 
-func (s *Storage) createPartitionMetadata(
+func (s *storage) createPartitionMetadata(
 	metadata partition.PartitionMetadata,
 	txn executor.TxnExecutor,
 ) error {
@@ -927,7 +948,7 @@ func (s *Storage) createPartitionMetadata(
 	return nil
 }
 
-func (s *Storage) updatePartitionCount(
+func (s *storage) updatePartitionCount(
 	metadata partition.PartitionMetadata,
 	txn executor.TxnExecutor,
 ) error {
