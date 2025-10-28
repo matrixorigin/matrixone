@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -102,6 +103,9 @@ type checkpointCleaner struct {
 		sync.RWMutex
 		extras map[string]func(item any) bool
 	}
+	
+	// Track last deletion time for 4-hour alert
+	lastDeletionTime atomic.Int64
 
 	mutation struct {
 		sync.Mutex
@@ -775,6 +779,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	pitrs *logtail.PitrInfo,
 	gcFileCount int,
 ) (err error) {
+	mergeStart := time.Now()
+	defer func() {
+		v2.TaskGCMergeCheckpointDurationHistogram.Observe(time.Since(mergeStart).Seconds())
+	}()
+
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
 	// 2. one incremental checkpoint with empty start
@@ -949,6 +958,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			extraErrMsg = "DelFiles failed"
 			return err
 		}
+
+		// Record checkpoint file deletion metrics
+		if len(deleteFiles) > 0 {
+			v2.GCCheckpointFileDeletionCounter.Add(float64(len(deleteFiles)))
+			v2.GCLastCheckpointDeletionGauge.Set(float64(time.Now().Unix()))
+		}
 	}
 
 	for _, deleteFile := range deleteFiles {
@@ -995,6 +1010,11 @@ func (c *checkpointCleaner) tryGCLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
+	gcStart := time.Now()
+	defer func() {
+		v2.TaskGCDurationHistogram.Observe(time.Since(gcStart).Seconds())
+	}()
+
 	// 1. Quick check if GC is needed
 	// 1.1. If there is no global checkpoint, no need to do GC
 	var maxGlobalCKP *checkpoint.CheckpointEntry
@@ -1101,6 +1121,14 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
 		return
+	}
+
+	// Record file deletion metrics
+	if len(filesToGC) > 0 {
+		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
+		
+		// Check for 4-hour no deletion alert
+		c.checkGCDelitionAlert()
 	}
 	if c.GetGCWaterMark() == nil {
 		return nil
@@ -1489,6 +1517,19 @@ func (c *checkpointCleaner) Process(
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
+
+		// Record GC execution metrics
+		if err != nil {
+			v2.GCCheckpointExecutionErrorCounter.Inc()
+		} else {
+			v2.GCCheckpointExecutionCounter.Inc()
+		}
+		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
+		v2.GCLastCheckpointExecutionGauge.SetToCurrentTime()
+		
+		// Check GC alert periodically
+		c.checkGCAlertPeriodically()
+
 		logutil.Info(
 			"GC-TRACE-PROCESS",
 			zap.String("task", c.TaskNameLocked()),
@@ -1542,6 +1583,10 @@ func (c *checkpointCleaner) tryScanLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 	checker func(*checkpoint.CheckpointEntry) bool,
 ) (err error, tryGC bool) {
+	scanStart := time.Now()
+	defer func() {
+		v2.TaskGCScanDurationHistogram.Observe(time.Since(scanStart).Seconds())
+	}()
 
 	tryGC = true
 	// get the max scanned timestamp
@@ -1711,6 +1756,10 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		snapSize, tableSize uint32
 	)
 	defer func() {
+		// Record scan metrics
+		v2.TaskGCScanDurationHistogram.Observe(time.Since(now).Seconds())
+		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
+
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),
@@ -1815,6 +1864,57 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 		ckp.GetEnd(),
 		c.TaskNameLocked(),
 	)
+}
+
+// checkGCDelitionAlert checks if GC has not deleted any files in 4 hours
+func (c *checkpointCleaner) checkGCDelitionAlert() {
+	now := time.Now()
+	nowUnix := now.Unix()
+	
+	// Update the last deletion time
+	c.lastDeletionTime.Store(nowUnix)
+	
+	// Set the gauge for monitoring
+	v2.GCLastDataDeletionGauge.Set(float64(nowUnix))
+	
+	// Check if we haven't deleted anything in 4 hours
+	lastDeletion := c.lastDeletionTime.Load()
+	if lastDeletion == 0 || (nowUnix-lastDeletion) > 14400 { // 4 hours = 14400 seconds
+		v2.GCAlertNoDeletionGauge.Set(1)
+		logutil.Warn("GC-ALERT-NO-DELETION",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Int64("last-deletion", lastDeletion),
+			zap.Int64("current-time", nowUnix),
+			zap.Int64("hours-since-deletion", (nowUnix-lastDeletion)/3600),
+		)
+	} else {
+		v2.GCAlertNoDeletionGauge.Set(0)
+	}
+	
+	logutil.Info("GC-DELETION-RECORDED",
+		zap.String("task", c.TaskNameLocked()),
+		zap.Int64("deletion-timestamp", nowUnix),
+	)
+}
+
+// checkGCAlertPeriodically checks if GC has not deleted any files in 4 hours
+// This should be called periodically even when no files are deleted
+func (c *checkpointCleaner) checkGCAlertPeriodically() {
+	now := time.Now().Unix()
+	lastDeletion := c.lastDeletionTime.Load()
+	
+	// If last deletion timestamp is 0 (never deleted) or more than 4 hours ago
+	if lastDeletion == 0 || (now-lastDeletion) > 14400 { // 4 hours = 14400 seconds
+		v2.GCAlertNoDeletionGauge.Set(1)
+		logutil.Warn("GC-ALERT-NO-DELETION",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Int64("last-deletion", lastDeletion),
+			zap.Int64("current-time", now),
+			zap.Int64("hours-since-deletion", (now-lastDeletion)/3600),
+		)
+	} else {
+		v2.GCAlertNoDeletionGauge.Set(0)
+	}
 }
 
 func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {

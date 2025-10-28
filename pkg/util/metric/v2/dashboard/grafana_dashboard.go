@@ -133,6 +133,10 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initGCDashboard(); err != nil {
+		return err
+	}
+
 	if err := c.initFileServiceDashboard(); err != nil {
 		return err
 	}
