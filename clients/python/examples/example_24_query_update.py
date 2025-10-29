@@ -189,19 +189,22 @@ def demo_sqlalchemy_expressions():
             },
         ]
         client.batch_insert("example_users_update", users_data)
-        
+
         # Insert another user using client.insert() with JSON dict
-        client.insert("example_users_update", {
-            "id": 2,
-            "username": "bob",
-            "email": "bob@example.com",
-            "full_name": "Bob Johnson",
-            "age": 30,
-            "salary": 60000.00,
-            "status": "active",
-            "login_count": 10,
-            "preferences": {"theme": "light", "language": "zh", "notifications": False},
-        })
+        client.insert(
+            "example_users_update",
+            {
+                "id": 2,
+                "username": "bob",
+                "email": "bob@example.com",
+                "full_name": "Bob Johnson",
+                "age": 30,
+                "salary": 60000.00,
+                "status": "active",
+                "login_count": 10,
+                "preferences": {"theme": "light", "language": "zh", "notifications": False},
+            },
+        )
         print("   ✓ Inserted users using batch_insert() and insert() with JSON dicts")
 
         # 1. Update with SQLAlchemy expressions

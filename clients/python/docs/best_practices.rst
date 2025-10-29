@@ -4,6 +4,44 @@ Best Practices Guide
 This guide provides best practices for using the MatrixOne Python SDK effectively in production environments,
 with emphasis on using the SDK's high-level APIs and avoiding raw SQL.
 
+.. warning::
+   **🚨 CRITICAL: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   MatrixOne does not support SQL standard double-quoted identifiers in queries, which causes issues 
+   with camelCase column names when using SQLAlchemy ORM.
+   
+   **Examples:**
+   
+   .. code-block:: python
+   
+      # ❌ DON'T: CamelCase column names (will fail in SELECT queries)
+      class User(Base):
+          userName = Column(String(50))      # CREATE succeeds, SELECT fails!
+          userId = Column(Integer)           # Will cause SQL syntax errors
+      
+      # ✅ DO: Use lowercase with underscores (snake_case)
+      class User(Base):
+          user_name = Column(String(50))     # Works perfectly
+          user_id = Column(Integer)          # All operations succeed
+   
+   **Why this matters:**
+   
+   - ✅ CREATE TABLE works with both styles (uses backticks)
+   - ✅ INSERT works with both styles  
+   - ❌ **SELECT fails with camelCase** (uses double quotes, not supported by MatrixOne)
+   
+   **Generated SQL comparison:**
+   
+   .. code-block:: sql
+   
+      -- CamelCase generates:
+      SELECT "userName" FROM user  -- ❌ Fails with syntax error!
+      
+      -- snake_case generates:
+      SELECT user_name FROM user   -- ✅ Works perfectly!
+
 SDK-First Development Philosophy
 ---------------------------------
 
@@ -27,11 +65,12 @@ Creating Tables with SDK API
    client.connect(host=host, port=port, user=user, password=password, database=database)
    
    # ✅ GOOD: Use create_table API with dictionary
+   # Note: Always use snake_case for column names!
    client.create_table("users", {
        "id": "int",
-       "username": "varchar(100)",
+       "user_name": "varchar(100)",      # ✅ snake_case
        "email": "varchar(255)",
-       "created_at": "timestamp",
+       "created_at": "timestamp",        # ✅ snake_case
        "age": "int"
    }, primary_key="id")
    
@@ -47,7 +86,7 @@ Creating Tables with SDK API
        name = Column(String(200))
        price = Column(Integer)
        category = Column(String(50))
-       created_at = Column(DateTime)
+       created_at = Column(DateTime)     # ✅ snake_case
    
    client.create_table(Product)
    
@@ -60,18 +99,19 @@ Data Insertion Best Practices
 .. code-block:: python
 
    # ✅ GOOD: Single insert using SDK API
+   # Note: Use snake_case for column names
    client.insert("users", {
        "id": 1,
-       "username": "alice",
+       "user_name": "alice",        # ✅ snake_case
        "email": "alice@example.com",
        "age": 25
    })
    
    # ✅ GOOD: Batch insert for multiple rows - MUCH FASTER
    users_data = [
-       {"id": 2, "username": "bob", "email": "bob@example.com", "age": 30},
-       {"id": 3, "username": "charlie", "email": "charlie@example.com", "age": 28},
-       {"id": 4, "username": "diana", "email": "diana@example.com", "age": 32}
+       {"id": 2, "user_name": "bob", "email": "bob@example.com", "age": 30},
+       {"id": 3, "user_name": "charlie", "email": "charlie@example.com", "age": 28},
+       {"id": 4, "user_name": "diana", "email": "diana@example.com", "age": 32}
    ]
    client.batch_insert("users", users_data)
    

@@ -9,12 +9,25 @@ PITR (Point-in-Time Recovery), restore operations, table cloning, account manage
 and mo-ctl integration. The SDK is designed for both synchronous and asynchronous operations with full
 type safety and extensive documentation.
 
+.. danger::
+   **🚨 MUST READ: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   Using camelCase will cause SELECT queries to fail. See :doc:`naming_conventions` for details.
+   
+   .. code-block:: python
+   
+      # ❌ userName = Column(String(50))    # Fails in SELECT!
+      # ✅ user_name = Column(String(50))   # Works perfectly!
+
 .. toctree::
    :maxdepth: 2
    :caption: Getting Started
 
    installation
    quickstart
+   naming_conventions
    configuration_guide
 
 .. toctree::
