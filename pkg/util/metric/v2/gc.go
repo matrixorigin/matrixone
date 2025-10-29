@@ -200,7 +200,6 @@ var (
 			Help:      "GC alert status (1 = alerting, 0 = normal).",
 		}, []string{"type"})
 
-	GCAlertNoDeletionGauge    = gcAlertGauge.WithLabelValues("no_deletion")
 	GCAlertHighMemoryGauge    = gcAlertGauge.WithLabelValues("high_memory")
 	GCAlertSlowExecutionGauge = gcAlertGauge.WithLabelValues("slow_execution")
 	GCAlertErrorRateGauge     = gcAlertGauge.WithLabelValues("error_rate")

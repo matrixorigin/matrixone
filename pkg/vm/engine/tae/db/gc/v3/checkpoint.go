@@ -104,8 +104,7 @@ type checkpointCleaner struct {
 		extras map[string]func(item any) bool
 	}
 	
-	// Track last deletion time for 4-hour alert
-	lastDeletionTime atomic.Int64
+    // removed: last deletion time alert tracking
 
 	mutation struct {
 		sync.Mutex
@@ -1123,13 +1122,10 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		return
 	}
 
-	// Record file deletion metrics
-	if len(filesToGC) > 0 {
-		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
-		
-		// Check for 4-hour no deletion alert
-		c.checkGCDelitionAlert()
-	}
+    // Record file deletion metrics
+    if len(filesToGC) > 0 {
+        v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
+    }
 	if c.GetGCWaterMark() == nil {
 		return nil
 	}
@@ -1527,8 +1523,7 @@ func (c *checkpointCleaner) Process(
 		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
 		v2.GCLastCheckpointExecutionGauge.SetToCurrentTime()
 		
-		// Check GC alert periodically
-		c.checkGCAlertPeriodically()
+        // removed periodic GC alert check
 
 		logutil.Info(
 			"GC-TRACE-PROCESS",
@@ -1867,55 +1862,11 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 }
 
 // checkGCDelitionAlert checks if GC has not deleted any files in 4 hours
-func (c *checkpointCleaner) checkGCDelitionAlert() {
-	now := time.Now()
-	nowUnix := now.Unix()
-	
-	// Update the last deletion time
-	c.lastDeletionTime.Store(nowUnix)
-	
-	// Set the gauge for monitoring
-	v2.GCLastDataDeletionGauge.Set(float64(nowUnix))
-	
-	// Check if we haven't deleted anything in 4 hours
-	lastDeletion := c.lastDeletionTime.Load()
-	if lastDeletion == 0 || (nowUnix-lastDeletion) > 14400 { // 4 hours = 14400 seconds
-		v2.GCAlertNoDeletionGauge.Set(1)
-		logutil.Warn("GC-ALERT-NO-DELETION",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Int64("last-deletion", lastDeletion),
-			zap.Int64("current-time", nowUnix),
-			zap.Int64("hours-since-deletion", (nowUnix-lastDeletion)/3600),
-		)
-	} else {
-		v2.GCAlertNoDeletionGauge.Set(0)
-	}
-	
-	logutil.Info("GC-DELETION-RECORDED",
-		zap.String("task", c.TaskNameLocked()),
-		zap.Int64("deletion-timestamp", nowUnix),
-	)
-}
+// removed: checkGCDelitionAlert
 
 // checkGCAlertPeriodically checks if GC has not deleted any files in 4 hours
 // This should be called periodically even when no files are deleted
-func (c *checkpointCleaner) checkGCAlertPeriodically() {
-	now := time.Now().Unix()
-	lastDeletion := c.lastDeletionTime.Load()
-	
-	// If last deletion timestamp is 0 (never deleted) or more than 4 hours ago
-	if lastDeletion == 0 || (now-lastDeletion) > 14400 { // 4 hours = 14400 seconds
-		v2.GCAlertNoDeletionGauge.Set(1)
-		logutil.Warn("GC-ALERT-NO-DELETION",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Int64("last-deletion", lastDeletion),
-			zap.Int64("current-time", now),
-			zap.Int64("hours-since-deletion", (now-lastDeletion)/3600),
-		)
-	} else {
-		v2.GCAlertNoDeletionGauge.Set(0)
-	}
-}
+// removed: checkGCAlertPeriodically
 
 func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	c.mutation.Lock()
