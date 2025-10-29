@@ -2013,14 +2013,14 @@ class Client(BaseMatrixOneClient):
         if not version_string:
             return None
 
-        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v后面为空)
+        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v followed by nothing)
         dev_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v$"
         dev_match = re.search(dev_pattern, version_string.strip())
         if dev_match:
             # Development version - assign highest version number
             return "999.0.0"
 
-        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v后面有版本号)
+        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by version number)
         release_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)"
         release_match = re.search(release_pattern, version_string.strip())
         if release_match:
@@ -3154,6 +3154,9 @@ class Session(SQLAlchemySession):
         self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
+        from .export import ExportManager
+
+        self.export = ExportManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """

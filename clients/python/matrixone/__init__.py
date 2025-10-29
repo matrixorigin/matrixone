@@ -47,10 +47,7 @@ from .load_data import (
 )
 from .export import (
     ExportManager,
-    TransactionExportManager,
     AsyncExportManager,
-    AsyncTransactionExportManager,
-    ExportFormat,
 )
 from .moctl import MoCtlManager
 from .pitr import Pitr, PitrManager
@@ -138,10 +135,7 @@ __all__ = [
     "CompressionFormat",
     "JsonDataStructure",
     "ExportManager",
-    "TransactionExportManager",
     "AsyncExportManager",
-    "AsyncTransactionExportManager",
-    "ExportFormat",
     "VersionError",
     "VersionManager",
     "VersionInfo",
