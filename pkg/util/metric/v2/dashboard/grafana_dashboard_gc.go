@@ -18,9 +18,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/timeseries"
+	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
 
 func (c *DashboardCreator) initGCDashboard() error {
@@ -89,7 +89,7 @@ func (c *DashboardCreator) initGCFileDeletionRow() dashboard.Option {
 			)},
 			[]string{"{{ type }}"},
 			timeseries.Span(6),
-			axis.Unit("decbytes"),
+			timeseries.Axis(tsaxis.Unit("decbytes")),
 		),
 	)
 }
