@@ -325,20 +325,6 @@ if SA_VERSION >= (2, 0):
             mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
             return mysql_compiler.visit_small_integer(type_, **kw)
 
-        def visit_TINYINT(self, type_, **kw):
-            """Handle TINYINT type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_TINYINT(type_, **kw)
-
-        def visit_SMALLINT(self, type_, **kw):
-            """Handle SMALLINT type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_SMALLINT(type_, **kw)
-
         def visit_CHAR(self, type_, **kw):
             """Handle CHAR type compilation."""
             from sqlalchemy.dialects.mysql.base import MySQLDialect
@@ -380,20 +366,6 @@ if SA_VERSION >= (2, 0):
 
             mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
             return mysql_compiler.visit_BINARY(type_, **kw)
-
-        def visit_BINARY(self, type_, **kw):
-            """Handle Binary type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_BINARY(type_, **kw)
-
-        def visit_VARBINARY(self, type_, **kw):
-            """Handle Binary type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_VARBINARY(type_, **kw)
 
         def visit_BLOB(self, type_, **kw):
             """Handle BLOB type compilation."""
@@ -496,14 +468,6 @@ else:
 
         # Additional type methods for comprehensive SQLAlchemy 1.4.x support
         def visit_small_integer(self, type_, **kw):
-            """Handle SMALLINT type compilation."""
-            return "SMALLINT"
-
-        def visit_TINYINT(self, type_, **kw):
-            """Handle TINYINT type compilation."""
-            return "TINYINT"
-
-        def visit_SMALLINT(self, type_, **kw):
             """Handle SMALLINT type compilation."""
             return "SMALLINT"
 

@@ -40,8 +40,7 @@ from matrixone import Client, LoadDataFormat, CompressionFormat, JsonDataStructu
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params, print_config
 from matrixone.orm import declarative_base
-from sqlalchemy import Column, Integer,SmallInteger, String, DECIMAL, Text
-from sqlalchemy.dialects.mysql import TINYINT, BLOB, VARBINARY, BINARY
+from sqlalchemy import Column, Integer, String, DECIMAL, Text
 
 # Create Base for model definitions
 Base = declarative_base()
@@ -956,11 +955,6 @@ class LoadDataOperationsDemo:
                 __tablename__ = 'test_stage_parquet'
                 id = Column(BigInteger, primary_key=True, nullable=False)
                 name = Column(String(100), nullable=False)
-                int8Column = Column(TINYINT, nullable=False)
-                int16Column = Column(SmallInteger, nullable=False)
-                binaryColumn = Column(BINARY, nullable=False)
-                varBinaryColumn = Column(VARBINARY(32), nullable=False)
-                blobColumn = Column(BLOB, nullable=False)
 
             # Create table
             client.drop_table('test_stage_parquet')
@@ -972,24 +966,11 @@ class LoadDataOperationsDemo:
             parquet_file = os.path.join(tmpfiles_dir, 'test_stage.parq')
 
             # Create parquet data with explicit schema (non-nullable to match table definition)
-            schema = pa.schema([
-                pa.field('id', pa.int64(), nullable=False), 
-                pa.field('name', pa.string(), nullable=False), 
-                pa.field('int8column', pa.int8(), nullable=False), 
-                pa.field('int16column', pa.int16(), nullable=False),
-                pa.field('binarycolumn', pa.binary(), nullable=False),
-                pa.field('varbinarycolumn', pa.binary(), nullable=False),
-                pa.field('blobcolumn', pa.binary(), nullable=False),
-            ])
+            schema = pa.schema([pa.field('id', pa.int64(), nullable=False), pa.field('name', pa.string(), nullable=False)])
             table = pa.table(
                 {
                     'id': pa.array([1, 2, 3, 4, 5], type=pa.int64()),
                     'name': pa.array(['Alice', 'Bob', 'Charlie', 'Diana', 'Eve'], type=pa.string()),
-                    'int8column': pa.array([1, 2, 3, 4, 5], type=pa.int8()),
-                    'int16column': pa.array([100, 200, 300, 400, 500], type=pa.int16()),
-                    'binarycolumn': pa.array([b'binary1', b'binary2', b'binary3', b'binary4', b'binary5'], type=pa.binary()),
-                    'varbinarycolumn': pa.array([b'varbinary1', b'varbinary2', b'varbinary3', b'varbinary4', b'varbinary5'], type=pa.binary()),
-                    'blobcolumn': pa.array([b'blob1', b'blob2', b'blob3', b'blob4', b'blob5'], type=pa.binary()),
                 },
                 schema=schema,
             )
@@ -1004,13 +985,11 @@ class LoadDataOperationsDemo:
             )
             self.results['files_created'].append(parquet_file)
             self.logger.info("✅ Generated parquet file successfully")
-            print(parquet_file)
 
             # Create stage pointing to tmpfiles
             client.execute(f'CREATE STAGE IF NOT EXISTS parquet_stage URL="file://{tmpfiles_dir}/"')
             self.logger.info("✅ Created parquet stage successfully")
 
-            exit()
             # Test from_stage_parquet
             result = client.load_data.from_stage_parquet('parquet_stage', 'test_stage.parq', ParquetData)
             self.logger.info(f"✅ from_stage_parquet: Loaded {result.affected_rows} rows")
