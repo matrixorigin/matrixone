@@ -115,8 +115,9 @@ func (ctr *container) isSpilling() bool {
 func (ctr *container) setSpillMem(m int64) {
 	if m == 0 {
 		ctr.spillMem = common.GiB
+	} else {
+		ctr.spillMem = min(max(m, common.MiB), common.GiB*16)
 	}
-	ctr.spillMem = min(max(m, common.MiB), common.GiB*16)
 }
 
 func (ctr *container) freeAggList(proc *process.Process) {
