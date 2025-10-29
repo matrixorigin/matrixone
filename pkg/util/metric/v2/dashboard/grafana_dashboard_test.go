@@ -27,7 +27,7 @@ func TestCreateCloudDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewCloudDashboardCreator("http://10.222.1.50", "admin", "admin",
+	c := NewCloudDashboardCreator("http://10.222.1.50:3000", "admin", "admin",
 		"Prometheus", defaultMoFolderName)
 	require.NoError(t, c.Create())
 }
@@ -39,7 +39,7 @@ func TestCreateLocalDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewLocalDashboardCreator("http://10.222.1.50", "admin", "admin",
+	c := NewLocalDashboardCreator("http://10.222.1.50:3000", "admin", "admin",
 		localFolderName)
 	require.NoError(t, c.Create())
 }
@@ -51,7 +51,7 @@ func TestCreateK8SDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewK8SDashboardCreator("http://10.222.1.50", "admin", "admin",
+	c := NewK8SDashboardCreator("http://10.222.1.50:3000", "admin", "admin",
 		"Prometheus", defaultMoFolderName)
 	require.NoError(t, c.Create())
 }
@@ -64,13 +64,13 @@ func TestCreateCloudCtrlPlaneDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewCloudCtrlPlaneDashboardCreator("http://10.222.1.50", "admin", "admin",
+	c := NewCloudCtrlPlaneDashboardCreator("http://10.222.1.50:3000", "admin", "admin",
 		"Prometheus", defaultMoFolderName)
 	require.NoError(t, c.Create())
 }
 
 func Test_InitFrontendSQLLength(t *testing.T) {
-	c := NewLocalDashboardCreator("http://10.222.1.50", "admin", "admin",
+	c := NewLocalDashboardCreator("http://10.222.1.50:3000", "admin", "admin",
 		localFolderName)
 	c.initFrontendSQLLength()
 }
