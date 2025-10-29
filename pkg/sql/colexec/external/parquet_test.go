@@ -102,6 +102,7 @@ func Test_getMapper(t *testing.T) {
 		dt          types.T
 		expected    string
 		expectedOpt string
+		nilMapper   bool
 	}{
 		{
 			st:          parquet.BooleanType,
@@ -118,11 +119,25 @@ func Test_getMapper(t *testing.T) {
 			expectedOpt: "[0 10 20 0]-[0 3]",
 		},
 		{
+			st:        parquet.Int64Type,
+			numValues: 2,
+			values:    encoding.Int64Values([]int64{10, 20}),
+			dt:        types.T_int8,
+			nilMapper: true,
+		},
+		{
 			st:          parquet.Int32Type,
 			numValues:   2,
 			values:      encoding.Int32Values([]int32{100, 200}),
 			dt:          types.T_int16,
 			expectedOpt: "[0 100 200 0]-[0 3]",
+		},
+		{
+			st:        parquet.Int64Type,
+			numValues: 2,
+			values:    encoding.Int64Values([]int64{10, 20}),
+			dt:        types.T_int16,
+			nilMapper: true,
 		},
 		{
 			st:          parquet.Int32Type,
@@ -269,15 +284,20 @@ func Test_getMapper(t *testing.T) {
 
 			vec := vector.NewVec(types.New(tc.dt, 0, 0))
 			var h ParquetHandler
-			err = h.getMapper(f.Root().Column("c"), plan.Type{
+			mapper := h.getMapper(f.Root().Column("c"), plan.Type{
 				Id:          int32(tc.dt),
 				NotNullable: true,
-			}).mapping(page, proc, vec)
-			require.NoError(t, err)
-			if tc.expected != "" {
-				require.Equal(t, tc.expected, vec.String())
+			})
+			if tc.nilMapper {
+				require.Nil(t, mapper)
 			} else {
-				require.Equal(t, fmt.Sprint(values), vec.String())
+				err = mapper.mapping(page, proc, vec)
+				require.NoError(t, err)
+				if tc.expected != "" {
+					require.Equal(t, tc.expected, vec.String())
+				} else {
+					require.Equal(t, fmt.Sprint(values), vec.String())
+				}
 			}
 		})
 	}
@@ -318,16 +338,20 @@ func Test_getMapper(t *testing.T) {
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{
 				Id: int32(tc.dt),
 			})
-
-			pages := f.Root().Column("c").Pages()
-			page, _ = pages.ReadPage()
-			err = mp.mapping(page, proc, vec)
-			require.NoError(t, err)
-			if tc.expectedOpt != "" {
-				require.Equal(t, tc.expectedOpt, vec.String())
+			if tc.nilMapper {
+				require.Nil(t, mp)
 			} else {
-				require.Equal(t, fmt.Sprint(values), vec.String())
+				pages := f.Root().Column("c").Pages()
+				page, _ = pages.ReadPage()
+				err = mp.mapping(page, proc, vec)
+				require.NoError(t, err)
+				if tc.expectedOpt != "" {
+					require.Equal(t, tc.expectedOpt, vec.String())
+				} else {
+					require.Equal(t, fmt.Sprint(values), vec.String())
+				}
 			}
+
 		})
 	}
 }
