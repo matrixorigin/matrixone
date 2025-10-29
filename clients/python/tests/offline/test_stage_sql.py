@@ -226,12 +226,12 @@ class TestStageSQLGeneration:
 
     def test_create_s3_url_generation(self):
         """Test create_s3 URL generation"""
-        self.stage_manager.create_s3('s3_stage', 'my-bucket/data/', aws_key='key', aws_secret='secret')
+        self.stage_manager.create_s3('s3_stage', bucket='my-bucket', path='data/', aws_key_id='key', aws_secret_key='secret')
 
         actual_sql = self.mock_client.execute.call_args[0][0]
 
-        # Should add s3:// prefix
-        assert "URL='s3://my-bucket/data/'" in actual_sql
+        # Should build s3://bucket/path URL (trailing / stripped by implementation)
+        assert "URL='s3://my-bucket/data'" in actual_sql
         assert "CREDENTIALS={" in actual_sql
         assert "'AWS_KEY_ID'='key'" in actual_sql
         assert "'AWS_SECRET_KEY'='secret'" in actual_sql
@@ -239,19 +239,19 @@ class TestStageSQLGeneration:
     def test_create_s3_with_region(self):
         """Test create_s3 with AWS region"""
         self.stage_manager.create_s3(
-            's3_stage', 's3://bucket/path/', aws_key='key', aws_secret='secret', aws_region='us-west-2'
+            's3_stage', bucket='bucket', path='path/', aws_key_id='key', aws_secret_key='secret', aws_region='us-west-2'
         )
 
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert "'AWS_REGION'='us-west-2'" in actual_sql
 
     def test_create_s3_skip_prefix_if_present(self):
-        """Test create_s3 doesn't double-add s3:// prefix"""
-        self.stage_manager.create_s3('s3_stage', 's3://my-bucket/data/', aws_key='key', aws_secret='secret')
+        """Test create_s3 correctly builds s3:// URL from bucket and path"""
+        self.stage_manager.create_s3('s3_stage', bucket='my-bucket', path='data/', aws_key_id='key', aws_secret_key='secret')
 
         actual_sql = self.mock_client.execute.call_args[0][0]
-        # Should not be s3://s3://
-        assert "URL='s3://my-bucket/data/'" in actual_sql
+        # Should not be s3://s3:// (trailing / stripped)
+        assert "URL='s3://my-bucket/data'" in actual_sql
         assert "s3://s3://" not in actual_sql
 
 
@@ -289,6 +289,92 @@ class TestStageObjectMethods:
 
         with pytest.raises(ValueError, match="must be associated with a client"):
             stage.load_files({'file.csv': 'table'})
+
+    def test_stage_load_methods_call_correct_new_api(self):
+        """
+        Test that Stage object methods call the NEW pandas-style API.
+        This ensures we're using read_csv_stage, not the old from_stage_csv.
+        """
+        from unittest.mock import Mock, patch
+
+        client = Mock()
+        client.execute = Mock()
+        stage = Stage(name='test_stage', url='file:///data/', _client=client)
+
+        # Test load_csv calls read_csv_stage (NOT from_stage_csv)
+        with patch('matrixone.load_data.LoadDataManager') as MockLDM:
+            mock_manager = Mock()
+            MockLDM.return_value = mock_manager
+
+            stage.load_csv('data.csv', 'users')
+
+            # Verify it called read_csv_stage (new API)
+            assert mock_manager.read_csv_stage.called, "Should call read_csv_stage"
+            call_args = mock_manager.read_csv_stage.call_args
+            assert call_args[0] == (
+                'test_stage',
+                'data.csv',
+                'users',
+            ), f"Arguments should be (stage_name, filepath, table), got {call_args[0]}"
+
+        # Test load_json calls read_json_stage (NOT from_stage_jsonline)
+        with patch('matrixone.load_data.LoadDataManager') as MockLDM:
+            mock_manager = Mock()
+            MockLDM.return_value = mock_manager
+
+            stage.load_json('data.jsonl', 'events')
+
+            # Verify it called read_json_stage (new API)
+            assert mock_manager.read_json_stage.called, "Should call read_json_stage"
+            call_args = mock_manager.read_json_stage.call_args
+            assert call_args[0] == ('test_stage', 'data.jsonl', 'events')
+
+        # Test load_parquet calls read_parquet_stage (NOT from_stage_parquet)
+        with patch('matrixone.load_data.LoadDataManager') as MockLDM:
+            mock_manager = Mock()
+            MockLDM.return_value = mock_manager
+
+            stage.load_parquet('data.parquet', 'users')
+
+            # Verify it called read_parquet_stage (new API)
+            assert mock_manager.read_parquet_stage.called, "Should call read_parquet_stage"
+            call_args = mock_manager.read_parquet_stage.call_args
+            assert call_args[0] == ('test_stage', 'data.parquet', 'users')
+
+    def test_stage_export_methods_call_correct_new_api(self):
+        """
+        Test that Stage export methods call the NEW pandas-style API.
+        This ensures we're using to_csv_stage, not the old to_stage.
+        """
+        from unittest.mock import Mock, patch
+
+        client = Mock()
+        client.execute = Mock()
+        stage = Stage(name='test_stage', url='file:///data/', _client=client)
+
+        # Test export_to_csv calls to_csv_stage
+        with patch('matrixone.export.ExportManager') as MockEM:
+            mock_manager = Mock()
+            MockEM.return_value = mock_manager
+
+            stage.export_to_csv('output.csv', "SELECT * FROM users")
+
+            # Verify it called to_csv_stage (new API)
+            assert mock_manager.to_csv_stage.called, "Should call to_csv_stage"
+            call_args = mock_manager.to_csv_stage.call_args
+            assert call_args[0] == ('test_stage', 'output.csv', "SELECT * FROM users")
+
+        # Test export_to_jsonl calls to_jsonl_stage
+        with patch('matrixone.export.ExportManager') as MockEM:
+            mock_manager = Mock()
+            MockEM.return_value = mock_manager
+
+            stage.export_to_jsonl('output.jsonl', "SELECT * FROM events")
+
+            # Verify it called to_jsonl_stage (new API)
+            assert mock_manager.to_jsonl_stage.called, "Should call to_jsonl_stage"
+            call_args = mock_manager.to_jsonl_stage.call_args
+            assert call_args[0] == ('test_stage', 'output.jsonl', "SELECT * FROM events")
 
 
 class TestStageManagerConvenienceMethods:
@@ -334,18 +420,18 @@ class TestStageManagerConvenienceMethods:
         assert "URL='file:///data/'" in actual_sql  # Note the trailing /
 
     def test_create_s3_adds_prefix(self):
-        """Test create_s3 adds s3:// prefix if missing"""
-        self.stage_manager.create_s3('s3', 'my-bucket/path/', aws_key='key', aws_secret='secret')
+        """Test create_s3 builds s3:// URL from bucket and path"""
+        self.stage_manager.create_s3('s3', bucket='my-bucket', path='path/', aws_key_id='key', aws_secret_key='secret')
 
         actual_sql = self.mock_client.execute.call_args[0][0]
-        assert "URL='s3://my-bucket/path/'" in actual_sql
+        assert "URL='s3://my-bucket/path'" in actual_sql
 
     def test_create_s3_preserves_prefix(self):
-        """Test create_s3 doesn't double-add s3:// prefix"""
-        self.stage_manager.create_s3('s3', 's3://my-bucket/path/', aws_key='key', aws_secret='secret')
+        """Test create_s3 correctly builds URL from bucket and path"""
+        self.stage_manager.create_s3('s3', bucket='my-bucket', path='path/', aws_key_id='key', aws_secret_key='secret')
 
         actual_sql = self.mock_client.execute.call_args[0][0]
-        assert "URL='s3://my-bucket/path/'" in actual_sql
+        assert "URL='s3://my-bucket/path'" in actual_sql
         assert "s3://s3://" not in actual_sql
 
     def test_create_s3_env_fallback(self):
@@ -360,7 +446,7 @@ class TestStageManagerConvenienceMethods:
             os.environ['AWS_ACCESS_KEY_ID'] = 'env_key'
             os.environ['AWS_SECRET_ACCESS_KEY'] = 'env_secret'
 
-            self.stage_manager.create_s3('s3', 'my-bucket/path/')
+            self.stage_manager.create_s3('s3', bucket='my-bucket', path='path/')
 
             actual_sql = self.mock_client.execute.call_args[0][0]
             assert "'AWS_KEY_ID'='env_key'" in actual_sql

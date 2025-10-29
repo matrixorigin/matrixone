@@ -13,17 +13,17 @@
 # limitations under the License.
 
 """
-Online tests for Export operations (INTO OUTFILE, INTO STAGE)
+Online tests for Export operations (pandas-style interface)
 
-These tests are inspired by example_27_export_operations.py
+These tests verify the pandas-style to_csv() and to_jsonl() methods.
 """
 
 import pytest
 import os
 import tempfile
-from matrixone import Client, ExportFormat
+from matrixone import Client
 from matrixone.orm import declarative_base
-from sqlalchemy import Column, Integer, String, DECIMAL, func
+from sqlalchemy import Column, Integer, String, select, func
 
 # Create Base for model definitions
 Base = declarative_base()
@@ -51,11 +51,11 @@ def test_client():
 
 
 @pytest.mark.online
-class TestExportToFile:
-    """Test SELECT ... INTO OUTFILE functionality"""
+class TestExportToCSV:
+    """Test pandas-style to_csv() functionality"""
 
-    def test_export_to_csv_file(self, test_client):
-        """Test basic export to CSV file"""
+    def test_to_csv_basic(self, test_client):
+        """Test basic to_csv export with defaults"""
         # Create and populate test table
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
@@ -63,13 +63,11 @@ class TestExportToFile:
         test_client.insert(ExportTestData, {'id': 2, 'name': 'Bob', 'value': 200})
 
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        export_file = os.path.join(tmpdir, 'test_export.csv')
+        export_file = os.path.join(tmpdir, 'test_basic.csv')
 
         try:
-            # Export using low-level API
-            result = test_client.export.to_file(
-                query="SELECT * FROM export_test_data", filepath=export_file, format=ExportFormat.CSV
-            )
+            # Export using pandas-style API
+            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data")
 
             assert result is not None
             assert os.path.exists(export_file)
@@ -81,24 +79,19 @@ class TestExportToFile:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             test_client.drop_table('export_test_data')
 
-    def test_export_with_custom_delimiter(self, test_client):
-        """Test exporting with custom field delimiter"""
+    def test_to_csv_with_custom_sep(self, test_client):
+        """Test to_csv with custom separator (TSV)"""
         # Create and populate test table
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
         test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
 
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        export_file = os.path.join(tmpdir, 'test_custom_delim.csv')
+        export_file = os.path.join(tmpdir, 'test_tsv.tsv')
 
         try:
-            # Export with custom delimiter (pipe-separated)
-            result = test_client.export.to_file(
-                query="SELECT * FROM export_test_data",
-                filepath=export_file,
-                format=ExportFormat.CSV,
-                fields_terminated_by='|',
-            )
+            # Export with tab separator (pandas-style)
+            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", sep='\t')
 
             assert result is not None
 
@@ -109,21 +102,149 @@ class TestExportToFile:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             test_client.drop_table('export_test_data')
 
-    def test_export_with_field_enclosure(self, test_client):
-        """Test exporting with field enclosure (quotes)"""
+    def test_to_csv_with_pipe_delimiter(self, test_client):
+        """Test to_csv with pipe delimiter"""
         # Create and populate test table
+        test_client.drop_table('export_test_data')
+        test_client.create_table(ExportTestData)
+        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
+
+        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
+        export_file = os.path.join(tmpdir, 'test_pipe.csv')
+
+        try:
+            # Export with pipe separator (pandas-style)
+            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", sep='|')
+
+            assert result is not None
+
+        finally:
+            import shutil
+
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            test_client.drop_table('export_test_data')
+
+    def test_to_csv_with_quotechar(self, test_client):
+        """Test to_csv with field enclosure (quotechar)"""
+        # Create and populate test table with special characters
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
         test_client.insert(ExportTestData, {'id': 1, 'name': 'Data,WithComma', 'value': 100})
 
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        export_file = os.path.join(tmpdir, 'test_enclosed.csv')
+        export_file = os.path.join(tmpdir, 'test_quoted.csv')
 
         try:
-            # Export with field enclosure only
-            result = test_client.export.to_file(
-                query="SELECT * FROM export_test_data", filepath=export_file, format=ExportFormat.CSV, fields_enclosed_by='"'
-            )
+            # Export with quotechar (pandas-style)
+            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", quotechar='"')
+
+            assert result is not None
+
+        finally:
+            import shutil
+
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            test_client.drop_table('export_test_data')
+
+    def test_to_csv_with_sqlalchemy_select(self, test_client):
+        """Test to_csv with SQLAlchemy select() statement"""
+        # Create and populate test table
+        test_client.drop_table('export_test_data')
+        test_client.create_table(ExportTestData)
+        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
+        test_client.insert(ExportTestData, {'id': 2, 'name': 'Bob', 'value': 200})
+
+        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
+        export_file = os.path.join(tmpdir, 'test_sqlalchemy.csv')
+
+        try:
+            # Use SQLAlchemy select() statement
+            stmt = select(ExportTestData).where(ExportTestData.value > 100)
+
+            result = test_client.export.to_csv(export_file, stmt, sep=',')
+
+            assert result is not None
+
+        finally:
+            import shutil
+
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            test_client.drop_table('export_test_data')
+
+    def test_to_csv_with_matrixone_query(self, test_client):
+        """Test to_csv with MatrixOne query builder"""
+        # Create and populate test table
+        test_client.drop_table('export_test_data')
+        test_client.create_table(ExportTestData)
+        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
+        test_client.insert(ExportTestData, {'id': 2, 'name': 'Bob', 'value': 200})
+
+        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
+        export_file = os.path.join(tmpdir, 'test_moquery.csv')
+
+        try:
+            # Use MatrixOne query builder
+            query = test_client.query(ExportTestData).filter(ExportTestData.value > 100)
+
+            result = test_client.export.to_csv(export_file, query)
+
+            assert result is not None
+
+        finally:
+            import shutil
+
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            test_client.drop_table('export_test_data')
+
+
+@pytest.mark.online
+class TestExportToJSONL:
+    """Test pandas-style to_jsonl() functionality"""
+
+    def test_to_jsonl_basic(self, test_client):
+        """Test basic to_jsonl export"""
+        # Create and populate test table
+        test_client.drop_table('export_test_data')
+        test_client.create_table(ExportTestData)
+        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
+
+        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
+        export_file = os.path.join(tmpdir, 'test_basic.jsonl')
+
+        try:
+            # Export using pandas-style API
+            result = test_client.export.to_jsonl(export_file, "SELECT * FROM export_test_data")
+
+            assert result is not None
+            assert os.path.exists(export_file)
+
+        finally:
+            import shutil
+
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            test_client.drop_table('export_test_data')
+
+    def test_to_jsonl_with_sqlalchemy(self, test_client):
+        """Test to_jsonl with SQLAlchemy select()"""
+        # Create and populate test table
+        test_client.drop_table('export_test_data')
+        test_client.create_table(ExportTestData)
+        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
+        test_client.insert(ExportTestData, {'id': 2, 'name': 'Bob', 'value': 200})
+
+        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
+        export_file = os.path.join(tmpdir, 'test_sqlalchemy.jsonl')
+
+        try:
+            # Use SQLAlchemy select() statement
+            stmt = select(ExportTestData).where(ExportTestData.id > 0)
+
+            result = test_client.export.to_jsonl(export_file, stmt)
 
             assert result is not None
 
@@ -137,10 +258,10 @@ class TestExportToFile:
 
 @pytest.mark.online
 class TestExportToStage:
-    """Test SELECT ... INTO STAGE functionality (using stage:// protocol in INTO OUTFILE)"""
+    """Test exporting to stages using stage:// protocol"""
 
-    def test_export_to_stage_csv(self, test_client):
-        """Test basic export to stage as CSV"""
+    def test_to_csv_stage_path(self, test_client):
+        """Test to_csv with stage:// path"""
         # Create and populate test table
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
@@ -155,15 +276,15 @@ class TestExportToStage:
             # Create stage
             test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
 
-            # Export using low-level API
-            result = test_client.export.to_stage(
-                query="SELECT * FROM export_test_data",
-                stage_name=stage_name,
-                filename='test_export.csv',
-                format=ExportFormat.CSV,
-            )
+            # Export using stage:// path (pandas-style)
+            result = test_client.export.to_csv(f'stage://{stage_name}/test_export.csv', "SELECT * FROM export_test_data")
 
             assert result is not None
+
+            # Test new to_csv_stage method (pandas-style)
+            result2 = test_client.export.to_csv_stage(stage_name, 'test_export2.csv', "SELECT * FROM export_test_data")
+
+            assert result2 is not None
 
         finally:
             test_client.stage.drop(stage_name, if_exists=True)
@@ -173,8 +294,8 @@ class TestExportToStage:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             test_client.drop_table('export_test_data')
 
-    def test_stage_export_to_convenience_method(self, test_client):
-        """Test stage.export_to() convenience method"""
+    def test_to_jsonl_stage_path(self, test_client):
+        """Test to_jsonl with stage:// path"""
         # Create and populate test table
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
@@ -182,17 +303,21 @@ class TestExportToStage:
 
         # Create temporary stage
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        stage_name = 'pytest_export_stage_conv'
+        stage_name = 'pytest_jsonl_stage'
 
         try:
-            # Create stage and get stage object
+            # Create stage
             test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
-            stage = test_client.stage.get(stage_name)
 
-            # Export using stage convenience method
-            result = stage.export_to(query="SELECT * FROM export_test_data", filename='test_export_conv.csv')
+            # Export using stage:// path (pandas-style)
+            result = test_client.export.to_jsonl(f'stage://{stage_name}/test_export.jsonl', "SELECT * FROM export_test_data")
 
             assert result is not None
+
+            # Test new to_jsonl_stage method (pandas-style)
+            result2 = test_client.export.to_jsonl_stage(stage_name, 'test_export2.jsonl', "SELECT * FROM export_test_data")
+
+            assert result2 is not None
 
         finally:
             test_client.stage.drop(stage_name, if_exists=True)
@@ -202,7 +327,7 @@ class TestExportToStage:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             test_client.drop_table('export_test_data')
 
-    def test_export_aggregated_query(self, test_client):
+    def test_to_csv_aggregated_query(self, test_client):
         """Test exporting aggregated query results"""
         # Create and populate test table
         test_client.drop_table('export_test_data')
@@ -213,56 +338,16 @@ class TestExportToStage:
 
         # Create temporary stage
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        stage_name = 'pytest_export_stage_agg'
+        stage_name = 'pytest_agg_stage'
 
         try:
             # Create stage
             test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
 
-            # Export aggregated data using ORM
-            result = (
-                test_client.query(ExportTestData.name, func.sum(ExportTestData.value).label('total'))
-                .group_by(ExportTestData.name)
-                .export_to_stage(stage_name, 'aggregated_export.csv')
-            )
+            # Export aggregated data using SQLAlchemy
+            stmt = select(ExportTestData.name, func.sum(ExportTestData.value).label('total')).group_by(ExportTestData.name)
 
-            assert result is not None
-
-        finally:
-            test_client.stage.drop(stage_name, if_exists=True)
-            import shutil
-
-            if os.path.exists(tmpdir):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            test_client.drop_table('export_test_data')
-
-
-@pytest.mark.online
-class TestExportFormats:
-    """Test different export formats"""
-
-    def test_export_jsonline_format(self, test_client):
-        """Test exporting as JSONLINE format"""
-        # Create and populate test table
-        test_client.drop_table('export_test_data')
-        test_client.create_table(ExportTestData)
-        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
-
-        # Create temporary stage
-        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        stage_name = 'pytest_export_stage_json'
-
-        try:
-            # Create stage
-            test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
-
-            # Export as JSONLINE
-            result = test_client.export.to_stage(
-                query="SELECT * FROM export_test_data",
-                stage_name=stage_name,
-                filename='test_export.jsonl',
-                format=ExportFormat.JSONLINE,
-            )
+            result = test_client.export.to_csv(f'stage://{stage_name}/aggregated.csv', stmt)
 
             assert result is not None
 
@@ -277,68 +362,71 @@ class TestExportFormats:
 
 @pytest.mark.online
 class TestExportEdgeCases:
-    """Test export edge cases and special scenarios"""
+    """Test export edge cases and error handling"""
 
-    def test_export_empty_result_set(self, test_client):
+    def test_to_csv_empty_result(self, test_client):
         """Test exporting empty query results"""
         # Create empty test table
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
 
-        # Create temporary stage
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        stage_name = 'pytest_export_stage_empty'
+        export_file = os.path.join(tmpdir, 'empty.csv')
 
         try:
-            # Create stage
-            test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
-
             # Export empty results
-            result = test_client.export.to_stage(
-                query="SELECT * FROM export_test_data WHERE id > 1000",
-                stage_name=stage_name,
-                filename='empty_export.csv',
-                format=ExportFormat.CSV,
-            )
+            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data WHERE id > 1000")
 
             assert result is not None
 
         finally:
-            test_client.stage.drop(stage_name, if_exists=True)
             import shutil
 
             if os.path.exists(tmpdir):
                 shutil.rmtree(tmpdir, ignore_errors=True)
             test_client.drop_table('export_test_data')
 
-    def test_export_with_special_characters(self, test_client):
+    def test_to_csv_special_characters(self, test_client):
         """Test exporting data with special characters"""
         # Create and populate test table
         test_client.drop_table('export_test_data')
         test_client.create_table(ExportTestData)
         test_client.insert(ExportTestData, {'id': 1, 'name': 'Test"Quote', 'value': 100})
 
-        # Create temporary stage
         tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        stage_name = 'pytest_export_stage_special'
+        export_file = os.path.join(tmpdir, 'special_chars.csv')
 
         try:
-            # Create stage
-            test_client.stage.create(stage_name, f"file://{tmpdir}/", if_not_exists=True)
-
-            # Export with field enclosure to handle special characters
-            result = test_client.export.to_stage(
-                query="SELECT * FROM export_test_data",
-                stage_name=stage_name,
-                filename='special_chars.csv',
-                format=ExportFormat.CSV,
-                fields_enclosed_by='"',
-            )
+            # Export with quotechar to handle special characters
+            result = test_client.export.to_csv(export_file, "SELECT * FROM export_test_data", quotechar='"')
 
             assert result is not None
 
         finally:
-            test_client.stage.drop(stage_name, if_exists=True)
+            import shutil
+
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            test_client.drop_table('export_test_data')
+
+    def test_to_csv_with_session(self, test_client):
+        """Test to_csv using session"""
+        # Create and populate test table
+        test_client.drop_table('export_test_data')
+        test_client.create_table(ExportTestData)
+        test_client.insert(ExportTestData, {'id': 1, 'name': 'Alice', 'value': 100})
+
+        tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
+        export_file = os.path.join(tmpdir, 'session_export.csv')
+
+        try:
+            # Export using session
+            with test_client.session() as session:
+                stmt = select(ExportTestData).where(ExportTestData.id > 0)
+                result = session.export.to_csv(export_file, stmt)
+                assert result is not None
+
+        finally:
             import shutil
 
             if os.path.exists(tmpdir):
