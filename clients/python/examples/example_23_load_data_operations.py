@@ -1004,11 +1004,13 @@ class LoadDataOperationsDemo:
             )
             self.results['files_created'].append(parquet_file)
             self.logger.info("✅ Generated parquet file successfully")
+            print(parquet_file)
 
             # Create stage pointing to tmpfiles
             client.execute(f'CREATE STAGE IF NOT EXISTS parquet_stage URL="file://{tmpfiles_dir}/"')
             self.logger.info("✅ Created parquet stage successfully")
 
+            exit()
             # Test from_stage_parquet
             result = client.load_data.from_stage_parquet('parquet_stage', 'test_stage.parq', ParquetData)
             self.logger.info(f"✅ from_stage_parquet: Loaded {result.affected_rows} rows")
