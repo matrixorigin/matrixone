@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	// GC执行计数器
+	// GC execution counters
 	gcExecutionCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -35,7 +35,7 @@ var (
 	GCSnapshotExecutionCounter        = gcExecutionCounter.WithLabelValues("snapshot", "success")
 	GCSnapshotExecutionErrorCounter   = gcExecutionCounter.WithLabelValues("snapshot", "error")
 
-	// GC文件删除计数器
+	// GC file deletion counters
 	gcFileDeletionCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -50,7 +50,7 @@ var (
 	GCMetaFileDeletionCounter       = gcFileDeletionCounter.WithLabelValues("meta", "stale")
 	GCSnapshotFileDeletionCounter   = gcFileDeletionCounter.WithLabelValues("snapshot", "stale")
 
-	// GC文件大小统计
+	// GC file size statistics
 	gcFileSizeHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -66,7 +66,7 @@ var (
 	GCMetaFileSizeHistogram       = gcFileSizeHistogram.WithLabelValues("meta")
 	GCSnapshotFileSizeHistogram   = gcFileSizeHistogram.WithLabelValues("snapshot")
 
-	// GC执行时长统计
+	// GC execution duration statistics
 	gcDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -76,25 +76,25 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type", "phase"})
 
-	// Checkpoint GC阶段
+	// Checkpoint GC phases
 	GCCheckpointScanDurationHistogram   = gcDurationHistogram.WithLabelValues("checkpoint", "scan")
 	GCCheckpointFilterDurationHistogram = gcDurationHistogram.WithLabelValues("checkpoint", "filter")
 	GCCheckpointDeleteDurationHistogram = gcDurationHistogram.WithLabelValues("checkpoint", "delete")
 	GCCheckpointTotalDurationHistogram  = gcDurationHistogram.WithLabelValues("checkpoint", "total")
 
-	// Merge GC阶段
+	// Merge GC phases
 	GCMergeScanDurationHistogram    = gcDurationHistogram.WithLabelValues("merge", "scan")
 	GCMergeCollectDurationHistogram = gcDurationHistogram.WithLabelValues("merge", "collect")
 	GCMergeWriteDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "write")
 	GCMergeTotalDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "total")
 
-	// Snapshot GC阶段
+	// Snapshot GC phases
 	GCSnapshotScanDurationHistogram    = gcDurationHistogram.WithLabelValues("snapshot", "scan")
 	GCSnapshotCollectDurationHistogram = gcDurationHistogram.WithLabelValues("snapshot", "collect")
 	GCSnapshotDeleteDurationHistogram  = gcDurationHistogram.WithLabelValues("snapshot", "delete")
 	GCSnapshotTotalDurationHistogram   = gcDurationHistogram.WithLabelValues("snapshot", "total")
 
-	// GC对象统计
+	// GC object statistics
 	gcObjectCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -108,7 +108,7 @@ var (
 	GCObjectProtectedCounter = gcObjectCounter.WithLabelValues("object", "protected")
 	GCObjectSkippedCounter   = gcObjectCounter.WithLabelValues("object", "skipped")
 
-	// GC表统计
+	// GC table statistics
 	gcTableCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -122,7 +122,7 @@ var (
 	GCTableProtectedCounter = gcTableCounter.WithLabelValues("table", "protected")
 	GCTableSkippedCounter   = gcTableCounter.WithLabelValues("table", "skipped")
 
-	// GC快照统计
+	// GC snapshot statistics
 	gcSnapshotCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -136,7 +136,7 @@ var (
 	GCSnapshotDatabaseCounter = gcSnapshotCounter.WithLabelValues("database", "processed")
 	GCSnapshotTableCounter    = gcSnapshotCounter.WithLabelValues("table", "processed")
 
-	// GC PITR统计
+	// GC PITR statistics
 	gcPitrCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -150,7 +150,7 @@ var (
 	GCPitrDatabaseCounter = gcPitrCounter.WithLabelValues("database", "processed")
 	GCPitrTableCounter    = gcPitrCounter.WithLabelValues("table", "processed")
 
-	// GC内存使用统计
+	// GC memory usage statistics
 	gcMemoryGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -163,7 +163,7 @@ var (
 	GCMemoryCacheGauge   = gcMemoryGauge.WithLabelValues("cache")
 	GCMemoryObjectsGauge = gcMemoryGauge.WithLabelValues("objects")
 
-	// GC队列统计
+	// GC queue statistics
 	gcQueueGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -176,7 +176,7 @@ var (
 	GCQueueProcessingGauge = gcQueueGauge.WithLabelValues("processing")
 	GCQueueCompletedGauge  = gcQueueGauge.WithLabelValues("completed")
 
-	// GC错误统计
+	// GC error statistics
 	gcErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -191,7 +191,7 @@ var (
 	GCErrorTimeoutCounter          = gcErrorCounter.WithLabelValues("operation", "timeout")
 	GCErrorContextCanceledCounter  = gcErrorCounter.WithLabelValues("operation", "context_canceled")
 
-	// GC告警指标
+	// GC alert metrics
 	gcAlertGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -200,11 +200,12 @@ var (
 			Help:      "GC alert status (1 = alerting, 0 = normal).",
 		}, []string{"type"})
 
+	GCAlertNoDeletionGauge    = gcAlertGauge.WithLabelValues("no_deletion")
 	GCAlertHighMemoryGauge    = gcAlertGauge.WithLabelValues("high_memory")
 	GCAlertSlowExecutionGauge = gcAlertGauge.WithLabelValues("slow_execution")
 	GCAlertErrorRateGauge     = gcAlertGauge.WithLabelValues("error_rate")
 
-	// GC最后执行时间
+	// GC last execution time
 	gcLastExecutionGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -217,7 +218,7 @@ var (
 	GCLastMergeExecutionGauge      = gcLastExecutionGauge.WithLabelValues("merge")
 	GCLastSnapshotExecutionGauge   = gcLastExecutionGauge.WithLabelValues("snapshot")
 
-	// GC最后删除时间
+	// GC last deletion time
 	gcLastDeletionGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",

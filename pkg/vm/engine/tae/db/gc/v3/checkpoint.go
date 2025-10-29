@@ -103,8 +103,8 @@ type checkpointCleaner struct {
 		sync.RWMutex
 		extras map[string]func(item any) bool
 	}
-	
-    // removed: last deletion time alert tracking
+
+	// removed: last deletion time alert tracking
 
 	mutation struct {
 		sync.Mutex
@@ -705,7 +705,14 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 			zap.Strings("files", filesToDelete),
 			zap.String("task", c.TaskNameLocked()),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Record meta file deletion metrics
+	if len(filesToDelete) > 0 {
+		v2.GCMetaFileDeletionCounter.Add(float64(len(filesToDelete)))
+		v2.GCLastMetaDeletionGauge.Set(float64(time.Now().Unix()))
 	}
 	return c.mutSetNewMetaFilesLocked(metaFiles)
 }
@@ -781,6 +788,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	mergeStart := time.Now()
 	defer func() {
 		v2.TaskGCMergeCheckpointDurationHistogram.Observe(time.Since(mergeStart).Seconds())
+		if err != nil {
+			v2.GCMergeExecutionErrorCounter.Inc()
+		} else {
+			v2.GCMergeExecutionCounter.Inc()
+		}
+		v2.GCLastMergeExecutionGauge.Set(float64(time.Now().Unix()))
 	}()
 
 	// checkpointLowWaterMark is empty only in the following cases:
@@ -1012,6 +1025,12 @@ func (c *checkpointCleaner) tryGCLocked(
 	gcStart := time.Now()
 	defer func() {
 		v2.TaskGCDurationHistogram.Observe(time.Since(gcStart).Seconds())
+		if err != nil {
+			v2.GCSnapshotExecutionErrorCounter.Inc()
+		} else {
+			v2.GCSnapshotExecutionCounter.Inc()
+		}
+		v2.GCLastSnapshotExecutionGauge.Set(float64(time.Now().Unix()))
 	}()
 
 	// 1. Quick check if GC is needed
@@ -1119,13 +1138,17 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		filesToGC,
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
+		// record GC file delete errors
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
 
-    // Record file deletion metrics
-    if len(filesToGC) > 0 {
-        v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
-    }
+	// Record file deletion metrics
+	if len(filesToGC) > 0 {
+		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
+		v2.GCObjectDeletedCounter.Add(float64(len(filesToGC)))
+		v2.GCLastDataDeletionGauge.Set(float64(time.Now().Unix()))
+	}
 	if c.GetGCWaterMark() == nil {
 		return nil
 	}
@@ -1232,6 +1255,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.end,
 	))
 	softDuration = time.Since(now)
+	// Record GC filter duration
+	v2.GCCheckpointFilterDurationHistogram.Observe(softDuration.Seconds())
 
 	// update gc watermark and refresh snapshot meta with the latest gc result
 	// gcWaterMark will be updated to the end of the global checkpoint after each GC
@@ -1244,6 +1269,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	c.updateGCWaterMark(gckp)
 	c.mutation.snapshotMeta.MergeTableInfo(snapshots, pitrs)
 	mergeDuration = time.Since(now)
+	// Record merge duration
+	v2.GCMergeTotalDurationHistogram.Observe(mergeDuration.Seconds())
 	return filesToGC, nil
 }
 
@@ -1522,8 +1549,13 @@ func (c *checkpointCleaner) Process(
 		}
 		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
 		v2.GCLastCheckpointExecutionGauge.SetToCurrentTime()
-		
-        // removed periodic GC alert check
+
+		// Record queue metrics (simplified - pending tasks)
+		v2.GCQueuePendingGauge.Set(0)    // Reset after processing
+		v2.GCQueueProcessingGauge.Set(0) // Reset after processing
+		v2.GCQueueCompletedGauge.Set(1)  // Mark as completed
+
+		// removed periodic GC alert check
 
 		logutil.Info(
 			"GC-TRACE-PROCESS",
@@ -1754,7 +1786,6 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		// Record scan metrics
 		v2.TaskGCScanDurationHistogram.Observe(time.Since(now).Seconds())
 		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
-
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),
