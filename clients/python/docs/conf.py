@@ -135,6 +135,22 @@ intersphinx_mapping = {
 # -- Options for todo extension ----------------------------------------------
 todo_include_todos = True
 
+# -- Options for LaTeX output ------------------------------------------------
+latex_engine = 'xelatex'  # Use XeLaTeX for Unicode (Chinese, emoji, etc.) support
+latex_elements = {
+    'preamble': r'''
+% XeLaTeX Unicode support - handles Chinese, emoji, and all Unicode characters
+\usepackage{fontspec}
+\usepackage{xeCJK}
+% XeLaTeX can handle Unicode natively, including Chinese characters
+''',
+    'fontpkg': '',  # Don't use default font package
+    'fncychap': '',  # Disable fancy chapter headings
+    'papersize': 'a4paper',
+    'pointsize': '10pt',
+    'figure_align': 'htbp',
+}
+
 # -- Custom configuration ----------------------------------------------------
 html_theme_options = {
     'canonical_url': '',

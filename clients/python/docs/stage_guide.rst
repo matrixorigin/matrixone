@@ -153,7 +153,7 @@ Load from S3 Stage
    client.create_table(User)
    
    # Load data from S3 stage using ORM model (recommended)
-   client.load_data.from_stage_csv('production_s3', 'users.csv', User)
+   client.load_data.read_csv_stage('production_s3', 'users.csv', table=User)
    
    # Verify data loaded
    stmt = select(User)
@@ -174,10 +174,10 @@ Load from Local Stage
    client.connect(database='test')
    
    # Load from local filesystem stage
-   client.load_data.from_stage_csv('local_imports', 'orders.csv', Order)
+   client.load_data.read_csv_stage('local_imports', 'orders.csv', table=Order)
    
    # Load with custom options
-   client.load_data.from_stage_csv(
+   client.load_data.read_csv_stage(
        'local_imports',
        'products.csv',
        Product,
@@ -223,8 +223,8 @@ Atomic Stage Creation and Data Loading
        session.stage.create_s3('export_stage', 'backup-bucket', 'exports/', 'key', 'secret')
        
        # Load data from stages atomically
-       session.load_data.from_stage_csv('import_stage', 'users.csv', User)
-       session.load_data.from_stage_csv('import_stage', 'orders.csv', Order)
+       session.load_data.read_csv_stage('import_stage', 'users.csv', table=User)
+       session.load_data.read_csv_stage('import_stage', 'orders.csv', table=Order)
        
        # Insert additional data in same transaction
        session.execute(insert(User).values(name='Admin', email='admin@example.com'))
@@ -250,8 +250,8 @@ Complex Transaction with Multiple Stages
        session.stage.create_local('daily_import', '/data/daily/')
        
        # Load data
-       session.load_data.from_stage_csv('daily_import', 'users.csv', User)
-       session.load_data.from_stage_csv('daily_import', 'orders.csv', Order)
+       session.load_data.read_csv_stage('daily_import', 'users.csv', table=User)
+       session.load_data.read_csv_stage('daily_import', 'orders.csv', table=Order)
        
        # Verify data loaded correctly
        stmt = select(func.count(User.id))
@@ -301,7 +301,7 @@ Async Stage Creation and Loading
        )
        
        # Load data asynchronously
-       await client.load_data.from_stage_csv('async_s3', 'users.csv', User)
+       await client.load_data.read_csv_stage('async_s3', 'users.csv', table=User)
        
        # Query loaded data
        stmt = select(User).where(User.age > 25)
@@ -333,9 +333,9 @@ Concurrent Async Operations
        
        # Load from multiple stages concurrently
        await asyncio.gather(
-           client.load_data.from_stage_csv('stage1', 'users.csv', User),
-           client.load_data.from_stage_csv('stage2', 'orders.csv', Order),
-           client.load_data.from_stage_csv('stage3', 'products.csv', Product)
+           client.load_data.read_csv_stage('stage1', 'users.csv', table=User),
+           client.load_data.read_csv_stage('stage2', 'orders.csv', table=Order),
+           client.load_data.read_csv_stage('stage3', 'products.csv', table=Product)
        )
        
        await client.disconnect()
@@ -361,7 +361,7 @@ Async Transaction with Stages
            await session.stage.create_local('import_stage', '/data/')
            
            # Load data
-           await session.load_data.from_stage_csv('import_stage', 'users.csv', User)
+           await session.load_data.read_csv_stage('import_stage', 'users.csv', table=User)
            
            # Insert additional data
            await session.execute(insert(User).values(name='Admin', email='admin@example.com'))
@@ -414,7 +414,7 @@ Common Use Cases
    with client.session() as session:
        # Extract from S3
        session.stage.create_s3('source_stage', 'data-lake', 'raw/', 'key', 'secret')
-       session.load_data.from_stage_csv('source_stage', 'data.csv', RawData)
+       session.load_data.read_csv_stage('source_stage', 'data.csv', table=RawData)
        
        # Transform
        session.execute(
@@ -449,8 +449,8 @@ Common Use Cases
        session.stage.create_local('source_b', '/local/data/')
        
        # Load from all sources atomically
-       session.load_data.from_stage_csv('source_a', 'users.csv', User)
-       session.load_data.from_stage_csv('source_b', 'orders.csv', Order)
+       session.load_data.read_csv_stage('source_a', 'users.csv', table=User)
+       session.load_data.read_csv_stage('source_b', 'orders.csv', table=Order)
 
 See Also
 --------

@@ -158,7 +158,7 @@ class TestStageOperations:
 
             try:
                 # Load from stage
-                result = test_client.load_data.from_stage_csv('pytest_load_stage', 'pytest_users.csv', StageTestUser)
+                result = test_client.load_data.read_csv_stage('pytest_load_stage', 'pytest_users.csv', table=StageTestUser)
                 assert result.affected_rows == 3
 
                 # Verify
@@ -288,7 +288,7 @@ class TestStageOperations:
             try:
                 # Load data from stage in transaction
                 with test_client.session() as tx:
-                    result = tx.load_data.from_stage_csv('pytest_tx_stage', 'pytest_tx_data.csv', TxStageData)
+                    result = tx.load_data.read_csv_stage('pytest_tx_stage', 'pytest_tx_data.csv', table=TxStageData)
                     assert result.rowcount == 2
 
                 # Verify
@@ -360,7 +360,9 @@ class TestAsyncStageOperations:
 
             try:
                 # Load from stage
-                result = await client.load_data.from_stage_csv('pytest_async_load', 'pytest_async_users.csv', AsyncStageUser)
+                result = await client.load_data.read_csv_stage(
+                    'pytest_async_load', 'pytest_async_users.csv', table=AsyncStageUser
+                )
                 assert result.affected_rows == 3
 
                 # Verify
@@ -600,7 +602,9 @@ class TestStageExtendedOperations:
                     assert len(stages) >= 1
 
                     # Load data in session
-                    result = session.load_data.from_stage_csv('pytest_session_stage', 'session_data.csv', SessionStageData)
+                    result = session.load_data.read_csv_stage(
+                        'pytest_session_stage', 'session_data.csv', table=SessionStageData
+                    )
                     assert result.rowcount == 2
 
                 # Verify data was committed

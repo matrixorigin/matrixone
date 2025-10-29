@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2021 - 2022 Matrix Origin
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,363 +14,370 @@
 # limitations under the License.
 
 """
-Example 27: Export Operations - Data Export to Files and Stages
+Example: Data Export Operations (Pandas-Style Interface)
 
-This example demonstrates comprehensive export operations:
-1. Export query results to local files (SELECT ... INTO OUTFILE)
-2. Export to external stages (S3, local filesystem)
-3. ORM-style chainable export methods
-4. Various export formats (CSV, JSONLINE, TSV)
-5. Custom delimiters and field enclosures
-6. Export with aggregations and transformations
-7. Stage-based export convenience methods
+This example demonstrates how to export query results to files and stages
+using pandas-style to_csv() and to_jsonl() methods.
 
-This example showcases the ExportManager functionality for efficient
-data export from MatrixOne to external storage.
+Key Features:
+- Pandas-style interface: to_csv() and to_jsonl()
+- Support for raw SQL, SQLAlchemy select(), and MatrixOne queries
+- Export to local files or external stages
+- Customizable CSV options (sep, quotechar, lineterminator)
+
+Requirements:
+- MatrixOne server running on localhost:6001
+- Database 'test' with appropriate permissions
 """
 
-import os
-import tempfile
-import shutil
-from matrixone import Client, ExportFormat
-from matrixone.logger import create_default_logger
-from matrixone.config import get_connection_params, print_config
+from matrixone import Client
 from matrixone.orm import declarative_base
-from sqlalchemy import Column, Integer, String, DECIMAL, func
+from sqlalchemy import Column, Integer, String, DECIMAL, select, func
+import tempfile
+import os
 
-# Create Base for model definitions
+# Create Base for ORM
 Base = declarative_base()
 
-# Create tmpfiles directory if it doesn't exist
-TMPFILES_DIR = os.path.join(os.path.dirname(__file__), '..', 'tmpfiles')
-os.makedirs(TMPFILES_DIR, exist_ok=True)
 
+# Define models
+class Product(Base):
+    __tablename__ = 'export_products'
 
-# Define table model
-class Sale(Base):
-    __tablename__ = 'sales'
     id = Column(Integer, primary_key=True)
-    product = Column(String(100))
+    name = Column(String(100))
     category = Column(String(50))
-    amount = Column(DECIMAL(10, 2))
+    price = Column(DECIMAL(10, 2))
+    stock = Column(Integer)
+
+
+class Sale(Base):
+    __tablename__ = 'export_sales'
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer)
     quantity = Column(Integer)
+    total = Column(DECIMAL(10, 2))
 
 
-class ExportOperationsDemo:
-    """
-    Comprehensive demonstration of MatrixOne export operations.
+def setup_test_data(client: Client):
+    """Create tables and populate with test data"""
+    print("Setting up test data...")
 
-    Export operations allow you to write query results to external files or stages,
-    enabling data backup, data sharing, and integration with other systems.
-    """
+    # Drop and create tables
+    client.drop_table('export_products')
+    client.drop_table('export_sales')
+    client.create_table(Product)
+    client.create_table(Sale)
 
-    def __init__(self):
-        self.logger = create_default_logger()
-        self.results = {
-            'tests_run': 0,
-            'tests_passed': 0,
-            'tests_failed': 0,
-            'stages_created': [],
-            'tables_created': [],
-            'files_exported': [],
-        }
-        self.stage_name = 'demo_export_stage'
-        self.tmpdir = None
+    # Insert product data
+    products = [
+        {'id': 1, 'name': 'Laptop', 'category': 'Electronics', 'price': 999.99, 'stock': 50},
+        {'id': 2, 'name': 'Mouse', 'category': 'Electronics', 'price': 29.99, 'stock': 200},
+        {'id': 3, 'name': 'Desk', 'category': 'Furniture', 'price': 299.99, 'stock': 30},
+        {'id': 4, 'name': 'Chair', 'category': 'Furniture', 'price': 199.99, 'stock': 45},
+        {'id': 5, 'name': 'Monitor', 'category': 'Electronics', 'price': 399.99, 'stock': 75},
+    ]
 
-    def test_orm_export_to_stage(self, client):
-        """Test ORM-style export to stage (RECOMMENDED)"""
-        print("\n=== ORM-Style Export to Stage (Recommended) ===")
-        self.results['tests_run'] += 1
+    for product in products:
+        client.insert(Product, product)
 
-        try:
-            # Export filtered data using ORM
-            result = (
-                client.query(Sale).filter(Sale.category == 'Electronics').export_to_stage(self.stage_name, 'electronics.csv')
-            )
+    # Insert sales data
+    sales = [
+        {'id': 1, 'product_id': 1, 'quantity': 2, 'total': 1999.98},
+        {'id': 2, 'product_id': 2, 'quantity': 5, 'total': 149.95},
+        {'id': 3, 'product_id': 3, 'quantity': 1, 'total': 299.99},
+        {'id': 4, 'product_id': 1, 'quantity': 1, 'total': 999.99},
+        {'id': 5, 'product_id': 4, 'quantity': 3, 'total': 599.97},
+    ]
 
-            self.logger.info("✅ Exported filtered electronics sales")
-            self.results['files_exported'].append('electronics.csv')
-            self.results['tests_passed'] += 1
+    for sale in sales:
+        client.insert(Sale, sale)
 
-        except Exception as e:
-            self.logger.error(f"❌ ORM export test failed: {e}")
-            self.results['tests_failed'] += 1
+    print(f"✓ Created {len(products)} products and {len(sales)} sales")
 
-    def test_orm_export_aggregated(self, client):
-        """Test exporting aggregated query results"""
-        print("\n=== Export Aggregated Data ===")
-        self.results['tests_run'] += 1
 
-        try:
-            # Export aggregated results
-            result = (
-                client.query(Sale.category, func.sum(Sale.amount).label('total'))
-                .group_by(Sale.category)
-                .export_to_stage(self.stage_name, 'category_totals.csv')
-            )
+def example_1_basic_csv_export(client: Client, tmpdir: str):
+    """Example 1: Basic CSV export with defaults"""
+    print("\n" + "=" * 60)
+    print("Example 1: Basic CSV Export")
+    print("=" * 60)
 
-            self.logger.info("✅ Exported category totals")
-            self.results['files_exported'].append('category_totals.csv')
-            self.results['tests_passed'] += 1
+    export_file = os.path.join(tmpdir, 'products.csv')
 
-        except Exception as e:
-            self.logger.error(f"❌ Aggregated export test failed: {e}")
-            self.results['tests_failed'] += 1
+    # Export all products to CSV (pandas-style)
+    print(f"\nExporting products to {export_file}")
+    client.export.to_csv(export_file, "SELECT * FROM export_products")
 
-    def test_low_level_export_to_stage(self, client):
-        """Test low-level export API"""
-        print("\n=== Low-Level Export API ===")
-        self.results['tests_run'] += 1
+    print("✓ Export completed")
+    print(f"  File: {export_file}")
 
-        try:
-            # Use client.export.to_stage() directly
-            result = client.export.to_stage(
-                query="SELECT * FROM sales WHERE category = 'Furniture'",
-                stage_name=self.stage_name,
-                filename='furniture.csv',
-            )
+    # Show file contents
+    if os.path.exists(export_file):
+        with open(export_file, 'r') as f:
+            print("\nFirst 3 lines:")
+            for i, line in enumerate(f):
+                if i < 3:
+                    print(f"  {line.rstrip()}")
 
-            self.logger.info("✅ Exported using low-level API")
-            self.results['files_exported'].append('furniture.csv')
-            self.results['tests_passed'] += 1
 
-        except Exception as e:
-            self.logger.error(f"❌ Low-level export test failed: {e}")
-            self.results['tests_failed'] += 1
+def example_2_custom_separator(client: Client, tmpdir: str):
+    """Example 2: TSV export with tab separator"""
+    print("\n" + "=" * 60)
+    print("Example 2: TSV Export (Tab-Separated Values)")
+    print("=" * 60)
 
-    def test_stage_export_convenience(self, client):
-        """Test stage.export_to() convenience method"""
-        print("\n=== Stage Export Convenience Method ===")
-        self.results['tests_run'] += 1
+    export_file = os.path.join(tmpdir, 'products.tsv')
 
-        try:
-            # Get stage object and use its export method
-            stage = client.stage.get(self.stage_name)
-            result = stage.export_to(
-                query="SELECT product, SUM(quantity) as total_qty FROM sales GROUP BY product", filename='product_totals.csv'
-            )
+    # Export with tab separator (pandas-style)
+    print(f"\nExporting to TSV: {export_file}")
+    client.export.to_csv(export_file, "SELECT name, category, price FROM export_products", sep='\t')  # Tab separator
 
-            self.logger.info("✅ Exported using stage convenience method")
-            self.results['files_exported'].append('product_totals.csv')
-            self.results['tests_passed'] += 1
+    print("✓ TSV export completed")
 
-        except Exception as e:
-            self.logger.error(f"❌ Stage convenience export test failed: {e}")
-            self.results['tests_failed'] += 1
+    # Show file contents
+    if os.path.exists(export_file):
+        with open(export_file, 'r') as f:
+            print("\nFirst 3 lines:")
+            for i, line in enumerate(f):
+                if i < 3:
+                    print(f"  {line.rstrip()}")
 
-    def test_export_formats(self, client):
-        """Test different export formats"""
-        print("\n=== Export Formats ===")
 
-        # Test 1: CSV with field enclosure
-        self.results['tests_run'] += 1
-        try:
-            result = client.query(Sale).export_to_stage(
-                self.stage_name, 'sales_enclosed.csv', format='csv', fields_enclosed_by='"'
-            )
+def example_3_pipe_delimiter(client: Client, tmpdir: str):
+    """Example 3: Pipe-delimited export"""
+    print("\n" + "=" * 60)
+    print("Example 3: Pipe-Delimited Export")
+    print("=" * 60)
 
-            self.logger.info("✅ Exported CSV with field enclosure")
-            self.results['files_exported'].append('sales_enclosed.csv')
-            self.results['tests_passed'] += 1
-        except Exception as e:
-            self.logger.error(f"❌ CSV field enclosure test failed: {e}")
-            self.results['tests_failed'] += 1
+    export_file = os.path.join(tmpdir, 'products_pipe.csv')
 
-        # Test 2: JSONLINE format
-        self.results['tests_run'] += 1
-        try:
-            result = client.query(Sale).export_to_stage(self.stage_name, 'sales.jsonl', format='jsonline')
+    # Export with pipe delimiter (pandas-style)
+    print(f"\nExporting with pipe delimiter: {export_file}")
+    client.export.to_csv(export_file, "SELECT * FROM export_products", sep='|')  # Pipe separator
 
-            self.logger.info("✅ Exported as JSONLINE")
-            self.results['files_exported'].append('sales.jsonl')
-            self.results['tests_passed'] += 1
-        except Exception as e:
-            self.logger.error(f"❌ JSONLINE export test failed: {e}")
-            self.results['tests_failed'] += 1
+    print("✓ Export completed")
 
-        # Test 3: TSV format (tab-separated)
-        self.results['tests_run'] += 1
-        try:
-            result = client.query(Sale).export_to_stage(
-                self.stage_name, 'sales.tsv', format='csv', fields_terminated_by='\t'
-            )
+    # Show file contents
+    if os.path.exists(export_file):
+        with open(export_file, 'r') as f:
+            print("\nFirst 3 lines:")
+            for i, line in enumerate(f):
+                if i < 3:
+                    print(f"  {line.rstrip()}")
 
-            self.logger.info("✅ Exported as TSV")
-            self.results['files_exported'].append('sales.tsv')
-            self.results['tests_passed'] += 1
-        except Exception as e:
-            self.logger.error(f"❌ TSV export test failed: {e}")
-            self.results['tests_failed'] += 1
 
-    def test_practical_use_cases(self, client):
-        """Test practical real-world use cases"""
-        print("\n=== Practical Use Cases ===")
+def example_4_sqlalchemy_select(client: Client, tmpdir: str):
+    """Example 4: Export with SQLAlchemy select()"""
+    print("\n" + "=" * 60)
+    print("Example 4: Export with SQLAlchemy select()")
+    print("=" * 60)
 
-        # Use case 1: Daily sales report
-        self.results['tests_run'] += 1
-        try:
-            result = (
-                client.query(
-                    Sale.category,
-                    func.count(Sale.id).label('num_sales'),
-                    func.sum(Sale.amount).label('total_revenue'),
-                    func.avg(Sale.amount).label('avg_sale'),
-                )
-                .group_by(Sale.category)
-                .export_to_stage(self.stage_name, 'daily_report.csv')
-            )
+    export_file = os.path.join(tmpdir, 'electronics.csv')
 
-            self.logger.info("✅ Exported daily sales report")
-            self.results['files_exported'].append('daily_report.csv')
-            self.results['tests_passed'] += 1
-        except Exception as e:
-            self.logger.error(f"❌ Daily report test failed: {e}")
-            self.results['tests_failed'] += 1
+    # Use SQLAlchemy select() statement
+    stmt = select(Product).where(Product.category == 'Electronics')
 
-        # Use case 2: Data backup
-        self.results['tests_run'] += 1
-        try:
-            result = client.query(Sale).order_by(Sale.id).export_to_stage(self.stage_name, 'sales_backup.csv')
+    print(f"\nExporting electronics products to {export_file}")
+    client.export.to_csv(export_file, stmt, sep=',')  # SQLAlchemy statement
 
-            self.logger.info("✅ Exported full data backup")
-            self.results['files_exported'].append('sales_backup.csv')
-            self.results['tests_passed'] += 1
-        except Exception as e:
-            self.logger.error(f"❌ Data backup test failed: {e}")
-            self.results['tests_failed'] += 1
+    print("✓ Export completed")
+    print(f"  Query: {stmt}")
 
-        # Use case 3: Partner data sharing (selected columns)
-        self.results['tests_run'] += 1
-        try:
-            result = (
-                client.query(Sale.product, Sale.category, Sale.quantity)
-                .filter(Sale.category == 'Electronics')
-                .export_to_stage(self.stage_name, 'partner_data.csv')
-            )
 
-            self.logger.info("✅ Exported partner data (selected columns)")
-            self.results['files_exported'].append('partner_data.csv')
-            self.results['tests_passed'] += 1
-        except Exception as e:
-            self.logger.error(f"❌ Partner data test failed: {e}")
-            self.results['tests_failed'] += 1
+def example_5_matrixone_query(client: Client, tmpdir: str):
+    """Example 5: Export with MatrixOne query builder"""
+    print("\n" + "=" * 60)
+    print("Example 5: Export with MatrixOne Query Builder")
+    print("=" * 60)
 
-    def setup(self, client):
-        """Setup demo environment"""
-        print("=== Setting Up Demo Environment ===\n")
+    export_file = os.path.join(tmpdir, 'expensive_products.csv')
 
-        # Create table
-        client.drop_table('sales')
-        client.create_table(Sale)
-        self.results['tables_created'].append('sales')
-        self.logger.info("✅ Created sales table")
+    # Use MatrixOne query builder
+    query = client.query(Product).filter(Product.price > 200)
 
-        # Insert sample data using ORM
-        sales_data = [
-            {'id': 1, 'product': 'Laptop', 'category': 'Electronics', 'amount': 1200.00, 'quantity': 5},
-            {'id': 2, 'product': 'Mouse', 'category': 'Electronics', 'amount': 25.99, 'quantity': 50},
-            {'id': 3, 'product': 'Desk', 'category': 'Furniture', 'amount': 350.00, 'quantity': 10},
-            {'id': 4, 'product': 'Chair', 'category': 'Furniture', 'amount': 150.00, 'quantity': 20},
-            {'id': 5, 'product': 'Monitor', 'category': 'Electronics', 'amount': 300.00, 'quantity': 15},
-            {'id': 6, 'product': 'Bookshelf', 'category': 'Furniture', 'amount': 120.00, 'quantity': 8},
-        ]
+    print(f"\nExporting expensive products to {export_file}")
+    client.export.to_csv(export_file, query)  # MatrixOne query
 
-        for sale_data in sales_data:
-            client.insert(Sale, sale_data)
-        self.logger.info(f"✅ Inserted {len(sales_data)} sales records")
+    print("✓ Export completed")
+    print(f"  Filter: price > 200")
 
-        # Create local stage
-        self.tmpdir = tempfile.mkdtemp(dir=TMPFILES_DIR)
-        stage = client.stage.create(self.stage_name, f"file://{self.tmpdir}/", comment='Demo export stage')
-        self.results['stages_created'].append(self.stage_name)
-        self.logger.info(f"✅ Created stage at {self.tmpdir}")
 
-    def cleanup(self, client):
-        """Cleanup demo resources"""
-        print("\n=== Cleaning Up ===")
+def example_6_aggregated_query(client: Client, tmpdir: str):
+    """Example 6: Export aggregated data"""
+    print("\n" + "=" * 60)
+    print("Example 6: Export Aggregated Query Results")
+    print("=" * 60)
 
-        try:
-            # Drop stage
-            if self.stage_name in self.results['stages_created']:
-                client.stage.drop(self.stage_name, if_exists=True)
-                self.logger.info(f"✅ Dropped stage '{self.stage_name}'")
+    export_file = os.path.join(tmpdir, 'sales_by_product.csv')
 
-            # Drop tables
-            for table in self.results['tables_created']:
-                client.drop_table(table)
-                self.logger.info(f"✅ Dropped table '{table}'")
+    # Aggregated query with SQLAlchemy
+    stmt = select(
+        Sale.product_id, func.sum(Sale.quantity).label('total_quantity'), func.sum(Sale.total).label('total_revenue')
+    ).group_by(Sale.product_id)
 
-            # Remove temp directory
-            if self.tmpdir and os.path.exists(self.tmpdir):
-                shutil.rmtree(self.tmpdir, ignore_errors=True)
-                self.logger.info(f"✅ Removed temporary directory")
+    print(f"\nExporting sales summary to {export_file}")
+    client.export.to_csv(export_file, stmt)
 
-        except Exception as e:
-            self.logger.warning(f"⚠️ Cleanup warning: {e}")
+    print("✓ Export completed")
 
-    def print_summary(self):
-        """Print test results summary"""
-        print("\n" + "=" * 80)
-        print("Export Operations Demo Summary")
-        print("=" * 80)
 
-        print(f"\nTests Run: {self.results['tests_run']}")
-        print(f"Tests Passed: {self.results['tests_passed']}")
-        print(f"Tests Failed: {self.results['tests_failed']}")
+def example_7_jsonl_export(client: Client, tmpdir: str):
+    """Example 7: JSONL export"""
+    print("\n" + "=" * 60)
+    print("Example 7: JSONL Export (JSON Lines)")
+    print("=" * 60)
 
-        print(f"\nStages Created: {len(self.results['stages_created'])}")
-        print(f"Tables Created: {len(self.results['tables_created'])}")
-        print(f"Files Exported: {len(self.results['files_exported'])}")
+    export_file = os.path.join(tmpdir, 'products.jsonl')
 
-        if self.results['files_exported']:
-            print("\nExported Files:")
-            for filename in sorted(self.results['files_exported']):
-                print(f"  - {filename}")
+    # Export to JSONL format (pandas-style)
+    print(f"\nExporting products to JSONL: {export_file}")
+    client.export.to_jsonl(export_file, "SELECT * FROM export_products")
 
-        print("\nKey Takeaways:")
-        print("1. ✓ Use query().export_to_stage() for ORM-style exports (RECOMMENDED)")
-        print("2. ✓ Export supports filtering, aggregations, and transformations")
-        print("3. ✓ Multiple formats: CSV, JSONLINE, TSV")
-        print("4. ✓ Stage-based export is more flexible than server filesystem")
-        print("5. ✓ Note: MatrixOne doesn't support fields_terminated_by and fields_enclosed_by simultaneously")
-        print("=" * 80)
+    print("✓ JSONL export completed")
 
-    def run(self):
-        """Run all demo tests"""
-        print("=" * 80)
-        print("MatrixOne Export Operations Demo")
-        print("=" * 80)
+    # Show file contents
+    if os.path.exists(export_file):
+        with open(export_file, 'r') as f:
+            print("\nFirst 2 JSON objects:")
+            for i, line in enumerate(f):
+                if i < 2:
+                    print(f"  {line.rstrip()}")
 
-        # Create client
-        client = Client()
-        try:
-            client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
-            self.logger.info("✅ Connected to MatrixOne")
 
-            # Setup
-            self.setup(client)
+def example_8_export_to_stage(client: Client, tmpdir: str):
+    """Example 8: Export to external stage"""
+    print("\n" + "=" * 60)
+    print("Example 8: Export to External Stage")
+    print("=" * 60)
 
-            # Run tests
-            self.test_orm_export_to_stage(client)
-            self.test_orm_export_aggregated(client)
-            self.test_low_level_export_to_stage(client)
-            self.test_stage_export_convenience(client)
-            self.test_export_formats(client)
-            self.test_practical_use_cases(client)
+    # Create a stage
+    stage_name = 'example_export_stage'
+    stage_url = f"file://{tmpdir}/stage/"
 
-            # Print summary
-            self.print_summary()
+    print(f"\nCreating stage: {stage_name}")
+    client.stage.create(stage_name, stage_url, if_not_exists=True)
 
-        finally:
-            self.cleanup(client)
-            client.disconnect()
-            self.logger.info("✅ Disconnected from MatrixOne")
+    try:
+        # Export to stage using stage:// protocol (pandas-style)
+        print(f"\nExporting to stage://{stage_name}/backup.csv")
+        client.export.to_csv(f'stage://{stage_name}/backup.csv', "SELECT * FROM export_products")
+
+        print("✓ Export to stage completed")
+
+        # Export to stage using convenience method (pandas-style)
+        print(f"\nExporting to stage using to_csv_stage method")
+        client.export.to_csv_stage(stage_name, 'backup2.csv', "SELECT * FROM export_products")
+
+        print("✓ Export to stage (convenience method) completed")
+
+        # Export JSONL to stage
+        print(f"\nExporting to stage://{stage_name}/backup.jsonl")
+        client.export.to_jsonl(f'stage://{stage_name}/backup.jsonl', "SELECT * FROM export_products")
+
+        print("✓ JSONL export to stage completed")
+
+        # Export JSONL to stage using convenience method
+        print(f"\nExporting JSONL to stage using to_jsonl_stage method")
+        client.export.to_jsonl_stage(stage_name, 'backup2.jsonl', "SELECT * FROM export_products")
+
+        print("✓ JSONL export to stage (convenience method) completed")
+
+    finally:
+        # Clean up stage
+        client.stage.drop(stage_name, if_exists=True)
+        print(f"\n✓ Dropped stage: {stage_name}")
+
+
+def example_9_export_with_session(client: Client, tmpdir: str):
+    """Example 9: Export using session"""
+    print("\n" + "=" * 60)
+    print("Example 9: Export with Transaction Session")
+    print("=" * 60)
+
+    export_file = os.path.join(tmpdir, 'session_export.csv')
+
+    # Export using session (pandas-style)
+    print(f"\nExporting via session to {export_file}")
+    with client.session() as session:
+        stmt = select(Product).where(Product.stock > 50)
+        result = session.export.to_csv(export_file, stmt)
+        print("✓ Export completed within session")
+
+
+def example_10_special_characters(client: Client, tmpdir: str):
+    """Example 10: Export data with special characters"""
+    print("\n" + "=" * 60)
+    print("Example 10: Export with Special Characters")
+    print("=" * 60)
+
+    # Insert product with special characters
+    client.execute(
+        "INSERT INTO export_products (id, name, category, price, stock) "
+        "VALUES (10, 'Product \"Special\" Name', 'Test,Category', 99.99, 10)"
+    )
+
+    export_file = os.path.join(tmpdir, 'special_chars.csv')
+
+    # Export with quotechar to handle special characters (pandas-style)
+    print(f"\nExporting with quotechar to {export_file}")
+    client.export.to_csv(export_file, "SELECT * FROM export_products WHERE id = 10", quotechar='"')
+
+    print("✓ Export with quotechar completed")
+
+    # Show file contents
+    if os.path.exists(export_file):
+        with open(export_file, 'r') as f:
+            print("\nFile contents:")
+            print(f"  {f.read().rstrip()}")
+
+    # Clean up
+    client.execute("DELETE FROM export_products WHERE id = 10")
 
 
 def main():
-    """Main entry point"""
-    demo = ExportOperationsDemo()
-    demo.run()
+    """Main function to run all examples"""
+    print("\n" + "=" * 60)
+    print("MatrixOne Export Operations - Pandas-Style Interface")
+    print("=" * 60)
+
+    # Create client and connect
+    client = Client()
+    client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+
+    # Create temporary directory for exports
+    tmpdir = tempfile.mkdtemp(prefix='mo_export_')
+    print(f"\nTemporary directory: {tmpdir}")
+
+    try:
+        # Setup test data
+        setup_test_data(client)
+
+        # Run examples
+        example_1_basic_csv_export(client, tmpdir)
+        example_2_custom_separator(client, tmpdir)
+        example_3_pipe_delimiter(client, tmpdir)
+        example_4_sqlalchemy_select(client, tmpdir)
+        example_5_matrixone_query(client, tmpdir)
+        example_6_aggregated_query(client, tmpdir)
+        example_7_jsonl_export(client, tmpdir)
+        example_8_export_to_stage(client, tmpdir)
+        example_9_export_with_session(client, tmpdir)
+        example_10_special_characters(client, tmpdir)
+
+        print("\n" + "=" * 60)
+        print("All examples completed successfully!")
+        print("=" * 60)
+        print(f"\nExported files are in: {tmpdir}")
+
+    finally:
+        # Clean up
+        client.drop_table('export_products')
+        client.drop_table('export_sales')
+        client.disconnect()
+
+        # Note: tmpdir is not deleted so you can inspect the exported files
+        print(f"\nNote: Temporary files are kept for inspection: {tmpdir}")
 
 
 if __name__ == '__main__':
