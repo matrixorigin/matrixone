@@ -61,11 +61,16 @@ func init() {
 }
 
 func (ht *StringHashMap) Free() {
-	for i, de := range ht.rawDataDeallocators {
+	for _, de := range ht.rawDataDeallocators {
 		if de != nil {
 			de.Deallocate(malloc.NoHints)
 		}
-		ht.rawData[i], ht.cells[i] = nil, nil
+	}
+	for i := range ht.rawData {
+		ht.rawData[i] = nil
+	}
+	for i := range ht.cells {
+		ht.cells[i] = nil
 	}
 	ht.rawData, ht.cells = nil, nil
 }
