@@ -185,17 +185,64 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return nil
 		}
+	case types.T_uint8:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			dict := page.Dictionary()
+			data := page.Data()
+			if dict == nil {
+				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint8 {
+					return uint8(v)
+				})
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Int32()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint8 {
+				return uint8(dictValues[int(idx)])
+			})
+		}
 	case types.T_int8:
 		if st.Kind() != parquet.Int32 {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
+			dict := page.Dictionary()
 			data := page.Data()
-			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
-				return int8(v)
+			if dict == nil {
+				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
+					return int8(v)
+				})
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Int32()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int8 {
+				return int8(dictValues[int(idx)])
+			})
+		}
+	case types.T_uint16:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint16 {
+					return uint16(v)
+				})
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Int32()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint16 {
+				return uint16(dictValues[int(idx)])
 			})
 		}
 	case types.T_int16:
@@ -203,12 +250,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
-				return int16(v)
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
+					return int16(v)
+				})
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Int32()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int16 {
+				return int16(dictValues[int(idx)])
 			})
 		}
 	case types.T_int32:
@@ -216,66 +270,108 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVec(mp, page, proc, vec, data.Int32())
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVec(mp, page, proc, vec, data.Int32())
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Int32()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
+				return dictValues[int(idx)]
+			})
 		}
 	case types.T_int64:
 		if st.Kind() != parquet.Int64 {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVec(mp, page, proc, vec, data.Int64())
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVec(mp, page, proc, vec, data.Int64())
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Int64()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
+				return dictValues[int(idx)]
+			})
 		}
 	case types.T_uint32:
 		if st.Kind() != parquet.Int32 {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVec(mp, page, proc, vec, data.Uint32())
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVec(mp, page, proc, vec, data.Uint32())
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Uint32()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint32 {
+				return dictValues[int(idx)]
+			})
 		}
 	case types.T_uint64:
 		if st.Kind() != parquet.Int64 {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVec(mp, page, proc, vec, data.Uint64())
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVec(mp, page, proc, vec, data.Uint64())
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Uint64()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
+				return dictValues[int(idx)]
+			})
 		}
 	case types.T_float32:
 		if st.Kind() != parquet.Float {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVec(mp, page, proc, vec, data.Float())
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVec(mp, page, proc, vec, data.Float())
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Float()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float32 {
+				return dictValues[int(idx)]
+			})
 		}
 	case types.T_float64:
 		if st.Kind() != parquet.Double {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
-			return copyPageToVec(mp, page, proc, vec, data.Double())
+			dict := page.Dictionary()
+			if dict == nil {
+				return copyPageToVec(mp, page, proc, vec, data.Double())
+			}
+
+			dictData := dict.Page().Data()
+			dictValues := dictData.Double()
+			indices := data.Int32()
+			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+				return dictValues[int(idx)]
+			})
 		}
 	case types.T_date:
 		lt := st.LogicalType()
@@ -532,6 +628,22 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 		}
 	}
 	return nil
+}
+
+func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) error {
+	for _, idx := range indexes {
+		if idx < 0 || int(idx) >= dictLen {
+			return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
+		}
+	}
+	return nil
+}
+
+func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, dictLen int, indexes []int32, convert func(idx int32) T) error {
+	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {
+		return err
+	}
+	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
