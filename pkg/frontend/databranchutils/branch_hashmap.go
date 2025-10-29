@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -862,8 +863,12 @@ func (bh *branchHashmap) collectFromMemory(hash uint64, key []byte, dst [][]byte
 }
 
 func (bh *branchHashmap) spill(required uint64) error {
-	var freed uint64
-	for freed < required {
+	var (
+		freed       uint64
+		minRequired = max(mpool.MB, required)
+	)
+
+	for freed < minRequired {
 		element := bh.order.Front()
 		if element == nil {
 			break

@@ -16,8 +16,8 @@ package types
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -41,7 +41,8 @@ func (b *binaryStub) UnmarshalBinary(data []byte) error {
 func TestEncodeDecodeSlice(t *testing.T) {
 	ints := []int32{1, -2, 3}
 	raw := EncodeSlice(ints)
-	require.Len(t, raw, len(ints)*int(unsafe.Sizeof(ints[0])))
+	intElemSize := int(reflect.TypeOf(ints[0]).Size())
+	require.Len(t, raw, len(ints)*intElemSize)
 
 	reDecoded := DecodeSlice[int32](append([]byte(nil), raw...))
 	require.Equal(t, ints, reDecoded)
@@ -49,7 +50,8 @@ func TestEncodeDecodeSlice(t *testing.T) {
 	withCap := make([]int16, 2, 4)
 	withCap[0], withCap[1] = 5, -7
 	rawCap := EncodeSliceWithCap(withCap)
-	require.Len(t, rawCap, len(withCap)*int(unsafe.Sizeof(withCap[0])))
+	int16ElemSize := int(reflect.TypeOf(withCap[0]).Size())
+	require.Len(t, rawCap, len(withCap)*int16ElemSize)
 
 	reDecodedCap := DecodeSlice[int16](append([]byte(nil), rawCap...))
 	require.Equal(t, withCap, reDecodedCap)
