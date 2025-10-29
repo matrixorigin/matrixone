@@ -376,6 +376,7 @@ class Session(SQLAlchemySession):
         from .pubsub import PubSubManager
         from .restore import RestoreManager
         from .account import AccountManager
+        from .export import ExportManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -390,6 +391,7 @@ class Session(SQLAlchemySession):
         self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
+        self.export = ExportManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
@@ -1193,6 +1195,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         from .load_data import AsyncLoadDataManager
         from .stage import AsyncStageManager
         from .metadata import AsyncMetadataManager
+        from .export import AsyncExportManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -1207,6 +1210,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.metadata = AsyncMetadataManager(client, executor=self)
         self.load_data = AsyncLoadDataManager(client, executor=self)
         self.stage = AsyncStageManager(client, executor=self)
+        self.export = AsyncExportManager(self)
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
