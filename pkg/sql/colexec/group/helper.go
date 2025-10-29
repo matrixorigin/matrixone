@@ -367,10 +367,14 @@ func (ctr *container) loadSpilledData(proc *process.Process) (bool, error) {
 func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, bool, error) {
 	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
 	// now we need to flush the final result of agg to output batches.
-	if ctr.currBatchIdx >= len(ctr.groupByBatches) {
-		// exhaust batches, done.
+	if ctr.currBatchIdx >= len(ctr.groupByBatches) ||
+		(ctr.currBatchIdx == len(ctr.groupByBatches)-1 &&
+			ctr.groupByBatches[ctr.currBatchIdx].RowCount() == 0) {
+		// exhauseed all batches, or, last group by batch has no data,
+		// done.
 		return vm.CancelResult, false, nil
 	}
+
 	curr := ctr.currBatchIdx
 	ctr.currBatchIdx += 1
 	hasMore := ctr.currBatchIdx < len(ctr.groupByBatches)

@@ -163,9 +163,11 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				}
 				if group.ctr.mtyp == H0 {
 					group.ctr.aggList[i].GroupGrow(1)
-				} else {
-					aggexec.SyncAggregatorsToChunkSize(group.ctr.aggList, aggBatchSize)
 				}
+			}
+
+			if group.ctr.mtyp != H0 {
+				aggexec.SyncAggregatorsToChunkSize(group.ctr.aggList, aggBatchSize)
 			}
 		}
 	}
