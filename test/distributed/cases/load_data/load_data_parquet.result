@@ -59,7 +59,7 @@ drop stage parqstage;
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
 select * from t5;
-id  name  int8column int16column binarycolumn varbinarycolumn blobcolumn
+id    name    int8column    int16column    binarycolumn    varbinarycolumn    blobcolumn
 1    Alice    1    100    0x62696E61727931    0x76617262696E61727931    0x626C6F6231 
 2    Bob    2    200    0x62696E61727932    0x76617262696E61727932    0x626C6F6232
 3    Charlie    3    300    0x62696E61727933    0x76617262696E61727933    0x626C6F6233
