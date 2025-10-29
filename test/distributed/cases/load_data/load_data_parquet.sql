@@ -23,5 +23,8 @@ load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet
 select * from t4;
 drop stage parqstage;
 
+create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
+load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
+select * from t5;
 -- post
 drop database parq;
