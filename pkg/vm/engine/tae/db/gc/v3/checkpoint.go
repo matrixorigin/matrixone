@@ -581,8 +581,12 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 					zap.String("new-max-file", newMaxFile),
 					zap.String("new-max-ts", newMaxTS.ToString()),
 				)
+				v2.GCErrorIOErrorCounter.Inc()
 				return
 			}
+			// Record snapshot file deletion
+			v2.GCSnapshotFileDeletionCounter.Inc()
+			v2.GCLastSnapshotDeletionGauge.Set(float64(time.Now().Unix()))
 			logutil.Info(
 				"GC-TRACE-DELETE-SNAPSHOT-FILE",
 				zap.String("task", c.TaskNameLocked()),
@@ -604,6 +608,11 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				zap.String("max-file", maxFile),
 				zap.String("max-ts", maxTS.ToString()),
 			)
+			v2.GCErrorIOErrorCounter.Inc()
+		} else {
+			// Record snapshot file deletion
+			v2.GCSnapshotFileDeletionCounter.Inc()
+			v2.GCLastSnapshotDeletionGauge.Set(float64(time.Now().Unix()))
 		}
 		logutil.Info(
 			"GC-TRACE-DELETE-SNAPSHOT-FILE",
@@ -1246,6 +1255,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			zap.String("task", c.TaskNameLocked()),
 			zap.String("metafile", metafile),
 			zap.Error(err))
+		v2.GCErrorIOErrorCounter.Inc()
 		return nil, err
 	}
 	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
@@ -1536,6 +1546,7 @@ func (c *checkpointCleaner) Process(
 
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
+	var memoryBuffer *containers.OneSchemaBatchBuffer
 
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
@@ -1550,10 +1561,38 @@ func (c *checkpointCleaner) Process(
 		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
 		v2.GCLastCheckpointExecutionGauge.SetToCurrentTime()
 
+		// Record memory usage metrics
+		if memoryBuffer != nil {
+			bufferSize := float64(memoryBuffer.Len())
+			v2.GCMemoryBufferGauge.Set(bufferSize)
+			// Alert if memory usage is too high (>1GB)
+			if bufferSize > 1024*1024*1024 {
+				v2.GCAlertHighMemoryGauge.Set(1)
+			} else {
+				v2.GCAlertHighMemoryGauge.Set(0)
+			}
+		}
+
 		// Record queue metrics (simplified - pending tasks)
 		v2.GCQueuePendingGauge.Set(0)    // Reset after processing
 		v2.GCQueueProcessingGauge.Set(0) // Reset after processing
 		v2.GCQueueCompletedGauge.Set(1)  // Mark as completed
+
+		// Alert if GC execution is too slow (>5 minutes)
+		duration := time.Since(now)
+		if duration > 5*time.Minute {
+			v2.GCAlertSlowExecutionGauge.Set(1)
+		} else {
+			v2.GCAlertSlowExecutionGauge.Set(0)
+		}
+
+		// Calculate error rate and set alert (simplified calculation)
+		// In a real implementation, you might want to track error rate over time
+		if err != nil {
+			v2.GCAlertErrorRateGauge.Set(1)
+		} else {
+			v2.GCAlertErrorRateGauge.Set(0)
+		}
 
 		// removed periodic GC alert check
 
@@ -1587,7 +1626,7 @@ func (c *checkpointCleaner) Process(
 	default:
 	}
 
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
+	memoryBuffer = MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
 	var tryGC bool
@@ -1701,6 +1740,7 @@ func (c *checkpointCleaner) tryScanLocked(
 			zap.String("task", c.TaskNameLocked()),
 			zap.Error(err),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
 	return
@@ -1786,6 +1826,8 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		// Record scan metrics
 		v2.TaskGCScanDurationHistogram.Observe(time.Since(now).Seconds())
 		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
+		// Record table statistics
+		v2.GCTableScannedCounter.Add(float64(tableSize))
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
 
@@ -405,6 +406,10 @@ func MakeSnapshotAndPitrFineFilter(
 						entry.stats, pitr, &entry.createTS, &entry.dropTS, sp,
 					) {
 						bm.Add(uint64(i))
+						v2.GCObjectSkippedCounter.Inc()
+					} else {
+						v2.GCObjectProtectedCounter.Inc()
+						v2.GCTableProtectedCounter.Inc()
 					}
 					continue
 				}
@@ -422,6 +427,9 @@ func MakeSnapshotAndPitrFineFilter(
 				&stats, pitr, &createTS, &deleteTS, sp,
 			) {
 				bm.Add(uint64(i))
+				v2.GCObjectSkippedCounter.Inc()
+			} else {
+				v2.GCObjectProtectedCounter.Inc()
 			}
 		}
 		return nil

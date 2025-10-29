@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -131,6 +132,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) ([]string, string, error) {
+	// Record memory usage at start
+	v2.GCMemoryObjectsGauge.Set(float64(len(w.files)))
 
 	sourcer := w.MakeFilesReader(ctx, fs)
 
