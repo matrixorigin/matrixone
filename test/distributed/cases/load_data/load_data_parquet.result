@@ -60,9 +60,9 @@ create table t5(id bigint, name varchar, int8column tinyint, int16column smallin
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
 select * from t5;
 id    name    int8column    int16column    binarycolumn    varbinarycolumn    blobcolumn
-1    Alice    1    100    0x62696E61727931    0x76617262696E61727931    0x626C6F6231 
-2    Bob    2    200    0x62696E61727932    0x76617262696E61727932    0x626C6F6232
-3    Charlie    3    300    0x62696E61727933    0x76617262696E61727933    0x626C6F6233
-4    Diana    4    400    0x62696E61727934    0x76617262696E61727934    0x626C6F6234
-5    Eve    5    500    0x62696E61727935    0x76617262696E61727935    0x626C6F6235
+1    Alice    1    100    binary1    varbinary1    blob1
+2    Bob    2    200    binary2    varbinary2    blob2
+3    Charlie    3    300    binary3    varbinary3    blob3
+4    Diana    4    400    binary4    varbinary4    blob4
+5    Eve    5    500    binary5    varbinary5    blob5
 drop database parq;
