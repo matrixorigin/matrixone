@@ -20,9 +20,7 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
-	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
 
 func (c *DashboardCreator) initGCDashboard() error {
