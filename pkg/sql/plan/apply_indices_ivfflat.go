@@ -20,34 +20,36 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) bool {
+func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projNode, sortNode, scanNode *plan.Node, multiTableIndex *MultiTableIndex) (int32, error) {
 
 	if len(sortNode.OrderBy) != 1 {
-		return false
+		return nodeID, nil
 	}
 
+	var childNode *plan.Node
+	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
 	orderExpr := sortNode.OrderBy[0].Expr
 	distFnExpr := orderExpr.GetF()
 	if distFnExpr == nil {
-		childNode := builder.qry.Nodes[sortNode.Children[0]]
+		childNode = builder.qry.Nodes[sortNode.Children[0]]
 		if childNode.NodeType == plan.Node_PROJECT {
 			distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
 		}
 
 		if distFnExpr == nil {
-			return false
+			return nodeID, nil
 		}
 	}
+
 	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-		return false
+		return nodeID, nil
 	}
 
 	var limit *plan.Expr
@@ -59,199 +61,141 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 		limit = projNode.Limit
 	}
 	if limit == nil {
-		return false
+		return nodeID, nil
 	}
-
-	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-
-	val, err := sonic.Get([]byte(idxdef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
-	if err != nil {
-		return false
-	}
-	optype, err := val.StrictString()
-	if err != nil {
-		return false
-	}
-
-	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
-		return false
-	}
-
-	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, idxdef.Parts[0])
-	if !ok {
-		return false
-	}
-
-	if value.Typ.GetId() != int32(types.T_array_float32) && value.Typ.GetId() != int32(types.T_array_float64) {
-		return false
-	}
-
-	if value.GetF() != nil {
-		fnexpr := value.GetF()
-		if fnexpr.Func.ObjName != "cast" {
-			return false
-		}
-	} else {
-		return false
-	}
-
-	return true
-}
-
-func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projNode, sortNode, scanNode *plan.Node,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) (int32, error) {
 
 	ctx := builder.ctxByNode[nodeID]
 	metadef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
 	entriesdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
-	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
-	pkType := scanNode.TableDef.Cols[pkPos].Typ
-	keypart := idxdef.Parts[0]
-	partPos := scanNode.TableDef.Name2ColIndex[keypart]
-	partType := scanNode.TableDef.Cols[partPos].Typ
-	params := idxdef.IndexAlgoParams
+	keyPart := idxdef.Parts[0]
 
-	var limit *plan.Expr
-	if sortNode.Limit != nil {
-		limit = sortNode.Limit
-	} else if scanNode.Limit != nil {
-		limit = scanNode.Limit
-	} else if projNode.Limit != nil {
-		limit = projNode.Limit
+	opTypeAst, err := sonic.Get([]byte(metadef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	if err != nil {
+		return nodeID, nil
+	}
+	opType, err := opTypeAst.StrictString()
+	if err != nil {
+		return nodeID, nil
 	}
 
-	val, err := builder.compCtx.ResolveVariable("ivf_threads_search", true, false)
+	if opType != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
+		return nodeID, nil
+	}
+
+	distFnArgs := distFnExpr.Args
+	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+		return nodeID, nil
+	}
+
+	if distFnArgs[1].GetCol() != nil {
+		if distFnArgs[0].GetCol() != nil {
+			return nodeID, nil
+		}
+
+		distFnArgs[0], distFnArgs[1] = distFnArgs[1], distFnArgs[0]
+	}
+
+	vecColArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[0], builder.compCtx.GetProcess(), false, true)
+	if vecColArg != nil {
+		distFnArgs[0] = vecColArg
+	}
+	vecLitArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[1], builder.compCtx.GetProcess(), false, true)
+	if vecLitArg != nil {
+		distFnArgs[1] = vecLitArg
+	}
+
+	if vecColArg.GetCol() == nil {
+		return nodeID, nil
+	}
+	if vecLitArg.GetLit() == nil {
+		return nodeID, nil
+	}
+
+	vecLitArg.Typ = vecColArg.Typ
+
+	nThread, err := builder.compCtx.ResolveVariable("ivf_threads_search", true, false)
 	if err != nil {
 		return nodeID, err
 	}
 
-	nprobe := int64(5)
-	nprobeif, err := builder.compCtx.ResolveVariable("probe_limit", true, false)
+	nProbe := int64(5)
+	nProbeIf, err := builder.compCtx.ResolveVariable("probe_limit", true, false)
 	if err != nil {
 		return nodeID, err
 	}
-	if nprobeif != nil {
+	if nProbeIf != nil {
 		var ok bool
-		nprobe, ok = (nprobeif.(int64))
+		nProbe, ok = (nProbeIf.(int64))
 		if !ok {
 			return nodeID, moerr.NewInternalErrorNoCtx("ResolveVariable: probe_limit is not int64")
 		}
 	}
 
-	/*
-		tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
-			SrcTable:      scanNode.TableDef.Name,
-			MetadataTable: metadef.IndexTableName,
-			IndexTable:    idxdef.IndexTableName,
-			ThreadsSearch: val.(int64),
-			EntriesTable:  entriesdef.IndexTableName,
-			Nprobe:        uint(nprobe),
-			PKeyType:      pkType.Id,
-			PKey:          scanNode.TableDef.Pkey.PkeyColName,
-			KeyPart:       keypart,
-			KeyPartType:   partType.Id}
+	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+	pkType := scanNode.TableDef.Cols[pkPos].Typ
+	partPos := scanNode.TableDef.Name2ColIndex[keyPart]
+	partType := scanNode.TableDef.Cols[partPos].Typ
+	params := idxdef.IndexAlgoParams
 
-		cfgbytes, err := sonic.Marshal(tblcfg)
-		if err != nil {
-			return nodeID, err
-		}
-		tblcfgstr := string(cfgbytes)
-	*/
-
-	tblcfgstr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
 			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		metadef.IndexTableName,
 		idxdef.IndexTableName,
-		val.(int64),
+		nThread.(int64),
 		entriesdef.IndexTableName,
-		uint(nprobe),
+		uint(nProbe),
 		pkType.Id,
 		scanNode.TableDef.Pkey.PkeyColName,
-		keypart,
+		keyPart,
 		partType.Id)
 
-	var childNode *plan.Node
-	orderExpr := sortNode.OrderBy[0].Expr
-	distFnExpr := orderExpr.GetF()
-	if distFnExpr == nil {
-		childNode = builder.qry.Nodes[sortNode.Children[0]]
-		distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
-	}
-	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
-
-	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
-	if !ok {
-		return nodeID, moerr.NewInternalErrorNoCtx("invalid distance function")
-	}
-
-	//distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
-	// fp32vstr := distFnExpr.Args[1].GetLit().GetSval() // fp32vec
-
 	// JOIN between source table and hnsw_search table function
-	var exprs tree.Exprs
-
-	exprs = append(exprs, tree.NewNumVal(params, params, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal(tblcfgstr, tblcfgstr, false, tree.P_char))
-
-	fnexpr := value.GetF()
-	vecsval := fnexpr.Args[0].GetLit().GetSval()
-	family := "vecf32"
-	if value.Typ.GetId() == int32(types.T_array_float64) {
-		family = "vecf64"
-	}
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(vecsval, vecsval, false, tree.P_char),
-		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
-			FamilyString: family, Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
-	exprs = append(exprs, valExpr)
-
-	ivf_func := tree.NewCStr(ivf_search_func_name, 1)
-	alias_name := "mo_ivf_alias_0"
-	name := tree.NewUnresolvedName(ivf_func)
-
-	tmpTableFunc := &tree.AliasedTableExpr{
-		Expr: &tree.TableFunction{
-			Func: &tree.FuncExpr{
-				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: ivf_func,
-				Exprs:    exprs,
-				Type:     tree.FUNC_TYPE_TABLE,
+	tableFuncTag := builder.genNewTag()
+	tableFuncNode := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  ivf_search_func_name,
+				Param: []byte(params),
 			},
+			Cols: DeepCopyColDefList(ivfSearchColDefs),
 		},
-		As: tree.AliasClause{
-			Alias: tree.Identifier(alias_name),
+		BindingTags: []int32{tableFuncTag},
+		TblFuncExprList: []*plan.Expr{
+			{
+				Typ: plan.Type{
+					Id: int32(types.T_varchar),
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_Sval{
+							Sval: tblCfgStr,
+						},
+					},
+				},
+			},
+			DeepCopyExpr(vecLitArg),
 		},
 	}
+	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	curr_node_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_ivf_alias_0")}, ctx)
 	if err != nil {
-		return nodeID, err
-	}
-
-	curr_node := builder.qry.Nodes[curr_node_id]
-
-	curr_node_tag := curr_node.BindingTags[0]
-
-	curr_node_pkcol := &Expr{
-		Typ: pkType,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: curr_node_tag,
-				ColPos: 0,
-			},
-		},
+		return 0, err
 	}
 
 	// change doc_id type to the primary type here
-	curr_node.TableDef.Cols[0].Typ.Id = pkType.Id
-	curr_node.TableDef.Cols[0].Typ.Width = pkType.Width
-	curr_node.TableDef.Cols[0].Typ.Scale = pkType.Scale
+	tableFuncNode.TableDef.Cols[0].Typ = pkType
 
 	// pushdown limit
 	if limit != nil {
-		curr_node.Limit = DeepCopyExpr(limit)
+		tableFuncNode.Limit = DeepCopyExpr(limit)
 	}
 
 	// oncond
@@ -269,16 +213,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 0,                               // idxTbl.pk
+					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
+					ColPos: 0,            // idxTbl.pk
 				},
 			},
 		},
 	})
 
-	joinnodeID := builder.appendNode(&plan.Node{
+	joinNodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, curr_node_id},
+		Children: []int32{scanNode.NodeId, tableFuncNodeID},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
 		Limit:    DeepCopyExpr(scanNode.Limit),
@@ -292,10 +236,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	orderByScore := []*OrderBySpec{
 		{
 			Expr: &plan.Expr{
-				Typ: curr_node.TableDef.Cols[1].Typ, // score column
+				Typ: tableFuncNode.TableDef.Cols[1].Typ, // score column
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: curr_node.BindingTags[0],
+						RelPos: tableFuncTag,
 						ColPos: 1, // score column
 					},
 				},
@@ -306,7 +250,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
-		Children: []int32{joinnodeID},
+		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
 	}, ctx)
 
