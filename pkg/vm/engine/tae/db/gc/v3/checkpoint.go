@@ -1843,27 +1843,27 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
 		// Record table statistics
 		v2.GCTableScannedCounter.Add(float64(tableSize))
-		
+
 		// Record collect duration for snapshot processing
 		collectStart := time.Now()
-		if snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp); err == nil {
-			if len(snapshots.Cluster) > 0 {
-				v2.GCSnapshotClusterCounter.Add(float64(len(snapshots.Cluster)))
-			}
-			if len(snapshots.Account) > 0 {
-				v2.GCSnapshotAccountCounter.Add(float64(len(snapshots.Account)))
-			}
-			if len(snapshots.Database) > 0 {
-				v2.GCSnapshotDatabaseCounter.Add(float64(len(snapshots.Database)))
-			}
-			if len(snapshots.Tables) > 0 {
-				v2.GCSnapshotTableCounter.Add(float64(len(snapshots.Tables)))
-			}
-		}
+		//if snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp); err == nil {
+		//	if len(snapshots.Cluster) > 0 {
+		//		v2.GCSnapshotClusterCounter.Add(float64(len(snapshots.Cluster)))
+		//	}
+		//	if len(snapshots.Account) > 0 {
+		//		v2.GCSnapshotAccountCounter.Add(float64(len(snapshots.Account)))
+		//	}
+		//	if len(snapshots.Database) > 0 {
+		//		v2.GCSnapshotDatabaseCounter.Add(float64(len(snapshots.Database)))
+		//	}
+		//	if len(snapshots.Tables) > 0 {
+		//		v2.GCSnapshotTableCounter.Add(float64(len(snapshots.Tables)))
+		//	}
+		//}
 		// Record collect duration
 		v2.GCMergeCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
 		v2.GCSnapshotCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
-		
+
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),
