@@ -16,9 +16,7 @@ package external
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -240,30 +238,4 @@ func TestParquet_Dictionary_Date_Time_Timestamp(t *testing.T) {
 		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
 		require.Equal(t, []types.Timestamp{types.UnixMicroToTimestamp(0), types.UnixMicroToTimestamp(1_000_000), types.UnixMicroToTimestamp(0)}, got)
 	}
-}
-
-// Nested payloads marshalled as JSON
-type innerT struct {
-	T int32 `parquet:"t"`
-}
-
-type nestedT struct {
-	I   int32   `parquet:"i"`
-	S   string  `parquet:"s"`
-	Arr []int32 `parquet:"arr,list"`
-	Obj innerT  `parquet:"obj"`
-}
-
-type rowNested struct {
-	C nestedT `parquet:"c"`
-}
-
-func jsonEq(t *testing.T, got string, want any) {
-	var g any
-	require.NoError(t, json.Unmarshal([]byte(got), &g))
-	// Marshal want then unmarshal to normalize types
-	wb, _ := json.Marshal(want)
-	var w any
-	require.NoError(t, json.Unmarshal(wb, &w))
-	require.True(t, reflect.DeepEqual(g, w), "json not equal\n got=%s\nwant=%s", got, string(wb))
 }
