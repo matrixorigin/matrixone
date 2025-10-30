@@ -1322,7 +1322,7 @@ func datetimeToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return datetimeToTimestamp(source, rs, length, zone)
+		return datetimeToTimestamp(source, rs, length, zone, toType.Scale)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return datetimeToDate(source, rs, length, selectList)
@@ -2653,7 +2653,8 @@ func datetimeToDecimal128(
 func datetimeToTimestamp(
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
-	zone *time.Location) error {
+	zone *time.Location,
+	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2663,7 +2664,12 @@ func datetimeToTimestamp(
 				return err
 			}
 		} else {
-			if err := to.Append(v.ToTimestamp(zone), false); err != nil {
+			result := v.ToTimestamp(zone)
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
