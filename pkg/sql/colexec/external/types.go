@@ -255,4 +255,7 @@ type columnMapper struct {
 	maxDefinitionLevel byte
 
 	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+
+	isJSON bool
+	json   *jsonColumnMapper
 }

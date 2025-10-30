@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"math/big"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -117,12 +120,17 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		if col == nil {
 			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
-		if !col.Leaf() {
-			return moerr.NewNYIf(param.Ctx, "load group type column %s", attr.ColName)
-		}
 
-		h.cols[attr.ColIndex] = col
-		fn := h.getMapper(col, def.Typ)
+		var fn *columnMapper
+		var err error
+		if !col.Leaf() {
+			fn, err = h.getNestedMapper(param.Ctx, col, def.Typ)
+			if err != nil {
+				return err
+			}
+		} else {
+			fn = h.getMapper(col, def.Typ)
+		}
 		if fn == nil {
 			st := col.Type().String()
 			if col.Optional() {
@@ -138,10 +146,32 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			}
 			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
+		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
 	}
 
 	return nil
+}
+
+func (h *ParquetHandler) getNestedMapper(ctx context.Context, sc *parquet.Column, dt plan.Type) (*columnMapper, error) {
+	switch types.T(dt.Id) {
+	case types.T_varchar, types.T_text, types.T_json:
+	default:
+		return nil, moerr.NewNYIf(ctx, "load %s to %s", sc.String(), types.T(dt.Id).String())
+	}
+
+	jm, err := newJSONColumnMapper(h.file, sc)
+	if err != nil {
+		return nil, err
+	}
+
+	return &columnMapper{
+		srcNull:            true,
+		dstNull:            !dt.NotNullable,
+		maxDefinitionLevel: byte(sc.MaxDefinitionLevel()),
+		isJSON:             true,
+		json:               jm,
+	}, nil
 }
 
 func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
@@ -597,7 +627,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return moerr.NewInternalError(proc.Ctx, "unknown unit")
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -821,6 +851,268 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 		return err
 	}
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
+}
+
+type jsonColumnMapper struct {
+	column        *parquet.Column
+	schema        *parquet.Schema
+	leafIndexes   []int
+	indexMap      map[int]int
+	rowGroups     []parquet.RowGroup
+	rowBuf        []parquet.Row
+	columnsBuf    [][]parquet.Value
+	scratchRow    parquet.Row
+	rgIndex       int
+	rows          parquet.Rows
+	rgRowCount    int64
+	rowInGroup    int64
+	rowConsumed   int64
+	maxDefinition byte
+}
+
+func newJSONColumnMapper(file *parquet.File, col *parquet.Column) (*jsonColumnMapper, error) {
+	var leaves []*parquet.Column
+	collectLeafColumns(col, &leaves)
+	if len(leaves) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("nested column has no leaf")
+	}
+
+	leafIndexes := make([]int, len(leaves))
+	indexMap := make(map[int]int, len(leaves))
+	for i, leaf := range leaves {
+		idx := leaf.Index()
+		leafIndexes[i] = idx
+		indexMap[idx] = i
+	}
+
+	jm := &jsonColumnMapper{
+		column:        col,
+		schema:        parquet.NewSchema(col.Name(), col),
+		leafIndexes:   leafIndexes,
+		indexMap:      indexMap,
+		rowGroups:     file.RowGroups(),
+		rowBuf:        make([]parquet.Row, 128),
+		columnsBuf:    make([][]parquet.Value, len(leafIndexes)),
+		maxDefinition: byte(col.MaxDefinitionLevel()),
+	}
+	return jm, nil
+}
+
+func collectLeafColumns(col *parquet.Column, leaves *[]*parquet.Column) {
+	if col.Leaf() {
+		*leaves = append(*leaves, col)
+		return
+	}
+	for _, child := range col.Columns() {
+		collectLeafColumns(child, leaves)
+	}
+}
+
+func (jm *jsonColumnMapper) ensurePosition(ctx context.Context, target int64) error {
+	if target < jm.rowConsumed {
+		return moerr.NewInternalError(ctx, "parquet json mapper out of sync")
+	}
+	skip := target - jm.rowConsumed
+	for skip > 0 {
+		toRead := len(jm.rowBuf)
+		if int64(toRead) > skip {
+			toRead = int(skip)
+		}
+		if toRead == 0 {
+			toRead = 1
+		}
+		n, eof, err := jm.readRows(jm.rowBuf[:toRead])
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			if eof {
+				return io.EOF
+			}
+			continue
+		}
+		skip -= int64(n)
+	}
+	return nil
+}
+
+func (jm *jsonColumnMapper) mapBatch(ctx context.Context, vec *vector.Vector, count int, allowNull bool, mp *mpool.MPool) (bool, error) {
+	if count <= 0 {
+		return jm.isEOF(), nil
+	}
+
+	if err := vec.PreExtend(vec.Length()+count, mp); err != nil {
+		return false, err
+	}
+
+	remaining := count
+	for remaining > 0 {
+		toRead := len(jm.rowBuf)
+		if toRead > remaining {
+			toRead = remaining
+		}
+		n, eof, err := jm.readRows(jm.rowBuf[:toRead])
+		if err != nil {
+			return false, err
+		}
+		if n == 0 {
+			if eof {
+				return true, nil
+			}
+			continue
+		}
+		for i := 0; i < n; i++ {
+			data, isNull, err := jm.rowToJSON(ctx, jm.rowBuf[i])
+			if err != nil {
+				return false, err
+			}
+			if isNull {
+				if !allowNull {
+					return false, moerr.NewInvalidInput(ctx, "parquet column contains null but column is not nullable")
+				}
+				if err := vector.AppendBytes(vec, nil, true, mp); err != nil {
+					return false, err
+				}
+			} else {
+				// Defensive: ensure we never append empty JSON for nested columns.
+				if len(data) == 0 {
+					data = []byte("[]")
+				}
+				// If target column is JSON, build ByteJson for storage.
+				if vec.GetType().Oid == types.T_json {
+					var bj bytejson.ByteJson
+					if err := bj.UnmarshalJSON([]byte(data)); err != nil {
+						return false, moerr.NewInvalidInputf(ctx, "invalid json: %v", err)
+					}
+					if err := vector.AppendByteJson(vec, bj, false, mp); err != nil {
+						return false, err
+					}
+				} else {
+					if err := vector.AppendBytes(vec, []byte(data), false, mp); err != nil {
+						return false, err
+					}
+				}
+			}
+		}
+		remaining -= n
+		if eof {
+			return true, nil
+		}
+	}
+	return jm.isEOF(), nil
+}
+
+func (jm *jsonColumnMapper) isEOF() bool {
+	return jm.rgIndex >= len(jm.rowGroups) && jm.rows == nil
+}
+
+func (jm *jsonColumnMapper) readRows(buf []parquet.Row) (int, bool, error) {
+	total := 0
+	for total < len(buf) {
+		if jm.rows == nil {
+			if jm.rgIndex >= len(jm.rowGroups) {
+				if total == 0 {
+					return 0, true, nil
+				}
+				return total, true, nil
+			}
+			rg := jm.rowGroups[jm.rgIndex]
+			jm.rows = rg.Rows()
+			jm.rowInGroup = 0
+			jm.rgRowCount = rg.NumRows()
+		}
+
+		segment := buf[total:]
+		for i := range segment {
+			segment[i] = segment[i][:0]
+		}
+		n, err := jm.rows.ReadRows(segment)
+		if n > 0 {
+			total += n
+			jm.rowInGroup += int64(n)
+			jm.rowConsumed += int64(n)
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				_ = jm.rows.Close()
+				jm.rows = nil
+				jm.rgIndex++
+				jm.rowInGroup = 0
+				if total == len(buf) {
+					return total, jm.isEOF(), nil
+				}
+				continue
+			}
+			return total, false, err
+		}
+
+		if total == len(buf) {
+			return total, false, nil
+		}
+	}
+	return total, jm.isEOF(), nil
+}
+
+func (jm *jsonColumnMapper) resetColumnsBuf() {
+	for i := range jm.columnsBuf {
+		jm.columnsBuf[i] = jm.columnsBuf[i][:0]
+	}
+}
+
+func (jm *jsonColumnMapper) rowToJSON(ctx context.Context, row parquet.Row) ([]byte, bool, error) {
+	jm.resetColumnsBuf()
+
+	row.Range(func(globalIdx int, columnValues []parquet.Value) bool {
+		local, ok := jm.indexMap[globalIdx]
+		if !ok {
+			return true
+		}
+		buf := jm.columnsBuf[local][:0]
+		for _, val := range columnValues {
+			if val.IsNull() {
+				// skip nulls to avoid creating fake zero values for leaves
+				continue
+			}
+			cloned := val.Clone()
+			cloned = cloned.Level(val.RepetitionLevel(), val.DefinitionLevel(), local)
+			buf = append(buf, cloned)
+		}
+		jm.columnsBuf[local] = buf
+		return true
+	})
+
+	// If there is no value for any leaf in this row, inject a single null on the
+	// first leaf to let reconstruct detect an empty repeated group (list = []).
+	empty := true
+	for i := range jm.columnsBuf {
+		if len(jm.columnsBuf[i]) > 0 {
+			empty = false
+			break
+		}
+	}
+	if empty {
+		return []byte("[]"), false, nil
+	}
+
+	jm.scratchRow = jm.scratchRow[:0]
+	jm.scratchRow = parquet.AppendRow(jm.scratchRow, jm.columnsBuf...)
+
+	var out interface{}
+	if err := jm.schema.Reconstruct(&out, jm.scratchRow); err != nil {
+		return nil, false, moerr.NewInternalError(ctx, err.Error())
+	}
+	if out == nil {
+		// Treat missing nested values as empty JSON rather than null to
+		// align with LIST semantics expected by loaders.
+		return []byte("[]"), false, nil
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		return nil, false, moerr.NewInternalError(ctx, err.Error())
+	}
+	return data, false, nil
 }
 
 var (
@@ -1107,7 +1399,51 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 			continue
 		}
 
+		mapper := h.mappers[colIdx]
+		if mapper == nil {
+			continue
+		}
+
 		vec := bat.Vecs[colIdx]
+		if mapper.isJSON {
+			return moerr.NewNYI(proc.Ctx, "the nested parquet data type")
+			posErr := mapper.json.ensurePosition(param.Ctx, h.offset)
+			if posErr != nil {
+				if errors.Is(posErr, io.EOF) {
+					finish = true
+					length = vec.Length()
+					continue
+				}
+				return posErr
+			}
+
+			count := int(h.batchCnt)
+			if count <= 0 {
+				// Fallback: compute remaining rows from file row groups
+				var total int64
+				for _, rg := range mapper.json.rowGroups {
+					total += rg.NumRows()
+				}
+				remain := int(total - h.offset)
+				if remain < 0 {
+					remain = 0
+				}
+				if remain > int(maxParquetBatchCnt) {
+					remain = int(maxParquetBatchCnt)
+				}
+				count = remain
+			}
+			eof, err := mapper.json.mapBatch(param.Ctx, vec, count, mapper.dstNull, proc.Mp())
+			if err != nil {
+				return err
+			}
+			if eof {
+				finish = true
+			}
+			length = vec.Length()
+			continue
+		}
+
 		pages := col.Pages()
 		n := h.batchCnt
 		o := h.offset
