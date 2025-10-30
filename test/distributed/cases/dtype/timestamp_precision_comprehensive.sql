@@ -209,5 +209,61 @@ ORDER BY id;
 
 DROP TABLE t_timestamp_half;
 
+-- ============================================================================
+-- Test 11: DATE_ADD/DATE_SUB with TIMESTAMP and different INTERVAL types
+-- ============================================================================
+DROP TABLE IF EXISTS t_timestamp_dateadd;
+CREATE TABLE t_timestamp_dateadd (
+    id INT PRIMARY KEY,
+    ts0 TIMESTAMP(0),
+    ts3 TIMESTAMP(3),
+    ts6 TIMESTAMP(6)
+);
+
+INSERT INTO t_timestamp_dateadd VALUES 
+    (1, '2024-01-15 12:34:56', '2024-01-15 12:34:56.789', '2024-01-15 12:34:56.123456');
+
+-- Test: INTERVAL with non-fractional units should preserve source scale
+SELECT 
+    id,
+    DATE_ADD(ts0, INTERVAL 1 MINUTE) AS ts0_add_min,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 MINUTE)) AS ts0_micro,
+    DATE_ADD(ts3, INTERVAL 1 HOUR) AS ts3_add_hour,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts3, INTERVAL 1 HOUR)) AS ts3_micro,
+    DATE_ADD(ts6, INTERVAL 1 DAY) AS ts6_add_day,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts6, INTERVAL 1 DAY)) AS ts6_micro
+FROM t_timestamp_dateadd;
+
+-- Test: INTERVAL MICROSECOND should force scale=6
+-- Expected: Results should have microsecond precision even for TIMESTAMP(0) source
+SELECT 
+    id,
+    DATE_ADD(ts0, INTERVAL 1 MICROSECOND) AS ts0_add_micro,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 MICROSECOND)) AS ts0_result_micro,
+    DATE_SUB(ts0, INTERVAL 1 MICROSECOND) AS ts0_sub_micro,
+    EXTRACT(MICROSECOND FROM DATE_SUB(ts0, INTERVAL 1 MICROSECOND)) AS ts0_sub_result_micro
+FROM t_timestamp_dateadd;
+
+-- Test: Multiple microseconds with TIMESTAMP(6)
+-- Expected: Correct arithmetic on microseconds
+SELECT 
+    id,
+    DATE_ADD(ts6, INTERVAL 999 MICROSECOND) AS ts6_add_micro,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts6, INTERVAL 999 MICROSECOND)) AS result_micro,
+    DATE_SUB(ts6, INTERVAL 456 MICROSECOND) AS ts6_sub_micro,
+    EXTRACT(MICROSECOND FROM DATE_SUB(ts6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_timestamp_dateadd;
+
+-- Test: INTERVAL with integer SECOND should preserve source scale
+SELECT 
+    id,
+    DATE_ADD(ts0, INTERVAL 1 SECOND) AS ts0_add_sec,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 SECOND)) AS ts0_sec_micro,
+    DATE_ADD(ts3, INTERVAL 2 SECOND) AS ts3_add_sec,
+    EXTRACT(MICROSECOND FROM DATE_ADD(ts3, INTERVAL 2 SECOND)) AS ts3_sec_micro
+FROM t_timestamp_dateadd;
+
+DROP TABLE t_timestamp_dateadd;
+
 DROP DATABASE test_timestamp_precision;
 

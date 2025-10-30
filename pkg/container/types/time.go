@@ -391,6 +391,8 @@ func (t Time) ToDatetime(scale int32) Datetime {
 // return type bool means the if the time is valid
 func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	switch its {
+	case MicroSecond:
+		// nums is already in microseconds, no conversion needed
 	case Second:
 		nums *= MicroSecsPerSec
 	case Minute:

@@ -216,4 +216,52 @@ FROM t_datetime_funcs;
 result    microseconds
 2024-01-16 12:34:57    0
 DROP TABLE t_datetime_funcs;
+DROP TABLE IF EXISTS t_dateadd_scale;
+CREATE TABLE t_dateadd_scale (
+id INT PRIMARY KEY,
+dt0 DATETIME(0),
+dt3 DATETIME(3),
+dt6 DATETIME(6)
+);
+INSERT INTO t_dateadd_scale VALUES
+(1, '2024-01-15 12:34:56', '2024-01-15 12:34:56.789', '2024-01-15 12:34:56.123456');
+SELECT
+id,
+DATE_ADD(dt0, INTERVAL 1 MINUTE) AS dt0_add_min,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 MINUTE)) AS dt0_micro,
+DATE_ADD(dt3, INTERVAL 1 HOUR) AS dt3_add_hour,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt3, INTERVAL 1 HOUR)) AS dt3_micro,
+DATE_ADD(dt6, INTERVAL 1 DAY) AS dt6_add_day,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt6, INTERVAL 1 DAY)) AS dt6_micro
+FROM t_dateadd_scale;
+id    dt0_add_min    dt0_micro    dt3_add_hour    dt3_micro    dt6_add_day    dt6_micro
+1    2024-01-15 12:35:56    0    2024-01-15 13:34:56.789000000    789000    2024-01-16 12:34:56.123456000    123456
+SELECT
+id,
+DATE_ADD(dt0, INTERVAL 1 MICROSECOND) AS dt0_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 MICROSECOND)) AS dt0_result_micro,
+DATE_SUB(dt0, INTERVAL 1 MICROSECOND) AS dt0_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(dt0, INTERVAL 1 MICROSECOND)) AS dt0_sub_result_micro
+FROM t_dateadd_scale;
+id    dt0_add_micro    dt0_result_micro    dt0_sub_micro    dt0_sub_result_micro
+1    2024-01-15 12:34:56.000001000    1    2024-01-15 12:34:55.999999000    999999
+SELECT
+id,
+DATE_ADD(dt6, INTERVAL 123 MICROSECOND) AS dt6_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt6, INTERVAL 123 MICROSECOND)) AS result_micro,
+DATE_SUB(dt6, INTERVAL 456 MICROSECOND) AS dt6_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(dt6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_dateadd_scale;
+id    dt6_add_micro    result_micro    dt6_sub_micro    sub_result_micro
+1    2024-01-15 12:34:56.123579000    123579    2024-01-15 12:34:56.123000000    123000
+SELECT
+id,
+DATE_ADD(dt0, INTERVAL 1 SECOND) AS dt0_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 SECOND)) AS dt0_sec_micro,
+DATE_ADD(dt3, INTERVAL 2 SECOND) AS dt3_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt3, INTERVAL 2 SECOND)) AS dt3_sec_micro
+FROM t_dateadd_scale;
+id    dt0_add_sec    dt0_sec_micro    dt3_add_sec    dt3_sec_micro
+1    2024-01-15 12:34:57    0    2024-01-15 12:34:58.789000000    789000
+DROP TABLE t_dateadd_scale;
 DROP DATABASE test_datetime_precision;

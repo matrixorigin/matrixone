@@ -232,5 +232,49 @@ ORDER BY id;
 
 DROP TABLE t_time_half;
 
+-- ============================================================================
+-- Test 11: DATE_ADD/DATE_SUB with TIME and different INTERVAL types
+-- ============================================================================
+DROP TABLE IF EXISTS t_time_dateadd;
+CREATE TABLE t_time_dateadd (
+    id INT PRIMARY KEY,
+    t0 TIME(0),
+    t3 TIME(3),
+    t6 TIME(6)
+);
+
+INSERT INTO t_time_dateadd VALUES 
+    (1, '12:34:56', '12:34:56.789', '12:34:56.123456');
+
+-- Test: INTERVAL with non-fractional units should preserve source scale
+SELECT 
+    id,
+    DATE_ADD(t0, INTERVAL 1 MINUTE) AS t0_add_min,
+    EXTRACT(MICROSECOND FROM DATE_ADD(t0, INTERVAL 1 MINUTE)) AS t0_micro,
+    DATE_ADD(t3, INTERVAL 1 HOUR) AS t3_add_hour,
+    EXTRACT(MICROSECOND FROM DATE_ADD(t3, INTERVAL 1 HOUR)) AS t3_micro
+FROM t_time_dateadd;
+
+-- Test: INTERVAL MICROSECOND should force scale=6  
+-- Expected: Results should have microsecond precision even for TIME(0) source
+SELECT 
+    id,
+    DATE_ADD(t0, INTERVAL 1 MICROSECOND) AS t0_add_micro,
+    EXTRACT(MICROSECOND FROM DATE_ADD(t0, INTERVAL 1 MICROSECOND)) AS t0_result_micro,
+    DATE_SUB(t0, INTERVAL 1 MICROSECOND) AS t0_sub_micro,
+    EXTRACT(MICROSECOND FROM DATE_SUB(t0, INTERVAL 1 MICROSECOND)) AS t0_sub_result_micro
+FROM t_time_dateadd;
+
+-- Test: Multiple microseconds with TIME(6)
+SELECT 
+    id,
+    DATE_ADD(t6, INTERVAL 100 MICROSECOND) AS t6_add_micro,
+    EXTRACT(MICROSECOND FROM DATE_ADD(t6, INTERVAL 100 MICROSECOND)) AS result_micro,
+    DATE_SUB(t6, INTERVAL 456 MICROSECOND) AS t6_sub_micro,
+    EXTRACT(MICROSECOND FROM DATE_SUB(t6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_time_dateadd;
+
+DROP TABLE t_time_dateadd;
+
 DROP DATABASE test_time_precision;
 

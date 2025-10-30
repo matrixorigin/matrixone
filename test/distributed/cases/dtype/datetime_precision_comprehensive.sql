@@ -321,5 +321,61 @@ FROM t_datetime_funcs;
 
 DROP TABLE t_datetime_funcs;
 
+-- ============================================================================
+-- Test 16: DATE_ADD/DATE_SUB with different INTERVAL types and result scale
+-- ============================================================================
+DROP TABLE IF EXISTS t_dateadd_scale;
+CREATE TABLE t_dateadd_scale (
+    id INT PRIMARY KEY,
+    dt0 DATETIME(0),
+    dt3 DATETIME(3),
+    dt6 DATETIME(6)
+);
+
+INSERT INTO t_dateadd_scale VALUES 
+    (1, '2024-01-15 12:34:56', '2024-01-15 12:34:56.789', '2024-01-15 12:34:56.123456');
+
+-- Test: INTERVAL with non-fractional units should preserve source scale
+-- MINUTE/HOUR/DAY/MONTH/YEAR should not change scale
+SELECT 
+    id,
+    DATE_ADD(dt0, INTERVAL 1 MINUTE) AS dt0_add_min,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 MINUTE)) AS dt0_micro,
+    DATE_ADD(dt3, INTERVAL 1 HOUR) AS dt3_add_hour,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt3, INTERVAL 1 HOUR)) AS dt3_micro,
+    DATE_ADD(dt6, INTERVAL 1 DAY) AS dt6_add_day,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt6, INTERVAL 1 DAY)) AS dt6_micro
+FROM t_dateadd_scale;
+
+-- Test: INTERVAL MICROSECOND should force scale=6
+-- Expected: Results should have microsecond precision even for DATETIME(0) source
+SELECT 
+    id,
+    DATE_ADD(dt0, INTERVAL 1 MICROSECOND) AS dt0_add_micro,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 MICROSECOND)) AS dt0_result_micro,
+    DATE_SUB(dt0, INTERVAL 1 MICROSECOND) AS dt0_sub_micro,
+    EXTRACT(MICROSECOND FROM DATE_SUB(dt0, INTERVAL 1 MICROSECOND)) AS dt0_sub_result_micro
+FROM t_dateadd_scale;
+
+-- Test: Multiple microseconds addition/subtraction
+SELECT 
+    id,
+    DATE_ADD(dt6, INTERVAL 123 MICROSECOND) AS dt6_add_micro,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt6, INTERVAL 123 MICROSECOND)) AS result_micro,
+    DATE_SUB(dt6, INTERVAL 456 MICROSECOND) AS dt6_sub_micro,
+    EXTRACT(MICROSECOND FROM DATE_SUB(dt6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_dateadd_scale;
+
+-- Test: INTERVAL with integer SECOND should preserve source scale
+SELECT 
+    id,
+    DATE_ADD(dt0, INTERVAL 1 SECOND) AS dt0_add_sec,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 SECOND)) AS dt0_sec_micro,
+    DATE_ADD(dt3, INTERVAL 2 SECOND) AS dt3_add_sec,
+    EXTRACT(MICROSECOND FROM DATE_ADD(dt3, INTERVAL 2 SECOND)) AS dt3_sec_micro
+FROM t_dateadd_scale;
+
+DROP TABLE t_dateadd_scale;
+
 DROP DATABASE test_datetime_precision;
 

@@ -140,4 +140,52 @@ id    description    ts0    ts1    ts2
 2    scale 1 half    null    2024-01-15 12:34:56.200000000    null
 3    scale 2 half    null    null    2024-01-15 12:34:56.130000000
 DROP TABLE t_timestamp_half;
+DROP TABLE IF EXISTS t_timestamp_dateadd;
+CREATE TABLE t_timestamp_dateadd (
+id INT PRIMARY KEY,
+ts0 TIMESTAMP(0),
+ts3 TIMESTAMP(3),
+ts6 TIMESTAMP(6)
+);
+INSERT INTO t_timestamp_dateadd VALUES
+(1, '2024-01-15 12:34:56', '2024-01-15 12:34:56.789', '2024-01-15 12:34:56.123456');
+SELECT
+id,
+DATE_ADD(ts0, INTERVAL 1 MINUTE) AS ts0_add_min,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 MINUTE)) AS ts0_micro,
+DATE_ADD(ts3, INTERVAL 1 HOUR) AS ts3_add_hour,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts3, INTERVAL 1 HOUR)) AS ts3_micro,
+DATE_ADD(ts6, INTERVAL 1 DAY) AS ts6_add_day,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts6, INTERVAL 1 DAY)) AS ts6_micro
+FROM t_timestamp_dateadd;
+id    ts0_add_min    ts0_micro    ts3_add_hour    ts3_micro    ts6_add_day    ts6_micro
+1    2024-01-15 12:35:56    0    2024-01-15 13:34:56.789000000    789000    2024-01-16 12:34:56.123456000    123456
+SELECT
+id,
+DATE_ADD(ts0, INTERVAL 1 MICROSECOND) AS ts0_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 MICROSECOND)) AS ts0_result_micro,
+DATE_SUB(ts0, INTERVAL 1 MICROSECOND) AS ts0_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(ts0, INTERVAL 1 MICROSECOND)) AS ts0_sub_result_micro
+FROM t_timestamp_dateadd;
+id    ts0_add_micro    ts0_result_micro    ts0_sub_micro    ts0_sub_result_micro
+1    2024-01-15 12:34:56.000001000    1    2024-01-15 12:34:55.999999000    999999
+SELECT
+id,
+DATE_ADD(ts6, INTERVAL 999 MICROSECOND) AS ts6_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts6, INTERVAL 999 MICROSECOND)) AS result_micro,
+DATE_SUB(ts6, INTERVAL 456 MICROSECOND) AS ts6_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(ts6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_timestamp_dateadd;
+id    ts6_add_micro    result_micro    ts6_sub_micro    sub_result_micro
+1    2024-01-15 12:34:56.124455000    124455    2024-01-15 12:34:56.123000000    123000
+SELECT
+id,
+DATE_ADD(ts0, INTERVAL 1 SECOND) AS ts0_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 SECOND)) AS ts0_sec_micro,
+DATE_ADD(ts3, INTERVAL 2 SECOND) AS ts3_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts3, INTERVAL 2 SECOND)) AS ts3_sec_micro
+FROM t_timestamp_dateadd;
+id    ts0_add_sec    ts0_sec_micro    ts3_add_sec    ts3_sec_micro
+1    2024-01-15 12:34:57    0    2024-01-15 12:34:58.789000000    789000
+DROP TABLE t_timestamp_dateadd;
 DROP DATABASE test_timestamp_precision;
