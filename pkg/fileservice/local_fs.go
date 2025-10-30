@@ -425,10 +425,10 @@ read_disk_cache:
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
 		startLock := time.Now()
-		done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+		done, wait := l.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
 		if done != nil {
-			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 			defer done()
+			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		} else {
 			wait()
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
