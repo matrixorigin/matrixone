@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -12,6 +13,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+var running atomic.Bool
 
 type IndexUpdateTaskExecutor struct {
 	ctx         context.Context
@@ -29,10 +32,17 @@ func IndexUpdateTaskExecutorFactory(
 	mp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) (err error) {
 	return func(ctx context.Context, task task.Task) (err error) {
-		var exec *IndexUpdateTaskExecutor
+
+		if !running.CompareAndSwap(false, true) {
+			return nil
+		}
+
+		defer func() {
+			running.Store(false)
+		}()
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-		exec, err = NewIndexUpdateTaskExecutor(
+		exec, err := NewIndexUpdateTaskExecutor(
 			ctx,
 			cnUUID,
 			txnEngine,
