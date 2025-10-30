@@ -58,4 +58,11 @@ insert into t_scale_45 values (1, current_timestamp(4), current_timestamp(5));
 select id, extract(microsecond from ts4) % 100 as ts4_remainder, extract(microsecond from ts5) % 10 as ts5_remainder, case when extract(microsecond from ts4) % 100 = 0 then 'PASS' else 'FAIL' end as ts4_check, case when extract(microsecond from ts5) % 10 = 0 then 'PASS' else 'FAIL' end as ts5_check from t_scale_45;
 drop table t_scale_45;
 
+-- Test precision mismatch: insert higher precision into lower precision columns
+drop table if exists t_repro2;
+create table t_repro2 (dt0 datetime(0), ts0 timestamp(0));
+insert into t_repro2 values (current_timestamp(6), current_timestamp(3));
+select extract(microsecond from dt0) as d0, extract(microsecond from ts0) t0 from t_repro2;
+drop table t_repro2;
+
 drop database test_timestamp_precision;

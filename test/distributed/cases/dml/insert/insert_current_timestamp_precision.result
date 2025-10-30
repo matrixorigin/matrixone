@@ -52,4 +52,11 @@ select id, extract(microsecond from ts4) % 100 as ts4_remainder, extract(microse
 id    ts4_remainder    ts5_remainder    ts4_check    ts5_check
 1    0    0    PASS    PASS
 drop table t_scale_45;
+drop table if exists t_repro2;
+create table t_repro2 (dt0 datetime(0), ts0 timestamp(0));
+insert into t_repro2 values (current_timestamp(6), current_timestamp(3));
+select extract(microsecond from dt0) as d0, extract(microsecond from ts0) t0 from t_repro2;
+d0    t0
+0    0
+drop table t_repro2;
 drop database test_timestamp_precision;
