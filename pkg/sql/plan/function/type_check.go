@@ -294,26 +294,29 @@ func setTargetScaleFromSource(source, target *types.Type) {
 	}
 
 	if target.Oid == types.T_datetime {
-		if source.Oid.IsDateRelate() {
+		if source.Oid.IsMySQLString() {
+			target.Scale = 6
+		} else if source.Oid.IsDateRelate() {
 			target.Scale = source.Scale
 		}
-		// For string sources, keep target's scale (respects explicit CAST precision)
 		return
 	}
 
 	if target.Oid == types.T_time {
-		if source.Oid.IsDateRelate() {
+		if source.Oid.IsMySQLString() {
+			target.Scale = 6
+		} else if source.Oid.IsDateRelate() {
 			target.Scale = source.Scale
 		}
-		// For string sources, keep target's scale (respects explicit CAST precision)
 		return
 	}
 
 	if target.Oid == types.T_timestamp {
-		if source.Oid.IsDateRelate() {
+		if source.Oid.IsMySQLString() {
+			target.Scale = 6
+		} else if source.Oid.IsDateRelate() {
 			target.Scale = source.Scale
 		}
-		// For string sources, keep target's scale (respects explicit CAST precision)
 		return
 	}
 
