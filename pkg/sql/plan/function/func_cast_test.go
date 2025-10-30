@@ -157,8 +157,9 @@ func initCastTestCase() []tcTemp {
 					[]types.Datetime{66122056321728512}, []bool{false}),
 				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{}, []bool{}),
 			},
+			// When casting to datetime(0), .728512 microseconds should round to next second
 			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{66122056321728512}, []bool{false}),
+				[]types.Datetime{66122056322000000}, []bool{false}),
 		},
 		{
 			info: "timestamp to timestamp",
@@ -178,8 +179,9 @@ func initCastTestCase() []tcTemp {
 					[]types.Time{661220261227}, []bool{false}),
 				NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, []bool{}),
 			},
+			// When casting to time(0), .261227 microseconds should be truncated (2 < 5, no rounding)
 			expect: NewFunctionTestResult(types.T_time.ToType(), false,
-				[]types.Time{661220261227}, []bool{false}),
+				[]types.Time{661220000000}, []bool{false}),
 		},
 		{
 			info: "vecf32 to vecf32",
