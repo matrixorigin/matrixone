@@ -210,8 +210,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	switch group.ctr.state {
 	case vm.Build:
 		// receive all data, loop till exhuasted.
-		for {
-			proc.DebugBreakDump()
+		for !group.ctr.inputDone {
 
 			r, err := vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
 			if err != nil {
@@ -227,11 +226,10 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if r.Status == vm.ExecStop || r.Batch == nil {
 				group.ctr.state = vm.Eval
 				group.ctr.inputDone = true
-				break
 			}
 
 			// empty batch, skip.
-			if r.Batch.IsEmpty() {
+			if r.Batch == nil || r.Batch.IsEmpty() {
 				continue
 			}
 
