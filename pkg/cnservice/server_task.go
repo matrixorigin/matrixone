@@ -38,6 +38,7 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	idxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
@@ -335,6 +336,15 @@ func (s *service) registerExecutorsLocked() {
 			s._txnClient,
 			s.task.runner.Attach,
 			s.cfg.UUID,
+			common.ISCPAllocator,
+		),
+	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_IndexUpdateTaskExecutor,
+		idxcron.IndexUpdateTaskExecutorFactory(
+			s.cfg.UUID,
+			s.storeEngine,
+			s._txnClient,
 			common.ISCPAllocator,
 		),
 	)

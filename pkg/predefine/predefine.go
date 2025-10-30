@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	idxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cron"
 	"github.com/robfig/cron/v3"
 )
 
@@ -63,7 +64,7 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 		}, nil
 	}
 
-	cronTasks := make([]*task.CronTask, 0, 3)
+	cronTasks := make([]*task.CronTask, 0, 4)
 	task1, err := createCronTask(export.MergeTaskMetadata(task.TaskCode_MetricLogMerge), export.MergeTaskCronExprEvery05Min)
 	if err != nil {
 		return "", err
@@ -87,8 +88,13 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	cronTasks = append(cronTasks, task4)
+
+	task5, err := createCronTask(idxcron.IndexUpdateTaskMetadata(task.TaskCode_IndexUpdateTaskExecutor), idxcron.IndexUpdateTaskCronExpr)
+	if err != nil {
+		return "", err
+	}
+	cronTasks = append(cronTasks, task5)
 
 	sql := fmt.Sprintf(`insert into %s.sys_cron_task (
                            task_metadata_id,
