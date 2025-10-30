@@ -1425,9 +1425,7 @@ func timeToOthers(ctx context.Context,
 		return timeToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		v := source.GetSourceVector()
-		v.SetType(toType)
-		return rs.DupFromParameter(source, length)
+		return timeToTime(ctx, source, rs, length, toType.Scale)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2699,6 +2697,33 @@ func timestampToTimestamp(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Timestamp], length int,
+	targetScale int32) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			result := v
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timeToTime(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Time],
+	to *vector.FunctionResult[types.Time], length int,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)

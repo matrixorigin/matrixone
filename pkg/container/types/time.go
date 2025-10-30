@@ -262,6 +262,44 @@ func (t Time) ToInt64() int64 {
 	return trans
 }
 
+// TruncateToScale truncates a time to the given scale (0-6).
+// Scale represents fractional seconds precision:
+//   - 0: seconds (no fractional part)
+//   - 1-5: fractional seconds with corresponding precision
+//   - 6: microseconds (full precision, no truncation)
+func (t Time) TruncateToScale(scale int32) Time {
+	if scale == 6 {
+		return t
+	}
+
+	isNeg := t < 0
+	absTime := t
+	if isNeg {
+		absTime = -t
+	}
+
+	// Time is stored in microseconds (like Timestamp)
+	// Extract second part and microsecond part
+	secPart := (absTime / MicroSecsPerSec) * MicroSecsPerSec
+	microPart := absTime % MicroSecsPerSec
+
+	// Use same scale table as Timestamp (from timestamp.go)
+	scaleTable := [...]int64{1000000, 100000, 10000, 1000, 100, 10, 1}
+	divisor := scaleTable[scale]
+	base := int64(microPart) / divisor
+
+	// Round up if the next digit >= 5
+	if int64(microPart)%divisor/(divisor/10) >= 5 {
+		base += 1
+	}
+
+	result := secPart + Time(base*divisor)
+	if isNeg {
+		return -result
+	}
+	return result
+}
+
 func (t Time) ToDecimal64(ctx context.Context, width, scale int32) (Decimal64, error) {
 	tToStr := t.NumericString(scale)
 	ret, err := ParseDecimal64(tToStr, width, scale)
