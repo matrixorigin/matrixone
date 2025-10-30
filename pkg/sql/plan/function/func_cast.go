@@ -1328,9 +1328,7 @@ func datetimeToOthers(proc *process.Process,
 		return datetimeToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		v := source.GetSourceVector()
-		v.SetType(toType)
-		return rs.DupFromParameter(source, length)
+		return datetimeToDatetime(proc.Ctx, source, rs, length, toType.Scale)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length, selectList)
@@ -2724,6 +2722,33 @@ func timeToTime(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Time], length int,
+	targetScale int32) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			result := v
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func datetimeToDatetime(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Datetime],
+	to *vector.FunctionResult[types.Datetime], length int,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)

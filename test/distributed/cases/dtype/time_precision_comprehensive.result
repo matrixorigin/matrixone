@@ -52,20 +52,14 @@ INSERT INTO t_time_boundary VALUES (1, 'next second', CAST('12:34:56.999999' AS 
 INSERT INTO t_time_boundary VALUES (2, 'next minute', CAST('12:34:59.999999' AS TIME(0)));
 INSERT INTO t_time_boundary VALUES (3, 'next hour', CAST('12:59:59.999999' AS TIME(0)));
 INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.500000' AS TIME(0)));
-SELECT id, description, t0,
-CASE id
-WHEN 1 THEN CASE WHEN t0 = '12:34:57' THEN 'PASS' ELSE 'FAIL' END
-WHEN 2 THEN CASE WHEN t0 = '12:35:00' THEN 'PASS' ELSE 'FAIL' END
-WHEN 3 THEN CASE WHEN t0 = '13:00:00' THEN 'PASS' ELSE 'FAIL' END
-WHEN 4 THEN CASE WHEN t0 = '839:00:00' THEN 'PASS' ELSE 'FAIL' END
-END AS result
+SELECT id, description, t0
 FROM t_time_boundary
 ORDER BY id;
-id    description    t0    result
-1    next second    12:34:57    PASS
-2    next minute    12:35:00    PASS
-3    next hour    13:00:00    PASS
-4    max time    839:00:00    PASS
+id    description    t0
+1    next second    12:34:57
+2    next minute    12:35:00
+3    next hour    13:00:00
+4    max time    839:00:00
 DROP TABLE t_time_boundary;
 DROP TABLE IF EXISTS t_time_negative;
 CREATE TABLE t_time_negative (
@@ -86,21 +80,15 @@ id    t0    t3    t6    t0_micro    t3_micro    t6_micro
 1    -12:34:56    -12:34:56.123000000    -12:34:56.123456000    -45296000000    -45296123000    -45296123456
 2    -12:34:57    -12:34:57    -12:34:56.999999000    -45297000000    -45297000000    -45296999999
 DROP TABLE t_time_negative;
-SELECT CAST(CAST('12:34:56.999999' AS TIME(6)) AS TIME(0)) AS result,
-CASE WHEN CAST(CAST('12:34:56.999999' AS TIME(6)) AS TIME(0)) = '12:34:57'
-THEN 'PASS' ELSE 'FAIL' END AS check_result;
-result    check_result
-12:34:57    PASS
-SELECT CAST(CAST('12:34:56' AS TIME(0)) AS TIME(6)) AS result,
-CASE WHEN CAST(CAST('12:34:56' AS TIME(0)) AS TIME(6)) = '12:34:56.000000'
-THEN 'PASS' ELSE 'FAIL' END AS check_result;
-result    check_result
-12:34:56    PASS
-SELECT CAST(CAST('12:34:56.789' AS TIME(3)) AS TIME(0)) AS result,
-CASE WHEN CAST(CAST('12:34:56.789' AS TIME(3)) AS TIME(0)) = '12:34:57'
-THEN 'PASS' ELSE 'FAIL' END AS check_result;
-result    check_result
-12:34:57    PASS
+SELECT CAST(CAST('12:34:56.999999' AS TIME(6)) AS TIME(0)) AS time_6_to_0;
+time_6_to_0
+12:34:57
+SELECT CAST(CAST('12:34:56' AS TIME(0)) AS TIME(6)) AS time_0_to_6;
+time_0_to_6
+12:34:56
+SELECT CAST(CAST('12:34:56.789' AS TIME(3)) AS TIME(0)) AS time_3_to_0;
+time_3_to_0
+12:34:57
 SELECT TIMEDIFF('12:00:00', '10:30:00.123456') AS result,
 EXTRACT(MICROSECOND FROM TIMEDIFF('12:00:00', '10:30:00.123456')) AS microseconds;
 result    microseconds
@@ -118,12 +106,10 @@ t3 TIME(3)
 INSERT INTO t_time_update VALUES (1, '12:00:00', '12:00:00.000');
 UPDATE t_time_update SET t0 = '12:34:56.789012' WHERE id = 1;
 UPDATE t_time_update SET t3 = '12:34:56.789012' WHERE id = 1;
-SELECT id, t0, t3,
-CASE WHEN t0 = '12:34:57' THEN 'PASS' ELSE 'FAIL' END AS t0_check,
-CASE WHEN t3 = '12:34:56.789' THEN 'PASS' ELSE 'FAIL' END AS t3_check
+SELECT id, t0, t3
 FROM t_time_update;
-id    t0    t3    t0_check    t3_check
-1    12:34:57    12:34:56.789000000    PASS    PASS
+id    t0    t3
+1    12:34:57    12:34:56.789000000
 DROP TABLE t_time_update;
 DROP TABLE IF EXISTS t_time_where;
 CREATE TABLE t_time_where (
@@ -131,28 +117,23 @@ id INT,
 t3 TIME(3)
 );
 INSERT INTO t_time_where VALUES (1, '12:34:56.789456');
-SELECT COUNT(*) AS match_count,
-CASE WHEN COUNT(*) = 1 THEN 'PASS' ELSE 'FAIL' END AS result
+SELECT COUNT(*) AS match_with_rounded
 FROM t_time_where
 WHERE t3 = '12:34:56.789';
-match_count    result
-1    PASS
-SELECT COUNT(*) AS match_count
+match_with_rounded
+1
+SELECT COUNT(*) AS match_with_original
 FROM t_time_where
 WHERE t3 = '12:34:56.789456';
-match_count
+match_with_original
 1
 DROP TABLE t_time_where;
-SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.000000' AS TIME(6)) AS equal_result,
-CASE WHEN CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.000000' AS TIME(6))
-THEN 'PASS' ELSE 'FAIL' END AS check_result;
-equal_result    check_result
-true    PASS
-SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.123456' AS TIME(6)) AS equal_result,
-CASE WHEN CAST('12:34:56' AS TIME(0)) != CAST('12:34:56.123456' AS TIME(6))
-THEN 'PASS' ELSE 'FAIL' END AS check_result;
-equal_result    check_result
-false    PASS
+SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.000000' AS TIME(6)) AS time_0_eq_6_same;
+time_0_eq_6_same
+true
+SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.123456' AS TIME(6)) AS time_0_eq_6_diff;
+time_0_eq_6_diff
+false
 DROP TABLE IF EXISTS t_time_half;
 CREATE TABLE t_time_half (
 id INT,
@@ -164,17 +145,12 @@ t2 TIME(2)
 INSERT INTO t_time_half VALUES (1, 'scale 0 half', CAST('12:34:56.500000' AS TIME(0)), NULL, NULL);
 INSERT INTO t_time_half VALUES (2, 'scale 1 half', NULL, CAST('12:34:56.150000' AS TIME(1)), NULL);
 INSERT INTO t_time_half VALUES (3, 'scale 2 half', NULL, NULL, CAST('12:34:56.125000' AS TIME(2)));
-SELECT id, description, t0, t1, t2,
-CASE id
-WHEN 1 THEN CASE WHEN t0 = '12:34:57' THEN 'PASS' ELSE 'FAIL' END
-WHEN 2 THEN CASE WHEN t1 = '12:34:56.2' THEN 'PASS' ELSE 'FAIL' END
-WHEN 3 THEN CASE WHEN t2 = '12:34:56.13' THEN 'PASS' ELSE 'FAIL' END
-END AS result
+SELECT id, description, t0, t1, t2
 FROM t_time_half
 ORDER BY id;
-id    description    t0    t1    t2    result
-1    scale 0 half    12:34:57    null    null    PASS
-2    scale 1 half    null    12:34:56.200000000    null    PASS
-3    scale 2 half    null    null    12:34:56.130000000    PASS
+id    description    t0    t1    t2
+1    scale 0 half    12:34:57    null    null
+2    scale 1 half    null    12:34:56.200000000    null
+3    scale 2 half    null    null    12:34:56.130000000
 DROP TABLE t_time_half;
 DROP DATABASE test_time_precision;
