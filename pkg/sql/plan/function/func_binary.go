@@ -22,12 +22,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -677,7 +678,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				castType[i] = inputs[i]
 			} else {
 				castType[i] = minOid.ToType()
-				setTargetScaleFromSource(&inputs[i], &castType[i])
+				SetTargetScaleFromSource(&inputs[i], &castType[i])
 			}
 		}
 

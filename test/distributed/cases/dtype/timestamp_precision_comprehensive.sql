@@ -3,6 +3,9 @@
 -- @desc: Comprehensive TIMESTAMP precision tests - supplement existing tests
 -- @label:bvt
 
+-- Set timezone to UTC to ensure consistent results across different environments
+SET time_zone = '+00:00';
+
 DROP DATABASE IF EXISTS test_timestamp_precision;
 CREATE DATABASE test_timestamp_precision;
 USE test_timestamp_precision;
