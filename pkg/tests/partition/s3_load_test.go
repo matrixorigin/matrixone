@@ -87,12 +87,6 @@ func TestLoadS3(t *testing.T) {
 						require.NoError(t, err)
 						loaded += testutils.ReadCount(rs)
 						rs.Close()
-
-						rs, err = txn.Exec(
-							fmt.Sprintf("select count(1) from `%s` where c = 3", p.PartitionTableName),
-							executor.StatementOption{},
-						)
-						rs.Close()
 					}
 
 					rs, err := txn.Exec(
