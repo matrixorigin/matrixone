@@ -45,26 +45,30 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	proc.DebugBreakDump()
-
 	mergeGroup.OpAnalyzer.Start()
 	defer mergeGroup.OpAnalyzer.Stop()
 
 	switch mergeGroup.ctr.state {
 	case vm.Build:
 		// receive data and merge.
-		for {
+		for !mergeGroup.ctr.inputDone {
 			r, err := vm.ChildrenCall(mergeGroup.GetChildren(0), proc, mergeGroup.OpAnalyzer)
 			if err != nil {
 				return vm.CancelResult, err
 			}
 
-			if r.Status == vm.ExecStop {
+			// all handled, going to eval mode.
+			//
+			// XXX: Note that this test, r.Batch == nil is treated as ExecStop.
+			// I am not sure this is correct, but some code has already done this, notably
+			// value scan.
+			//
+			if r.Status == vm.ExecStop || r.Batch == nil {
 				mergeGroup.ctr.state = vm.Eval
 				mergeGroup.ctr.inputDone = true
-				break
 			}
 
+			// empty batch, skip.
 			if r.Batch == nil || r.Batch.IsEmpty() {
 				continue
 			}
@@ -91,7 +95,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		// has partial results, merge them.
 		if mergeGroup.PartialResults != nil {
 			for i, ag := range mergeGroup.ctr.aggList {
-				proc.DebugBreakDump()
 				if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
 					if err := ag.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {
 						return vm.CancelResult, err
@@ -244,10 +247,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 						return false, err
 					}
 				}
-				for j, ag := range mergeGroup.ctr.aggList {
-					if err := ag.BatchMerge(mergeGroup.ctr.spillAggList[j], i, vals[:len(insertList)]); err != nil {
-						return false, err
-					}
+			}
+			for j, ag := range mergeGroup.ctr.aggList {
+				if err := ag.BatchMerge(mergeGroup.ctr.spillAggList[j], i, vals[:len(insertList)]); err != nil {
+					return false, err
 				}
 			}
 		}
