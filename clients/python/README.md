@@ -70,6 +70,37 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Non-interactive mode for scripting and automation
   - Batch operations on tables and indexes
 
+## ⚠️ Important: Column Naming Convention
+
+**🚨 CRITICAL: Always use lowercase with underscores (snake_case) for column names!**
+
+MatrixOne does not support SQL standard double-quoted identifiers in queries, which causes issues with camelCase column names when using SQLAlchemy ORM.
+
+```python
+# ❌ DON'T: CamelCase column names (will fail in SELECT queries)
+class User(Base):
+    userName = Column(String(50))      # CREATE succeeds, SELECT fails!
+    userId = Column(Integer)           # Will cause SQL syntax errors
+
+# ✅ DO: Use lowercase with underscores (snake_case)
+class User(Base):
+    user_name = Column(String(50))     # Works perfectly
+    user_id = Column(Integer)          # All operations succeed
+```
+
+**Why this matters:**
+- ✅ CREATE TABLE works with both styles (uses backticks)
+- ✅ INSERT works with both styles  
+- ❌ **SELECT fails with camelCase** (uses double quotes, not supported by MatrixOne)
+
+**Example of the problem:**
+```python
+# CamelCase generates: SELECT "userName" FROM user  ❌ Fails!
+# snake_case generates: SELECT user_name FROM user  ✅ Works!
+```
+
+---
+
 ## 🚀 Installation
 
 ### From PyPI (Stable Release)

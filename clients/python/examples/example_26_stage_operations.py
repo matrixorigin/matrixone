@@ -225,7 +225,7 @@ class StageOperationsDemo:
             self.results['files_created'].append(csv_file)
 
             # Load data from stage using client.load_data
-            result = client.load_data.from_stage_csv('demo_file_stage', 'stage_users.csv', StageUser)
+            result = client.load_data.read_csv_stage('demo_file_stage', 'stage_users.csv', StageUser)
             self.logger.info(f"✅ Loaded {result.affected_rows} rows from stage")
 
             # Verify data
@@ -392,7 +392,7 @@ class StageOperationsDemo:
             # Load data from stage within session
             with client.session() as tx:
                 # Load data from pre-existing stage in session
-                result = tx.load_data.from_stage_csv('tx_temp_stage', 'tx_data.csv', TxStageData)
+                result = tx.load_data.read_csv_stage('tx_temp_stage', 'tx_data.csv', TxStageData)
                 # Check for both ResultSet and SQLAlchemy Result
                 affected = result.affected_rows if hasattr(result, 'affected_rows') else result.rowcount
                 self.logger.info(f"✅ Loaded {affected} rows in session")
@@ -706,7 +706,7 @@ class StageOperationsDemo:
 
             # Load customers
             print("Loading customers dimension...")
-            stage.load_csv('customers.csv', Customer, ignore_lines=1)
+            stage.load_csv('customers.csv', Customer, skiprows=1)
             count = client.query(Customer).count()
             print(f"✅ Loaded {count} customers")
 
@@ -718,13 +718,13 @@ class StageOperationsDemo:
 
             # Load orders
             print("Loading orders fact table...")
-            stage.load_csv('orders.csv', Order, ignore_lines=1)
+            stage.load_csv('orders.csv', Order, skiprows=1)
             count = client.query(Order).count()
             print(f"✅ Loaded {count} orders")
 
             # Load shipping (TSV)
             print("Loading shipping logistics...")
-            stage.load_tsv('shipping.tsv', Shipping, ignore_lines=1)
+            stage.load_tsv('shipping.tsv', Shipping, skiprows=1)
             count = client.query(Shipping).count()
             print(f"✅ Loaded {count} shipping records")
 
@@ -794,7 +794,7 @@ class StageOperationsDemo:
             self.results['files_created'].append(delta_file)
 
             print("📥 Loading incremental orders...")
-            stage.load_csv('orders_delta.csv', Order, ignore_lines=1)
+            stage.load_csv('orders_delta.csv', Order, skiprows=1)
             count = client.query(Order).count()
             print(f"✅ Total orders now: {count} (+2 new)")
 
