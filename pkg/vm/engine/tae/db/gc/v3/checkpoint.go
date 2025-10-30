@@ -796,7 +796,9 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 ) (err error) {
 	mergeStart := time.Now()
 	defer func() {
-		v2.TaskGCMergeCheckpointDurationHistogram.Observe(time.Since(mergeStart).Seconds())
+		duration := time.Since(mergeStart).Seconds()
+		v2.TaskGCMergeCheckpointDurationHistogram.Observe(duration)
+		v2.GCMergeTotalDurationHistogram.Observe(duration)
 		if err != nil {
 			v2.GCMergeExecutionErrorCounter.Inc()
 		} else {
@@ -925,6 +927,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		newFiles = append(newFiles, stats.ObjectName().String())
 	}
 
+	writeStart := time.Now()
 	if err = c.appendFilesToWAL(newFiles...); err != nil {
 		logutil.Error(
 			"GC-TRACE-MERGE-CHECKPOINT-FILES",
@@ -932,8 +935,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.Int("file len", len(newFiles)),
 			zap.Error(err),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
+	// Record write duration
+	v2.GCMergeWriteDurationHistogram.Observe(time.Since(writeStart).Seconds())
 
 	// SJW TODO: need to handle not updated scenario
 	c.checkpointCli.UpdateCompacted(newCkp)
@@ -1033,7 +1039,9 @@ func (c *checkpointCleaner) tryGCLocked(
 ) (err error) {
 	gcStart := time.Now()
 	defer func() {
-		v2.TaskGCDurationHistogram.Observe(time.Since(gcStart).Seconds())
+		duration := time.Since(gcStart).Seconds()
+		v2.TaskGCDurationHistogram.Observe(duration)
+		v2.GCSnapshotTotalDurationHistogram.Observe(duration)
 		if err != nil {
 			v2.GCSnapshotExecutionErrorCounter.Inc()
 		} else {
@@ -1154,9 +1162,13 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 
 	// Record file deletion metrics
 	if len(filesToGC) > 0 {
+		deleteStart := time.Now()
 		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
 		v2.GCObjectDeletedCounter.Add(float64(len(filesToGC)))
 		v2.GCLastDataDeletionGauge.Set(float64(time.Now().Unix()))
+		// Record delete duration
+		v2.GCCheckpointDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
+		v2.GCSnapshotDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
 	}
 	if c.GetGCWaterMark() == nil {
 		return nil
@@ -1824,10 +1836,34 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	)
 	defer func() {
 		// Record scan metrics
-		v2.TaskGCScanDurationHistogram.Observe(time.Since(now).Seconds())
+		duration := time.Since(now).Seconds()
+		v2.TaskGCScanDurationHistogram.Observe(duration)
+		v2.GCCheckpointScanDurationHistogram.Observe(duration)
+		v2.GCSnapshotScanDurationHistogram.Observe(duration)
 		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
 		// Record table statistics
 		v2.GCTableScannedCounter.Add(float64(tableSize))
+		
+		// Record collect duration for snapshot processing
+		collectStart := time.Now()
+		if snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp); err == nil {
+			if len(snapshots.Cluster) > 0 {
+				v2.GCSnapshotClusterCounter.Add(float64(len(snapshots.Cluster)))
+			}
+			if len(snapshots.Account) > 0 {
+				v2.GCSnapshotAccountCounter.Add(float64(len(snapshots.Account)))
+			}
+			if len(snapshots.Database) > 0 {
+				v2.GCSnapshotDatabaseCounter.Add(float64(len(snapshots.Database)))
+			}
+			if len(snapshots.Tables) > 0 {
+				v2.GCSnapshotTableCounter.Add(float64(len(snapshots.Tables)))
+			}
+		}
+		// Record collect duration
+		v2.GCMergeCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
+		v2.GCSnapshotCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
+		
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),

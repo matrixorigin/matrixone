@@ -22,6 +22,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -362,6 +363,13 @@ func MakeSnapshotAndPitrFineFilter(
 	filter FilterFn,
 	err error,
 ) {
+	filterStart := time.Now()
+	defer func() {
+		// Record filter duration
+		duration := time.Since(filterStart).Seconds()
+		v2.GCCheckpointFilterDurationHistogram.Observe(duration)
+		v2.GCSnapshotCollectDurationHistogram.Observe(duration)
+	}()
 	// Build combined table existence map from both snapshotMeta and catalog
 	tableExistenceMap, err := buildTableExistenceMap(snapshotMeta, checkpointCli)
 	if err != nil {
