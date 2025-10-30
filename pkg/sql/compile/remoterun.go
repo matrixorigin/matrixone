@@ -695,7 +695,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
-		in.Agg = &pipeline.Group{}
+		in.Agg = &pipeline.Group{
+			SpillMem: t.SpillMem,
+		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
 	case *mergetop.MergeTop:
@@ -1233,6 +1235,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
 		arg := group.NewArgumentMergeGroup()
+		// here the opr is a MergeGroup node, merge group is "generated" by the
+		// group node and then merge them
+		t := opr.GetAgg()
+		arg.SpillMem = t.SpillMem
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
