@@ -133,7 +133,12 @@ func TestResultSerialization(t *testing.T) {
 
 		data1, data2, dist, err := r1.marshalToBytes()
 		require.NoError(t, err)
-		require.Equal(t, nil, dist)
+		if dist != nil {
+			t.Fatal("dist should be nil")
+		}
+		// XXX The following will fail -- a typed nil is not require.Equal to nil.
+		// require.Equal(t, nil, dist)
+		require.Equal(t, 0, len(dist))
 
 		r2 := aggResultWithFixedType[int64]{}
 		r2.init(proc, types.T_int64.ToType(), true, false)
@@ -163,7 +168,7 @@ func TestResultSerialization(t *testing.T) {
 
 		data1, data2, dist, err := r1.marshalToBytes()
 		require.NoError(t, err)
-		require.Equal(t, nil, dist)
+		require.Equal(t, 0, len(dist))
 
 		r2 := aggResultWithBytesType{}
 		r2.init(proc, types.T_varchar.ToType(), true, false)
