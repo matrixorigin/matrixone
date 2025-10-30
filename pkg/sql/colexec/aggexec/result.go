@@ -289,17 +289,16 @@ func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, [][]byte, error) 
 		}
 	}
 
-	var distinctData [][]byte
 	if len(r.distinct) > 0 {
-		distinctData = make([][]byte, min(r.nowIdx1+1, len(r.distinct)))
+		distinctData := make([][]byte, min(r.nowIdx1+1, len(r.distinct)))
 		for i := range r.distinct {
 			if distinctData[i], err = r.distinct[i].marshal(); err != nil {
 				return nil, nil, nil, err
 			}
 		}
+		return resultData, emptyData, distinctData, nil
 	}
-
-	return resultData, emptyData, distinctData, nil
+	return resultData, emptyData, nil, nil
 }
 
 func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData [][]byte) (err error) {

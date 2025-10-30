@@ -219,15 +219,19 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			// all handled, going to eval mode.
-			if r.Status == vm.ExecStop {
+			//
+			// XXX: Note that this test, r.Batch == nil is treated as ExecStop.
+			// I am not sure this is correct, but some code has already done this, notably
+			// value scan.
+			//
+			if r.Status == vm.ExecStop || r.Batch == nil {
 				group.ctr.state = vm.Eval
 				group.ctr.inputDone = true
 				break
 			}
 
 			// empty batch, skip.
-			bat := r.Batch
-			if bat == nil || bat.IsEmpty() {
+			if r.Batch.IsEmpty() {
 				continue
 			}
 
