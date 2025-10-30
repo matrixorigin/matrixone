@@ -282,6 +282,19 @@ var (
 				primary key(account_id, table_id, job_name, job_id)
 			)`
 
+	MoCatalogMoIndexUpdateDDL = `CREATE TABLE mo_catalog.mo_index_update (
+                                account_id INT UNSIGNED NOT NULL,
+                                table_id BIGINT UNSIGNED NOT NULL,
+				db_name VARCHAR NOT NULL,
+				table_name VARCHAR NOT NULL,
+				index_name VARCHAR NOT NULL,
+				action VARCHAR NOT NULL,
+				status JSON NOT NULL,
+                                create_at TIMESTAMP NOT NULL,
+                                last_update_at TIMESTAMP NULL, 
+                                primary key(account_id, table_id, db_name, table_name, index_name, action)
+                        )`
+
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
 	MoCatalogMoLocksDDL          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`

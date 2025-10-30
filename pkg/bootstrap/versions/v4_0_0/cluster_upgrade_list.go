@@ -17,12 +17,14 @@ package v4_0_0
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_task,
+	upg_mo_index_update_new,
 }
 
 var upg_mo_iscp_task = versions.UpgradeEntry{
@@ -33,5 +35,15 @@ var upg_mo_iscp_task = versions.UpgradeEntry{
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenISCPTaskCheckSQL())
 		return ok, err
+	},
+}
+
+var upg_mo_index_update_new = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_INDEX_UPDATE,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoIndexUpdateDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEX_UPDATE)
 	},
 }
