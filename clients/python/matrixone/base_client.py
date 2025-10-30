@@ -67,15 +67,22 @@ class BaseMatrixOneClient:
 
             SQL INSERT statement string
         """
+        import json
+
         columns = list(data.keys())
         values = list(data.values())
 
-        # Convert vectors to string format
+        # Convert values to appropriate SQL format
         formatted_values = []
         for value in values:
             if value is None:
                 formatted_values.append("NULL")
+            elif isinstance(value, dict):
+                # JSON type: serialize dict to JSON string
+                json_str = json.dumps(value)
+                formatted_values.append(f"'{json_str}'")
             elif isinstance(value, list):
+                # Vector type: format as [1,2,3]
                 formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
             else:
                 formatted_values.append(f"'{str(value)}'")
@@ -98,6 +105,8 @@ class BaseMatrixOneClient:
 
             SQL batch INSERT statement string
         """
+        import json
+
         if not data_list:
             return ""
 
@@ -113,7 +122,14 @@ class BaseMatrixOneClient:
                 value = data[col]
                 if value is None:
                     formatted_values.append("NULL")
+                elif isinstance(value, dict):
+                    # JSON type: serialize dict to JSON string
+                    json_str = json.dumps(value)
+                    # Escape single quotes in JSON string to prevent SQL injection
+                    escaped_json = json_str.replace("'", "''")
+                    formatted_values.append(f"'{escaped_json}'")
                 elif isinstance(value, list):
+                    # Vector type: format as [1,2,3]
                     formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
                 else:
                     # Escape single quotes in string values to prevent SQL injection

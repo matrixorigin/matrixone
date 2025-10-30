@@ -3,6 +3,30 @@ Quick Start
 
 This guide will help you get started with the MatrixOne Python SDK quickly. For detailed configuration options, see :doc:`configuration_guide`.
 
+.. danger::
+   **🚨 CRITICAL: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   MatrixOne does not support SQL standard double-quoted identifiers, causing SELECT queries 
+   to fail when using camelCase column names with SQLAlchemy ORM.
+   
+   .. code-block:: python
+   
+      # ❌ DON'T: CamelCase - Will fail!
+      class User(Base):
+          userName = Column(String(50))    # SELECT will fail
+          userId = Column(Integer)
+      
+      # ✅ DO: snake_case - Works perfectly
+      class User(Base):
+          user_name = Column(String(50))   # All operations work
+          user_id = Column(Integer)
+   
+   **Problem:** CamelCase generates ``SELECT "userName"`` ❌ (not supported by MatrixOne)
+   
+   **Solution:** snake_case generates ``SELECT user_name`` ✅ (works perfectly)
+
 Basic Usage
 -----------
 

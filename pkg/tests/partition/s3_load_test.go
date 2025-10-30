@@ -89,6 +89,14 @@ func TestLoadS3(t *testing.T) {
 						rs.Close()
 					}
 
+					rs, err := txn.Exec(
+						fmt.Sprintf("select count(1) from `%s` where c = 3", t.Name()),
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					require.Equal(t, 1, testutils.ReadCount(rs))
+					rs.Close()
+
 					return nil
 				},
 				executor.Options{},
