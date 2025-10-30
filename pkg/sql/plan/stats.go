@@ -350,13 +350,20 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_decimal64:
-			s.MinValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf()))
+			// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
+			// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
+			scale := coldef.Typ.Scale
+			minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
+			maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
+			s.MinValMap[colName] = types.Decimal64ToFloat64(minDec, scale)
+			s.MaxValMap[colName] = types.Decimal64ToFloat64(maxDec, scale)
 		case types.T_decimal128:
-			val := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
-			s.MinValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
-			val = types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
-			s.MaxValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
+			// Fix: Use actual scale from column definition instead of hardcoded 0
+			scale := coldef.Typ.Scale
+			minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+			maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+			s.MinValMap[colName] = types.Decimal128ToFloat64(minDec, scale)
+			s.MaxValMap[colName] = types.Decimal128ToFloat64(maxDec, scale)
 		}
 
 		if info.ShuffleRanges[i] != nil {
