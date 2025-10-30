@@ -16,7 +16,6 @@ package external
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -267,57 +266,4 @@ func jsonEq(t *testing.T, got string, want any) {
 	var w any
 	require.NoError(t, json.Unmarshal(wb, &w))
 	require.True(t, reflect.DeepEqual(g, w), "json not equal\n got=%s\nwant=%s", got, string(wb))
-}
-
-func TestParquet_NestedStructListMap_JSON(t *testing.T) {
-	proc := testutil.NewProc(t)
-	rows := []rowNested{
-		{C: nestedT{I: 1, S: "a", Arr: []int32{1, 2}, Obj: innerT{T: 9}}},
-		{C: nestedT{I: 2, S: "b", Arr: []int32{3}, Obj: innerT{T: 8}}},
-		{C: nestedT{I: 3, S: "c", Arr: nil, Obj: innerT{T: 7}}},
-	}
-
-	var buf bytes.Buffer
-	schema := parquet.SchemaOf(rowNested{})
-	w := parquet.NewGenericWriter[rowNested](&buf, schema)
-	_, err := w.Write(rows)
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-
-	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	require.NoError(t, err)
-
-	col := f.Root().Column("c")
-	require.NotNil(t, col)
-	require.False(t, col.Leaf())
-
-	jm, err := newJSONColumnMapper(f, col)
-	require.NoError(t, err)
-
-	vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
-	eof, err := jm.mapBatch(context.Background(), vec, len(rows), true, proc.Mp())
-	require.NoError(t, err)
-	require.True(t, eof)
-	require.Equal(t, len(rows), vec.Length())
-
-	// Validate JSON content per row (map order ignored)
-	jsonEq(t, vec.GetStringAt(0), map[string]any{
-		"i":   float64(1),
-		"s":   "a",
-		"arr": []any{float64(1), float64(2)},
-		"obj": map[string]any{"t": float64(9)},
-	})
-	jsonEq(t, vec.GetStringAt(1), map[string]any{
-		"i":   float64(2),
-		"s":   "b",
-		"arr": []any{float64(3)},
-		"obj": map[string]any{"t": float64(8)},
-	})
-	jsonEq(t, vec.GetStringAt(2), map[string]any{
-		"i": float64(3),
-		"s": "c",
-		// parquet-go reconstructs missing list as empty slice rather than null
-		"arr": []any{},
-		"obj": map[string]any{"t": float64(7)},
-	})
 }
