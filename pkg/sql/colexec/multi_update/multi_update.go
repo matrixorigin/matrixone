@@ -402,9 +402,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {
-	for k := range update.ctr.updateCtxInfos {
-		delete(update.ctr.updateCtxInfos, k)
-	}
+	update.ctr.updateCtxInfos = make(map[string]*updateCtxInfo, len(update.MultiUpdateCtx))
 
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := new(updateCtxInfo)
