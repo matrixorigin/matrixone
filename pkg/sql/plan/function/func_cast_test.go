@@ -17,11 +17,12 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -166,8 +167,9 @@ func initCastTestCase() []tcTemp {
 					[]types.Timestamp{66122026122739712}, []bool{false}),
 				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{}, []bool{}),
 			},
+			// When casting to timestamp(0), .739712 microseconds should round to next second
 			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
-				[]types.Timestamp{66122026122739712}, []bool{false}),
+				[]types.Timestamp{66122026123000000}, []bool{false}),
 		},
 		{
 			info: "time to time",
