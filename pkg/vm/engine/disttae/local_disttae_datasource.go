@@ -722,7 +722,6 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			); err != nil {
 				return err
 			}
-
 			for i := range outBatch.Attrs {
 				if i == physicalColumnPos {
 					continue

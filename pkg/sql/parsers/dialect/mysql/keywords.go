@@ -657,5 +657,12 @@ func init() {
 		"savepoint":                  SAVEPOINT,
 		"recovery_window":            RECOVERY_WINDOW,
 		"clone":                      CLONE,
+		"branch":                     BRANCH,
+		"fail":                       CONFLICT_FAIL,
+		"skip":                       CONFLICT_SKIP,
+		"accept":                     CONFLICT_ACCEPT,
+		"diff":                       DIFF,
+		"conflict":                   CONFLICT,
+		"output":                     OUTPUT,
 	}
 }
