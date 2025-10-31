@@ -89,12 +89,12 @@ func TestCDCRetryFromZero(t *testing.T) {
 	appendFn(0)
 
 	// new cdc executor with stubs
-	stub1, stub2, stub3, stub4, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
 	defer stub1.Reset()
 	defer stub2.Reset()
 	defer stub3.Reset()
 	defer stub4.Reset()
-
+	defer stub5.Reset()
 	// Define tables to track
 	tables := cdc.PatternTuples{
 		Pts: []*cdc.PatternTuple{

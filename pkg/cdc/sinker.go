@@ -47,6 +47,8 @@ const (
 	createTableIfNotExists = "create table if not exists"
 )
 
+var SqlBufReserved = sqlBufReserved
+
 var (
 	begin    = []byte("begin")
 	commit   = []byte("commit")
@@ -299,9 +301,15 @@ var NewMysqlSinker = func(
 		ar:               ar,
 	}
 	var maxAllowedPacket uint64
-	_ = mysql.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
-	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
-	logutil.Infof("CDC-MySQLSinker (%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+	sinkImpl, ok := mysql.(*mysqlSink)
+	if ok {
+		_ = sinkImpl.conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
+		maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
+		logutil.Infof("CDC-MySQLSinker (%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+	} else {
+		logutil.Warnf("CDC-MySQLSinker (%v) mysql is not a mysqlSink", s.dbTblInfo)
+		maxAllowedPacket = maxSqlLength
+	}
 
 	// sqlBuf
 	s.sqlBufs[0] = make([]byte, sqlBufReserved, maxAllowedPacket)

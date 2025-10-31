@@ -884,7 +884,7 @@ var retryableErrorRegex = regexp.MustCompile(`^retryable error(?::(\d+):(\d+))?`
 //   - retryTimes: the retry count extracted from the input (0 if not present)
 func ParseRetryableError(input string) (retryable bool, startts int64, retryTimes int) {
 	if input == "" {
-		return false, 0, 0
+		return true, 0, 0
 	}
 
 	matches := retryableErrorRegex.FindStringSubmatch(input)

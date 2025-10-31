@@ -494,7 +494,11 @@ func NewMockEngineSink(
 
 func (s *MockEngineSink) Send(ctx context.Context, ar *cdc.ActiveRoutine, sqlBuf []byte, needRetry bool) error {
 
-	sql := string(sqlBuf)
+	sql := string(sqlBuf[cdc.SqlBufReserved:])
+	if strings.HasPrefix(sql, "use ") {
+		logutil.Warnf("CDC-MockEngineSink skip use sql: %s", sql)
+		return nil
+	}
 	sql = strings.TrimSpace(sql)
 
 	if sql == "" || sql == "fakeSql" {
@@ -511,7 +515,9 @@ func (s *MockEngineSink) Send(ctx context.Context, ar *cdc.ActiveRoutine, sqlBuf
 		opts = opts.WithTxn(s.currentTxn)
 	}
 
-	_, err := s.sqlExecutor.Exec(ctx, sql, opts)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := s.sqlExecutor.Exec(ctxWithTimeout, sql, opts)
 	return err
 }
 
@@ -531,7 +537,9 @@ func (s *MockEngineSink) SendBegin(ctx context.Context) error {
 
 func (s *MockEngineSink) SendCommit(ctx context.Context) error {
 	ctx = defines.AttachAccountId(ctx, s.accountId)
-	err := s.currentTxn.Commit(ctx)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err := s.currentTxn.Commit(ctxWithTimeout)
 	s.currentTxn = nil
 	s.CommitCount++
 	return err
@@ -734,6 +742,7 @@ func StubCDCSinkAndWatermarkUpdater(
 	*gostub.Stubs,
 	*gostub.Stubs,
 	*gostub.Stubs,
+	*gostub.Stubs,
 	*MockWatermarkUpdater,
 	chan string,
 ) {
@@ -772,14 +781,42 @@ func StubCDCSinkAndWatermarkUpdater(
 		&frontend.RetrieveCdcTask,
 		MockRetrieveCdcTask,
 	)
-	return stub1, stub2, stub3, stub4, mockWatermarkUpdater, errChan
+	stub5 := gostub.Stub(
+		&frontend.GetTableErrMsg,
+		func(
+			ctx context.Context,
+			accountId uint32,
+			ieExecutor ie.InternalExecutor,
+			taskId string,
+			tbl *cdc.DbTableInfo,
+		) (
+			hasError bool,
+			startTS int64,
+			retryTimes int,
+			err error,
+		) {
+			watermarkKey := cdc.WatermarkKey{
+				AccountId: uint64(accountId),
+				TaskId:    taskId,
+				DBName:    tbl.SourceDbName,
+				TableName: tbl.SourceTblName,
+			}
+			errMsg, ok := mockWatermarkUpdater.GetErrMsg(watermarkKey)
+			if ok {
+				return false, 0, 0, nil
+			}
+			retryable, startTS, retryTimes := cdc.ParseRetryableError(errMsg)
+			return !retryable, startTS, retryTimes, nil
+		},
+	)
+	return stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan
 }
 
 // MockRetrieveCdcTask mocks the retrieveCdcTask function for testing
 func MockRetrieveCdcTask(ctx context.Context, exec *frontend.CDCTaskExecutor) error {
 	// Set sinkUri with Console type (no external sink needed for testing)
 	exec.SetSinkUri(cdc.UriInfo{
-		SinkTyp: cdc.CDCSinkType_Console,
+		SinkTyp: cdc.CDCSinkType_MySQL,
 	})
 
 	// Note: tables are already set in NewMockCDCExecutor, so we don't override them here
