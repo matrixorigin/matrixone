@@ -314,3 +314,170 @@ func TestRetryRollback(t *testing.T) {
 
 	CheckTableDataWithName(t, disttaeEngine, ctxWithTimeout, sinkDatabaseName, sinkTableName, databaseName, tableName)
 }
+
+func TestTruncateTable(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		taskId       = uuid.New().String()
+		taskName     = "test_truncate_table"
+		databaseName = "test_db"
+		tableName    = "test_table"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Create sink database and table
+	sinkDatabaseName := "sink_db"
+	sinkTableName := "sink_table"
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+
+	// Create test data
+	bat := CreateDBAndTableForCDC(t, disttaeEngine, ctxWithTimeout, databaseName, tableName, 10)
+	bats := bat.Split(10)
+	defer bat.Close()
+
+	// Get table info
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, databaseName, tableName)
+	require.NoError(t, err)
+	_ = rel.GetTableID(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// append function
+	appendFn := func(idx int) {
+		txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+		require.Nil(t, rel.Append(ctxWithTimeout, bats[idx]))
+		require.Nil(t, txn.Commit(ctxWithTimeout))
+	}
+
+	// Append initial data
+	appendFn(0)
+	appendFn(1)
+
+	// Setup CDC executor with stubs
+	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	defer stub1.Reset()
+	defer stub2.Reset()
+	defer stub3.Reset()
+	defer stub4.Reset()
+	defer stub5.Reset()
+
+	// Define tables to track
+	tables := cdc.PatternTuples{
+		Pts: []*cdc.PatternTuple{
+			{
+				Source: cdc.PatternTable{
+					Database: databaseName,
+					Table:    tableName,
+				},
+				Sink: cdc.PatternTable{
+					Database: sinkDatabaseName,
+					Table:    sinkTableName,
+				},
+			},
+		},
+	}
+
+	fault.Enable()
+	defer fault.Disable()
+
+	rmFn, err := objectio.InjectCDCScanTable("fast scan")
+	require.NoError(t, err)
+	defer rmFn()
+
+	executor := NewMockCDCExecutor(
+		t,
+		disttaeEngine,
+		ctxWithTimeout,
+		accountId,
+		taskId,
+		taskName,
+		tables,
+	)
+
+	go executor.Start(ctxWithTimeout)
+
+	// Test watermark updater
+	wmKey := cdc.WatermarkKey{
+		AccountId: uint64(accountId),
+		TaskId:    taskId,
+		DBName:    databaseName,
+		TableName: tableName,
+	}
+
+	// Verify watermark function
+	checkWatermarkFn := func(expectedWM types.TS, waitTime int) {
+		testutils.WaitExpect(
+			waitTime,
+			func() bool {
+				wm, ok := mockWatermarkUpdater.GetWatermark(wmKey)
+				return ok && wm.GE(&expectedWM)
+			},
+		)
+		wm, ok := mockWatermarkUpdater.GetWatermark(wmKey)
+		t.Logf("watermark check: wm: %v, expected: %v, ok: %v", wm.ToString(), expectedWM.ToString(), ok)
+		require.True(t, ok)
+		require.True(t, wm.GE(&expectedWM))
+	}
+
+	assert.Equal(t, 0, len(errChan))
+
+	// Wait for initial sync to complete
+	wm1 := taeHandler.GetDB().TxnMgr.Now()
+	checkWatermarkFn(wm1, 3000)
+	t.Log("initial data synced successfully")
+
+	// Drop the table using disttaeEngine
+	dropTxn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+	db, err := disttaeEngine.Engine.Database(ctxWithTimeout, databaseName, dropTxn)
+	require.NoError(t, err)
+	err = db.Delete(ctxWithTimeout, tableName)
+	require.NoError(t, err)
+	err = dropTxn.Commit(ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log("table dropped")
+
+	// Recreate the table with the same structure
+	bat2 := CreateDBAndTableForCDC(t, disttaeEngine, ctxWithTimeout, databaseName, tableName, 10)
+	bats2 := bat2.Split(10)
+	defer bat2.Close()
+
+	// Redefine append function for new table
+	appendFn = func(idx int) {
+		txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+		require.Nil(t, rel.Append(ctxWithTimeout, bats2[idx]))
+		require.Nil(t, txn.Commit(ctxWithTimeout))
+	}
+
+	// Append new data to recreated table
+	appendFn(0)
+	appendFn(1)
+	appendFn(2)
+	t.Log("new data appended to recreated table")
+
+	// Wait for new data to sync
+	wm2 := taeHandler.GetDB().TxnMgr.Now()
+	checkWatermarkFn(wm2, 4000)
+	t.Log("new data synced successfully")
+
+	// Verify data consistency
+	CheckTableDataWithName(t, disttaeEngine, ctxWithTimeout, sinkDatabaseName, sinkTableName, databaseName, tableName)
+	t.Log("data consistency verified after table recreation")
+}
