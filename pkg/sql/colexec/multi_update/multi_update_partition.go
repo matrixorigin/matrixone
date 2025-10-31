@@ -271,6 +271,9 @@ func (op *PartitionMultiUpdate) writeS3(
 					return false
 				}
 
+				old := op.raw.MultiUpdateCtx
+				new := make([]*MultiUpdateCtx, 0, len(old))
+
 				// mapping all main table and index table to partition's.
 				for i, c := range op.raw.MultiUpdateCtx {
 					r := rel
@@ -286,9 +289,13 @@ func (op *PartitionMultiUpdate) writeS3(
 						}
 					}
 
-					c.ObjRef.ObjName = r.GetTableName()
-					c.TableDef = r.GetTableDef(proc.Ctx)
+					newC := c.clone()
+					newC.ObjRef.ObjName = r.GetTableName()
+					newC.TableDef = r.GetTableDef(proc.Ctx)
+					new = append(new, newC)
 				}
+				op.raw.MultiUpdateCtx = new
+
 				op.raw.resetMultiUpdateCtxs()
 				if err = op.raw.resetMultiSources(proc); err != nil {
 					return false
@@ -410,4 +417,17 @@ func (op *PartitionMultiUpdate) GetAffectedRows() uint64 {
 
 func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
 	op.affectedRows = affectedRows
+}
+
+func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
+	v := &MultiUpdateCtx{
+		InsertCols:    ctx.InsertCols,
+		DeleteCols:    ctx.DeleteCols,
+		PartitionCols: ctx.DeleteCols,
+	}
+	objRef := *ctx.ObjRef
+	def := *ctx.TableDef
+	v.ObjRef = &objRef
+	v.TableDef = &def
+	return v
 }

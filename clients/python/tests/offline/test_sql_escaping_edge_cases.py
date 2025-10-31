@@ -167,6 +167,45 @@ class TestSQLEscapingEdgeCases:
 
         print(f"Generated SQL with vectors:\n{sql}\n")
 
+    def test_json_dict_auto_serialization(self):
+        """Test that Python dicts are automatically serialized to JSON"""
+        from matrixone.base_client import BaseMatrixOneClient
+
+        client = BaseMatrixOneClient()
+
+        # Test data with Python dicts that should be serialized to JSON
+        data_list = [
+            {"id": 1, "name": "Product 1", "attributes": {"brand": "Dell", "price": 999}},
+            {"id": 2, "name": "Product 2", "attributes": {"brand": "Apple", "color": "silver"}},
+        ]
+
+        sql = client._build_batch_insert_sql("test_table", data_list)
+
+        # Dicts should be serialized to JSON strings
+        assert '{"brand": "Dell", "price": 999}' in sql or '"brand"' in sql
+        assert '{"brand": "Apple", "color": "silver"}' in sql or '"color"' in sql
+        assert "Product 1" in sql
+        assert "Product 2" in sql
+
+        print(f"Generated SQL with JSON dict auto-serialization:\n{sql}\n")
+
+    def test_insert_json_dict_auto_serialization(self):
+        """Test that single insert also auto-serializes Python dicts"""
+        from matrixone.base_client import BaseMatrixOneClient
+
+        client = BaseMatrixOneClient()
+
+        # Test single insert with dict
+        data = {"id": 1, "name": "Test", "metadata": {"key": "value", "count": 42}}
+
+        sql = client._build_insert_sql("test_table", data)
+
+        # Dict should be serialized to JSON string
+        assert '{"key": "value", "count": 42}' in sql or '"key"' in sql
+        assert "Test" in sql
+
+        print(f"Generated SQL for single insert with JSON dict:\n{sql}\n")
+
     def test_complex_json_with_multiple_special_chars(self):
         """Test JSON with multiple special characters"""
         from matrixone.base_client import BaseMatrixOneClient

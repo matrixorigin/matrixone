@@ -209,6 +209,11 @@ type TxnOperator interface {
 	EnterRollbackStmt()
 	ExitRollbackStmt()
 	SetFootPrints(id int, enter bool)
+
+	// txn based cache
+	Set(key string, value any)
+	Get(key string) (any, bool)
+	Delete(key string)
 }
 
 // TxnIDGenerator txn id generator

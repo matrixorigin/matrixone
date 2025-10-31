@@ -15,11 +15,11 @@
 """
 Data Export for MatrixOne
 
-This module provides functionality to export query results to files or stages
-using MatrixOne's SELECT ... INTO OUTFILE and SELECT ... INTO STAGE commands.
+This module provides pandas-style functionality to export query results to files
+or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 """
 
-from enum import Enum
+import warnings
 from typing import Any, Optional, Union
 
 
@@ -80,42 +80,99 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     )
 
 
-class ExportFormat(Enum):
-    """Export file format options"""
-
-    CSV = "csv"
-    JSONLINE = "jsonline"
-
-
-def _build_export_sql(
-    query: Union[str, Any],
-    output_path: str,
-    format: ExportFormat = ExportFormat.CSV,
-    fields_terminated_by: Optional[str] = None,
-    fields_enclosed_by: Optional[str] = None,
-    lines_terminated_by: Optional[str] = None,
-    header: bool = False,
-    max_file_size: Optional[int] = None,
-    force_quote: Optional[list] = None,
-    compression: Optional[str] = None,
-) -> str:
+def _validate_csv_params(sep: str, quotechar: Optional[str], lineterminator: str) -> None:
     """
-    Build export SQL statement (shared logic for sync and async).
+    Validate CSV export parameters.
 
     Args:
-        query: SELECT query to execute (without INTO clause). Can be:
-            - String: Raw SQL
-            - SQLAlchemy select() statement
-            - MatrixOneQuery object
-        output_path: Output file path or stage path (e.g., '/tmp/file.csv' or 'stage://stage_name/file.csv')
-        format: Export file format
-        fields_terminated_by: Field delimiter
-        fields_enclosed_by: Field enclosure character
-        lines_terminated_by: Line terminator
-        header: Whether to include column headers
-        max_file_size: Maximum size per file in bytes
-        force_quote: List of column names/indices to always quote
-        compression: Compression format
+        sep: Field separator
+        quotechar: Quote character
+        lineterminator: Line terminator
+
+    Raises:
+        ValueError: If parameters are invalid or conflicting
+    """
+    if not sep:
+        raise ValueError("sep cannot be empty")
+
+    if len(sep) > 1:
+        warnings.warn(
+            f"sep is '{sep}' (length {len(sep)}). MatrixOne may only support single-character separators.", UserWarning
+        )
+
+    if quotechar and sep == quotechar:
+        raise ValueError(f"sep and quotechar cannot be the same: '{sep}'")
+
+
+def _build_csv_export_sql(
+    query: Union[str, Any],
+    output_path: str,
+    sep: str = ',',
+    quotechar: Optional[str] = None,
+    lineterminator: str = '\n',
+    header: bool = False,
+) -> str:
+    """
+    Build CSV export SQL statement.
+
+    Args:
+        query: SELECT query to execute
+        output_path: Output file path or stage path
+        sep: Field separator (default: ',')
+        quotechar: Quote character (default: None)
+        lineterminator: Line terminator (default: '\n')
+        header: Whether to include column headers (default: False)
+
+    Returns:
+        Complete export SQL statement
+    """
+    # Validate parameters
+    _validate_csv_params(sep, quotechar, lineterminator)
+
+    # Convert query to SQL string
+    query_sql = _query_to_sql(query)
+
+    # Build the export SQL
+    sql_parts = [query_sql, "INTO OUTFILE", f"'{output_path}'"]
+
+    # Add CSV options
+    options = []
+
+    # MatrixOne limitation: can't use both sep and quotechar simultaneously
+    # If both are specified, use sep only
+    if quotechar and sep != ',':
+        # Use quotechar only if sep is not default (user wants quoting behavior)
+        options.append(f"fields enclosed by '{quotechar}'")
+    elif sep:
+        # Use sep (default behavior)
+        options.append(f"fields terminated by '{sep}'")
+
+    # Add line terminator if not default
+    if lineterminator != '\n':
+        options.append(f"lines terminated by '{lineterminator}'")
+
+    sql_parts.extend(options)
+
+    # Note: HEADER option not yet supported in MatrixOne
+    if header:
+        warnings.warn(
+            "header=True is not yet supported by MatrixOne's INTO OUTFILE. " "Headers will not be included in the output.",
+            UserWarning,
+        )
+
+    return ' '.join(sql_parts)
+
+
+def _build_jsonl_export_sql(
+    query: Union[str, Any],
+    output_path: str,
+) -> str:
+    """
+    Build JSONL export SQL statement.
+
+    Args:
+        query: SELECT query to execute
+        output_path: Output file path or stage path
 
     Returns:
         Complete export SQL statement
@@ -123,64 +180,28 @@ def _build_export_sql(
     # Convert query to SQL string
     query_sql = _query_to_sql(query)
 
-    # Determine quote style for output path based on fields_enclosed_by
-    # If fields_enclosed_by contains a quote character, use double quotes for the path
-    # to avoid quote conflicts in the SQL statement
-    if fields_enclosed_by and fields_enclosed_by in ('"', "'"):
-        path_quoted = f'"{output_path}"'
-    else:
-        path_quoted = f"'{output_path}'"
-
-    # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", path_quoted]
-
-    # Add format-specific options
-    if format == ExportFormat.CSV:
-        options = []
-        if fields_terminated_by:
-            options.append(f"fields terminated by '{fields_terminated_by}'")
-        if fields_enclosed_by:
-            # MatrixOne syntax: fields enclosed by '"' or fields enclosed by "'"
-            # Note: MatrixOne doesn't support using both fields_terminated_by and
-            # fields_enclosed_by simultaneously in current version
-            options.append(f"fields enclosed by '{fields_enclosed_by}'")
-        if lines_terminated_by:
-            options.append(f"lines terminated by '{lines_terminated_by}'")
-
-        if options:
-            sql_parts.extend(options)
-
-    # Note: Advanced options like HEADER, MAX_FILE_SIZE, FORCE_QUOTE, COMPRESSION are not yet
-    # supported in current MatrixOne version for INTO OUTFILE. Commenting out for now.
-    # TODO: Enable these options when MatrixOne adds support
-
-    # # Add header option
-    # if header:
-    #     sql_parts.append("HEADER=TRUE")
-
-    # # Add max file size
-    # if max_file_size:
-    #     sql_parts.append(f"MAX_FILE_SIZE {max_file_size}")
-
-    # # Add force quote
-    # if force_quote:
-    #     if isinstance(force_quote, list):
-    #         force_quote_str = ','.join(str(item) for item in force_quote)
-    #         sql_parts.append(f"FORCE_QUOTE ({force_quote_str})")
-
-    # # Add compression
-    # if compression:
-    #     sql_parts.append(f"COMPRESSION '{compression}'")
-
-    return ' '.join(sql_parts)
+    # Build the export SQL with JSONL format
+    # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
+    return f"{query_sql} INTO OUTFILE '{output_path}'"
 
 
 class ExportManager:
     """
-    Manager class for data export operations.
+    Manager class for data export operations (pandas-style interface).
 
-    This class provides methods to export query results to local files
-    (INTO OUTFILE) or to external stages (INTO STAGE).
+    This class provides pandas-like methods to export query results to local
+    files or external stages.
+
+    Examples::
+
+        # CSV export (pandas-style)
+        client.export.to_csv('data.csv', query, sep='|', header=True)
+
+        # JSONL export
+        client.export.to_jsonl('data.jsonl', query)
+
+        # Export to S3 stage
+        client.export.to_csv('stage://s3_stage/data.csv', query)
     """
 
     def __init__(self, client: Any):
@@ -188,196 +209,262 @@ class ExportManager:
         Initialize ExportManager with a client instance.
 
         Args:
-            client: MatrixOne client instance (Client or TransactionWrapper)
+            client: MatrixOne client instance (Client or Session)
         """
         self.client = client
 
-    def to_file(
+    def to_csv(
         self,
+        path: str,
         query: Union[str, Any],
-        filepath: str,
-        format: ExportFormat = ExportFormat.CSV,
-        fields_terminated_by: Optional[str] = None,
-        fields_enclosed_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
+        *,
+        sep: str = ',',
+        quotechar: Optional[str] = None,
+        lineterminator: str = '\n',
         header: bool = False,
-        max_file_size: Optional[int] = None,
-        force_quote: Optional[list] = None,
+        **kwargs,
     ) -> Any:
         """
-        Export query results to a local file using SELECT ... INTO OUTFILE.
+        Export query results to CSV file (pandas-style).
 
-        This method executes a SELECT query and writes the results to a file
-        on the MatrixOne server's filesystem.
+        This method exports query results to a CSV file on the MatrixOne server's
+        filesystem or to an external stage.
 
         Args:
+            path: Output file path. Can be:
+                - Local path: '/tmp/data.csv'
+                - Stage path: 'stage://stage_name/data.csv'
             query: SELECT query to execute. Can be:
-                - String: Raw SQL (e.g., "SELECT * FROM users")
-                - SQLAlchemy select(): stmt = select(User).where(User.age > 25)
-                - MatrixOneQuery: query = client.query(User).filter(User.age > 25)
-            filepath: Absolute path on server filesystem where file will be created
-            format: Export file format (CSV or JSONLINE)
-            fields_terminated_by: Field delimiter (default: ',' for CSV)
-            fields_enclosed_by: Field enclosure character (default: '"' for CSV)
-            lines_terminated_by: Line terminator (default: '\\n')
-            header: Whether to include column headers (default: False)
-            max_file_size: Maximum size per file in bytes (for splitting large exports)
-            force_quote: List of column names/indices to always quote
+                - Raw SQL string: "SELECT * FROM users"
+                - SQLAlchemy select(): select(User).where(User.age > 25)
+                - MatrixOneQuery: client.query(User).filter(User.age > 25)
+            sep: Field separator/delimiter (default: ',')
+            quotechar: Character to quote fields containing special characters
+            lineterminator: Line terminator (default: '\\n')
+            header: Include column headers (not yet supported by MatrixOne)
+            **kwargs: Reserved for future options
 
         Returns:
-            ResultSet with export operation results
+            Query execution result
 
-        Examples:
-            >>> # Export with raw SQL
-            >>> client.export.to_file(
-            ...     query="SELECT * FROM orders WHERE order_date > '2025-01-01'",
-            ...     filepath="/tmp/orders_export.csv",
-            ...     format=ExportFormat.CSV,
-            ...     header=True
-            ... )
+        Raises:
+            ValueError: If parameters are invalid
+            TypeError: If query type is unsupported
 
-            >>> # Export with SQLAlchemy select()
-            >>> from sqlalchemy import select
-            >>> stmt = select(Order).where(Order.order_date > '2025-01-01')
-            >>> client.export.to_file(
-            ...     query=stmt,
-            ...     filepath="/tmp/orders_export.csv",
-            ...     format=ExportFormat.CSV,
-            ...     header=True
-            ... )
+        Examples::
 
-            >>> # Export with MatrixOne fulltext search
-            >>> from sqlalchemy import select
-            >>> from matrixone.sqlalchemy_ext import boolean_match
-            >>> stmt = select(Article).where(
-            ...     boolean_match("title", "content").must("python")
-            ... )
-            >>> client.export.to_file(query=stmt, filepath="/tmp/articles.csv")
+            # Basic CSV export with defaults
+            client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+
+            # Custom separator (TSV)
+            client.export.to_csv('/tmp/users.tsv', query, sep='\\t')
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.age > 25)
+            client.export.to_csv('/tmp/adults.csv', stmt, sep='|')
+
+            # Export to stage
+            client.export.to_csv('stage://s3_stage/backup.csv', query)
+
+            # With MatrixOne query builder
+            query = client.query(Order).filter(Order.status == 'completed')
+            client.export.to_csv('/tmp/orders.csv', query, sep=',')
+
+            # Using session
+            with client.session() as session:
+                query = session.query(User).filter(User.active == True)
+                session.export.to_csv('/tmp/active_users.csv', query)
 
         Note:
-            - The filepath must be on the MatrixOne server's filesystem
-            - The MatrixOne server process must have write permissions
-            - The file will be overwritten if it already exists
-            - MatrixOne doesn't support fields_terminated_by and fields_enclosed_by simultaneously
+            - For local paths, the MatrixOne server must have write permissions
+            - For stage paths, use format: 'stage://stage_name/filename.csv'
+            - MatrixOne doesn't support using sep and quotechar simultaneously
+            - header=True is not yet supported by MatrixOne
         """
-        # Build SQL using shared logic
-        export_sql = _build_export_sql(
+        # Build SQL
+        export_sql = _build_csv_export_sql(
             query=query,
-            output_path=filepath,
-            format=format,
-            fields_terminated_by=fields_terminated_by,
-            fields_enclosed_by=fields_enclosed_by,
-            lines_terminated_by=lines_terminated_by,
+            output_path=path,
+            sep=sep,
+            quotechar=quotechar,
+            lineterminator=lineterminator,
             header=header,
-            max_file_size=max_file_size,
-            force_quote=force_quote,
         )
 
         # Execute export
         return self.client.execute(export_sql)
 
-    def to_stage(
+    def to_jsonl(self, path: str, query: Union[str, Any], **kwargs) -> Any:
+        """
+        Export query results to JSONL file (JSON Lines format).
+
+        Each line in the output file is a valid JSON object representing one row.
+
+        Args:
+            path: Output file path. Can be:
+                - Local path: '/tmp/data.jsonl'
+                - Stage path: 'stage://stage_name/data.jsonl'
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Basic JSONL export
+            client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.verified == True)
+            client.export.to_jsonl('/tmp/verified.jsonl', stmt)
+
+            # Export to stage
+            client.export.to_jsonl('stage://s3_stage/data.jsonl', query)
+
+            # Complex query with joins
+            query = '''
+                SELECT u.name, o.total
+                FROM users u
+                JOIN orders o ON u.id = o.user_id
+            '''
+            client.export.to_jsonl('/tmp/user_orders.jsonl', query)
+
+        Note:
+            - JSONL format: one JSON object per line, no array wrapper
+            - Each line is a complete, valid JSON object
+            - Suitable for streaming and big data processing
+        """
+        # Build SQL
+        export_sql = _build_jsonl_export_sql(
+            query=query,
+            output_path=path,
+        )
+
+        # Execute export
+        return self.client.execute(export_sql)
+
+    def to_csv_stage(
         self,
-        query: Union[str, Any],
         stage_name: str,
         filename: str,
-        format: ExportFormat = ExportFormat.CSV,
-        fields_terminated_by: Optional[str] = None,
-        fields_enclosed_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
+        query: Union[str, Any],
+        *,
+        sep: str = ',',
+        quotechar: Optional[str] = None,
+        lineterminator: str = '\n',
         header: bool = False,
-        max_file_size: Optional[int] = None,
-        force_quote: Optional[list] = None,
-        compression: Optional[str] = None,
+        **kwargs,
     ) -> Any:
         """
-        Export query results to a stage using SELECT ... INTO STAGE.
+        Export query results to CSV file in an external stage.
 
-        This method executes a SELECT query and writes the results to an
-        external stage (S3, local filesystem, etc.).
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
 
         Args:
-            query: SELECT query to execute. Can be:
-                - String: Raw SQL (e.g., "SELECT * FROM users")
-                - SQLAlchemy select(): stmt = select(User).where(User.age > 25)
-                - MatrixOneQuery: query = client.query(User).filter(User.age > 25)
-            stage_name: Name of the target stage
-            filename: Filename to create in the stage
-            format: Export file format (CSV or JSONLINE)
-            fields_terminated_by: Field delimiter (default: ',' for CSV)
-            fields_enclosed_by: Field enclosure character (default: '"' for CSV)
-            lines_terminated_by: Line terminator (default: '\\n')
-            header: Whether to include column headers (default: False)
-            max_file_size: Maximum size per file in bytes (for splitting large exports)
-            force_quote: List of column names/indices to always quote
-            compression: Compression format (e.g., 'gzip', 'bzip2')
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            sep: Field separator/delimiter (default: ',')
+            quotechar: Character to quote fields containing special characters
+            lineterminator: Line terminator (default: '\\n')
+            header: Include column headers (not yet supported by MatrixOne)
+            **kwargs: Reserved for future options
 
         Returns:
-            ResultSet with export operation results
+            Query execution result
 
-        Examples:
-            >>> # Export to stage with raw SQL
-            >>> client.export.to_stage(
-            ...     query="SELECT * FROM orders",
-            ...     stage_name="s3_stage",
-            ...     filename="orders_backup.csv",
-            ...     format=ExportFormat.CSV,
-            ...     header=True,
-            ...     compression="gzip"
-            ... )
+        Examples::
 
-            >>> # Export with SQLAlchemy select()
-            >>> from sqlalchemy import select, func
-            >>> stmt = select(Sale.product_id, func.sum(Sale.quantity).label('total')).group_by(Sale.product_id)
-            >>> client.export.to_stage(
-            ...     query=stmt,
-            ...     stage_name="local_stage",
-            ...     filename="sales_summary.jsonl",
-            ...     format=ExportFormat.JSONLINE
-            ... )
+            # Export to S3 stage
+            client.export.to_csv_stage('s3_stage', 'data.csv', "SELECT * FROM users")
 
-            >>> # Export with MatrixOne vector search
-            >>> from sqlalchemy import select
-            >>> query_vector = [0.1, 0.2, 0.3, ...]
-            >>> stmt = (select(Document, Document.embedding.l2_distance(query_vector).label('distance'))
-            ...        .order_by(Document.embedding.l2_distance(query_vector))
-            ...        .limit(100))
-            >>> client.export.to_stage(query=stmt, stage_name="results", filename="similar_docs.csv")
+            # With custom separator
+            client.export.to_csv_stage('backup_stage', 'data.tsv', query, sep='\t')
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.active == True)
+            client.export.to_csv_stage('active_stage', 'active_users.csv', stmt)
 
         Note:
-            - The stage must exist before exporting
-            - The stage must have appropriate write permissions
-            - Use compression for large exports to save storage and transfer costs
-            - MatrixOne doesn't support fields_terminated_by and fields_enclosed_by simultaneously
+            - The stage must exist before calling this method
+            - Use client.stage.create_s3() or client.stage.create_local() to create stages
+            - MatrixOne doesn't support using sep and quotechar simultaneously
         """
-        # MatrixOne uses special INTO OUTFILE syntax with stage:// protocol
-        # Format: INTO OUTFILE 'stage://stage_name/filename.csv'
+        # Build stage path
         stage_path = f"stage://{stage_name}/{filename}"
 
-        # Build SQL using shared logic
-        export_sql = _build_export_sql(
+        # Delegate to to_csv method
+        return self.to_csv(
+            path=stage_path,
             query=query,
-            output_path=stage_path,
-            format=format,
-            fields_terminated_by=fields_terminated_by,
-            fields_enclosed_by=fields_enclosed_by,
-            lines_terminated_by=lines_terminated_by,
+            sep=sep,
+            quotechar=quotechar,
+            lineterminator=lineterminator,
             header=header,
-            max_file_size=max_file_size,
-            force_quote=force_quote,
-            compression=compression,
+            **kwargs,
         )
 
-        # Execute export
-        return self.client.execute(export_sql)
+    def to_jsonl_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        query: Union[str, Any],
+        **kwargs,
+    ) -> Any:
+        """
+        Export query results to JSONL file in an external stage.
+
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
+
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Export to S3 stage
+            client.export.to_jsonl_stage('s3_stage', 'data.jsonl', "SELECT * FROM users")
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.verified == True)
+            client.export.to_jsonl_stage('verified_stage', 'verified.jsonl', stmt)
+
+        Note:
+            - The stage must exist before calling this method
+            - Use client.stage.create_s3() or client.stage.create_local() to create stages
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to to_jsonl method
+        return self.to_jsonl(path=stage_path, query=query, **kwargs)
 
 
 class AsyncExportManager:
     """
-    Async manager class for data export operations.
+    Async manager class for data export operations (pandas-style interface).
 
-    This class provides async methods to export query results to local files
-    (INTO OUTFILE) or to external stages (INTO STAGE).
+    Provides async versions of all export methods from ExportManager.
+
+    Examples::
+
+        # Async CSV export
+        await client.export.to_csv('data.csv', query, sep='|')
+
+        # Async JSONL export
+        await client.export.to_jsonl('data.jsonl', query)
     """
 
     def __init__(self, client: Any):
@@ -385,76 +472,172 @@ class AsyncExportManager:
         Initialize AsyncExportManager with an async client instance.
 
         Args:
-            client: MatrixOne async client instance (AsyncClient or AsyncTransactionWrapper)
+            client: MatrixOne async client instance (AsyncClient or AsyncSession)
         """
         self.client = client
 
-    async def to_file(
+    async def to_csv(
         self,
+        path: str,
         query: Union[str, Any],
-        filepath: str,
-        format: ExportFormat = ExportFormat.CSV,
-        fields_terminated_by: Optional[str] = None,
-        fields_enclosed_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
+        *,
+        sep: str = ',',
+        quotechar: Optional[str] = None,
+        lineterminator: str = '\n',
         header: bool = False,
-        max_file_size: Optional[int] = None,
-        force_quote: Optional[list] = None,
+        **kwargs,
     ) -> Any:
-        """Async version of to_file. See ExportManager.to_file for documentation."""
-        # Build SQL using shared logic
-        export_sql = _build_export_sql(
+        """
+        Async export query results to CSV file.
+
+        See ExportManager.to_csv() for detailed documentation.
+
+        Examples::
+
+            # Async CSV export
+            await client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+
+            # With custom options
+            await client.export.to_csv(
+                '/tmp/data.tsv',
+                query,
+                sep='\\t',
+                lineterminator='\\r\\n'
+            )
+
+            # Using async session
+            async with client.session() as session:
+                query = session.query(User).filter(User.active == True)
+                await session.export.to_csv('/tmp/active.csv', query)
+        """
+        # Build SQL
+        export_sql = _build_csv_export_sql(
             query=query,
-            output_path=filepath,
-            format=format,
-            fields_terminated_by=fields_terminated_by,
-            fields_enclosed_by=fields_enclosed_by,
-            lines_terminated_by=lines_terminated_by,
+            output_path=path,
+            sep=sep,
+            quotechar=quotechar,
+            lineterminator=lineterminator,
             header=header,
-            max_file_size=max_file_size,
-            force_quote=force_quote,
         )
 
         # Execute export asynchronously
         return await self.client.execute(export_sql)
 
-    async def to_stage(
+    async def to_jsonl(self, path: str, query: Union[str, Any], **kwargs) -> Any:
+        """
+        Async export query results to JSONL file.
+
+        See ExportManager.to_jsonl() for detailed documentation.
+
+        Examples::
+
+            # Async JSONL export
+            await client.export.to_jsonl('/tmp/data.jsonl', query)
+
+            # Export to stage
+            await client.export.to_jsonl('stage://s3/backup.jsonl', query)
+        """
+        # Build SQL
+        export_sql = _build_jsonl_export_sql(
+            query=query,
+            output_path=path,
+        )
+
+        # Execute export asynchronously
+        return await self.client.execute(export_sql)
+
+    async def to_csv_stage(
         self,
-        query: Union[str, Any],
         stage_name: str,
         filename: str,
-        format: ExportFormat = ExportFormat.CSV,
-        fields_terminated_by: Optional[str] = None,
-        fields_enclosed_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
+        query: Union[str, Any],
+        *,
+        sep: str = ',',
+        quotechar: Optional[str] = None,
+        lineterminator: str = '\n',
         header: bool = False,
-        max_file_size: Optional[int] = None,
-        force_quote: Optional[list] = None,
-        compression: Optional[str] = None,
+        **kwargs,
     ) -> Any:
-        """Async version of to_stage. See ExportManager.to_stage for documentation."""
-        # MatrixOne uses special INTO OUTFILE syntax with stage:// protocol
-        # Format: INTO OUTFILE 'stage://stage_name/filename.csv'
+        """
+        Async export query results to CSV file in an external stage.
+
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
+
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            sep: Field separator/delimiter (default: ',')
+            quotechar: Character to quote fields containing special characters
+            lineterminator: Line terminator (default: '\\n')
+            header: Include column headers (not yet supported by MatrixOne)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Async export to S3 stage
+            await client.export.to_csv_stage('s3_stage', 'data.csv', "SELECT * FROM users")
+
+            # With custom separator
+            await client.export.to_csv_stage('backup_stage', 'data.tsv', query, sep='\t')
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.active == True)
+            await client.export.to_csv_stage('active_stage', 'active_users.csv', stmt)
+        """
+        # Build stage path
         stage_path = f"stage://{stage_name}/{filename}"
 
-        # Build SQL using shared logic
-        export_sql = _build_export_sql(
+        # Delegate to to_csv method
+        return await self.to_csv(
+            path=stage_path,
             query=query,
-            output_path=stage_path,
-            format=format,
-            fields_terminated_by=fields_terminated_by,
-            fields_enclosed_by=fields_enclosed_by,
-            lines_terminated_by=lines_terminated_by,
+            sep=sep,
+            quotechar=quotechar,
+            lineterminator=lineterminator,
             header=header,
-            max_file_size=max_file_size,
-            force_quote=force_quote,
-            compression=compression,
+            **kwargs,
         )
 
-        # Execute export asynchronously
-        return await self.client.execute(export_sql)
+    async def to_jsonl_stage(
+        self,
+        stage_name: str,
+        filename: str,
+        query: Union[str, Any],
+        **kwargs,
+    ) -> Any:
+        """
+        Async export query results to JSONL file in an external stage.
 
+        This is a convenience method for stage exports that doesn't require
+        the 'stage://' protocol prefix.
 
-# Convenience type aliases
-TransactionExportManager = ExportManager
-AsyncTransactionExportManager = AsyncExportManager
+        Args:
+            stage_name: Name of the external stage
+            filename: Name of the file to create in the stage
+            query: SELECT query to execute (str, SQLAlchemy select(), or MatrixOneQuery)
+            **kwargs: Reserved for future options
+
+        Returns:
+            Query execution result
+
+        Examples::
+
+            # Async export to S3 stage
+            await client.export.to_jsonl_stage('s3_stage', 'data.jsonl', "SELECT * FROM users")
+
+            # With SQLAlchemy
+            from sqlalchemy import select
+            stmt = select(User).where(User.verified == True)
+            await client.export.to_jsonl_stage('verified_stage', 'verified.jsonl', stmt)
+        """
+        # Build stage path
+        stage_path = f"stage://{stage_name}/{filename}"
+
+        # Delegate to to_jsonl method
+        return await self.to_jsonl(path=stage_path, query=query, **kwargs)

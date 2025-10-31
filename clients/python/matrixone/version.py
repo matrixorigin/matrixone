@@ -300,14 +300,14 @@ class VersionManager:
 
         version_string = version_string.strip()
 
-        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v后面为空)
+        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v followed by nothing)
         dev_pattern = r"^(\d+\.\d+\.\d+)-MatrixOne-v$"
         dev_match = re.search(dev_pattern, version_string)
         if dev_match:
             # Development version - assign highest version number
             return "999.0.0"
 
-        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v后面有版本号)
+        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by version number)
         release_pattern = r"^(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)$"
         release_match = re.search(release_pattern, version_string)
         if release_match:

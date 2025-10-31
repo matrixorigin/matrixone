@@ -3,6 +3,42 @@ ORM Usage Guide
 
 This guide provides comprehensive information on using the MatrixOne Python SDK with modern ORM patterns and advanced query building capabilities.
 
+.. danger::
+   **🚨 CRITICAL: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   MatrixOne does not support SQL standard double-quoted identifiers in queries, which causes 
+   issues with camelCase column names when using SQLAlchemy ORM.
+   
+   .. code-block:: python
+   
+      # ❌ DON'T: CamelCase column names (will fail in SELECT queries)
+      class User(Base):
+          userName = Column(String(50))      # CREATE succeeds, SELECT fails!
+          userId = Column(Integer)           # Will cause SQL syntax errors
+      
+      # ✅ DO: Use lowercase with underscores (snake_case)
+      class User(Base):
+          user_name = Column(String(50))     # Works perfectly
+          user_id = Column(Integer)          # All operations succeed
+   
+   **Problem demonstration:**
+   
+   .. code-block:: sql
+   
+      -- CamelCase generates:
+      SELECT "userName" FROM user  -- ❌ Fails with SQL syntax error!
+      
+      -- snake_case generates:
+      SELECT user_name FROM user   -- ✅ Works perfectly!
+   
+   **Why this happens:**
+   
+   - CREATE TABLE uses backticks: ``CREATE TABLE user (`userName` VARCHAR(50))`` ✅ Works
+   - SELECT uses double quotes: ``SELECT "userName" FROM user`` ❌ MatrixOne doesn't support
+   - Solution: Use snake_case to avoid any quoting: ``SELECT user_name FROM user`` ✅ Works
+
 Overview
 --------
 

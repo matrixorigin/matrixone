@@ -9,12 +9,25 @@ PITR (Point-in-Time Recovery), restore operations, table cloning, account manage
 and mo-ctl integration. The SDK is designed for both synchronous and asynchronous operations with full
 type safety and extensive documentation.
 
+.. danger::
+   **🚨 MUST READ: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   Using camelCase will cause SELECT queries to fail. See :doc:`naming_conventions` for details.
+   
+   .. code-block:: python
+   
+      # ❌ userName = Column(String(50))    # Fails in SELECT!
+      # ✅ user_name = Column(String(50))   # Works perfectly!
+
 .. toctree::
    :maxdepth: 2
    :caption: Getting Started
 
    installation
    quickstart
+   naming_conventions
    configuration_guide
 
 .. toctree::
@@ -23,6 +36,7 @@ type safety and extensive documentation.
 
    vector_guide
    fulltext_guide
+   json_guide
    orm_guide
    metadata_guide
    index_verification_guide
@@ -235,6 +249,44 @@ Quick Start
    * Workaround: Drop index → Modify data → Recreate index
    
    See :doc:`vector_guide` for details on HNSW vs IVF selection.
+
+**JSON Data Handling:**
+
+.. code-block:: python
+
+   from matrixone.sqlalchemy_ext import JSON
+   from sqlalchemy import Column, Integer, String, Numeric
+
+   class Product(Base):
+       __tablename__ = 'products'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(200))
+       specifications = Column(JSON)  # MatrixOne JSON type
+
+   # Insert with Python dictionaries (auto-serialized)
+   client.insert(Product, {
+       'id': 1,
+       'name': 'Laptop',
+       'specifications': {
+           'brand': 'Dell',
+           'ram': 16,
+           'price': 1299.99,
+           'active': True
+       }
+   })
+
+   # SQLAlchemy standard syntax
+   results = client.query(Product).filter(
+       Product.specifications['brand'] == 'Dell'
+   ).filter(
+       Product.specifications['price'].cast(Numeric) > 1000
+   ).all()
+
+   # Extract text without quotes
+   stmt = select(
+       Product.name,
+       Product.specifications['brand'].astext.label('brand')
+   )
 
 **Fulltext Search:**
 

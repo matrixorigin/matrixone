@@ -3,6 +3,30 @@ Quick Start
 
 This guide will help you get started with the MatrixOne Python SDK quickly. For detailed configuration options, see :doc:`configuration_guide`.
 
+.. danger::
+   **🚨 CRITICAL: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   MatrixOne does not support SQL standard double-quoted identifiers, causing SELECT queries 
+   to fail when using camelCase column names with SQLAlchemy ORM.
+   
+   .. code-block:: python
+   
+      # ❌ DON'T: CamelCase - Will fail!
+      class User(Base):
+          userName = Column(String(50))    # SELECT will fail
+          userId = Column(Integer)
+      
+      # ✅ DO: snake_case - Works perfectly
+      class User(Base):
+          user_name = Column(String(50))   # All operations work
+          user_id = Column(Integer)
+   
+   **Problem:** CamelCase generates ``SELECT "userName"`` ❌ (not supported by MatrixOne)
+   
+   **Solution:** snake_case generates ``SELECT user_name`` ✅ (works perfectly)
+
 Basic Usage
 -----------
 
@@ -172,9 +196,9 @@ If you have existing SQLAlchemy code, you can wrap your sessions to add MatrixOn
        result = mo_session.execute("SELECT * FROM users")
        
        # Now you can also use MatrixOne-specific features
-       mo_session.stage.create_s3('backup_stage', bucket='my-backups')
+       mo_session.stage.create_s3('backup_stage', bucket='my-backups', path='')
        mo_session.snapshots.create('daily_backup', level='database')
-       mo_session.load_data.from_csv('/data/users.csv', 'users')
+       mo_session.load_data.read_csv('/data/users.csv', table='users')
        
        mo_session.commit()
    finally:

@@ -158,7 +158,7 @@ COUNT(null)
 0
 SELECT COUNT(*) FROM table_constraints;
 COUNT(*)
-116
+121
 USE mo_catalog;
 SHOW CREATE TABLE mo_columns;
 Table    Create Table

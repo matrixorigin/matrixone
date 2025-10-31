@@ -4,6 +4,11 @@ Export Manager
 ExportManager
 -------------
 
+Pandas-style export manager for synchronous operations.
+
+Provides ``to_csv()`` and ``to_jsonl()`` methods for exporting query results
+to files or external stages.
+
 .. autoclass:: matrixone.export.ExportManager
    :members:
    :undoc-members:
@@ -12,35 +17,12 @@ ExportManager
 AsyncExportManager
 ------------------
 
+Pandas-style export manager for asynchronous operations.
+
+Provides async ``to_csv()`` and ``to_jsonl()`` methods for non-blocking
+export operations.
+
 .. autoclass:: matrixone.export.AsyncExportManager
    :members:
    :undoc-members:
    :show-inheritance:
-
-TransactionExportManager
-------------------------
-
-.. autoclass:: matrixone.export.TransactionExportManager
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-AsyncTransactionExportManager
-------------------------------
-
-.. autoclass:: matrixone.export.AsyncTransactionExportManager
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Enumerations
-------------
-
-ExportFormat
-~~~~~~~~~~~~
-
-.. autoclass:: matrixone.export.ExportFormat
-   :members:
-   :undoc-members:
-   :show-inheritance:
-

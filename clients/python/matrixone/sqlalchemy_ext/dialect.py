@@ -367,12 +367,33 @@ if SA_VERSION >= (2, 0):
             mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
             return mysql_compiler.visit_BINARY(type_, **kw)
 
+        def visit_BINARY(self, type_, **kw):
+            """Handle BINARY type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_BINARY(type_, **kw)
+
+        def visit_VARBINARY(self, type_, **kw):
+            """Handle VARBINARY type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_VARBINARY(type_, **kw)
+
         def visit_BLOB(self, type_, **kw):
             """Handle BLOB type compilation."""
             from sqlalchemy.dialects.mysql.base import MySQLDialect
 
             mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
             return mysql_compiler.visit_BLOB(type_, **kw)
+
+        def visit_TINYINT(self, type_, **kw):
+            """Handle TINYINT type compilation."""
+            from sqlalchemy.dialects.mysql.base import MySQLDialect
+
+            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
+            return mysql_compiler.visit_TINYINT(type_, **kw)
 
         def visit_enum(self, type_, **kw):
             """Handle Enum type compilation."""
@@ -503,9 +524,25 @@ else:
                 return f"BINARY({type_.length})"
             return "BINARY"
 
+        def visit_BINARY(self, type_, **kw):
+            """Handle BINARY type compilation."""
+            if hasattr(type_, 'length') and type_.length:
+                return f"BINARY({type_.length})"
+            return "BINARY"
+
+        def visit_VARBINARY(self, type_, **kw):
+            """Handle VARBINARY type compilation."""
+            if hasattr(type_, 'length') and type_.length:
+                return f"VARBINARY({type_.length})"
+            return "VARBINARY"
+
         def visit_BLOB(self, type_, **kw):
             """Handle BLOB type compilation."""
             return "BLOB"
+
+        def visit_TINYINT(self, type_, **kw):
+            """Handle TINYINT type compilation."""
+            return "TINYINT"
 
         def visit_enum(self, type_, **kw):
             """Handle Enum type compilation."""

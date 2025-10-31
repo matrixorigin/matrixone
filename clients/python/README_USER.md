@@ -34,6 +34,10 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
   - Natural language and boolean search modes
   - Multi-column indexes with relevance scoring
 - 📊 **Metadata Analysis**: Table and column metadata analysis with statistics
+- 📤 **Data Export**: Pandas-style export with intuitive ``to_csv()`` and ``to_jsonl()`` methods
+  - Export to local files or external stages (``stage://`` protocol)
+  - Support for raw SQL, SQLAlchemy, and MatrixOne queries
+  - Transaction-aware exports for consistency
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently
@@ -98,6 +102,37 @@ conda activate matrixone
 # Install MatrixOne SDK
 pip install matrixone-python-sdk
 ```
+
+## ⚠️ Important: Column Naming Convention
+
+**🚨 CRITICAL: Always use lowercase with underscores (snake_case) for column names!**
+
+MatrixOne does not support SQL standard double-quoted identifiers in queries, which causes issues with camelCase column names when using SQLAlchemy ORM.
+
+```python
+# ❌ DON'T: CamelCase column names (will fail in SELECT queries)
+class User(Base):
+    userName = Column(String(50))      # CREATE succeeds, SELECT fails!
+    userId = Column(Integer)           # Will cause SQL syntax errors
+
+# ✅ DO: Use lowercase with underscores (snake_case)
+class User(Base):
+    user_name = Column(String(50))     # Works perfectly
+    user_id = Column(Integer)          # All operations succeed
+```
+
+**Why this matters:**
+- ✅ CREATE TABLE works with both styles (uses backticks)
+- ✅ INSERT works with both styles  
+- ❌ **SELECT fails with camelCase** (uses double quotes, not supported by MatrixOne)
+
+**Example of the problem:**
+```python
+# CamelCase generates: SELECT "userName" FROM user  ❌ Fails!
+# snake_case generates: SELECT user_name FROM user  ✅ Works!
+```
+
+---
 
 ## Quick Start
 
@@ -174,6 +209,76 @@ client.disconnect()
 - ✅ Automatic rollback on errors
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
 - ✅ Full SQLAlchemy ORM support
+
+### Data Loading (Pandas-Style)
+
+Load bulk data from files with pandas-compatible API:
+
+```python
+from matrixone import Client
+from matrixone.orm import declarative_base, Column, Integer, String
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+
+client = Client()
+client.connect(database='test')
+client.create_table(User)
+
+# CSV loading (pandas-style)
+client.load_data.read_csv('users.csv', table=User, skiprows=1)
+
+# Custom separator (pandas-style)
+client.load_data.read_csv('users.txt', table=User, sep='|')
+
+# JSON Lines (pandas-style)
+client.load_data.read_json('events.jsonl', table='events', lines=True)
+
+# Parquet (pandas-style)
+client.load_data.read_parquet('data.parquet', table=User)
+
+# From stage
+client.load_data.read_csv_stage('s3_stage', 'users.csv', table=User)
+
+client.disconnect()
+```
+
+### Data Export (Pandas-Style)
+
+Export query results with pandas-compatible API:
+
+```python
+from matrixone import Client
+from sqlalchemy import select
+
+client = Client()
+client.connect(database='test')
+
+# CSV export (pandas-style)
+client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+
+# TSV export
+client.export.to_csv('/tmp/users.tsv', "SELECT * FROM users", sep='\t')
+
+# JSONL export
+client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
+
+# Export with SQLAlchemy
+stmt = select(User).where(User.age > 25)
+client.export.to_csv('/tmp/adults.csv', stmt)
+
+# Export to external stage (using stage:// protocol)
+client.export.to_csv('stage://s3_stage/backup.csv', stmt)
+
+# Export to external stage (using convenience method)
+client.export.to_csv_stage('s3_stage', 'backup2.csv', stmt)
+
+client.disconnect()
+```
 
 ### Wrapping Existing Sessions (For Legacy Code)
 

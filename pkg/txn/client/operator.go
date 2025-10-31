@@ -264,6 +264,7 @@ type txnOperator struct {
 		fprints              footPrints
 		runningSQL           atomic.Bool
 		commitErr            error
+		cache                sync.Map
 	}
 
 	opts struct {
@@ -339,6 +340,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.fprints = footPrints{}
 	tc.reset.runningSQL.Store(false)
 	tc.reset.commitErr = nil
+	tc.reset.cache = sync.Map{}
 }
 
 func (tc *txnOperator) initProtectedFields() {
