@@ -429,8 +429,8 @@ func (s *service) watch(ctx context.Context) {
 				defer res.Close()
 				res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					for i := 0; i < rows; i++ {
-						features = append(features, cols[0].UnsafeGetStringAt(i))
-						states = append(states, cols[1].UnsafeGetStringAt(i))
+						features = append(features, cols[0].GetStringAt(i))
+						states = append(states, cols[1].GetStringAt(i))
 					}
 					return true
 				})

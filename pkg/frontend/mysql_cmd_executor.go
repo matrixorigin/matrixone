@@ -1731,13 +1731,13 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
-			rows[i][0] = v0[i].UnsafeGetString(area0)
-			rows[i][1] = v1[i].UnsafeGetString(area1)
+			rows[i][0] = v0[i].GetString(area0)
+			rows[i][1] = v1[i].GetString(area1)
 			rows[i][2] = v2[i]
-			rows[i][3] = v3[i].UnsafeGetString(area3)
-			rows[i][4] = v4[i].UnsafeGetString(area4)
+			rows[i][3] = v3[i].GetString(area3)
+			rows[i][4] = v4[i].GetString(area4)
 			rows[i][5] = v5[i]
-			rows[i][6] = v6[i].UnsafeGetString(area6)
+			rows[i][6] = v6[i].GetString(area6)
 		}
 	}
 

@@ -492,7 +492,7 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 	case types.Rowid:
 		return v.String(), nil
 	default:
-		return "", moerr.NewInternalErrorf(ctx, "unsupported type %d ", v)
+		return "", moerr.NewInternalErrorf(ctx, "unsupported type %T ", v)
 	}
 }
 
