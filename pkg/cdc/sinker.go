@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -919,11 +920,15 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 
 	s.recordTxnSQL(sqlBuf)
 
-	f := func() (err error) {
+	f := func() (stopRetry bool, err error) {
 		if s.tx != nil {
 			_, err = s.tx.Exec(fakeSql, reuseQueryArg)
 		} else {
 			_, err = s.conn.Exec(fakeSql, reuseQueryArg)
+		}
+
+		if err != nil && errors.Is(err, sql.ErrConnDone) {
+			return true, err
 		}
 
 		if err != nil {
@@ -938,7 +943,8 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 	}
 
 	if !needRetry {
-		return f()
+		_, err := f()
+		return err
 	}
 	return retry(ctx, ar, f, s.retryTimes, s.retryDuration)
 }
@@ -973,7 +979,7 @@ func (s *mysqlSink) connect() (err error) {
 	return err
 }
 
-func retry(ctx context.Context, ar *ActiveRoutine, fn func() error, retryTimes int, retryDuration time.Duration) (err error) {
+func retry(ctx context.Context, ar *ActiveRoutine, fn func() (stopRetry bool, err error), retryTimes int, retryDuration time.Duration) (err error) {
 	needRetry := func(retry int, startTime time.Time) bool {
 		// retryTimes == -1 means retry forever
 		// do not exceed retryTimes and retryDuration
@@ -992,7 +998,11 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() error, retryTimes i
 		}
 
 		start := time.Now()
-		err = fn()
+		var stopRetry bool
+		stopRetry, err = fn()
+		if stopRetry || err == nil {
+			return
+		}
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 
 		// return if success

@@ -47,6 +47,7 @@ const (
 	CDCDefaultSendSqlTimeout                 = "10m"
 	CDCDefaultRetryTimes                     = -1
 	CDCDefaultRetryDuration                  = 10 * time.Minute
+	SinkerRetryDuration                      = 2 * time.Minute
 	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
 	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
 )

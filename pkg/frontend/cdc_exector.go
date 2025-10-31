@@ -609,7 +609,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.watermarkUpdater,
 		tableDef,
 		cdc.CDCDefaultRetryTimes,
-		cdc.CDCDefaultRetryDuration,
+		cdc.SinkerRetryDuration,
 		exec.activeRoutine,
 		uint64(exec.additionalConfig[cdc.CDCTaskExtraOptions_MaxSqlLength].(float64)),
 		exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string),
