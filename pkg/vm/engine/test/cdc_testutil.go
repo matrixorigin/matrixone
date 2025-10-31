@@ -912,8 +912,7 @@ func CreateDBAndTableForCDC(
 		`create table %s.%s (
 		id int primary key,
 		name varchar(100),
-		age int,
-		created_at timestamp
+		age int
 		)`, databaseName, tableName)
 
 	v, ok := moruntime.ServiceRuntime("").
@@ -933,9 +932,8 @@ func CreateDBAndTableForCDC(
 			types.T_int32.ToType(),
 			types.T_varchar.ToType(),
 			types.T_int32.ToType(),
-			types.T_timestamp.ToType(),
 		},
-		[]string{"id", "name", "age", "created_at"},
+		[]string{"id", "name", "age"},
 		rowCount,
 		0,
 		nil,
