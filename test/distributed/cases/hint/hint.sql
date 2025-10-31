@@ -1,4 +1,5 @@
-                                           set enable_remap_hint = 1;
+
+set enable_remap_hint = 1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 -- verify the basic rewriting functionality of a single table
@@ -531,12 +532,12 @@ drop database hint_test;
 
 
 -- performance testing
--- @bvt:issue#22688
 -- @session:id=1&user=acc01:test_account&password=111
 set enable_remap_hint = 1;
 drop database if exists acc01_test;
 create database acc01_test;
 use acc01_test;
+-- @bvt:issue#22688
 drop table if exists large_table;
 create table large_table (
     id int,
@@ -545,14 +546,168 @@ create table large_table (
 insert into large_table select result, 2 from generate_series(1, 1000000) g;
 /*+ {
     "rewrites": {
-        "hint_test.large_table": "SELECT * FROM large_table WHERE id < 1000"
+        "acc01_test.large_table": "SELECT * FROM large_table WHERE id < 1000"
   }
 } */
 select count(*) from large_table;
 select count(*) from large_table where id < 1000;
 drop database acc01_test;
 set enable_remap_hint = 0;
--- @session
 -- @bvt:issue
+
+
+
+
+set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
+drop table if exists t_user;
+create table t_user (
+      id           int primary key,
+      username     varchar(50) not null,
+      nick         char(10)     default 'guest',
+      bio          text,
+      status       enum('active','inactive') not null default 'active',
+      created_at   datetime not null default current_timestamp,
+      updated_ts   timestamp,
+      email        varchar(100),
+      phone        varchar(20),
+      avatar       blob,
+      profile      json,
+      ft           varchar,
+      bin_tag      binary(8)
+);
+drop table if exists t_order;
+create table t_order (
+      order_id     int primary key,
+      user_id      int not null,
+      amount       float not null default 0,
+      order_date   date not null,
+      note         text,
+      detail       json,
+      payload      binary(16),
+      status       enum('NEW','PAID','CANCEL') not null default 'NEW',
+      created_ts   timestamp,
+      foreign key (user_id) references t_user(id)
+);
+create fulltext index ftidx on t_user (ft);
+insert into t_user(id,username,nick,bio,status,created_at,updated_ts,email,phone,avatar,profile,ft,bin_tag) values
+(1,'admin','root','super', 'active',   '2025-01-01 12:00:00', '2025-01-01 12:00:00','admin@company.com','13812345678', x'00', '{"level":1,"dept":"R&D"}', 'Matrix Origin', x'0102030405060708'),
+(2,'user123','u123','normal','active',   '2025-02-02 08:30:00', '2025-02-02 08:30:00','user@example.com', '18998765432', x'01', '{"level":2,"dept":"Sales"}', 'hello world',    x'1111111111111111'),
+(3,'test_user','guest',null, 'inactive','2024-12-31 23:59:59', '2024-12-31 23:59:59','test@domain.org',  null,           null, '{"level":1,"dept":"Ops"}',   'quick brown',    x'2222222222222222');
+
+insert into t_order(order_id,user_id,amount,order_date,note,detail,payload,status,created_ts) values
+(101,1, 99.9,  '2025-01-10','first',   '{"coupon":"NY","vip":true}',  x'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA','PAID',   '2025-01-10 10:10:10'),
+(102,1, 10.0,  '2025-03-01','small',   null,                           x'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB','NEW',    '2025-03-01 09:00:00'),
+(201,2, 250.5, '2025-02-15','mid',     '{"gift":1}',                   x'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC','PAID',   '2025-02-15 12:00:00'),
+(301,3, 7.77,  '2024-12-25','xmas',    '{"coupon":"XMAS"}',            x'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD','CANCEL', '2024-12-25 20:20:20');
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, username, status, created_at from t_user where status='active'",
+    "acc01_test.t_order": "select user_id, amount, order_date from t_order where order_date >= '2025-01-01'"
+  }
+} */
+select t_user.id, t_user.username, t_order.amount, t_order.order_date
+from t_user join t_order on t_user.id = t_order.user_id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_order": "select user_id, sum(amount) as total_amt from t_order where status='PAID' group by user_id"
+  }
+} */
+select t_user.id, t_user.username, t_order.total_amt
+from t_user join t_order on t_user.id=t_order.user_id
+order by t_user.id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, profile from t_user where profile like '%1%'",
+    "acc01_test.t_order": "select user_id, count(*) as cnt from t_order where detail is null group by user_id"
+  }
+} */
+select t_user.id, t_order.cnt
+from t_user left join t_order on t_user.id=t_order.user_id
+order by t_user.id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, username from t_user where id = 2"
+  }
+} */
+select id, username from t_user;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, username from t_user where id in (1,3)"
+  }
+} */
+select t_user.id, t_user.username from t_user order by id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, length(avatar) as av_len, hex(bin_tag) as bin_hex from t_user where avatar is not null"
+  }
+} */
+select t_user.id, t_user.av_len, t_user.bin_hex
+from t_user order by id;
+-- 期望：只返回有 avatar 的行，展示长度与二进制十六进制串
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, ft from t_user where ft like '%Matrix%'"
+  }
+} */
+select t_user.id, t_user.ft from t_user;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_order": "select order_id, user_id, status from t_order where status='PAID'",
+    "acc01_test.t_user": "select id, email from t_user where email like '%@company.com'"
+  }
+} */
+select t_order.order_id, t_user.email
+from t_order join t_user on t_order.user_id=t_user.id
+order by t_order.order_id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_order": "select user_id, count(*) as c from t_order where created_ts >= '2025-01-01 00:00:00' and status <> 'CANCEL' group by user_id"
+  }
+} */
+select t_user.id, coalesce(t_order.c,0) as recent_cnt
+from t_user left join t_order on t_user.id=t_order.user_id
+order by t_user.id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, username, phone from t_user where username is not null and phone is not null"
+  }
+} */
+select t_user.id, t_user.username, t_user.phone from t_user order by id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, username from t_user where username like 'user%'",
+    "acc01_test.t_order": "select user_id, sum(amount) s from t_order group by user_id"
+  }
+} */
+select t_user.id, t_user.username, t_order.s
+from t_user join t_order on t_user.id=t_order.user_id
+order by t_user.id;
+
+/*+ {
+  "rewrites": {
+    "acc01_test.t_user": "select id, status from t_user where status='active'",
+    "acc01_test.t_order": "select user_id, max(order_date) as last_day from t_order group by user_id"
+  }
+} */
+select t_user.id, t_order.last_day
+from t_user left join t_order on t_user.id=t_order.user_id
+where t_order.last_day is not null
+order by t_user.id;
+
+drop database if exists acc01_test;
+set enable_remap_hint = 0;
+-- @session
 drop account acc01;
 set enable_remap_hint = 0;
