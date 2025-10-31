@@ -78,7 +78,27 @@ select cast(cast('file://xxx' as float) as datalink);
 select cast(cast(cast('file://xxx' as char) as datalink) as bool);
 select cast(cast(cast('file://xxx' as char) as datalink) as bigint);
 select cast(cast(cast('file://xxx' as char) as datalink) as int);
-
+select cast(cast('file://xxx' as decimal(10,2)) as datalink);
+select cast(cast('file://xxx' as double) as datalink);
+select cast(cast('file://xxx' as date) as datalink);
+select cast(cast('file://xxx' as datetime) as datalink);
+select cast(cast('file://xxx' as timestamp) as datalink);
+select cast(cast('file://xxx' as time) as datalink);
+select cast(cast('file://xxx' as year) as datalink);
+select cast(cast('file://xxx' as tinyint) as datalink);
+select cast(cast('file://xxx' as smallint) as datalink);
+select cast(cast('file://xxx' as mediumint) as datalink);
+select cast(cast('file://xxx' as bigint unsigned) as datalink);
+select cast(cast('file://xxx' as float(10,2)) as datalink);
+select cast(cast('file://xxx' as enum('a','b')) as datalink);
+select cast(cast('{"k":1}' as json) as datalink);
+select cast(cast('[1,2,3]' as json) as datalink);
+select cast(cast('file://xxx' as fulltext) as datalink);
+select cast(cast(cast('file://xxx' as varchar) as datalink) as decimal(12,3));
+select cast(cast(cast('file://xxx' as varchar) as datalink) as float);
+select cast(cast(cast('file://xxx' as varchar) as datalink) as date);
+select cast(cast(cast('file://xxx' as varchar) as datalink) as datetime);
+select cast(cast(cast('file://xxx' as varchar) as datalink) as timestamp);
 
 -- success cast
 select cast(cast('file://xxx' as binary) as datalink);
@@ -89,7 +109,17 @@ select cast(cast(cast('file://xxx' as char) as datalink) as text);
 select cast(cast(cast('file://xxx' as char) as datalink) as varchar);
 select cast(cast(cast('file://xxx' as char) as datalink) as char);
 
-
+select cast('' as datalink);
+select cast('   ' as datalink);
+select cast(cast('file://xxx' as varchar(100)) as datalink);
+select cast(cast('file://xxx' as char(20)) as datalink);
+select cast(cast('file://xxx' as text) as datalink);
+select cast(cast(x'66696C653A2F2F787878' as binary) as datalink); -- 'file://xxx' 的hex
+select cast(null as datalink);
+select cast(cast(null as varchar) as datalink);
+select cast(cast(cast(null as varchar) as datalink) as varchar);
+select cast(cast('file://短路径' as char(32)) as datalink);
+select cast('file:///etc/hosts#L10' as datalink);
 
 
 drop stage filestage;
