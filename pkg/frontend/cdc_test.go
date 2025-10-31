@@ -2782,7 +2782,7 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 	defer stub2.Reset()
 
 	stub3 := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, int64, int, error) {
-		return false, nil
+		return false, 0, 0, nil
 	})
 	defer stub3.Reset()
 
