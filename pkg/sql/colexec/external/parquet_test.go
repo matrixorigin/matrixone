@@ -350,6 +350,38 @@ func TestParquet_Dictionary_Date_Time_Timestamp(t *testing.T) {
 		require.Equal(t, []types.Date{types.DaysFromUnixEpochToDate(0), types.DaysFromUnixEpochToDate(1), types.DaysFromUnixEpochToDate(0)}, got)
 	}
 
+	// TIME nanos dictionary (int64 nanos)
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Time(parquet.Nanosecond).Type()), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(1_000), parquet.Int64Value(61_000), parquet.Int64Value(1_000),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_time, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Time](vec)
+		require.Equal(t, []types.Time{types.Time(1), types.Time(61), types.Time(1)}, got)
+	}
+
+	// TIME micros dictionary (int64 micros)
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Time(parquet.Microsecond).Type()), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(1_000), parquet.Int64Value(61_000), parquet.Int64Value(1_000),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_time, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Time](vec)
+		require.Equal(t, []types.Time{types.Time(1_000), types.Time(61_000), types.Time(1_000)}, got)
+	}
+
 	// TIME millis dictionary (int32 millis)
 	{
 		node := parquet.Encoded(parquet.Leaf(parquet.Time(parquet.Millisecond).Type()), &parquet.RLEDictionary)
@@ -365,6 +397,22 @@ func TestParquet_Dictionary_Date_Time_Timestamp(t *testing.T) {
 		got := vector.MustFixedColWithTypeCheck[types.Time](vec)
 		// TIME stores microseconds of day
 		require.Equal(t, []types.Time{types.Time(1000) * 1000, types.Time(61000) * 1000, types.Time(1000) * 1000}, got)
+	}
+
+	// TIMESTAMP nanos dictionary (int64 nanos)
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Timestamp(parquet.Nanosecond).Type()), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(1_000), parquet.Int64Value(2_000), parquet.Int64Value(1_000),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+		require.Equal(t, []types.Timestamp{types.UnixNanoToTimestamp(1_000), types.UnixNanoToTimestamp(2_000), types.UnixNanoToTimestamp(1_000)}, got)
 	}
 
 	// TIMESTAMP micros dictionary (int64 micros)
@@ -513,6 +561,70 @@ func TestParquet_Time_Timestamp_Datetime_Units(t *testing.T) {
 	}
 }
 
+func TestParquet_Dictionary_Datetime(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	// DATETIME nanos dictionary (int64 nanos)
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Timestamp(parquet.Nanosecond).Type()), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(1_000), parquet.Int64Value(2_000), parquet.Int64Value(1_000),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Datetime](vec)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(types.UnixNanoToTimestamp(1_000)),
+			types.Datetime(types.UnixNanoToTimestamp(2_000)),
+			types.Datetime(types.UnixNanoToTimestamp(1_000)),
+		}, got)
+	}
+
+	// DATETIME micros dictionary (int64 micros)
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Timestamp(parquet.Microsecond).Type()), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(500_000), parquet.Int64Value(1_000_000), parquet.Int64Value(500_000),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Datetime](vec)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(types.UnixMicroToTimestamp(500_000)),
+			types.Datetime(types.UnixMicroToTimestamp(1_000_000)),
+			types.Datetime(types.UnixMicroToTimestamp(500_000)),
+		}, got)
+	}
+
+	// DATETIME millis dictionary (int64 millis)
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Timestamp(parquet.Millisecond).Type()), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(3), parquet.Int64Value(4), parquet.Int64Value(3),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Datetime](vec)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(types.UnixMicroToTimestamp(3_000)),
+			types.Datetime(types.UnixMicroToTimestamp(4_000)),
+			types.Datetime(types.UnixMicroToTimestamp(3_000)),
+		}, got)
+	}
+}
+
 func TestParquet_Decimal_Mapping(t *testing.T) {
 	proc := testutil.NewProc(t)
 	// decimal64 from int32 non-dict
@@ -562,7 +674,70 @@ func TestParquet_Decimal_Mapping(t *testing.T) {
 		require.Equal(t, uint64(0), got[0].B64_127)
 		require.Equal(t, uint64(^uint64(0)), got[1].B64_127) // sign extension for negative
 	}
-	// Note: decimal256 vector type may not be fully supported by vector.New; skip mapping here.
+	// Note: decimal256 non-dictionary mapping is skipped because vector.New may not fully support it yet.
+}
+
+func TestParquet_Dictionary_Decimals(t *testing.T) {
+	proc := testutil.NewProc(t)
+	toDecimal64 := func(v int64) types.Decimal64 {
+		return types.Decimal64(v)
+	}
+
+	// DECIMAL64 dictionary
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Int64Type), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(7), parquet.Int64Value(-3), parquet.Int64Value(7),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_decimal64, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_decimal64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+		require.Equal(t, []types.Decimal64{toDecimal64(7), toDecimal64(-3), toDecimal64(7)}, got)
+	}
+
+	// DECIMAL128 dictionary
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Int64Type), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(11), parquet.Int64Value(-9), parquet.Int64Value(11),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_decimal128, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_decimal128), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)
+		require.Equal(t, []types.Decimal128{
+			decimal128FromInt64(11),
+			decimal128FromInt64(-9),
+			decimal128FromInt64(11),
+		}, got)
+	}
+
+	// DECIMAL256 dictionary
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.Int64Type), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.Int64Value(13), parquet.Int64Value(-5), parquet.Int64Value(13),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		vec := vector.NewVec(types.New(types.T_decimal256, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_decimal256), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		got := vector.MustFixedColWithTypeCheck[types.Decimal256](vec)
+		require.Equal(t, []types.Decimal256{
+			decimal256FromInt64(13),
+			decimal256FromInt64(-5),
+			decimal256FromInt64(13),
+		}, got)
+	}
 }
 
 func TestParquet_openFile_localNYI(t *testing.T) {
