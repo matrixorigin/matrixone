@@ -155,7 +155,7 @@ func checkTimedJobConfig(
 			return true, consumer.watermark.Next(), maxTS, true
 		} else {
 			if minTS.EQ(&maxTS) {
-				return true, maxTS, now, true
+				return true, maxTS.Next(), now, true
 			}
 			return false, types.TS{}, types.TS{}, false
 		}
