@@ -307,11 +307,11 @@ var readTableWithTxn = func(
 	packer *types.Packer,
 	ar *ActiveRoutine,
 ) (retryable bool, err error) {
-	retry(ctx, ar, func() (stopRetry bool, err error) {
+	err = retry(ctx, ar, func() (stopRetry bool, err error) {
 		var retryWithNewReader bool
 		retryable, retryWithNewReader, err = reader.readTableWithTxn(ctx, txnOp, packer, ar)
 		if retryWithNewReader {
-			return true, nil
+			return true, err
 		}
 		return false, err
 	}, CDCDefaultRetryTimes, CDCDefaultRetryDuration)
