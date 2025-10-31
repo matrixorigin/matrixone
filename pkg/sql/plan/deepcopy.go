@@ -345,6 +345,17 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 	}
 }
 
+func DeepCopyColDefList(colDefs []*plan.ColDef) []*plan.ColDef {
+	if colDefs == nil {
+		return nil
+	}
+	newColDefs := make([]*plan.ColDef, len(colDefs))
+	for i, col := range colDefs {
+		newColDefs[i] = DeepCopyColDef(col)
+	}
+	return newColDefs
+}
+
 func DeepCopyPrimaryKeyDef(pkeyDef *plan.PrimaryKeyDef) *plan.PrimaryKeyDef {
 	if pkeyDef == nil {
 		return nil
@@ -452,10 +463,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 	}
 
 	if withCols {
-		newTable.Cols = make([]*plan.ColDef, len(table.Cols))
-		for idx, col := range table.Cols {
-			newTable.Cols[idx] = DeepCopyColDef(col)
-		}
+		newTable.Cols = DeepCopyColDefList(table.Cols)
 	}
 
 	for idx, fkey := range table.Fkeys {

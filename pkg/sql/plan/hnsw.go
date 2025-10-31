@@ -63,7 +63,7 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
 
-	colDefs := _getColDefs(hnswBuildIndexColDefs)
+	colDefs := DeepCopyColDefList(hnswBuildIndexColDefs)
 	params, err := builder.getHnswParams(tbl.Func)
 	if err != nil {
 		return 0, err
@@ -105,7 +105,7 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
-	colDefs := _getColDefs(hnswSearchColDefs)
+	colDefs := DeepCopyColDefList(hnswSearchColDefs)
 
 	params, err := builder.getHnswParams(tbl.Func)
 	if err != nil {

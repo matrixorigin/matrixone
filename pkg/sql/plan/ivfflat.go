@@ -62,7 +62,7 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
 	}
 
-	colDefs := _getColDefs(ivfBuildIndexColDefs)
+	colDefs := DeepCopyColDefList(ivfBuildIndexColDefs)
 	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {
 		return 0, err
@@ -102,7 +102,7 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
-	colDefs := _getColDefs(ivfSearchColDefs)
+	colDefs := DeepCopyColDefList(ivfSearchColDefs)
 
 	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {

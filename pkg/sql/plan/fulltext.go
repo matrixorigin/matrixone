@@ -82,7 +82,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 5).")
 	}
 
-	colDefs := _getColDefs(ftIndexColdefs)
+	colDefs := DeepCopyColDefList(ftIndexColdefs)
 
 	params, err := builder.getFullTextParams(tbl.Func)
 	if err != nil {
@@ -180,7 +180,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
 	}
 
-	colDefs := _getColDefs(tokenizeColDefs)
+	colDefs := DeepCopyColDefList(tokenizeColDefs)
 	params, err := builder.getFullTextParams(tbl.Func)
 	if err != nil {
 		return 0, err

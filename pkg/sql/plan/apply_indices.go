@@ -280,13 +280,10 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-
-				if !builder.checkValidIvfflatDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
-					continue
+				newNodeID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, projNode, sortNode, scanNode, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
 				}
-
-				return builder.applyIndicesForSortUsingIvfflat(nodeID, projNode, sortNode, scanNode,
-					colRefCnt, idxColMap, multiTableIndex)
 
 			case catalog.MoIndexHnswAlgo.ToString():
 
