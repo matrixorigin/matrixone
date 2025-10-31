@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -871,4 +872,38 @@ func parseFrequencyToDuration(freq string) time.Duration {
 	}
 	minutes, _ := strconv.Atoi(strings.TrimSuffix(freq, "m"))
 	return time.Duration(minutes) * time.Minute
+}
+
+var retryableErrorRegex = regexp.MustCompile(`^retryable error(?::(\d+):(\d+))?`)
+
+// ParseRetryableError parses a retryable error string and extracts the information
+// Input format: "retryable error:1633024500:3:database connection failed"
+// Returns:
+//   - retryable: true if the input starts with "retryable error", false otherwise
+//   - startts: the timestamp extracted from the input (0 if not present)
+//   - retryTimes: the retry count extracted from the input (0 if not present)
+func ParseRetryableError(input string) (retryable bool, startts int64, retryTimes int) {
+	if input == "" {
+		return false, 0, 0
+	}
+
+	matches := retryableErrorRegex.FindStringSubmatch(input)
+	if matches == nil {
+		return false, 0, 0
+	}
+
+	// Found "retryable error" prefix
+	retryable = true
+
+	// Try to extract timestamp (group 1)
+	if len(matches) > 1 && matches[1] != "" {
+		startts, _ = strconv.ParseInt(matches[1], 10, 64)
+	}
+
+	// Try to extract retry times (group 2)
+	if len(matches) > 2 && matches[2] != "" {
+		retryTimes, _ = strconv.Atoi(matches[2])
+	}
+
+	return retryable, startts, retryTimes
 }

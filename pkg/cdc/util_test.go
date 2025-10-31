@@ -974,3 +974,86 @@ func TestParseFrequencyToDuration(t *testing.T) {
 		t.Errorf("30m: got %v, want %v", got, 30*time.Minute)
 	}
 }
+
+func TestParseRetryableError(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		wantRetryable  bool
+		wantStartts    int64
+		wantRetryTimes int
+	}{
+		{
+			name:           "empty string",
+			input:          "",
+			wantRetryable:  false,
+			wantStartts:    0,
+			wantRetryTimes: 0,
+		},
+		{
+			name:           "only prefix",
+			input:          "retryable error",
+			wantRetryable:  true,
+			wantStartts:    0,
+			wantRetryTimes: 0,
+		},
+		{
+			name:           "full format",
+			input:          "retryable error:1633024500:3:database connection failed",
+			wantRetryable:  true,
+			wantStartts:    1633024500,
+			wantRetryTimes: 3,
+		},
+		{
+			name:           "full format with different values",
+			input:          "retryable error:1234567890:5:some error message",
+			wantRetryable:  true,
+			wantStartts:    1234567890,
+			wantRetryTimes: 5,
+		},
+		{
+			name:           "non-retryable error",
+			input:          "some other error",
+			wantRetryable:  false,
+			wantStartts:    0,
+			wantRetryTimes: 0,
+		},
+		{
+			name:           "prefix with extra text but no timestamp",
+			input:          "retryable error something",
+			wantRetryable:  true,
+			wantStartts:    0,
+			wantRetryTimes: 0,
+		},
+		{
+			name:           "prefix with colon but incomplete format",
+			input:          "retryable error:",
+			wantRetryable:  true,
+			wantStartts:    0,
+			wantRetryTimes: 0,
+		},
+		{
+			name:           "zero values",
+			input:          "retryable error:0:0:test",
+			wantRetryable:  true,
+			wantStartts:    0,
+			wantRetryTimes: 0,
+		},
+		{
+			name:           "large timestamp",
+			input:          "retryable error:9999999999:100:error",
+			wantRetryable:  true,
+			wantStartts:    9999999999,
+			wantRetryTimes: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRetryable, gotStartts, gotRetryTimes := ParseRetryableError(tt.input)
+			assert.Equal(t, tt.wantRetryable, gotRetryable, "retryable mismatch")
+			assert.Equal(t, tt.wantStartts, gotStartts, "startts mismatch")
+			assert.Equal(t, tt.wantRetryTimes, gotRetryTimes, "retryTimes mismatch")
+		})
+	}
+}
