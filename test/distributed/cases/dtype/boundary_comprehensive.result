@@ -1,0 +1,520 @@
+DROP TABLE IF EXISTS t_bigint;
+CREATE TABLE t_bigint (
+id INT PRIMARY KEY AUTO_INCREMENT,
+val_signed BIGINT,
+val_unsigned BIGINT UNSIGNED
+);
+INSERT INTO t_bigint (val_signed, val_unsigned) VALUES (-9223372036854775808, 0);
+INSERT INTO t_bigint (val_signed, val_unsigned) VALUES (0, 9223372036854775807);
+INSERT INTO t_bigint (val_signed, val_unsigned) VALUES (9223372036854775807, 18446744073709551615);
+SELECT * FROM t_bigint ORDER BY id;
+id    val_signed    val_unsigned
+1    -9223372036854775808    0
+2    0    9223372036854775807
+3    9223372036854775807    18446744073709551615
+INSERT INTO t_bigint (val_signed) VALUES (9223372036854775808);
+Data truncation: data out of range: data type int64, value '9223372036854775808'
+INSERT INTO t_bigint (val_signed) VALUES (-9223372036854775809);
+Data truncation: data out of range: data type int64, value '-9223372036854775809'
+SELECT val_signed + 1 FROM t_bigint WHERE val_signed = 9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+SELECT val_signed - 1 FROM t_bigint WHERE val_signed = -9223372036854775808;
+Data truncation: data out of range: data type int64, (-9223372036854775808 - 1)
+SELECT val_signed * 2 FROM t_bigint WHERE val_signed = 9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 * 2)
+DROP TABLE t_bigint;
+DROP TABLE IF EXISTS t_int;
+CREATE TABLE t_int (
+id INT PRIMARY KEY AUTO_INCREMENT,
+val_signed INT,
+val_unsigned INT UNSIGNED
+);
+INSERT INTO t_int (val_signed, val_unsigned) VALUES (-2147483648, 0);
+INSERT INTO t_int (val_signed, val_unsigned) VALUES (2147483647, 4294967295);
+SELECT * FROM t_int ORDER BY id;
+id    val_signed    val_unsigned
+1    -2147483648    0
+2    2147483647    4294967295
+INSERT INTO t_int (val_signed) VALUES (2147483648);
+Data truncation: data out of range: data type int32, value '2147483648'
+INSERT INTO t_int (val_unsigned) VALUES (4294967296);
+Data truncation: data out of range: data type uint32, value '4294967296'
+DROP TABLE t_int;
+DROP TABLE IF EXISTS t_small_int;
+CREATE TABLE t_small_int (
+id INT PRIMARY KEY AUTO_INCREMENT,
+tiny TINYINT,
+small SMALLINT
+);
+INSERT INTO t_small_int (tiny, small) VALUES (-128, -32768);
+INSERT INTO t_small_int (tiny, small) VALUES (127, 32767);
+SELECT * FROM t_small_int ORDER BY id;
+id    tiny    small
+1    -128    -32768
+2    127    32767
+DROP TABLE t_small_int;
+DROP TABLE IF EXISTS t_sum_overflow;
+CREATE TABLE t_sum_overflow (val BIGINT);
+INSERT INTO t_sum_overflow VALUES (9223372036854775807);
+INSERT INTO t_sum_overflow VALUES (9223372036854775807);
+INSERT INTO t_sum_overflow VALUES (9223372036854775807);
+SELECT SUM(val) FROM t_sum_overflow;
+Data truncation: data out of range: data type int64, SUM overflow in (9223372036854775807 + 9223372036854775807)
+SELECT SUM(CAST(val AS DECIMAL(38,0))) FROM t_sum_overflow;
+SUM(cast(val as decimal(38)))
+27670116110564327421
+DROP TABLE t_sum_overflow;
+DROP TABLE IF EXISTS t_float;
+CREATE TABLE t_float (
+id INT PRIMARY KEY AUTO_INCREMENT,
+val_float FLOAT,
+val_double DOUBLE
+);
+INSERT INTO t_float (val_float, val_double) VALUES (1.23456789, 1.23456789);
+INSERT INTO t_float (val_float, val_double) VALUES (123456789.123456789, 123456789.123456789);
+SELECT * FROM t_float ORDER BY id;
+id    val_float    val_double
+1    1.2345679    1.23456789
+2    1.2345679E8    1.2345678912345679E8
+DROP TABLE t_float;
+DROP TABLE IF EXISTS t_decimal;
+CREATE TABLE t_decimal (
+id INT PRIMARY KEY AUTO_INCREMENT,
+dec_5_2 DECIMAL(5,2),
+dec_20_10 DECIMAL(20,10)
+);
+INSERT INTO t_decimal (dec_5_2, dec_20_10) VALUES (999.99, 9999999999.9999999999);
+INSERT INTO t_decimal (dec_5_2, dec_20_10) VALUES (-999.99, -9999999999.9999999999);
+SELECT * FROM t_decimal ORDER BY id;
+id    dec_5_2    dec_20_10
+1    999.99    9999999999.9999999999
+2    -999.99    -9999999999.9999999999
+INSERT INTO t_decimal (dec_5_2) VALUES (1000.00);
+invalid input: 1000.00 beyond the range, can't be converted to Decimal64(5,2).
+INSERT INTO t_decimal (dec_5_2) VALUES (123.456);
+SELECT * FROM t_decimal WHERE id = 3;
+id    dec_5_2    dec_20_10
+3    123.46    null
+DROP TABLE t_decimal;
+DROP TABLE IF EXISTS t_float_cmp;
+CREATE TABLE t_float_cmp (
+id INT PRIMARY KEY,
+val1 FLOAT,
+val2 FLOAT
+);
+INSERT INTO t_float_cmp VALUES (1, 0.1, 0.1);
+INSERT INTO t_float_cmp VALUES (2, 0.1 + 0.1 + 0.1, 0.3);
+SELECT id, val1, val2, val1 = val2 FROM t_float_cmp ORDER BY id;
+id    val1    val2    val1 = val2
+1    0.1    0.1    true
+2    0.3    0.3    true
+DROP TABLE t_float_cmp;
+DROP TABLE IF EXISTS t_varchar;
+CREATE TABLE t_varchar (
+id INT PRIMARY KEY AUTO_INCREMENT,
+short_str VARCHAR(10),
+long_str VARCHAR(1000)
+);
+INSERT INTO t_varchar (short_str) VALUES ('1234567890');
+INSERT INTO t_varchar (short_str) VALUES ('12345');
+INSERT INTO t_varchar (short_str) VALUES ('12345678901');
+internal error: Can't cast '12345678901' to VARCHAR type. Src length 11 is larger than Dest length 10
+INSERT INTO t_varchar (short_str) VALUES ('');
+INSERT INTO t_varchar (short_str) VALUES (NULL);
+SELECT id, short_str, LENGTH(short_str) AS len, short_str IS NULL AS is_null
+FROM t_varchar ORDER BY id;
+id    short_str    len    is_null
+1    1234567890    10    false
+2    12345    5    false
+3        0    false
+4    null    null    true
+INSERT INTO t_varchar (short_str) VALUES ('中文测试');
+INSERT INTO t_varchar (short_str) VALUES ('🎉🎊');
+SELECT id, short_str, LENGTH(short_str) AS bytes, CHAR_LENGTH(short_str) AS chars
+FROM t_varchar WHERE id > 5 ORDER BY id;
+id    short_str    bytes    chars
+6    🎉🎊    8    2
+DROP TABLE t_varchar;
+DROP TABLE IF EXISTS t_char_varchar;
+CREATE TABLE t_char_varchar (
+id INT PRIMARY KEY AUTO_INCREMENT,
+char_col CHAR(10),
+varchar_col VARCHAR(10)
+);
+INSERT INTO t_char_varchar (char_col, varchar_col) VALUES ('test', 'test');
+INSERT INTO t_char_varchar (char_col, varchar_col) VALUES ('test   ', 'test   ');
+SELECT id,
+CONCAT('[', char_col, ']') AS char_brackets,
+CONCAT('[', varchar_col, ']') AS varchar_brackets,
+LENGTH(char_col) AS char_len,
+LENGTH(varchar_col) AS varchar_len
+FROM t_char_varchar ORDER BY id;
+id    char_brackets    varchar_brackets    char_len    varchar_len
+1    [test]    [test]    4    4
+2    [test   ]    [test   ]    7    7
+DROP TABLE t_char_varchar;
+DROP TABLE IF EXISTS t_date;
+CREATE TABLE t_date (
+id INT PRIMARY KEY AUTO_INCREMENT,
+dt DATE
+);
+INSERT INTO t_date (dt) VALUES ('1000-01-01');
+INSERT INTO t_date (dt) VALUES ('1970-01-01');
+INSERT INTO t_date (dt) VALUES ('2038-01-19');
+INSERT INTO t_date (dt) VALUES ('9999-12-31');
+SELECT * FROM t_date ORDER BY dt;
+id    dt
+1    1000-01-01
+2    1970-01-01
+3    2038-01-19
+4    9999-12-31
+INSERT INTO t_date (dt) VALUES ('10000-01-01');
+invalid argument parsedate, bad value 10000-01-01
+INSERT INTO t_date (dt) VALUES ('2024-02-30');
+invalid argument parsedate, bad value 2024-02-30
+INSERT INTO t_date (dt) VALUES ('2024-13-01');
+invalid argument parsedate, bad value 2024-13-01
+INSERT INTO t_date (dt) VALUES ('2024-02-29');
+INSERT INTO t_date (dt) VALUES ('2023-02-29');
+invalid argument parsedate, bad value 2023-02-29
+INSERT INTO t_date (dt) VALUES ('1900-02-29');
+invalid argument parsedate, bad value 1900-02-29
+SELECT * FROM t_date WHERE YEAR(dt) IN (2000, 2023, 2024) ORDER BY dt;
+id    dt
+5    2024-02-29
+DROP TABLE t_date;
+DROP TABLE IF EXISTS t_datetime;
+CREATE TABLE t_datetime (
+id INT PRIMARY KEY AUTO_INCREMENT,
+dt0 DATETIME(0),
+dt6 DATETIME(6)
+);
+INSERT INTO t_datetime (dt0, dt6) VALUES
+('2024-01-01 12:34:56', '2024-01-01 12:34:56.789012');
+INSERT INTO t_datetime (dt0, dt6) VALUES
+('2024-01-01 23:59:59.999', '2024-01-01 23:59:59.999999');
+SELECT * FROM t_datetime ORDER BY id;
+id    dt0    dt6
+1    2024-01-01 12:34:56    2024-01-01 12:34:56.789012000
+2    2024-01-02 00:00:00    2024-01-01 23:59:59.999999000
+DROP TABLE t_datetime;
+DROP TABLE IF EXISTS t_timestamp;
+CREATE TABLE t_timestamp (
+id INT PRIMARY KEY AUTO_INCREMENT,
+ts TIMESTAMP
+);
+INSERT INTO t_timestamp (ts) VALUES ('1970-01-01 00:00:01');
+INSERT INTO t_timestamp (ts) VALUES ('2038-01-19 03:14:07');
+SELECT * FROM t_timestamp ORDER BY ts;
+id    ts
+1    1970-01-01 00:00:01
+2    2038-01-19 03:14:07
+INSERT INTO t_timestamp (ts) VALUES ('1969-12-31 23:59:59');
+INSERT INTO t_timestamp (ts) VALUES ('2038-01-19 03:14:08');
+DROP TABLE t_timestamp;
+DROP TABLE IF EXISTS t_time;
+CREATE TABLE t_time (
+id INT PRIMARY KEY AUTO_INCREMENT,
+tm TIME
+);
+INSERT INTO t_time (tm) VALUES ('-838:59:59');
+INSERT INTO t_time (tm) VALUES ('00:00:00');
+INSERT INTO t_time (tm) VALUES ('838:59:59');
+SELECT * FROM t_time ORDER BY id;
+id    tm
+1    -838:59:59
+2    00:00:00
+3    838:59:59
+INSERT INTO t_time (tm) VALUES ('839:00:00');
+DROP TABLE t_time;
+DROP TABLE IF EXISTS t_null_test;
+CREATE TABLE t_null_test (
+id INT PRIMARY KEY,
+str_col VARCHAR(50),
+int_col INT
+);
+INSERT INTO t_null_test VALUES (1, NULL, NULL);
+INSERT INTO t_null_test VALUES (2, '', 0);
+INSERT INTO t_null_test VALUES (3, '0', 0);
+SELECT id,
+str_col,
+str_col IS NULL AS is_null,
+str_col = '' AS is_empty
+FROM t_null_test ORDER BY id;
+id    str_col    is_null    is_empty
+1    null    true    null
+2        false    true
+3    0    false    false
+SELECT * FROM t_null_test WHERE int_col IS NULL;
+id    str_col    int_col
+1    null    null
+SELECT * FROM t_null_test WHERE int_col = NULL;
+id    str_col    int_col
+DROP TABLE t_null_test;
+DROP TABLE IF EXISTS t_null_arith;
+CREATE TABLE t_null_arith (
+id INT PRIMARY KEY,
+val INT
+);
+INSERT INTO t_null_arith VALUES (1, NULL);
+INSERT INTO t_null_arith VALUES (2, 10);
+SELECT id, val, val + 1 AS plus_one, val * 2 AS times_two FROM t_null_arith ORDER BY id;
+id    val    plus_one    times_two
+1    null    null    null
+2    10    11    20
+DROP TABLE t_null_arith;
+DROP TABLE IF EXISTS t_null_agg;
+CREATE TABLE t_null_agg (
+id INT PRIMARY KEY,
+category VARCHAR(10),
+value INT
+);
+INSERT INTO t_null_agg VALUES (1, 'A', 10);
+INSERT INTO t_null_agg VALUES (2, 'A', NULL);
+INSERT INTO t_null_agg VALUES (3, 'A', 20);
+INSERT INTO t_null_agg VALUES (4, 'B', NULL);
+INSERT INTO t_null_agg VALUES (5, 'B', NULL);
+SELECT category,
+COUNT(*) AS count_all,
+COUNT(value) AS count_value,
+SUM(value) AS sum_value,
+AVG(value) AS avg_value
+FROM t_null_agg
+GROUP BY category
+ORDER BY category;
+category    count_all    count_value    sum_value    avg_value
+A    3    2    30    15.0
+B    2    0    null    null
+DROP TABLE t_null_agg;
+DROP TABLE IF EXISTS t_left;
+DROP TABLE IF EXISTS t_right;
+CREATE TABLE t_left (id INT PRIMARY KEY, val INT);
+CREATE TABLE t_right (id INT PRIMARY KEY, val INT);
+INSERT INTO t_left VALUES (1, NULL), (2, 0), (3, 10);
+INSERT INTO t_right VALUES (1, NULL), (2, 0), (3, 10);
+SELECT l.id, l.val, r.id, r.val
+FROM t_left l JOIN t_right r ON l.val = r.val
+ORDER BY l.id;
+id    val    id    val
+2    0    2    0
+3    10    3    10
+DROP TABLE t_left;
+DROP TABLE t_right;
+DROP TABLE IF EXISTS t_div;
+CREATE TABLE t_div (
+id INT PRIMARY KEY,
+numerator INT,
+denominator INT
+);
+INSERT INTO t_div VALUES (1, 100, 0);
+INSERT INTO t_div VALUES (2, 10, 3);
+SELECT numerator / denominator FROM t_div WHERE id = 1;
+Data truncation: division by zero
+SELECT numerator / denominator FROM t_div WHERE id = 2;
+numerator / denominator
+3.3333333333333335
+DROP TABLE t_div;
+DROP TABLE IF EXISTS t_mod;
+CREATE TABLE t_mod (
+id INT PRIMARY KEY,
+val INT,
+divisor INT
+);
+INSERT INTO t_mod VALUES (1, 100, 0);
+INSERT INTO t_mod VALUES (2, 10, 3);
+SELECT val % divisor FROM t_mod WHERE id = 1;
+val % divisor
+null
+SELECT val % divisor FROM t_mod WHERE id = 2;
+val % divisor
+1
+DROP TABLE t_mod;
+DROP TABLE IF EXISTS t_conv;
+CREATE TABLE t_conv (
+id INT PRIMARY KEY,
+big_val BIGINT,
+str_val VARCHAR(50)
+);
+INSERT INTO t_conv VALUES (1, 9223372036854775807, '9223372036854775807');
+INSERT INTO t_conv VALUES (2, 0, '99999999999999999999');
+SELECT CAST(big_val AS INT) FROM t_conv WHERE id = 1;
+Data truncation: data out of range: data type int32, value '9223372036854775807'
+SELECT CAST(big_val AS SMALLINT) FROM t_conv WHERE id = 1;
+Data truncation: data out of range: data type int16, value '9223372036854775807'
+SELECT CAST(str_val AS BIGINT) FROM t_conv WHERE id = 1;
+cast(str_val as bigint)
+9223372036854775807
+SELECT CAST(str_val AS BIGINT) FROM t_conv WHERE id = 2;
+Data truncation: data out of range: data type int64, value '99999999999999999999'
+DROP TABLE t_conv;
+DROP TABLE IF EXISTS t_cmp;
+CREATE TABLE t_cmp (
+id INT PRIMARY KEY,
+val BIGINT
+);
+INSERT INTO t_cmp VALUES (1, 9223372036854775807);
+INSERT INTO t_cmp VALUES (2, -9223372036854775808);
+INSERT INTO t_cmp VALUES (3, 0);
+SELECT * FROM t_cmp WHERE val > 9223372036854775806;
+id    val
+1    9223372036854775807
+SELECT * FROM t_cmp WHERE val < -9223372036854775807;
+id    val
+2    -9223372036854775808
+SELECT * FROM t_cmp WHERE val BETWEEN -1 AND 1;
+id    val
+3    0
+SELECT * FROM t_cmp WHERE val IN (9223372036854775807, -9223372036854775808, 0);
+id    val
+1    9223372036854775807
+2    -9223372036854775808
+3    0
+DROP TABLE t_cmp;
+DROP TABLE IF EXISTS t_str_empty;
+CREATE TABLE t_str_empty (
+id INT PRIMARY KEY,
+str VARCHAR(50)
+);
+INSERT INTO t_str_empty VALUES (1, NULL);
+INSERT INTO t_str_empty VALUES (2, '');
+INSERT INTO t_str_empty VALUES (3, ' ');
+SELECT id, str,
+str IS NULL AS is_null,
+str = '' AS is_empty,
+LENGTH(str) AS len
+FROM t_str_empty ORDER BY id;
+id    str    is_null    is_empty    len
+1    null    true    null    null
+2        false    true    0
+3         false    false    1
+SELECT id, CONCAT('prefix-', str, '-suffix') FROM t_str_empty ORDER BY id;
+id    CONCAT(prefix-, str, -suffix)
+1    null
+2    prefix--suffix
+3    prefix- -suffix
+DROP TABLE t_str_empty;
+DROP TABLE IF EXISTS t_special;
+CREATE TABLE t_special (
+id INT PRIMARY KEY AUTO_INCREMENT,
+str VARCHAR(100)
+);
+INSERT INTO t_special (str) VALUES ('Line1\nLine2');
+INSERT INTO t_special (str) VALUES ('Quote''s');
+INSERT INTO t_special (str) VALUES ('Back\\Slash');
+SELECT id, str, LENGTH(str) FROM t_special ORDER BY id;
+id    str    LENGTH(str)
+1    Line1\nLine2    11
+2    Quote's    7
+3    Back\Slash    10
+DROP TABLE t_special;
+DROP TABLE IF EXISTS t_date_arith;
+CREATE TABLE t_date_arith (
+id INT PRIMARY KEY,
+dt DATE
+);
+INSERT INTO t_date_arith VALUES (1, '9999-12-31');
+INSERT INTO t_date_arith VALUES (2, '1000-01-01');
+INSERT INTO t_date_arith VALUES (3, '2024-02-29');
+SELECT dt, DATE_ADD(dt, INTERVAL 1 DAY) FROM t_date_arith WHERE id = 1;
+Data truncation: data out of range: data type date, 
+SELECT dt, DATE_SUB(dt, INTERVAL 1 DAY) FROM t_date_arith WHERE id = 2;
+dt    DATE_SUB(dt, INTERVAL(1, day))
+1000-01-01    0999-12-31
+SELECT dt, DATE_ADD(dt, INTERVAL 1 MONTH) FROM t_date_arith WHERE id = 3;
+dt    DATE_ADD(dt, INTERVAL(1, month))
+2024-02-29    2024-03-29
+DROP TABLE t_date_arith;
+DROP TABLE IF EXISTS t_diff;
+CREATE TABLE t_diff (
+id INT PRIMARY KEY,
+start_dt DATE,
+end_dt DATE
+);
+INSERT INTO t_diff VALUES (1, '1000-01-01', '9999-12-31');
+INSERT INTO t_diff VALUES (2, '2024-01-01', '2024-12-31');
+SELECT id, DATEDIFF(end_dt, start_dt) AS days FROM t_diff ORDER BY id;
+id    days
+1    3287181
+2    365
+DROP TABLE t_diff;
+DROP TABLE IF EXISTS t_unique;
+CREATE TABLE t_unique (
+id INT PRIMARY KEY AUTO_INCREMENT,
+code VARCHAR(50) UNIQUE
+);
+INSERT INTO t_unique (code) VALUES (NULL);
+INSERT INTO t_unique (code) VALUES (NULL);
+INSERT INTO t_unique (code) VALUES ('A');
+INSERT INTO t_unique (code) VALUES ('A');
+Duplicate entry 'A' for key 'code'
+SELECT * FROM t_unique ORDER BY id;
+id    code
+1    null
+2    null
+3    A
+DROP TABLE t_unique;
+DROP TABLE IF EXISTS t_not_null;
+CREATE TABLE t_not_null (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL
+);
+INSERT INTO t_not_null (name) VALUES ('');
+INSERT INTO t_not_null (name) VALUES ('test');
+INSERT INTO t_not_null (name) VALUES (NULL);
+constraint violation: Column 'name' cannot be null
+SELECT * FROM t_not_null ORDER BY id;
+id    name
+1    
+2    test
+DROP TABLE t_not_null;
+DROP TABLE IF EXISTS t_mixed;
+CREATE TABLE t_mixed (
+id INT PRIMARY KEY,
+tiny TINYINT,
+normal INT,
+big BIGINT
+);
+INSERT INTO t_mixed VALUES (1, 127, 2147483647, 9223372036854775807);
+SELECT tiny + normal FROM t_mixed WHERE id = 1;
+Data truncation: data out of range: data type int32, (127 + 2147483647)
+SELECT normal + big FROM t_mixed WHERE id = 1;
+Data truncation: data out of range: data type int64, (2147483647 + 9223372036854775807)
+DROP TABLE t_mixed;
+DROP TABLE IF EXISTS t_money;
+CREATE TABLE t_money (
+id INT PRIMARY KEY,
+amount_dec DECIMAL(15,2),
+amount_float FLOAT,
+quantity INT
+);
+INSERT INTO t_money VALUES (1, 0.01, 0.01, 100);
+INSERT INTO t_money VALUES (2, 9.99, 9.99, 1000);
+SELECT id,
+amount_dec * quantity AS total_dec,
+amount_float * quantity AS total_float
+FROM t_money ORDER BY id;
+id    total_dec    total_float
+1    1.00    0.9999999776482582
+2    9990.00    9989.999771118164
+SELECT SUM(amount_dec * quantity) AS sum_dec,
+SUM(amount_float * quantity) AS sum_float
+FROM t_money;
+sum_dec    sum_float
+9991.00    9990.999771095812
+DROP TABLE t_money;
+DROP TABLE IF EXISTS t_round;
+CREATE TABLE t_round (
+id INT PRIMARY KEY,
+val DECIMAL(10,5)
+);
+INSERT INTO t_round VALUES (1, 123.45678);
+INSERT INTO t_round VALUES (2, -123.45678);
+SELECT id, val,
+ROUND(val, 2) AS round_2,
+FLOOR(val) AS floor_val,
+CEIL(val) AS ceil_val
+FROM t_round ORDER BY id;
+id    val    round_2    floor_val    ceil_val
+1    123.45678    123.46    123    124
+2    -123.45678    -123.46    -124    -123
+DROP TABLE t_round;
