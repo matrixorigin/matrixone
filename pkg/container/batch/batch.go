@@ -108,11 +108,15 @@ func (bat *Batch) Slice(from, to int) *Batch {
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
 	var w bytes.Buffer
-	return bat.MarshalBinaryWithBuffer(&w)
+	return bat.MarshalBinaryWithBuffer(&w, false)
 }
 
-func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
-	w.Reset()
+func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
+	// reset the buffer if caller wants to.
+	if reset {
+		w.Reset()
+	}
+
 	// row count.
 	rl := int64(bat.rowCount)
 	w.Write(types.EncodeInt64(&rl))
