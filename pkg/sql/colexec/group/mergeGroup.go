@@ -63,7 +63,8 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			// I am not sure this is correct, but some code has already done this, notably
 			// value scan.
 			//
-			if r.Status == vm.ExecStop || r.Batch == nil {
+			// if r.Status == vm.ExecStop || r.Batch == nil {
+			if r.Batch == nil {
 				mergeGroup.ctr.state = vm.Eval
 				mergeGroup.ctr.inputDone = true
 			}
@@ -137,6 +138,7 @@ func (mergeGroup *MergeGroup) makeAggList(proc *process.Process, aggExprs []agge
 
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
+
 	// lower send me a batch with extra buf1,
 	// which contains the aggregation expressions.
 	if len(bat.ExtraBuf1) != 0 {

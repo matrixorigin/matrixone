@@ -113,6 +113,17 @@ func (ctr *container) isSpilling() bool {
 }
 
 func (ctr *container) setSpillMem(m int64) {
+	// BUG #22725
+	// We simply cannot spill distinct agg at this moment.
+	for _, ag := range ctr.aggList {
+		if ag.IsDistinct() {
+			// Set to TiB, effectively disabling spill for distinct agg.
+			// If we cannot fix this before TB mem is commonly available
+			// it will be very sad.
+			ctr.spillMem = common.TiB
+			break
+		}
+	}
 	if m == 0 {
 		ctr.spillMem = common.GiB
 	} else {

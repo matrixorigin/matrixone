@@ -223,7 +223,8 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			// I am not sure this is correct, but some code has already done this, notably
 			// value scan.
 			//
-			if r.Status == vm.ExecStop || r.Batch == nil {
+			// if r.Status == vm.ExecStop || r.Batch == nil {
+			if r.Batch == nil {
 				group.ctr.state = vm.Eval
 				group.ctr.inputDone = true
 			}
@@ -273,7 +274,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
+
 	var err error
+
 	// evaluate the group by and agg args, no matter what mtyp,
 	// we need to do this first.
 	if err = group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
@@ -501,15 +504,14 @@ func computeChunkFlags(bucketIdx []uint64, bucket uint64, chunkSize int) (int64,
 	nextY := 0
 
 	for _, idx := range bucketIdx {
+		if idx == bucket {
+			flags[nextX][nextY] = 1
+			cnt += 1
+		}
 		nextY += 1
 		if nextY == chunkSize {
 			nextX += 1
 			nextY = 0
-		}
-
-		if idx == bucket {
-			flags[nextX][nextY] = 1
-			cnt += 1
 		}
 	}
 	return cnt, flags
