@@ -513,7 +513,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		}
 		if startTS > 0 {
 			now := time.Now()
-			if now.UnixNano() - startTS > cdc.CDCDefaultReaderRetryDuration.Nanoseconds() {
+			if now.UnixNano()-startTS > cdc.CDCDefaultReaderRetryDuration.Nanoseconds() {
 				continue
 			}
 		}

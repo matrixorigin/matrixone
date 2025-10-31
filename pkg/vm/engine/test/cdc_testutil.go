@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -545,7 +546,7 @@ func (s *MockEngineSink) SendCommit(ctx context.Context) error {
 	// Only fail on the first commit attempt (commitAttempts == 0)
 	if msg, injected := objectio.ISCPExecutorInjected(); injected {
 		if strings.Contains(msg, "commit error") {
-			return fmt.Errorf("driver: bad connection")
+			return sql.ErrConnDone
 		}
 	}
 

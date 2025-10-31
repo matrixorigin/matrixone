@@ -481,3 +481,176 @@ func TestTruncateTable(t *testing.T) {
 	CheckTableDataWithName(t, disttaeEngine, ctxWithTimeout, sinkDatabaseName, sinkTableName, databaseName, tableName)
 	t.Log("data consistency verified after table recreation")
 }
+
+func TestRestartCDC(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		taskId1      = uuid.New().String()
+		taskId2      = uuid.New().String()
+		taskName     = "test_restart_cdc"
+		databaseName = "test_db"
+		tableName    = "test_table"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Create sink database and table
+	sinkDatabaseName := "sink_db"
+	sinkTableName := "sink_table"
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+
+	// Create test data
+	bat := CreateDBAndTableForCDC(t, disttaeEngine, ctxWithTimeout, databaseName, tableName, 10)
+	bats := bat.Split(10)
+	defer bat.Close()
+
+	// Get table info
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, databaseName, tableName)
+	require.NoError(t, err)
+	_ = rel.GetTableID(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// append function
+	appendFn := func(idx int) {
+		txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+		require.Nil(t, rel.Append(ctxWithTimeout, bats[idx]))
+		require.Nil(t, txn.Commit(ctxWithTimeout))
+	}
+
+	// Setup CDC executor with stubs
+	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	defer stub1.Reset()
+	defer stub2.Reset()
+	defer stub3.Reset()
+	defer stub4.Reset()
+	defer stub5.Reset()
+
+	// Define tables to track
+	tables := cdc.PatternTuples{
+		Pts: []*cdc.PatternTuple{
+			{
+				Source: cdc.PatternTable{
+					Database: databaseName,
+					Table:    tableName,
+				},
+				Sink: cdc.PatternTable{
+					Database: sinkDatabaseName,
+					Table:    sinkTableName,
+				},
+			},
+		},
+	}
+
+	fault.Enable()
+	defer fault.Disable()
+
+	rmFn, err := objectio.InjectCDCScanTable("fast scan")
+	require.NoError(t, err)
+	defer rmFn()
+
+	// Create and start first CDC executor
+	executor1 := NewMockCDCExecutor(
+		t,
+		disttaeEngine,
+		ctxWithTimeout,
+		accountId,
+		taskId1,
+		taskName,
+		tables,
+	)
+
+	go executor1.Start(ctxWithTimeout)
+
+	// Test watermark updater
+	wmKey1 := cdc.WatermarkKey{
+		AccountId: uint64(accountId),
+		TaskId:    taskId1,
+		DBName:    databaseName,
+		TableName: tableName,
+	}
+	wmKey2 := cdc.WatermarkKey{
+		AccountId: uint64(accountId),
+		TaskId:    taskId2,
+		DBName:    databaseName,
+		TableName: tableName,
+	}
+
+	// Verify watermark function
+	checkWatermarkFn := func(expectedWM types.TS, key cdc.WatermarkKey, waitTime int) {
+		testutils.WaitExpect(
+			waitTime,
+			func() bool {
+				wm, ok := mockWatermarkUpdater.GetWatermark(key)
+				return ok && wm.GE(&expectedWM)
+			},
+		)
+		wm, ok := mockWatermarkUpdater.GetWatermark(key)
+		t.Logf("watermark check: wm: %v, expected: %v, ok: %v", wm.ToString(), expectedWM.ToString(), ok)
+		require.True(t, ok)
+		require.True(t, wm.GE(&expectedWM))
+	}
+
+	assert.Equal(t, 0, len(errChan))
+
+	// Append initial data
+	appendFn(0)
+	appendFn(1)
+
+	// Wait for first sync to complete
+	wm1 := taeHandler.GetDB().TxnMgr.Now()
+	checkWatermarkFn(wm1, wmKey1, 3000)
+	t.Log("first sync completed with executor1")
+
+	// Stop the first executor
+	err = executor1.Cancel()
+	require.NoError(t, err)
+	t.Log("executor1 cancelled")
+
+	// Create and start second CDC executor with same task ID
+	executor2 := NewMockCDCExecutor(
+		t,
+		disttaeEngine,
+		ctxWithTimeout,
+		accountId,
+		taskId2,
+		taskName,
+		tables,
+	)
+
+	go executor2.Start(ctxWithTimeout)
+	t.Log("executor2 started")
+
+	// Append more data
+	appendFn(2)
+	appendFn(3)
+
+	// Wait for second sync to complete
+	wm2 := taeHandler.GetDB().TxnMgr.Now()
+	checkWatermarkFn(wm2, wmKey2, 4000)
+	t.Log("second sync completed with executor2")
+
+	// Verify final data consistency
+	CheckTableDataWithName(t, disttaeEngine, ctxWithTimeout, sinkDatabaseName, sinkTableName, databaseName, tableName)
+	t.Log("data consistency verified after CDC restart")
+
+	// Cleanup second executor
+	err = executor2.Cancel()
+	require.NoError(t, err)
+}
