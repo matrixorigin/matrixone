@@ -1160,14 +1160,17 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 
 	bat.SetRowCount(length)
 
+	h.offset += int64(length)
+	if h.file != nil && h.offset >= h.file.NumRows() {
+		finish = true
+	}
+
 	if finish {
 		param.parqh = nil
 		param.Fileparam.FileFin++
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
 		}
-	} else {
-		h.offset += int64(length)
 	}
 
 	return nil
