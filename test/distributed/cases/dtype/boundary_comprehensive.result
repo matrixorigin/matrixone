@@ -446,7 +446,7 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 INSERT INTO t_unique (code) VALUES ('A');
-(Duplicate entry 'A' for key)([\d\D]*)
+Duplicate entry 'A' for key '(.*)'
 SELECT * FROM t_unique ORDER BY id;
 id    code
 1    null
