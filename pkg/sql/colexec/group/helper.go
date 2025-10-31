@@ -339,10 +339,11 @@ func (ctr *container) loadSpilledData(proc *process.Process) (bool, error) {
 						return false, err
 					}
 				}
-				for j, ag := range ctr.aggList {
-					if err := ag.BatchMerge(ctr.spillAggList[j], i, vals[:len(insertList)]); err != nil {
-						return false, err
-					}
+			}
+
+			for j, ag := range ctr.aggList {
+				if err := ag.BatchMerge(ctr.spillAggList[j], i, vals[:len(insertList)]); err != nil {
+					return false, err
 				}
 			}
 		}
