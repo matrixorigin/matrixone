@@ -1520,7 +1520,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					return err
 				}
 
-				_ = txn.GCObjsByStats(stats)
+				//_ = txn.GCObjsByStats(stats)
 				bat.Clean(txn.proc.Mp())
 
 			} else {
