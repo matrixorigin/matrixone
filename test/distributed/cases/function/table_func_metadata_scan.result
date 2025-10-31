@@ -126,5 +126,5 @@ bit_cast(sum as bigint)
 0
 select sum(b) from t;
 sum(b)
--9223372036854775808
+Data truncation: data out of range: data type int64, SUM overflow in (9223372036854775807 + 1)
 drop table if exists t;
