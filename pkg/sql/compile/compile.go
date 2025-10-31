@@ -871,7 +871,12 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, cantCompileForPrepareErr
 	}
 
-	plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList), c.execType)
+	ncpu := int32(c.ncpu)
+	if qry.MaxDop > 0 {
+		ncpu = min(ncpu, int32(qry.MaxDop))
+	}
+
+	plan2.CalcQueryDOP(c.pn, ncpu, len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.

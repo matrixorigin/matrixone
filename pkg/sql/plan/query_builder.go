@@ -76,9 +76,18 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		}
 	}
 
+	var maxDop int64
+	maxDopInt, err := ctx.ResolveVariable("max_dop", true, false)
+	if err == nil {
+		if maxDopVal, ok := maxDopInt.(int64); ok {
+			maxDop = maxDopVal
+		}
+	}
+
 	return &QueryBuilder{
 		qry: &Query{
 			StmtType: queryType,
+			MaxDop:   int64(maxDop),
 		},
 		compCtx:            ctx,
 		ctxByNode:          []*BindContext{},
