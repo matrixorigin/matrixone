@@ -719,6 +719,34 @@ func gcFiles(txn *Transaction, names ...string) error {
 		})
 	}
 
+	if len(names) == 0 {
+		return nil
+	}
+
+	//getCaller := func(depth int) (str []string) {
+	//	pc := make([]uintptr, depth)
+	//	n := runtime.Callers(2, pc)
+	//	frames := runtime.CallersFrames(pc[:n])
+	//
+	//	i := 0
+	//	for {
+	//		frame, more := frames.Next()
+	//		funcName := filepath.Base(frame.Function)
+	//		str = append(str, funcName)
+	//		i++
+	//		if !more || i >= depth {
+	//			break
+	//		}
+	//	}
+	//	return
+	//}
+
+	logutil.Info("GC-WORKSPACE-FILES",
+		zap.Strings("names", names),
+		zap.String("txn-info", txn.op.Txn().DebugString()),
+		//zap.String("stack", strings.Join(getCaller(5), "<-")),
+	)
+
 	//gc the objects asynchronously.
 	//TODO:: to handle the failure when CN is down.
 	step := GCBatchOfFileCount
