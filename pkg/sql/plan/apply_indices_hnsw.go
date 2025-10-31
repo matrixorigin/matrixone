@@ -224,9 +224,44 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		},
 	}
 
-	// pushdown limit
+	// pushdown limit to Table Function
+	// When there are filters, over-fetch to get more candidates
+	// This ensures we have enough candidates after filtering
 	if limit != nil {
-		curr_node.Limit = DeepCopyExpr(limit)
+		if len(scanNode.FilterList) > 0 {
+			// Over-fetch strategy: dynamically adjust factor based on limit size
+			// Smaller limits need more over-fetching due to higher variance
+			if limitConst := limit.GetLit(); limitConst != nil {
+				originalLimit := limitConst.GetU64Val()
+
+				// Use shared function to calculate over-fetch factor
+				overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
+
+				newLimit := uint64(float64(originalLimit) * overFetchFactor)
+				// Ensure at least original limit + some buffer
+				if newLimit < originalLimit+10 {
+					newLimit = originalLimit + 10
+				}
+
+				curr_node.Limit = &Expr{
+					Typ: limit.Typ,
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_U64Val{
+								U64Val: newLimit,
+							},
+						},
+					},
+				}
+			} else {
+				// If limit is not a constant, just copy it
+				curr_node.Limit = DeepCopyExpr(limit)
+			}
+		} else {
+			// No filters, use original limit
+			curr_node.Limit = DeepCopyExpr(limit)
+		}
 	}
 
 	// oncond
@@ -251,17 +286,28 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		},
 	})
 
+	// Preserve non-vector filters from scanNode
+	// These filters (e.g., "score >= 4.0") should be applied after the JOIN
+	var filterList []*Expr
+	if len(scanNode.FilterList) > 0 {
+		filterList = make([]*Expr, len(scanNode.FilterList))
+		for i, filter := range scanNode.FilterList {
+			filterList[i] = DeepCopyExpr(filter)
+		}
+	}
+
 	joinnodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{scanNode.NodeId, curr_node_id},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
-		Limit:    DeepCopyExpr(scanNode.Limit),
-		Offset:   DeepCopyExpr(scanNode.Offset),
+		// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		// Don't set FilterList on JOIN - move to SORT for better execution
 	}, ctx)
 
 	scanNode.Limit = nil
 	scanNode.Offset = nil
+	scanNode.FilterList = nil // Clear filters from scanNode since they're moved to SORT
 
 	// Create SortBy with distance column from table function
 	orderByScore := []*OrderBySpec{
@@ -280,9 +326,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	}
 
 	sortByID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_SORT,
-		Children: []int32{joinnodeID},
-		OrderBy:  orderByScore,
+		NodeType:   plan.Node_SORT,
+		Children:   []int32{joinnodeID},
+		OrderBy:    orderByScore,
+		FilterList: filterList,                    // Apply filters before limit
+		Limit:      DeepCopyExpr(scanNode.Limit),  // Apply LIMIT after filtering and sorting
+		Offset:     DeepCopyExpr(scanNode.Offset), // Apply OFFSET after filtering and sorting
 	}, ctx)
 
 	projNode.Children[0] = sortByID
