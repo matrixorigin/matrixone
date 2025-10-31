@@ -49,6 +49,15 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
+// RowSizeThreshold Regardless of the table,
+// the minimum row size is 100.
+// However, due to inaccurate statistical information,
+// the RowSizeThreshold is tentatively set at 128,
+// and it is only used for tables with vector indexes
+const RowSizeThreshold = 128
+const LargeBlockThresholdForOneCN = 4
+const LargeBlockThresholdForMultiCN = 32
+
 // for test
 var ForceScanOnMultiCN atomic.Bool
 
@@ -1426,6 +1435,19 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
+	// SizeMap stores approximate persisted bytes per column; divide by total rows to get bytes/row
+	{
+		var totalSize uint64
+		for _, v := range s.SizeMap {
+			totalSize += v
+		}
+		if stats.TableCnt > 0 {
+			stats.Rowsize = float64(totalSize) / stats.TableCnt
+		} else {
+			stats.Rowsize = 0
+		}
+	}
 	return stats
 }
 
@@ -1648,18 +1670,42 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func calcDOP(ncpu, blocks int32, isPrepare bool) int32 {
-	if ncpu <= 0 || blocks <= 16 {
+// dop tuning constants
+const (
+	// base block-to-core mapping for dop estimation
+	dopBlocksBaseUnit    int32 = 16 // default: every ~16 blocks add a core
+	dopBlocksPrepareUnit int32 = 64 // prepare: more conservative
+)
+
+func calcDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
+	if ncpu <= 0 {
 		return 1
 	}
-	ret := blocks/16 + 1
+
+	baseUnit := dopBlocksBaseUnit
 	if isPrepare {
-		ret = blocks/64 + 1
+		baseUnit = dopBlocksPrepareUnit
 	}
-	if ret <= ncpu {
-		return ret
+
+	blocks := stats.BlockNum
+	var ret int32 = 1
+	if blocks > 0 {
+		ret = blocks/baseUnit + 1
 	}
-	return ncpu
+
+	rs := stats.Rowsize
+	if rs >= RowSizeThreshold {
+		// very wide rows: be aggressive
+		ret = stats.BlockNum
+	}
+
+	if ret > ncpu {
+		ret = ncpu
+	}
+	if ret < 1 {
+		ret = 1
+	}
+	return ret
 }
 
 // set node dop and left child recursively
@@ -1693,7 +1739,7 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 			setNodeDOP(p, rootID, dop)
 		}
 	} else {
-		node.Stats.Dop = calcDOP(ncpu, node.Stats.BlockNum, p.IsPrepare)
+		node.Stats.Dop = calcDOP(ncpu, node.Stats, p.IsPrepare)
 	}
 }
 
@@ -1735,6 +1781,16 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		} else {
 			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
 				ret = ExecTypeAP_ONECN
+			}
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN &&
+			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
+			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
+			stats.Rowsize > RowSizeThreshold &&
+			stats.BlockNum > LargeBlockThresholdForOneCN {
+			ret = ExecTypeAP_ONECN
+			if stats.BlockNum > LargeBlockThresholdForMultiCN {
+				ret = ExecTypeAP_MULTICN
 			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
