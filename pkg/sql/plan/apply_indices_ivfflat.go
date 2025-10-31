@@ -311,28 +311,18 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		},
 	})
 
-	// Preserve non-vector filters from scanNode
-	// These filters (e.g., "score >= 4.0") should be applied after the JOIN
-	var filterList []*Expr
-	if len(scanNode.FilterList) > 0 {
-		filterList = make([]*Expr, len(scanNode.FilterList))
-		for i, filter := range scanNode.FilterList {
-			filterList[i] = DeepCopyExpr(filter)
-		}
-	}
-
 	joinnodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{scanNode.NodeId, curr_node_id},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
 		// Don't set Limit/Offset on JOIN - they should be applied after SORT
-		// Don't set FilterList on JOIN - move to SORT for better execution
 	}, ctx)
 
+	// Keep FilterList on scanNode so filters are applied during table scan
+	// Clear Limit/Offset from scanNode since they should be applied after SORT
 	scanNode.Limit = nil
 	scanNode.Offset = nil
-	scanNode.FilterList = nil // Clear filters from scanNode since they're moved to SORT
 
 	// Create SortBy with distance column from table function
 	orderByScore := []*OrderBySpec{
@@ -351,12 +341,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}
 
 	sortByID := builder.appendNode(&plan.Node{
-		NodeType:   plan.Node_SORT,
-		Children:   []int32{joinnodeID},
-		OrderBy:    orderByScore,
-		FilterList: filterList,                    // Apply filters before limit
-		Limit:      DeepCopyExpr(scanNode.Limit),  // Apply LIMIT after filtering and sorting
-		Offset:     DeepCopyExpr(scanNode.Offset), // Apply OFFSET after filtering and sorting
+		NodeType: plan.Node_SORT,
+		Children: []int32{joinnodeID},
+		OrderBy:  orderByScore,
+		Limit:    limit,                         // Apply LIMIT after sorting
+		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
 	}, ctx)
 
 	projNode.Children[0] = sortByID
