@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -539,6 +540,15 @@ func (s *MockEngineSink) SendCommit(ctx context.Context) error {
 	ctx = defines.AttachAccountId(ctx, s.accountId)
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
+	// Check for injected fault using ISCPExecutorInjected
+	// Only fail on the first commit attempt (commitAttempts == 0)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected {
+		if strings.Contains(msg, "commit error") {
+			return fmt.Errorf("driver: bad connection")
+		}
+	}
+
 	err := s.currentTxn.Commit(ctxWithTimeout)
 	s.currentTxn = nil
 	s.CommitCount++
