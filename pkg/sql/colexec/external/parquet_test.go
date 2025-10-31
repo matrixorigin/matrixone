@@ -598,7 +598,7 @@ func TestParquet_prepare_missingColumn(t *testing.T) {
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows([]parquet.Row{
-		parquet.Row{parquet.Int32Value(1).Level(0, 0, 0)},
+		{parquet.Int32Value(1).Level(0, 0, 0)},
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
