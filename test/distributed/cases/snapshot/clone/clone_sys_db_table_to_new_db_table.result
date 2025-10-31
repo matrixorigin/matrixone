@@ -129,6 +129,7 @@ use mo_catalog_new;
 show tables;
 Tables_in_mo_catalog_new
 mo_account
+mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -178,6 +179,7 @@ use mo_catalog_new_new;
 show tables;
 Tables_in_mo_catalog_new_new
 mo_account
+mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
