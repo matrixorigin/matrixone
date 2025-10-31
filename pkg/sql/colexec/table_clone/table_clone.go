@@ -114,6 +114,9 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		tc.OpAnalyzer.Reset()
 	}
 
+	txnMeta := proc.GetTxnOperator().Txn()
+	proc.GetTxnOperator().GetWorkspace().SetCloneTxn(txnMeta.SnapshotTS.PhysicalTime)
+
 	var (
 		err   error
 		txnOp client.TxnOperator
