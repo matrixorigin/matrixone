@@ -238,6 +238,7 @@ func TestMedian(t *testing.T) {
 		emptyNull: true,
 	}
 	a := newMedianColumnNumericExec[int64](m, info)
+	defer a.Free()
 
 	a.PreAllocateGroups(1)
 
@@ -260,6 +261,7 @@ func TestMedian(t *testing.T) {
 		emptyNull: true,
 	}
 	b := newMedianColumnNumericExec[int64](m, info2)
+	defer b.Free()
 
 	doAggTest[int64, float64](
 		t, b,
@@ -320,6 +322,7 @@ func TestBytesToBytesFrameWork(t *testing.T) {
 
 	a := newAggregatorFromBytesToBytes(
 		m, info, implement)
+	defer a.Free()
 
 	doAggTest[string, string](
 		t, a,
@@ -383,6 +386,7 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 
 	a := newSingleAggFuncExec1NewVersion(
 		m, info, implement)
+	defer a.Free()
 
 	doAggTest[int64, int64](
 		t, a,
@@ -451,6 +455,7 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 
 	a := newSingleAggFuncExec1NewVersion(
 		m, info, implement)
+	defer a.Free()
 
 	doAggTest[int64, int64](
 		t, a,
@@ -466,8 +471,14 @@ func TestMakeInitialAggListFromList(t *testing.T) {
 	mg := NewSimpleAggMemoryManager(mp)
 	agg0, err := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
 	require.Nil(t, err)
+	defer agg0.Free()
 	res, err := MakeInitialAggListFromList(mg, []AggFuncExec{agg0})
 	require.Nil(t, err)
+	defer func() {
+		for _, agg := range res {
+			agg.Free()
+		}
+	}()
 	require.Equal(t, 1, len(res))
 	require.Equal(t, int64(123), res[0].AggID())
 	require.Equal(t, true, res[0].IsDistinct())
