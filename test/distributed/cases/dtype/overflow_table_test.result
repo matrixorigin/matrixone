@@ -1,0 +1,39 @@
+DROP TABLE IF EXISTS t_overflow_test;
+CREATE TABLE t_overflow_test (
+id INT PRIMARY KEY,
+bigint_val BIGINT,
+int_val INT
+);
+INSERT INTO t_overflow_test VALUES (1, 9223372036854775807, 2147483647);
+INSERT INTO t_overflow_test VALUES (2, -9223372036854775808, -2147483648);
+SELECT id, bigint_val, bigint_val + 1 AS result FROM t_overflow_test WHERE id = 1;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+SELECT id, bigint_val, bigint_val - 1 AS result FROM t_overflow_test WHERE id = 2;
+Data truncation: data out of range: data type int64, (-9223372036854775808 - 1)
+SELECT id, int_val, int_val + 1 AS result FROM t_overflow_test WHERE id = 1;
+id    int_val    result
+1    2147483647    2147483648
+SELECT id, int_val, int_val - 1 AS result FROM t_overflow_test WHERE id = 2;
+id    int_val    result
+2    -2147483648    -2147483649
+SELECT id, bigint_val, bigint_val + 0 AS result FROM t_overflow_test WHERE id = 1;
+id    bigint_val    result
+1    9223372036854775807    9223372036854775807
+SELECT id, int_val, int_val + 10 AS result FROM t_overflow_test WHERE id = 1;
+id    int_val    result
+1    2147483647    2147483657
+DROP TABLE IF EXISTS t_overflow_test2;
+CREATE TABLE t_overflow_test2 (
+id INT PRIMARY KEY,
+val1 BIGINT,
+val2 BIGINT
+);
+INSERT INTO t_overflow_test2 VALUES (1, 9223372036854775807, 1);
+INSERT INTO t_overflow_test2 VALUES (2, -9223372036854775808, -1);
+SELECT id, val1, val2, val1 + val2 AS result FROM t_overflow_test2 WHERE id = 1;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+SELECT id, val1, val2, val1 - val2 AS result FROM t_overflow_test2 WHERE id = 2;
+id    val1    val2    result
+2    -9223372036854775808    -1    -9223372036854775807
+DROP TABLE t_overflow_test;
+DROP TABLE t_overflow_test2;

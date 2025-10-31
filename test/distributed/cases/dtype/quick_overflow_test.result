@@ -1,0 +1,26 @@
+SELECT 9223372036854775807 + 1 AS bigint_overflow;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+SELECT -9223372036854775808 - 1 AS bigint_underflow;
+bigint_underflow
+-9223372036854775809
+SELECT 2147483647 + 1 AS int_overflow;
+int_overflow
+2147483648
+SELECT -2147483648 - 1 AS int_underflow;
+int_underflow
+-2147483649
+SELECT CAST(18446744073709551615 AS UNSIGNED) + 1 AS unsigned_overflow;
+unsigned_overflow
+18446744073709551616
+SELECT 100 + 200 AS normal_add;
+normal_add
+300
+SELECT -100 + (-200) AS negative_add;
+negative_add
+-300
+SELECT 9223372036854775807 + 0 AS max_plus_zero;
+max_plus_zero
+9223372036854775807
+SELECT 0 + 0 AS zero_plus_zero;
+zero_plus_zero
+0
