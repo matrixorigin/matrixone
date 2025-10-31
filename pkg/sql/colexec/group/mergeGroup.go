@@ -63,7 +63,8 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			// I am not sure this is correct, but some code has already done this, notably
 			// value scan.
 			//
-			if r.Status == vm.ExecStop || r.Batch == nil {
+			// if r.Status == vm.ExecStop || r.Batch == nil {
+			if r.Batch == nil {
 				mergeGroup.ctr.state = vm.Eval
 				mergeGroup.ctr.inputDone = true
 			}
@@ -79,16 +80,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if needSpill {
-				mergeGroup.ctr.spillDataToDisk(proc, nil, false)
-			}
-		}
-
-		if mergeGroup.ctr.isSpilling() {
-			if err := mergeGroup.ctr.spillDataToDisk(proc, nil, true); err != nil {
-				return vm.CancelResult, err
-			}
-			if _, err := mergeGroup.ctr.loadSpilledData(proc); err != nil {
-				return vm.CancelResult, err
+				mergeGroup.ctr.spillDataToDisk(proc, nil)
 			}
 		}
 
@@ -103,11 +95,20 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 		}
 
+		if mergeGroup.ctr.isSpilling() {
+			if err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+				return vm.CancelResult, err
+			}
+			if _, err := mergeGroup.ctr.loadSpilledData(proc, mergeGroup.OpAnalyzer); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+
 		// output the final result.
-		return mergeGroup.ctr.outputOneBatchFinal(proc)
+		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer)
 
 	case vm.Eval:
-		return mergeGroup.ctr.outputOneBatchFinal(proc)
+		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer)
 	case vm.End:
 		return vm.CancelResult, nil
 	}
@@ -137,6 +138,7 @@ func (mergeGroup *MergeGroup) makeAggList(proc *process.Process, aggExprs []agge
 
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
+
 	// lower send me a batch with extra buf1,
 	// which contains the aggregation expressions.
 	if len(bat.ExtraBuf1) != 0 {
@@ -256,5 +258,5 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
-	return mergeGroup.ctr.needSpill(), nil
+	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
 }

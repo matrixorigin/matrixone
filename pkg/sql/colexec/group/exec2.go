@@ -223,7 +223,8 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			// I am not sure this is correct, but some code has already done this, notably
 			// value scan.
 			//
-			if r.Status == vm.ExecStop || r.Batch == nil {
+			// if r.Status == vm.ExecStop || r.Batch == nil {
+			if r.Batch == nil {
 				group.ctr.state = vm.Eval
 				group.ctr.inputDone = true
 			}
@@ -242,7 +243,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.ctr.spillDataToDisk(proc, nil, false)
+					group.ctr.spillDataToDisk(proc, nil)
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
@@ -253,10 +254,10 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if err := group.ctr.spillDataToDisk(proc, nil, true); err != nil {
+			if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
 				return vm.CancelResult, err
 			}
-			if _, err := group.ctr.loadSpilledData(proc); err != nil {
+			if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -273,7 +274,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
+
 	var err error
+
 	// evaluate the group by and agg args, no matter what mtyp,
 	// we need to do this first.
 	if err = group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
@@ -339,7 +342,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		} // end of mini batch for loop
 
 		// check size
-		return group.ctr.needSpill(), nil
+		return group.ctr.needSpill(group.OpAnalyzer), nil
 	}
 }
 
@@ -362,10 +365,17 @@ func (ctr *container) buildHashTable(proc *process.Process) error {
 }
 
 func (ctr *container) createNewGroupByBatch(proc *process.Process, vs []*vector.Vector, size int) *batch.Batch {
-	// what is so special about off heap?
-	b := batch.NewOffHeapWithSize(len(vs))
-	for i, vec := range vs {
-		b.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+	// initialize the groupByTypes.   this is again very bad design.
+	// types should be resolved at plan time.
+	if len(ctr.groupByTypes) == 0 {
+		for _, vec := range vs {
+			ctr.groupByTypes = append(ctr.groupByTypes, *vec.GetType())
+		}
+	}
+
+	b := batch.NewOffHeapWithSize(len(ctr.groupByTypes))
+	for i, typ := range ctr.groupByTypes {
+		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 	}
 	b.PreExtend(proc.Mp(), size)
 	b.SetRowCount(0)
@@ -422,7 +432,7 @@ func (ctr *container) appendGroupByBatch(
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
 	if group.NeedEval {
-		return group.ctr.outputOneBatchFinal(proc)
+		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer)
 	} else {
 		// no need to eval, we are in streaming mode.  spill never happen
 		// here.
@@ -501,15 +511,14 @@ func computeChunkFlags(bucketIdx []uint64, bucket uint64, chunkSize int) (int64,
 	nextY := 0
 
 	for _, idx := range bucketIdx {
+		if idx == bucket {
+			flags[nextX][nextY] = 1
+			cnt += 1
+		}
 		nextY += 1
 		if nextY == chunkSize {
 			nextX += 1
 			nextY = 0
-		}
-
-		if idx == bucket {
-			flags[nextX][nextY] = 1
-			cnt += 1
 		}
 	}
 	return cnt, flags

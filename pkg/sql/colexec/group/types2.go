@@ -96,6 +96,7 @@ type container struct {
 	aggArgEvaluate []colexec.ExprEvalVector
 
 	// group by columns
+	groupByTypes   []types.Type
 	groupByBatches []*batch.Batch
 
 	// aggs, which holds the intermediate state of agg functions.
@@ -113,6 +114,17 @@ func (ctr *container) isSpilling() bool {
 }
 
 func (ctr *container) setSpillMem(m int64) {
+	// BUG #22725
+	// We simply cannot spill distinct agg at this moment.
+	for _, ag := range ctr.aggList {
+		if ag.IsDistinct() {
+			// Set to TiB, effectively disabling spill for distinct agg.
+			// If we cannot fix this before TB mem is commonly available
+			// it will be very sad.
+			ctr.spillMem = common.TiB
+			break
+		}
+	}
 	if m == 0 {
 		ctr.spillMem = common.GiB
 	} else {
@@ -183,7 +195,11 @@ func (ctr *container) free(proc *process.Process) {
 
 func (ctr *container) reset(proc *process.Process) {
 	ctr.state = vm.Build
+	ctr.resetForSpill(proc)
+	ctr.freeSpillBkts(proc)
+}
 
+func (ctr *container) resetForSpill(proc *process.Process) {
 	// Reset also frees the hash related stuff.
 	ctr.hr.Free0()
 
@@ -192,11 +208,11 @@ func (ctr *container) reset(proc *process.Process) {
 	for i := range ctr.aggArgEvaluate {
 		ctr.aggArgEvaluate[i].ResetForNextQuery()
 	}
-
 	// free group by batches, agg list and spill buckets, do not reuse for now.
 	ctr.freeGroupByBatches(proc)
+	ctr.currBatchIdx = 0
+
 	ctr.freeAggList(proc)
-	ctr.freeSpillBkts(proc)
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {

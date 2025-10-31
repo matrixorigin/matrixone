@@ -484,8 +484,8 @@ func (si *SessionInfo) GetVersion() string {
 	return si.Version
 }
 
-func (proc *Process) DebugBreakDump() {
-	if proc.Base.SessionInfo.User == "dump" {
+func (proc *Process) DebugBreakDump(cond bool) {
+	if proc.Base.SessionInfo.User == "dump" && cond {
 		logutil.GetGlobalLogger().Info("debug break dump")
 	}
 }
