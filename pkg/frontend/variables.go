@@ -3818,6 +3818,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
 		Default:           int64(common.GiB),
 	},
+	"max_dop": {
+		Name:              "max_dop",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
