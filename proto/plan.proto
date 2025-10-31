@@ -498,7 +498,7 @@ message Stats {
 	double cost				= 2;
 	//number of output lines
 	double outcnt			= 3;
-	// average size of one row
+	// average size of one row, currently not used
 	double rowsize	        = 4;
 	//for scan, this means total count of all table, before filtering
 	double table_cnt = 5;

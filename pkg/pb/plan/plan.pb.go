@@ -4843,7 +4843,7 @@ type Stats struct {
 	Cost float64 `protobuf:"fixed64,2,opt,name=cost,proto3" json:"cost,omitempty"`
 	// number of output lines
 	Outcnt float64 `protobuf:"fixed64,3,opt,name=outcnt,proto3" json:"outcnt,omitempty"`
-	// average size of one row
+	// average size of one row, currently not used
 	Rowsize float64 `protobuf:"fixed64,4,opt,name=rowsize,proto3" json:"rowsize,omitempty"`
 	// for scan, this means total count of all table, before filtering
 	TableCnt float64 `protobuf:"fixed64,5,opt,name=table_cnt,json=tableCnt,proto3" json:"table_cnt,omitempty"`
