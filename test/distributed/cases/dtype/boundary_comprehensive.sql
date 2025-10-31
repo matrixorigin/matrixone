@@ -618,9 +618,8 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 
--- @bvt:issue
+-- @pattern
 INSERT INTO t_unique (code) VALUES ('A');
--- @bvt:issue
 
 SELECT * FROM t_unique ORDER BY id;
 
