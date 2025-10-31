@@ -30,9 +30,9 @@ func addInt64WithOverflowCheck(ctx context.Context, v1, v2 int64) (int64, error)
 	result := v1 + v2
 	// Overflow detection:
 	// - If both operands have the same sign, result must have the same sign
-	// - Positive + Positive overflow if result is negative
-	// - Negative + Negative overflow if result is positive
-	if (v1 > 0 && v2 > 0 && result < 0) || (v1 < 0 && v2 < 0 && result > 0) {
+	// - Positive + Positive overflow if result is negative or zero
+	// - Negative + Negative overflow if result is positive or zero (when both are negative)
+	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
 		return 0, moerr.NewOutOfRangef(ctx, "int64", "(%d + %d)", v1, v2)
 	}
 	return result, nil
@@ -41,7 +41,7 @@ func addInt64WithOverflowCheck(ctx context.Context, v1, v2 int64) (int64, error)
 // addInt32WithOverflowCheck checks for overflow in int32 addition
 func addInt32WithOverflowCheck(ctx context.Context, v1, v2 int32) (int32, error) {
 	result := v1 + v2
-	if (v1 > 0 && v2 > 0 && result < 0) || (v1 < 0 && v2 < 0 && result > 0) {
+	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
 		return 0, moerr.NewOutOfRangef(ctx, "int32", "(%d + %d)", v1, v2)
 	}
 	return result, nil
@@ -50,7 +50,7 @@ func addInt32WithOverflowCheck(ctx context.Context, v1, v2 int32) (int32, error)
 // addInt16WithOverflowCheck checks for overflow in int16 addition
 func addInt16WithOverflowCheck(ctx context.Context, v1, v2 int16) (int16, error) {
 	result := v1 + v2
-	if (v1 > 0 && v2 > 0 && result < 0) || (v1 < 0 && v2 < 0 && result > 0) {
+	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
 		return 0, moerr.NewOutOfRangef(ctx, "int16", "(%d + %d)", v1, v2)
 	}
 	return result, nil
@@ -59,7 +59,7 @@ func addInt16WithOverflowCheck(ctx context.Context, v1, v2 int16) (int16, error)
 // addInt8WithOverflowCheck checks for overflow in int8 addition
 func addInt8WithOverflowCheck(ctx context.Context, v1, v2 int8) (int8, error) {
 	result := v1 + v2
-	if (v1 > 0 && v2 > 0 && result < 0) || (v1 < 0 && v2 < 0 && result > 0) {
+	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
 		return 0, moerr.NewOutOfRangef(ctx, "int8", "(%d + %d)", v1, v2)
 	}
 	return result, nil
