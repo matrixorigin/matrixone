@@ -360,6 +360,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return ExtractFromVarchar
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varchar, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromTimestamp
+				},
+			},
 		},
 	},
 
@@ -4094,6 +4104,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_time, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeSub
 				},
 			},
 		},
