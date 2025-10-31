@@ -1168,11 +1168,15 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 1 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
 		}
+		var rowsizeStr string
+		if c.Stats.Rowsize > 0 {
+			rowsizeStr = " rowsize=" + strconv.FormatFloat(c.Stats.Rowsize, 'f', 2, 64)
+		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
 			" selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 4, 64) +
 			" dop=" + strconv.FormatInt(int64(c.Stats.Dop), 10) +
-			blockNumStr + hashmapSizeStr + ")")
+			blockNumStr + hashmapSizeStr + rowsizeStr + ")")
 	}
 	return nil
 }

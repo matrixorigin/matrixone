@@ -15,6 +15,93 @@ MatrixOne's snapshot and restore system provides:
 * **Cross-Database Restore**: Restore snapshots to different databases
 * **Snapshot Management**: List, query, and delete snapshots
 * **Automated Backup**: Schedule regular snapshot creation
+* **Transaction Support**: Atomic snapshot operations with ``session()``
+
+Transaction-Aware Operations (Recommended)
+-------------------------------------------
+
+Use ``client.session()`` for atomic snapshot and clone operations:
+
+Atomic Snapshot and Clone
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client, SnapshotLevel
+   from matrixone.orm import Base, Column, Integer, String
+   from sqlalchemy import select, insert
+   
+   # Define ORM model
+   Base = declarative_base()
+   
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       email = Column(String(255))
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Atomic snapshot + clone operation
+   with client.session() as session:
+       # Create snapshot
+       snapshot = session.snapshots.create(
+           name='daily_backup',
+           level=SnapshotLevel.DATABASE,
+           database='production'
+       )
+       
+       # Clone from snapshot atomically
+       session.clone.clone_database(
+           target_db='production_copy',
+           source_db='production',
+           snapshot_name='daily_backup'
+       )
+       
+       # Both operations commit together or rollback on error
+   
+   client.disconnect()
+
+Complex Transaction with Snapshot
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client, SnapshotLevel
+   from sqlalchemy import select, insert, func
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Complex atomic operation
+   with client.session() as session:
+       # Insert data
+       session.execute(insert(User).values(name='Alice', email='alice@example.com'))
+       session.execute(insert(User).values(name='Bob', email='bob@example.com'))
+       
+       # Verify data count
+       stmt = select(func.count(User.id))
+       count = session.execute(stmt).scalar()
+       print(f"Inserted {count} users")
+       
+       # Create snapshot after successful insert
+       snapshot = session.snapshots.create(
+           name='post_insert_snapshot',
+           level=SnapshotLevel.DATABASE,
+           database='test'
+       )
+       
+       # Clone to backup database
+       session.clone.clone_database(
+           target_db='test_backup',
+           source_db='test',
+           snapshot_name='post_insert_snapshot'
+       )
+       
+       # All operations are atomic
+   
+   client.disconnect()
 
 Getting Started
 ---------------

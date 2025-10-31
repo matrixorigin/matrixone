@@ -80,7 +80,7 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
 
         # MatrixOne should handle the SQLAlchemy expression correctly
         self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("id = user_id", matrixone_query._joins[0])
+        self.assertIn("users.id = addresses.user_id", matrixone_query._joins[0])
 
     def test_left_join_behavior_matches_sqlalchemy(self):
         """Test that left join behavior matches SQLAlchemy ORM"""
@@ -196,7 +196,7 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         self.assertIn("ON", matrixone_query._joins[0])
         # The complex expression should be compiled to SQL
         join_clause = matrixone_query._joins[0]
-        self.assertIn("id = user_id", join_clause)
+        self.assertIn("users.id = addresses.user_id", join_clause)
 
     def test_join_method_chaining_compatibility(self):
         """Test that join methods support method chaining like SQLAlchemy"""

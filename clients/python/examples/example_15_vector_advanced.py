@@ -146,10 +146,10 @@ class VectorAdvancedDemo:
         self.results['tests_run'] += 1
 
         try:
-            # Test 1: Successful transaction
-            print("1. Testing successful transaction:")
+            # Test 1: Successful session
+            print("1. Testing successful session:")
 
-            with self.client.transaction() as tx:
+            with self.client.session() as tx:
                 # Insert multiple documents
                 docs_data = [
                     {
@@ -168,19 +168,19 @@ class VectorAdvancedDemo:
                     self.session.add(doc)
 
                 self.session.commit()
-                print("  ✓ Inserted 5 documents in transaction")
+                print("  ✓ Inserted 5 documents in session")
 
             # Verify documents were inserted
             count = self.client.query(AdvancedDocument).filter(AdvancedDocument.category == 'Transaction').count()
             print(f"  ✓ Verified {count} documents in database")
 
-            # Test 2: Failed transaction (rollback)
-            print("\n2. Testing failed transaction (rollback):")
+            # Test 2: Failed session (rollback)
+            print("\n2. Testing failed session (rollback):")
 
             initial_count = self.client.query(AdvancedDocument).count()
 
             try:
-                with self.client.transaction() as tx:
+                with self.client.session() as tx:
                     # Insert a document
                     doc = AdvancedDocument(
                         title='Should Fail',
@@ -194,17 +194,17 @@ class VectorAdvancedDemo:
                     self.session.commit()
 
                     # Simulate an error
-                    raise Exception("Simulated transaction failure")
+                    raise Exception("Simulated session failure")
 
             except Exception as e:
-                print(f"  ✓ Transaction failed as expected: {e}")
+                print(f"  ✓ Session failed as expected: {e}")
 
             # Verify rollback
             final_count = self.client.query(AdvancedDocument).count()
             if final_count == initial_count:
-                print("  ✓ Transaction was properly rolled back")
+                print("  ✓ Session was properly rolled back")
             else:
-                print(f"  ✗ Transaction rollback failed: {initial_count} -> {final_count}")
+                print(f"  ✗ Session rollback failed: {initial_count} -> {final_count}")
 
             self.results['tests_passed'] += 1
 

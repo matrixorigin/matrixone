@@ -829,7 +829,7 @@ class TestSimpleFulltextMigration:
     def test_transaction_simple_query_functionality(self):
         """Test TransactionSimpleFulltextQueryBuilder with real database."""
         # Test within a transaction
-        with self.client.transaction() as tx:
+        with self.client.session() as tx:
             results = (
                 tx.query(
                     "migration_test.title",
@@ -841,8 +841,8 @@ class TestSimpleFulltextMigration:
             )
 
             assert results is not None
-            assert hasattr(results, 'rows')
-            assert isinstance(results.rows, list)
+            rows = results.fetchall()
+            assert isinstance(rows, list)
 
     @pytest.mark.asyncio
     async def test_async_transaction_simple_query_functionality(self):
@@ -862,7 +862,7 @@ class TestSimpleFulltextMigration:
             await async_client.execute(f"USE {self.test_db}")
 
             # Test within an async transaction
-            async with async_client.transaction() as tx:
+            async with async_client.session() as tx:
                 results = (
                     await tx.query(
                         "migration_test.title",
@@ -874,8 +874,8 @@ class TestSimpleFulltextMigration:
                 )
 
                 assert results is not None
-                assert hasattr(results, 'rows')
-                assert isinstance(results.rows, list)
+                rows = results.fetchall()
+                assert isinstance(rows, list)
 
         finally:
             await async_client.disconnect()

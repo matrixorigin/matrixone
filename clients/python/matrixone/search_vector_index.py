@@ -585,10 +585,21 @@ class PineconeCompatibleIndex:
             ValueError: If vector dimension doesn't match index dimension
             RuntimeError: If used with async client (use query_async instead)
         """
-        index_info = self._get_index_info()
-
         # Parse filter if provided
         where_conditions, where_params = self._parse_pinecone_filter(filter)
+
+        # Build where_clause from conditions and params
+        where_clause = None
+        if where_conditions:
+            # Convert ? placeholders to actual values (safely escaped)
+            where_clause = " AND ".join(where_conditions)
+            # Replace ? with escaped values
+            for param in where_params:
+                if isinstance(param, str):
+                    escaped_value = param.replace("'", "''")
+                    where_clause = where_clause.replace("?", f"'{escaped_value}'", 1)
+                else:
+                    where_clause = where_clause.replace("?", str(param), 1)
 
         # Build similarity search query
         id_column = self._get_id_column()
@@ -599,56 +610,39 @@ class PineconeCompatibleIndex:
         if include_values:
             select_columns.append(self.vector_column)
 
-        # Use the appropriate similarity search method based on algorithm
-        if index_info["algorithm"] == "hnsw":
-            results = self.client.vector_ops.similarity_search(
-                self.table_name,
-                vector_column=self.vector_column,
-                query_vector=vector,
-                limit=top_k,
-                distance_type=index_info.get("metric", "l2"),
-                select_columns=select_columns,
-                where_conditions=where_conditions,
-                where_params=where_params,
-            )
-        else:  # default to IVF
-            results = self.client.vector_ops.similarity_search(
-                self.table_name,
-                vector_column=self.vector_column,
-                query_vector=vector,
-                limit=top_k,
-                distance_type=index_info.get("metric", "l2"),
-                select_columns=select_columns,
-                where_conditions=where_conditions,
-                where_params=where_params,
-            )
+        # Use VectorManager.similarity_search with new API
+        results = self.client.vector_ops.similarity_search(
+            self.table_name,
+            vector_column=self.vector_column,
+            query_vector=vector,
+            limit=top_k,
+            select_columns=select_columns,
+            where_clause=where_clause,
+        )
 
-        # Convert results to MatrixOne format (using real primary key)
+        # Convert results to Pinecone format
+        # Results are now dictionaries from VectorManager.similarity_search()
         matches = []
-        for row in results:
-            # Use the actual primary key value and column name
-            pk_value = row[0]  # Primary key value (can be any type)
-            score = float(row[-1]) if len(row) > 1 else 0.0  # Last column is usually score
+        id_column = self._get_id_column()
 
-            # Extract metadata (including primary key as a field)
+        for row in results:
+            # Extract ID from the dictionary
+            pk_value = row.get(id_column)
+
+            # Extract score (distance)
+            score = float(row.get('distance', 0.0))
+
+            # Extract metadata (all columns except vector and distance)
             metadata = {}
             if include_metadata:
-                metadata_columns = self._get_metadata_columns()
-                for i, col in enumerate(metadata_columns):
-                    if i + 1 < len(row):
-                        metadata[col] = row[i + 1]
-
-                # Add primary key to metadata with its real column name
-                id_column = self._get_id_column()
-                metadata[id_column] = pk_value
+                for key, value in row.items():
+                    if key != self.vector_column and key != 'distance':
+                        metadata[key] = value
 
             # Extract vector values if requested
             values = None
-            if include_values and self.vector_column in select_columns:
-                # Find vector column index case-insensitively
-                vector_idx = next(i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower())
-                if vector_idx < len(row):
-                    values = row[vector_idx]
+            if include_values:
+                values = row.get(self.vector_column)
 
             # Use primary key value as the match ID (convert to string for compatibility)
             matches.append(VectorMatch(id=str(pk_value), score=score, metadata=metadata, values=values))
@@ -680,10 +674,21 @@ class PineconeCompatibleIndex:
 
             QueryResponse object with matches
         """
-        index_info = await self._get_index_info_async()
-
         # Parse filter if provided
         where_conditions, where_params = self._parse_pinecone_filter(filter)
+
+        # Build where_clause from conditions and params
+        where_clause = None
+        if where_conditions:
+            # Convert ? placeholders to actual values (safely escaped)
+            where_clause = " AND ".join(where_conditions)
+            # Replace ? with escaped values
+            for param in where_params:
+                if isinstance(param, str):
+                    escaped_value = param.replace("'", "''")
+                    where_clause = where_clause.replace("?", f"'{escaped_value}'", 1)
+                else:
+                    where_clause = where_clause.replace("?", str(param), 1)
 
         # Build similarity search query
         id_column = await self._get_id_column_async()
@@ -694,62 +699,39 @@ class PineconeCompatibleIndex:
         if include_values:
             select_columns.append(self.vector_column)
 
-        # Use unified SQL builder for async queries
-        from .sql_builder import DistanceFunction, build_vector_similarity_query
-
-        # Convert metric to distance function enum
-        metric = index_info.get("metric", "l2")
-        if metric == "l2":
-            distance_func = DistanceFunction.L2
-        elif metric == "cosine":
-            distance_func = DistanceFunction.COSINE
-        elif metric == "ip":
-            distance_func = DistanceFunction.INNER_PRODUCT
-        else:
-            distance_func = DistanceFunction.L2
-
-        # Build query using unified SQL builder
-        sql = build_vector_similarity_query(
-            table_name=self.table_name,
+        # Use AsyncVectorManager.similarity_search with new API
+        results = await self.client.vector_ops.similarity_search(
+            self.table_name,
             vector_column=self.vector_column,
             query_vector=vector,
-            distance_func=distance_func,
             limit=top_k,
             select_columns=select_columns,
-            where_conditions=where_conditions,
-            where_params=where_params,
+            where_clause=where_clause,
         )
 
-        # Execute query
-        result = await self.client.execute(sql)
-        results = result.rows
-
-        # Convert results to MatrixOne format (using real primary key)
+        # Convert results to Pinecone format
+        # Results are now dictionaries from AsyncVectorManager.similarity_search()
         matches = []
-        for row in results:
-            # Use the actual primary key value and column name
-            pk_value = row[0]  # Primary key value (can be any type)
-            score = float(row[-1]) if len(row) > 1 else 0.0  # Last column is usually score
+        id_column = await self._get_id_column_async()
 
-            # Extract metadata (including primary key as a field)
+        for row in results:
+            # Extract ID from the dictionary
+            pk_value = row.get(id_column)
+
+            # Extract score (distance)
+            score = float(row.get('distance', 0.0))
+
+            # Extract metadata (all columns except vector and distance)
             metadata = {}
             if include_metadata:
-                metadata_columns = await self._get_metadata_columns_async()
-                for i, col in enumerate(metadata_columns):
-                    if i + 1 < len(row):
-                        metadata[col] = row[i + 1]
-
-                # Add primary key to metadata with its real column name
-                id_column = await self._get_id_column_async()
-                metadata[id_column] = pk_value
+                for key, value in row.items():
+                    if key != self.vector_column and key != 'distance':
+                        metadata[key] = value
 
             # Extract vector values if requested
             values = None
-            if include_values and self.vector_column in select_columns:
-                # Find vector column index case-insensitively
-                vector_idx = next(i for i, col in enumerate(select_columns) if col.lower() == self.vector_column.lower())
-                if vector_idx < len(row):
-                    values = row[vector_idx]
+            if include_values:
+                values = row.get(self.vector_column)
 
             # Use primary key value as the match ID (convert to string for compatibility)
             matches.append(VectorMatch(id=str(pk_value), score=score, metadata=metadata, values=values))

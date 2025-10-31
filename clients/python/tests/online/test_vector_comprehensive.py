@@ -337,7 +337,7 @@ class TestVectorComprehensive:
 
             assert len(result) == 2
             # Should return most similar vectors first
-            assert result[0].name == "unit_x"  # Should be most similar
+            assert result[0]['name'] == "unit_x"  # Should be most similar
 
         finally:
             test_client.drop_table(VectorCosine)

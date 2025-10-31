@@ -94,14 +94,14 @@ def sync_complete_example():
         except Exception as e:
             print(f"   ❌ Auto-inference error: {e}")
 
-        # Step 6: Test within transaction
-        print("\n6. Testing within transaction...")
+        # Step 6: Test within session
+        print("\n6. Testing within session...")
         try:
-            with client.transaction() as tx:
+            with client.session() as tx:
                 stats = tx.vector_ops.get_ivf_stats("vector_docs", "embedding")
-                print(f"   ✓ Transaction stats: {len(stats['index_tables'])} index tables found")
+                print(f"   ✓ Session stats: {len(stats['index_tables'])} index tables found")
         except Exception as e:
-            print(f"   ❌ Transaction error: {e}")
+            print(f"   ❌ Session error: {e}")
 
     finally:
         # Cleanup
@@ -193,14 +193,14 @@ async def async_complete_example():
         except Exception as e:
             print(f"   ❌ Auto-inference error: {e}")
 
-        # Step 6: Test within transaction
-        print("\n6. Testing within transaction...")
+        # Step 6: Test within session
+        print("\n6. Testing within session...")
         try:
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 stats = await tx.vector_ops.get_ivf_stats("async_vector_docs", "embedding")
-                print(f"   ✓ Transaction stats: {len(stats['index_tables'])} index tables found")
+                print(f"   ✓ Session stats: {len(stats['index_tables'])} index tables found")
         except Exception as e:
-            print(f"   ❌ Transaction error: {e}")
+            print(f"   ❌ Session error: {e}")
 
     finally:
         # Cleanup

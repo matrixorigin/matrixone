@@ -40,6 +40,17 @@ Fulltext Search
    fulltext_index
    fulltext_search
 
+Data Management
+===============
+
+.. toctree::
+   :maxdepth: 2
+
+   stage_manager
+   load_data_manager
+   export_manager
+   metadata_manager
+
 Database Management
 ===================
 

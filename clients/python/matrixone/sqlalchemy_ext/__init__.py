@@ -99,6 +99,35 @@ from .vector_type import (
     within_distance,
 )
 
+# Import JSON functions
+from .json_functions import (
+    JSON_EXTRACT,
+    JSON_EXTRACT_FLOAT64,
+    JSON_EXTRACT_STRING,
+    JSON_INSERT,
+    JSON_QUOTE,
+    JSON_REPLACE,
+    JSON_ROW,
+    JSON_SET,
+    JSON_UNQUOTE,
+    json_extract,
+    json_extract_float64,
+    json_extract_string,
+    json_insert,
+    json_quote,
+    json_replace,
+    json_row,
+    json_set,
+    json_unquote,
+)
+
+# Import custom JSON type
+from .json_type import (
+    JSON,
+    JSONPathElement,
+    MATRIXONE_JSON,
+)
+
 __all__ = [
     "VectorType",
     "Vectorf32",
@@ -159,4 +188,27 @@ __all__ = [
     "boolean_match",
     "natural_match",
     "group",
+    # JSON functions
+    "json_extract",
+    "json_extract_string",
+    "json_extract_float64",
+    "json_set",
+    "json_insert",
+    "json_replace",
+    "json_quote",
+    "json_unquote",
+    "json_row",
+    "JSON_EXTRACT",
+    "JSON_EXTRACT_STRING",
+    "JSON_EXTRACT_FLOAT64",
+    "JSON_SET",
+    "JSON_INSERT",
+    "JSON_REPLACE",
+    "JSON_QUOTE",
+    "JSON_UNQUOTE",
+    "JSON_ROW",
+    # JSON type
+    "JSON",
+    "JSONPathElement",
+    "MATRIXONE_JSON",
 ]

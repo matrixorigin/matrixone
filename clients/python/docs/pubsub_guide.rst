@@ -14,6 +14,124 @@ MatrixOne's Pub/Sub system provides:
 * **Message Filtering**: Subscribe to specific message patterns
 * **Async Support**: Full async/await support for high-performance applications
 * **Durability**: Reliable message delivery with persistence options
+* **Transaction Support**: Atomic pub/sub operations with ``session()``
+
+Transaction-Aware Pub/Sub Operations (Recommended)
+---------------------------------------------------
+
+Use ``client.session()`` for atomic publication and subscription setup:
+
+Atomic Publication Setup
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import insert, select
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Atomic publication creation
+   with client.session() as session:
+       # Create database publication
+       publication = session.pubsub.create_database_publication(
+           name='analytics_pub',
+           database='analytics',
+           account='subscriber_account'
+       )
+       
+       # Insert initial data in same transaction
+       session.execute(
+           insert(AnalyticsData).values(
+               metric='users',
+               value=1000,
+               timestamp=func.now()
+           )
+       )
+       
+       # Both operations commit together
+   
+   client.disconnect()
+
+Complex Pub/Sub Transaction
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select, insert, func
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Complex pub/sub setup with verification
+   with client.session() as session:
+       # Create table publication
+       publication = session.pubsub.create_table_publication(
+           name='users_pub',
+           database='production',
+           table='users',
+           account='analytics_account'
+       )
+       
+       # Verify table exists and has data
+       stmt = select(func.count()).select_from(text('production.users'))
+       count = session.execute(stmt).scalar()
+       
+       if count == 0:
+           raise Exception("Cannot publish empty table")
+       
+       print(f"Publishing table with {count} rows")
+       
+       # Create subscription on subscriber side
+       subscription = session.pubsub.create_subscription(
+           name='users_sub',
+           publication_name='users_pub',
+           publication_account='production_account'
+       )
+       
+       # All operations are atomic
+   
+   client.disconnect()
+
+Transactional Data Sharing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import insert, select
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Share data atomically
+   with client.session() as session:
+       # Insert data
+       session.execute(
+           insert(SharedData).values(
+               name='Dataset A',
+               data='Important data',
+               created_at=func.now()
+           )
+       )
+       
+       # Create publication
+       publication = session.pubsub.create_database_publication(
+           name='shared_data_pub',
+           database='shared',
+           account='partner_account'
+       )
+       
+       # Verify publication created
+       pubs = session.pubsub.list_publications()
+       if not any(p.name == 'shared_data_pub' for p in pubs):
+           raise Exception("Publication creation failed")
+       
+       # Commits all operations together
+   
+   client.disconnect()
 
 Getting Started
 ---------------

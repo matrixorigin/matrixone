@@ -95,10 +95,37 @@ func (t *droppedMergeTable) HasDropCommitted() bool {
 	return true
 }
 
+func TestHandleTaskTriggerNilPointerFixed(t *testing.T) {
+	// Setup: Create a MergeScheduler with empty supps map
+	scheduler := &MergeScheduler{
+		supps:   make(map[uint64]*todoSupporter),
+		msgChan: make(chan *MMsg, 4096),
+		ioChan:  make(chan *MMsg, 256),
+		clock:   NewStdClock(),
+	}
+
+	db := catalog.MockDBEntryWithAccInfo(1, 999)
+	table := catalog.MockTableEntryWithDB(db, 1000)
+	mockTable := catalog.ToMergeTable(table)
+
+	// Create a mock table with ID that doesn't exist in supps map
+	// Create a trigger message with vacuum set
+	msg := &MMsgTaskTrigger{
+		table:  mockTable,
+		vacuum: &VacuumOpts{},
+	}
+
+	// After the fix: This should NOT panic
+	// The early nil check should return gracefully
+	require.NotPanics(t, func() {
+		scheduler.handleTaskTrigger(msg)
+	}, "Should not panic after moving nil check before vacuum check")
+}
+
 func TestScheduler(t *testing.T) {
 
 	newTestTable := func(did, tid uint64) catalog.MergeTable {
-		db := catalog.MockDBEntryWithAccInfo(1, tid)
+		db := catalog.MockDBEntryWithAccInfo(did, tid)
 		table := catalog.MockTableEntryWithDB(db, tid)
 		return catalog.ToMergeTable(table)
 	}

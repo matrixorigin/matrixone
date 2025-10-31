@@ -36,6 +36,7 @@ from matrixone import Client
 from matrixone.orm import declarative_base
 from matrixone.config import get_connection_params
 from sqlalchemy import Column, Integer, String, DECIMAL, TIMESTAMP, func
+from sqlalchemy.dialects.mysql import JSON
 
 # Create MatrixOne logger
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class User(Base):
     login_count = Column(Integer, default=0)
     last_login = Column(TIMESTAMP)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    preferences = Column(JSON, nullable=True)  # JSON field for user preferences
 
 
 class Product(Base):
@@ -87,7 +89,8 @@ def demo_simple_updates():
         # Create tables
         client.create_all(Base)
 
-        # Insert sample data
+        # Insert sample data with JSON fields
+        # Note: Python dict in JSON column is automatically serialized
         users_data = [
             {
                 "id": 1,
@@ -98,6 +101,7 @@ def demo_simple_updates():
                 "salary": 50000.00,
                 "status": "active",
                 "login_count": 5,
+                "preferences": {"theme": "dark", "language": "en", "notifications": True},
             },
             {
                 "id": 2,
@@ -108,6 +112,7 @@ def demo_simple_updates():
                 "salary": 60000.00,
                 "status": "active",
                 "login_count": 10,
+                "preferences": {"theme": "light", "language": "zh", "notifications": False},
             },
             {
                 "id": 3,
@@ -118,18 +123,22 @@ def demo_simple_updates():
                 "salary": 70000.00,
                 "status": "inactive",
                 "login_count": 2,
+                "preferences": {"theme": "auto", "language": "en", "email_digest": "daily"},
             },
         ]
+        # Using batch_insert with JSON dict - auto-serialization
         client.batch_insert("example_users_update", users_data)
+        print("   ✓ Inserted users with JSON preferences using batch_insert()")
 
         # 1. Simple update with key-value pairs
-        print("1. Simple update with key-value pairs")
+        print("\n1. Simple update with key-value pairs")
         query = client.query(User)
         result = query.update(full_name="Alice Updated", email="alice.updated@example.com").filter(User.id == 1).execute()
 
         # Verify the update
         updated_user = client.query(User).filter(User.id == 1).first()
         print(f"   Updated user: {updated_user.full_name}, {updated_user.email}")
+        print(f"   User preferences (JSON): {updated_user.preferences}")
 
         # 2. Update multiple records with condition
         print("\n2. Update multiple records with condition")
@@ -165,7 +174,7 @@ def demo_sqlalchemy_expressions():
         # Create tables
         client.create_all(Base)
 
-        # Insert sample data
+        # Insert sample data with JSON - Using batch_insert
         users_data = [
             {
                 "id": 1,
@@ -176,7 +185,14 @@ def demo_sqlalchemy_expressions():
                 "salary": 50000.00,
                 "status": "active",
                 "login_count": 5,
+                "preferences": {"theme": "dark", "language": "en"},
             },
+        ]
+        client.batch_insert("example_users_update", users_data)
+
+        # Insert another user using client.insert() with JSON dict
+        client.insert(
+            "example_users_update",
             {
                 "id": 2,
                 "username": "bob",
@@ -186,12 +202,13 @@ def demo_sqlalchemy_expressions():
                 "salary": 60000.00,
                 "status": "active",
                 "login_count": 10,
+                "preferences": {"theme": "light", "language": "zh", "notifications": False},
             },
-        ]
-        client.batch_insert("example_users_update", users_data)
+        )
+        print("   ✓ Inserted users using batch_insert() and insert() with JSON dicts")
 
         # 1. Update with SQLAlchemy expressions
-        print("1. Update with SQLAlchemy expressions")
+        print("\n1. Update with SQLAlchemy expressions")
         query = client.query(User)
         result = query.update(login_count=User.login_count + 1, salary=User.salary * 1.1).filter(User.id == 1).execute()
 
@@ -316,25 +333,25 @@ def demo_update_with_transactions():
         ]
         client.batch_insert("example_users_update", users_data)
 
-        # 1. Successful transaction
-        print("1. Successful transaction")
-        with client.transaction() as tx:
+        # 1. Successful session
+        print("1. Successful session")
+        with client.session() as tx:
             query = client.query(User)
-            query.update(status="transaction_test").filter(User.id == 1).execute()
+            query.update(status="session_test").filter(User.id == 1).execute()
 
             query = client.query(User)
-            query.update(status="transaction_test").filter(User.id == 2).execute()
+            query.update(status="session_test").filter(User.id == 2).execute()
 
         # Verify the updates were committed
-        test_users = client.query(User).filter(User.status == "transaction_test").all()
-        print(f"   Transaction test users: {len(test_users)}")
+        test_users = client.query(User).filter(User.status == "session_test").all()
+        print(f"   Session test users: {len(test_users)}")
 
-        # 2. Rollback transaction
-        print("\n2. Rollback transaction")
+        # 2. Rollback session
+        print("\n2. Rollback session")
         original_status = client.query(User).filter(User.id == 1).first().status
 
         try:
-            with client.transaction() as tx:
+            with client.session() as tx:
                 query = client.query(User)
                 query.update(status="rollback_test").filter(User.id == 1).execute()
 

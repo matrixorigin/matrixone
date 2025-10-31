@@ -898,8 +898,8 @@ func (s *service) RefreshTxnFilters() error {
 
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
-					methods = append(methods, cols[0].UnsafeGetStringAt(i))
-					values = append(values, cols[1].UnsafeGetStringAt(i))
+					methods = append(methods, cols[0].GetStringAt(i))
+					values = append(values, cols[1].GetStringAt(i))
 				}
 				return true
 			})

@@ -97,24 +97,25 @@ class TestTransactionInsertMethods:
         """Test insert method in sync transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test single insert
             data = {'name': 'John Doe', 'age': 30, 'email': 'john@example.com'}
             result = tx.insert(f"{test_db}.test_table", data)
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Verify insert
             result = tx.execute(f"SELECT * FROM {test_db}.test_table WHERE name = 'John Doe'")
-            assert len(result.rows) == 1
-            assert result.rows[0][1] == 'John Doe'
-            assert result.rows[0][2] == 30
-            assert result.rows[0][3] == 'john@example.com'
+            rows = result.fetchall()
+            assert len(rows) == 1
+            assert rows[0][1] == 'John Doe'
+            assert rows[0][2] == 30
+            assert rows[0][3] == 'john@example.com'
 
     def test_sync_transaction_batch_insert(self, sync_client_setup):
         """Test batch_insert method in sync transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test batch insert
             data_list = [
                 {'name': 'Alice', 'age': 25, 'email': 'alice@example.com'},
@@ -122,18 +123,20 @@ class TestTransactionInsertMethods:
                 {'name': 'Charlie', 'age': 28, 'email': 'charlie@example.com'},
             ]
             result = tx.batch_insert(f"{test_db}.test_table", data_list)
-            assert result.affected_rows == 3
+            assert result.rowcount == 3
 
             # Verify batch insert
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 3
+            rows = result.fetchall()
+            assert rows[0][0] == 3
 
             # Verify individual records
             result = tx.execute(f"SELECT * FROM {test_db}.test_table ORDER BY name")
-            assert len(result.rows) == 3
-            assert result.rows[0][1] == 'Alice'
-            assert result.rows[1][1] == 'Bob'
-            assert result.rows[2][1] == 'Charlie'
+            rows = result.fetchall()
+            assert len(rows) == 3
+            assert rows[0][1] == 'Alice'
+            assert rows[1][1] == 'Bob'
+            assert rows[2][1] == 'Charlie'
 
     def test_sync_transaction_insert_with_vectors(self, sync_client_setup):
         """Test insert method with vector data in sync transaction context"""
@@ -150,51 +153,59 @@ class TestTransactionInsertMethods:
         """
         )
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test insert with vector data
             data = {'name': 'Vector Test', 'vector': [1.0, 2.0, 3.0, 4.0]}
             result = tx.insert(f"{test_db}.vector_table", data)
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Verify insert
             result = tx.execute(f"SELECT * FROM {test_db}.vector_table WHERE name = 'Vector Test'")
-            assert len(result.rows) == 1
-            assert result.rows[0][1] == 'Vector Test'
+            rows = result.fetchall()
+            assert len(rows) == 1
+            assert rows[0][1] == 'Vector Test'
 
     def test_sync_transaction_empty_batch_insert(self, sync_client_setup):
         """Test batch_insert with empty list in sync transaction context"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Test empty batch insert
             result = tx.batch_insert(f"{test_db}.test_table", [])
-            assert result.affected_rows == 0
-            assert len(result.rows) == 0
+            # For empty batch insert, batch_insert returns a ResultSet (not SQLAlchemy Result)
+            # which has affected_rows attribute instead of rowcount
+            if hasattr(result, 'affected_rows'):
+                assert result.affected_rows == 0
+            else:
+                assert result.rowcount == 0
+            rows = result.rows
+            assert len(rows) == 0
 
     @pytest.mark.asyncio
     async def test_async_transaction_insert(self, async_client_setup):
         """Test insert method in async transaction context"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test single insert
             data = {'name': 'Jane Doe', 'age': 32, 'email': 'jane@example.com'}
             result = await tx.insert(f"{test_db}.test_table", data)
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Verify insert
             result = await tx.execute(f"SELECT * FROM {test_db}.test_table WHERE name = 'Jane Doe'")
-            assert len(result.rows) == 1
-            assert result.rows[0][1] == 'Jane Doe'
-            assert result.rows[0][2] == 32
-            assert result.rows[0][3] == 'jane@example.com'
+            rows = result.fetchall()
+            assert len(rows) == 1
+            assert rows[0][1] == 'Jane Doe'
+            assert rows[0][2] == 32
+            assert rows[0][3] == 'jane@example.com'
 
     @pytest.mark.asyncio
     async def test_async_transaction_batch_insert(self, async_client_setup):
         """Test batch_insert method in async transaction context"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test batch insert
             data_list = [
                 {'name': 'David', 'age': 27, 'email': 'david@example.com'},
@@ -202,18 +213,20 @@ class TestTransactionInsertMethods:
                 {'name': 'Frank', 'age': 29, 'email': 'frank@example.com'},
             ]
             result = await tx.batch_insert(f"{test_db}.test_table", data_list)
-            assert result.affected_rows == 3
+            assert result.rowcount == 3
 
             # Verify batch insert
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 3
+            rows = result.fetchall()
+            assert rows[0][0] == 3
 
             # Verify individual records
             result = await tx.execute(f"SELECT * FROM {test_db}.test_table ORDER BY name")
-            assert len(result.rows) == 3
-            assert result.rows[0][1] == 'David'
-            assert result.rows[1][1] == 'Eve'
-            assert result.rows[2][1] == 'Frank'
+            rows = result.fetchall()
+            assert len(rows) == 3
+            assert rows[0][1] == 'David'
+            assert rows[1][1] == 'Eve'
+            assert rows[2][1] == 'Frank'
 
     @pytest.mark.asyncio
     async def test_async_transaction_insert_with_vectors(self, async_client_setup):
@@ -231,38 +244,45 @@ class TestTransactionInsertMethods:
         """
         )
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test insert with vector data
             data = {'name': 'Async Vector Test', 'vector': [5.0, 6.0, 7.0, 8.0]}
             result = await tx.insert(f"{test_db}.vector_table", data)
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Verify insert
             result = await tx.execute(f"SELECT * FROM {test_db}.vector_table WHERE name = 'Async Vector Test'")
-            assert len(result.rows) == 1
-            assert result.rows[0][1] == 'Async Vector Test'
+            rows = result.fetchall()
+            assert len(rows) == 1
+            assert rows[0][1] == 'Async Vector Test'
 
     @pytest.mark.asyncio
     async def test_async_transaction_empty_batch_insert(self, async_client_setup):
         """Test batch_insert with empty list in async transaction context"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Test empty batch insert
             result = await tx.batch_insert(f"{test_db}.test_table", [])
-            assert result.affected_rows == 0
-            assert len(result.rows) == 0
+            # For empty batch insert, batch_insert returns an AsyncResultSet (not SQLAlchemy Result)
+            # which has affected_rows attribute instead of rowcount
+            if hasattr(result, 'affected_rows'):
+                assert result.affected_rows == 0
+            else:
+                assert result.rowcount == 0
+            rows = result.rows
+            assert len(rows) == 0
 
     def test_sync_transaction_rollback_insert(self, sync_client_setup):
         """Test that insert operations are rolled back on transaction failure"""
         client, test_db = sync_client_setup
 
         try:
-            with client.transaction() as tx:
+            with client.session() as tx:
                 # Insert data
                 data = {'name': 'Rollback Test', 'age': 40, 'email': 'rollback@example.com'}
                 result = tx.insert(f"{test_db}.test_table", data)
-                assert result.affected_rows == 1
+                assert result.rowcount == 1
 
                 # Force rollback by raising an exception
                 raise Exception("Force rollback")
@@ -271,7 +291,8 @@ class TestTransactionInsertMethods:
 
         # Verify data was rolled back
         result = client.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-        assert result.rows[0][0] == 0
+        rows = result.fetchall()
+        assert rows[0][0] == 0
 
     @pytest.mark.asyncio
     async def test_async_transaction_rollback_insert(self, async_client_setup):
@@ -279,7 +300,7 @@ class TestTransactionInsertMethods:
         client, test_db = async_client_setup
 
         try:
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 # Insert data
                 data = {
                     'name': 'Async Rollback Test',
@@ -287,7 +308,7 @@ class TestTransactionInsertMethods:
                     'email': 'async_rollback@example.com',
                 }
                 result = await tx.insert(f"{test_db}.test_table", data)
-                assert result.affected_rows == 1
+                assert result.rowcount == 1
 
                 # Force rollback by raising an exception
                 raise Exception("Force rollback")
@@ -296,17 +317,18 @@ class TestTransactionInsertMethods:
 
         # Verify data was rolled back
         result = await client.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-        assert result.rows[0][0] == 0
+        rows = result.fetchall()
+        assert rows[0][0] == 0
 
     def test_sync_transaction_mixed_operations(self, sync_client_setup):
         """Test mixing insert, batch_insert, and execute in sync transaction"""
         client, test_db = sync_client_setup
 
-        with client.transaction() as tx:
+        with client.session() as tx:
             # Single insert
             data1 = {'name': 'Mixed Test 1', 'age': 20, 'email': 'mixed1@example.com'}
             result = tx.insert(f"{test_db}.test_table", data1)
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Batch insert
             data_list = [
@@ -314,28 +336,29 @@ class TestTransactionInsertMethods:
                 {'name': 'Mixed Test 3', 'age': 22, 'email': 'mixed3@example.com'},
             ]
             result = tx.batch_insert(f"{test_db}.test_table", data_list)
-            assert result.affected_rows == 2
+            assert result.rowcount == 2
 
             # Direct execute
             result = tx.execute(
                 f"INSERT INTO {test_db}.test_table (name, age, email) VALUES ('Mixed Test 4', 23, 'mixed4@example.com')"
             )
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Verify all operations
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 4
+            rows = result.fetchall()
+            assert rows[0][0] == 4
 
     @pytest.mark.asyncio
     async def test_async_transaction_mixed_operations(self, async_client_setup):
         """Test mixing insert, batch_insert, and execute in async transaction"""
         client, test_db = async_client_setup
 
-        async with client.transaction() as tx:
+        async with client.session() as tx:
             # Single insert
             data1 = {'name': 'Async Mixed Test 1', 'age': 24, 'email': 'async_mixed1@example.com'}
             result = await tx.insert(f"{test_db}.test_table", data1)
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Batch insert
             data_list = [
@@ -343,14 +366,15 @@ class TestTransactionInsertMethods:
                 {'name': 'Async Mixed Test 3', 'age': 26, 'email': 'async_mixed3@example.com'},
             ]
             result = await tx.batch_insert(f"{test_db}.test_table", data_list)
-            assert result.affected_rows == 2
+            assert result.rowcount == 2
 
             # Direct execute
             result = await tx.execute(
                 f"INSERT INTO {test_db}.test_table (name, age, email) VALUES ('Async Mixed Test 4', 27, 'async_mixed4@example.com')"
             )
-            assert result.affected_rows == 1
+            assert result.rowcount == 1
 
             # Verify all operations
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
-            assert result.rows[0][0] == 4
+            rows = result.fetchall()
+            assert rows[0][0] == 4
