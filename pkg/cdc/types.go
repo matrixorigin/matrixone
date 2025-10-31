@@ -47,7 +47,9 @@ const (
 	CDCDefaultSendSqlTimeout                 = "10m"
 	CDCDefaultRetryTimes                     = -1
 	CDCDefaultRetryDuration                  = 10 * time.Minute
-	SinkerRetryDuration                      = 2 * time.Minute
+	CDCDefaultSinkerRetryDuration            = 2 * time.Minute
+	CDCDefaultReaderRetryDuration            = 1 * time.Hour
+	CDCDefaultReaderMaxRetryTimes            = 5
 	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
 	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
 )
@@ -236,7 +238,9 @@ type DbTableInfo struct {
 	SinkDbName  string
 	SinkTblName string
 
-	IdChanged bool
+	IdChanged    bool
+	RetryStartTS int64
+	RetryTimes   int
 }
 
 func (info DbTableInfo) String() string {

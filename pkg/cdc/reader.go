@@ -194,7 +194,13 @@ func (reader *tableReader) Run(
 		if err != nil {
 			errMsg := err.Error()
 			if retryable {
-				errMsg = RetryableErrorPrefix + errMsg
+				startTS := reader.info.RetryStartTS
+				retryTimes := reader.info.RetryTimes
+				if startTS == 0 {
+					startTS = time.Now().UnixNano()
+				}
+				retryTimes++
+				errMsg = GenerateRetryableError(startTS, retryTimes, errMsg)
 			}
 			if err = reader.wMarkUpdater.UpdateWatermarkErrMsg(
 				ctx,

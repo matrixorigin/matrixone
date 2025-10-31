@@ -82,7 +82,7 @@ func TestGetErrorMsg(t *testing.T) {
 	taskID := uuid.New().String()
 
 	ie := &mockCDCIE{de: disttaeEngine}
-	hasError, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	hasError, _, _, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
@@ -93,7 +93,7 @@ func TestGetErrorMsg(t *testing.T) {
 	require.NoError(t, err)
 
 	ie = &mockCDCIE{de: disttaeEngine}
-	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
@@ -104,7 +104,7 @@ func TestGetErrorMsg(t *testing.T) {
 	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
 	require.NoError(t, err)
 
-	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
@@ -113,7 +113,7 @@ func TestGetErrorMsg(t *testing.T) {
 
 	ie.setError(moerr.NewInternalErrorNoCtx("debug"))
 
-	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
@@ -123,7 +123,7 @@ func TestGetErrorMsg(t *testing.T) {
 	ie.setError(nil)
 	ie.setStringError(moerr.NewInternalErrorNoCtx("debug"))
 
-	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
@@ -136,7 +136,7 @@ func TestGetErrorMsg(t *testing.T) {
 	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
 	require.NoError(t, err)
 
-	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})

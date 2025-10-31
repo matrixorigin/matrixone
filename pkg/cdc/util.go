@@ -907,3 +907,7 @@ func ParseRetryableError(input string) (retryable bool, startts int64, retryTime
 
 	return retryable, startts, retryTimes
 }
+
+func GenerateRetryableError(startTS int64, retryTimes int, errMsg string) string {
+	return fmt.Sprintf("%s:%d:%d:%s", RetryableErrorPrefix, startTS, retryTimes, errMsg)
+}

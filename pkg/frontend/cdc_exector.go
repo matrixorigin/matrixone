@@ -472,10 +472,17 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		if !exec.matchAnyPattern(key, newTableInfo) {
 			continue
 		}
-		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
+		hasError, startTS, retryTimes, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
 		if err != nil {
 			logutil.Errorf("cdc task %s get table err msg for table %s failed, err: %v", exec.spec.TaskName, key, err)
 			return err
+		}
+		if retryTimes > cdc.CDCDefaultReaderMaxRetryTimes {
+			continue
+		}
+		now := time.Now()
+		if now.UnixNano() - startTS > cdc.CDCDefaultReaderRetryDuration.Nanoseconds() {
+			continue
 		}
 		if hasError {
 			continue
@@ -499,29 +506,23 @@ var GetTableErrMsg = func(
 	ieExecutor ie.InternalExecutor,
 	taskId string,
 	tbl *cdc.DbTableInfo) (
-	hasError bool, err error,
+	hasError bool, startTS int64, retryTimes int, err error,
 ) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := cdc.CDCSQLBuilder.GetTableErrMsgSQL(uint64(accountId), taskId, tbl.SourceDbName, tbl.SourceTblName)
 	res := ieExecutor.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
-		return false, res.Error()
+		return false, 0, 0, res.Error()
 	} else if res.RowCount() < 1 {
-		return false, nil
+		return false, 0, 0, nil
 	}
 
 	errMsg, err := res.GetString(ctx, 0, 0)
 	if err != nil {
-		return false, err
+		return false, 0, 0, err
 	}
-	if errMsg == "" {
-		return false, nil
-	}
-	if strings.HasPrefix(errMsg, cdc.RetryableErrorPrefix) {
-		return false, nil
-	}
-	hasError = true
-	return
+	retryable, startTS, retryTimes := cdc.ParseRetryableError(errMsg)
+	return !retryable, startTS, retryTimes, nil
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
@@ -609,7 +610,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.watermarkUpdater,
 		tableDef,
 		cdc.CDCDefaultRetryTimes,
-		cdc.SinkerRetryDuration,
+		cdc.CDCDefaultSinkerRetryDuration,
 		exec.activeRoutine,
 		uint64(exec.additionalConfig[cdc.CDCTaskExtraOptions_MaxSqlLength].(float64)),
 		exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string),
