@@ -59,7 +59,7 @@ var NewSinker = func(
 	accountId uint64,
 	taskId string,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *CDCWatermarkUpdater,
+	watermarkUpdater WatermarkUpdater,
 	tableDef *plan.TableDef,
 	retryTimes int,
 	retryDuration time.Duration,
@@ -151,12 +151,12 @@ var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater *CDCWatermarkUpdater
+	watermarkUpdater WatermarkUpdater
 }
 
 func NewConsoleSinker(
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *CDCWatermarkUpdater,
+	watermarkUpdater WatermarkUpdater,
 ) Sinker {
 	return &consoleSinker{
 		dbTblInfo:        dbTblInfo,
@@ -224,7 +224,7 @@ type mysqlSinker struct {
 	// task id of the cdc task
 	taskId           string
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater *CDCWatermarkUpdater
+	watermarkUpdater WatermarkUpdater
 	ar               *ActiveRoutine
 
 	// buf of sql statement
@@ -284,7 +284,7 @@ var NewMysqlSinker = func(
 	accountId uint64,
 	taskId string,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *CDCWatermarkUpdater,
+	watermarkUpdater WatermarkUpdater,
 	tableDef *plan.TableDef,
 	ar *ActiveRoutine,
 	maxSqlLength uint64,

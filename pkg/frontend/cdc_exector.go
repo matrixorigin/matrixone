@@ -125,7 +125,7 @@ type CDCTaskExecutor struct {
 
 	activeRoutine *cdc.ActiveRoutine
 	// watermarkUpdater update the watermark of the items that has been sunk to downstream
-	watermarkUpdater *cdc.CDCWatermarkUpdater
+	watermarkUpdater cdc.WatermarkUpdater
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
 
@@ -172,6 +172,38 @@ func NewCDCTaskExecutor(
 	return task
 }
 
+func (exec *CDCTaskExecutor) SetActiveRoutine(activeRoutine *cdc.ActiveRoutine) {
+	exec.activeRoutine = activeRoutine
+}
+
+func (exec *CDCTaskExecutor) SetSinkUri(sinkUri cdc.UriInfo) {
+	exec.sinkUri = sinkUri
+}
+
+func (exec *CDCTaskExecutor) SetTables(tables cdc.PatternTuples) {
+	exec.tables = tables
+}
+
+func (exec *CDCTaskExecutor) SetExclude(exclude *regexp.Regexp) {
+	exec.exclude = exclude
+}
+
+func (exec *CDCTaskExecutor) SetStartTs(startTs types.TS) {
+	exec.startTs = startTs
+}
+
+func (exec *CDCTaskExecutor) SetEndTs(endTs types.TS) {
+	exec.endTs = endTs
+}
+
+func (exec *CDCTaskExecutor) SetNoFull(noFull bool) {
+	exec.noFull = noFull
+}
+
+func (exec *CDCTaskExecutor) SetAdditionalConfig(additionalConfig map[string]interface{}) {
+	exec.additionalConfig = additionalConfig
+}
+
 func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	taskId := exec.spec.TaskId
 	taskName := exec.spec.TaskName
@@ -192,7 +224,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 			exec.activeRoutine.ClosePause()
 			exec.activeRoutine.CloseCancel()
 
-			updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error())
+			updateErrMsgErr := UpdateErrMsg(rootCtx, exec, err.Error())
 			logutil.Error(
 				"CDC-Task-Start-Failed",
 				zap.String("task-id", taskId),
@@ -206,7 +238,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	ctx := defines.AttachAccountId(rootCtx, accountId)
 
 	// get cdc task definition
-	if err = exec.retrieveCdcTask(ctx); err != nil {
+	if err = RetrieveCdcTask(ctx, exec); err != nil {
 		return err
 	}
 
@@ -228,7 +260,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 	exec.isRunning = true
 	// start success, clear err msg
-	clearErrMsgErr := exec.updateErrMsg(ctx, "")
+	clearErrMsgErr := UpdateErrMsg(ctx, exec, "")
 
 	logutil.Info(
 		"CDC-Task-Start-Success",
@@ -376,7 +408,7 @@ func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, a
 	return
 }
 
-func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (err error) {
+var UpdateErrMsg = func(ctx context.Context, exec *CDCTaskExecutor, errMsg string) (err error) {
 	accId := exec.spec.Accounts[0].GetId()
 	state := cdc.CDCState_Running
 	if errMsg != "" {
@@ -644,7 +676,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	return
 }
 
-func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
+var RetrieveCdcTask = func(ctx context.Context, exec *CDCTaskExecutor) error {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
 	accId := exec.spec.Accounts[0].GetId()
