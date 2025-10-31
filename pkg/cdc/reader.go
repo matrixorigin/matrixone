@@ -83,7 +83,7 @@ var NewTableReader = func(
 	taskId string,
 	info *DbTableInfo,
 	sinker Sinker,
-	wMarkUpdater *CDCWatermarkUpdater,
+	wMarkUpdater WatermarkUpdater,
 	tableDef *plan.TableDef,
 	initSnapshotSplitTxn bool,
 	runningReaders *sync.Map,

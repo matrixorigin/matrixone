@@ -58,10 +58,10 @@ func init() {
 	tasks.RegisterJobType(JT_CDC_RemoveCachedWM, "CDC_RemoveCachedWM")
 }
 
-func GetCDCWatermarkUpdater(
+var GetCDCWatermarkUpdater = func(
 	cnUUID string,
 	executor ie.InternalExecutor,
-) *CDCWatermarkUpdater {
+) WatermarkUpdater {
 	updater := cdcWatermarkUpdater.Load()
 	for updater == nil {
 		newUpdater := NewCDCWatermarkUpdater(
