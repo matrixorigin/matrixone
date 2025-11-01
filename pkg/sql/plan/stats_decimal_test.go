@@ -188,6 +188,289 @@ func TestCalcSelectivityByMinMaxForDecimal(t *testing.T) {
 		expected := (9999.99 - (-500.0) + 1) / (9999.99 - (-999.99))
 		require.InDelta(t, expected, result, 0.01)
 	})
+
+	t.Run("max < min - invalid range", func(t *testing.T) {
+		// Invalid range: max < min
+		// Should return default 0.1
+		expr := makeDecimalComparisonExpr(">=", 5.0, 2)
+		result := calcSelectivityByMinMaxForDecimal(">=", 50.0, 1.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("expr.GetF() returns nil", func(t *testing.T) {
+		// Invalid expr - no function
+		expr := &plan.Expr{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{Name: "test_col"},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal(">=", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("expr with insufficient args", func(t *testing.T) {
+		// Invalid expr - only 1 arg (needs 2)
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: ">="},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{Name: "test_col"},
+							},
+						},
+						// Missing second arg
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal(">=", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("literal is nil", func(t *testing.T) {
+		// Expr with nil literal
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: ">="},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{Name: "test_col"},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: nil, // nil literal
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal(">=", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("getDecimalLiteralValue returns false", func(t *testing.T) {
+		// Literal that getDecimalLiteralValue can't handle (non-decimal)
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: ">="},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{Name: "test_col"},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_I64Val{I64Val: 123}, // int literal, not decimal
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal(">=", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("greater than (single >)", func(t *testing.T) {
+		// Test ">" (not ">=")
+		// Note: The current implementation treats ">" and ">=" the same
+		// Both use: (max - val1 + 1) / (max - min)
+		expr := makeDecimalComparisonExpr(">", 5.0, 2)
+		result := calcSelectivityByMinMaxForDecimal(">", 1.0, 50.0, expr)
+		// Actual implementation uses same formula as >=
+		expected := (50.0 - 5.0 + 1) / (50.0 - 1.0)
+		require.InDelta(t, expected, result, 0.01)
+	})
+
+	t.Run("less than (single <)", func(t *testing.T) {
+		// Test "<" (not "<=")
+		// Note: The current implementation treats "<" and "<=" the same
+		expr := makeDecimalComparisonExpr("<", 15.0, 2)
+		result := calcSelectivityByMinMaxForDecimal("<", 1.0, 50.0, expr)
+		// Actual implementation uses same formula as <=
+		expected := (15.0 - 1.0 + 1) / (50.0 - 1.0)
+		require.InDelta(t, expected, result, 0.01)
+	})
+
+	t.Run("between with nil lit1", func(t *testing.T) {
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "between"},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "test_col"}},
+							Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{Lit: nil}, // nil lit1
+							Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Decimal64Val{
+										Decimal64Val: &plan.Decimal64{A: 1500}, // 15.0
+									},
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal("between", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("between with nil lit2", func(t *testing.T) {
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "between"},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "test_col"}},
+							Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Decimal64Val{
+										Decimal64Val: &plan.Decimal64{A: 500}, // 5.0
+									},
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{Lit: nil}, // nil lit2
+							Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal("between", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("between with invalid lit1", func(t *testing.T) {
+		// lit1 that getDecimalLiteralValue can't handle
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "between"},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "test_col"}},
+							Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_I64Val{I64Val: 123}, // wrong type
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Decimal64Val{
+										Decimal64Val: &plan.Decimal64{A: 1500},
+									},
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal("between", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("between with invalid lit2", func(t *testing.T) {
+		// lit2 that getDecimalLiteralValue can't handle
+		dec, _ := types.Decimal64FromFloat64(5.0, 18, 2)
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "between"},
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "test_col"}},
+							Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Decimal64Val{
+										Decimal64Val: &plan.Decimal64{A: int64(dec)},
+									},
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+						{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_I64Val{I64Val: 123}, // wrong type
+								},
+							},
+							Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+						},
+					},
+				},
+			},
+		}
+		result := calcSelectivityByMinMaxForDecimal("between", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("unknown funcName defaults", func(t *testing.T) {
+		// Unknown function name should return 0.1
+		expr := makeDecimalComparisonExpr("unknown", 5.0, 2)
+		result := calcSelectivityByMinMaxForDecimal("unknown", 1.0, 50.0, expr)
+		require.Equal(t, 0.1, result)
+	})
+
+	t.Run("ret > 1 clamped to 1.0", func(t *testing.T) {
+		// Scenario where calculation would give > 1
+		// This happens when between range (val2 - val1 + 1) > (max - min)
+		// e.g., val1=1, val2=100, but max-min=49
+		expr := makeDecimalBetweenExpr(1.0, 100.0, 2) // val2 way beyond max
+		result := calcSelectivityByMinMaxForDecimal("between", 1.0, 50.0, expr)
+		// Should be clamped to 1.0
+		require.Equal(t, 1.0, result)
+	})
+
+	t.Run("ret < 0 returns low value", func(t *testing.T) {
+		// Scenario where calculation gives negative result
+		// This can happen in edge cases with between when range is inverted
+		// Use a between with val2 < val1 and very small range
+		expr := makeDecimalBetweenExpr(50.0, 1.0, 2)                             // val2 < val1
+		result := calcSelectivityByMinMaxForDecimal("between", 50.0, 50.0, expr) // min=max edge case
+		// Should return low value (0.00000001)
+		require.Less(t, result, 0.001)
+	})
 }
 
 // TestDecimalSelectivityRegression tests the specific Q19 scenario that caused performance regression
