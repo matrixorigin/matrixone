@@ -13,12 +13,12 @@ create table test.t4 clone test.t1 {snapshot = "sp2"};
 create database if not exists test2;
 create snapshot sp3 for database test2;
 create table test.t5 clone test.t1 {snapshot = "sp3"};
-internal error: the snapshot sp3 doesnot contain the table t1
+internal error: database-level snapshot(sp3) does not belong to the database(test)
 create snapshot sp4 for table test t1;
 create table test.t6 clone test.t2 {snapshot = "sp4"};
-internal error: the snapshot sp4 doesnot contain the table t2
+internal error: table-level snapshot(sp4) does not belong to the table(test-t2)
 create database test3 clone test {snapshot = "sp4"};
-internal error: the snapshot sp4 doesnot contain the table t2
+internal error: cannot use a table-level snapshot to clone cluster/account/database
 drop snapshot sp1;
 drop snapshot sp2;
 drop snapshot sp3;
