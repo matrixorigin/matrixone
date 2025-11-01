@@ -338,7 +338,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 
 	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
-	})
+	}, maxIOWaitDuration)
 	if done != nil {
 		defer done()
 	} else {
@@ -596,12 +596,12 @@ read_disk_cache:
 		// may read caches, merge
 		LogEvent(ctx, str_ioMerger_Merge_begin)
 		startLock := time.Now()
-		done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+		done, wait := s.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
 		if done != nil {
+			defer done()
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			LogEvent(ctx, str_ioMerger_Merge_initiate)
 			LogEvent(ctx, str_ioMerger_Merge_end)
-			defer done()
 		} else {
 			LogEvent(ctx, str_ioMerger_Merge_wait)
 			wait()
