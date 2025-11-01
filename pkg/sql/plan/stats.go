@@ -355,15 +355,21 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 			scale := coldef.Typ.Scale
 			minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
 			maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
-			s.MinValMap[colName] = types.Decimal64ToFloat64(minDec, scale)
-			s.MaxValMap[colName] = types.Decimal64ToFloat64(maxDec, scale)
+			minFloat := types.Decimal64ToFloat64(minDec, scale)
+			maxFloat := types.Decimal64ToFloat64(maxDec, scale)
+			s.MinValMap[colName] = minFloat
+			s.MaxValMap[colName] = maxFloat
+
 		case types.T_decimal128:
 			// Fix: Use actual scale from column definition instead of hardcoded 0
 			scale := coldef.Typ.Scale
 			minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
 			maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
-			s.MinValMap[colName] = types.Decimal128ToFloat64(minDec, scale)
-			s.MaxValMap[colName] = types.Decimal128ToFloat64(maxDec, scale)
+			minFloat := types.Decimal128ToFloat64(minDec, scale)
+			maxFloat := types.Decimal128ToFloat64(maxDec, scale)
+			s.MinValMap[colName] = minFloat
+			s.MaxValMap[colName] = maxFloat
+
 		}
 
 		if info.ShuffleRanges[i] != nil {
@@ -539,6 +545,89 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 	return 0.01
 }
 
+// calcSelectivityByMinMaxForDecimal handles decimal types with proper scale conversion
+func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *plan.Expr) (ret float64) {
+	if max < min {
+		return 0.1
+	}
+
+	// Extract literal expressions with type information (which includes scale)
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) < 2 {
+		return 0.1
+	}
+
+	// Get scale from the literal expr's type
+	var val1, val2 float64
+	var ok bool
+
+	switch funcName {
+	case ">", ">=", "<", "<=":
+		lit := fn.Args[1].GetLit()
+		if lit == nil {
+			return 0.1
+		}
+		// Use the expr's type which contains scale information
+		scale := fn.Args[1].Typ.Scale
+		val1, ok = getDecimalLiteralValue(lit, scale)
+		if !ok {
+			return 0.1
+		}
+
+		switch funcName {
+		case ">", ">=":
+			ret = (max - val1 + 1) / (max - min)
+		case "<", "<=":
+			ret = (val1 - min + 1) / (max - min)
+		}
+
+	case "between":
+		lit1 := fn.Args[1].GetLit()
+		lit2 := fn.Args[2].GetLit()
+		if lit1 == nil || lit2 == nil {
+			return 0.1
+		}
+		scale1 := fn.Args[1].Typ.Scale
+		scale2 := fn.Args[2].Typ.Scale
+		val1, ok = getDecimalLiteralValue(lit1, scale1)
+		if !ok {
+			return 0.1
+		}
+		val2, ok = getDecimalLiteralValue(lit2, scale2)
+		if !ok {
+			return 0.1
+		}
+		ret = (val2 - val1 + 1) / (max - min)
+	default:
+		return 0.1
+	}
+
+	if ret < 0 {
+		// Value out of range, return low selectivity
+		return 0.00000001
+	}
+	if ret > 1 {
+		return 1.0
+	}
+	return ret
+}
+
+// getDecimalLiteralValue extracts the actual float64 value from a decimal literal using its scale
+func getDecimalLiteralValue(lit *plan.Literal, scale int32) (float64, bool) {
+	if val64, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+		dec64 := types.Decimal64(val64.Decimal64Val.A)
+		return types.Decimal64ToFloat64(dec64, scale), true
+	}
+	if val128, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		dec128 := types.Decimal128{
+			B0_63:   uint64(val128.Decimal128Val.A),
+			B64_127: uint64(val128.Decimal128Val.B),
+		}
+		return types.Decimal128ToFloat64(dec128, scale), true
+	}
+	return 0, false
+}
+
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	var ok bool
 	var val1, val2 float64
@@ -564,6 +653,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	default:
 		ret = 0.1
 	}
+
 	if ret < 0 {
 		// val out of range, return low sel
 		return 0.00000001
@@ -635,6 +725,8 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 		}
 	case types.T_decimal64:
 		if val, valOk := lit.Value.(*plan.Literal_Decimal64Val); valOk {
+			// Note: This path is only used for non-decimal column types
+			// For decimal columns, use calcSelectivityByMinMaxForDecimal instead
 			return float64(val.Decimal64Val.A), true
 		}
 	case types.T_decimal128:
@@ -674,6 +766,12 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 		switch colFnName {
 		case "":
+			// CRITICAL FIX: For decimal types, we need to pass the expr to get scale information
+			// Decimal literals store internal scaled values, need proper conversion
+			if typ == types.T_decimal64 || typ == types.T_decimal128 {
+				return calcSelectivityByMinMaxForDecimal(
+					funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], expr)
+			}
 			return calcSelectivityByMinMax(
 				funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], typ, literals)
 		case "year":
