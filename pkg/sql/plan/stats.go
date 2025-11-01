@@ -352,7 +352,9 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_decimal64:
 			// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
 			// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
-			scale := coldef.Typ.Scale
+			// IMPORTANT: Use ZoneMap's scale, not TableDef's scale
+			// ZoneMap stores the scale from when data was written (may differ from current schema after ALTER TABLE)
+			scale := info.ColumnZMs[i].GetScale()
 			minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
 			maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
 			minFloat := types.Decimal64ToFloat64(minDec, scale)
@@ -361,8 +363,9 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 			s.MaxValMap[colName] = maxFloat
 
 		case types.T_decimal128:
-			// Fix: Use actual scale from column definition instead of hardcoded 0
-			scale := coldef.Typ.Scale
+			// Fix: Use actual scale from ZoneMap (not TableDef)
+			// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
+			scale := info.ColumnZMs[i].GetScale()
 			minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
 			maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
 			minFloat := types.Decimal128ToFloat64(minDec, scale)
@@ -576,8 +579,16 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 
 		switch funcName {
 		case ">", ">=":
+			// If value is greater than max, almost no rows will match
+			if val1 > max {
+				return 0.00000001
+			}
 			ret = (max - val1 + 1) / (max - min)
 		case "<", "<=":
+			// If value is less than min, almost no rows will match
+			if val1 < min {
+				return 0.00000001
+			}
 			ret = (val1 - min + 1) / (max - min)
 		}
 
