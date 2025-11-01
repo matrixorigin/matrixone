@@ -173,20 +173,26 @@ func RequestMultipleCn(ctx context.Context,
 	for nodesLeft > 0 {
 		select {
 		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+			if res.err != nil {
+				// Record first error
+				if retErr == nil {
+					retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+				}
+				nodesLeft--
+				continue
+			}
+
+			// Only process response when successful
+			queryResp, ok := res.response.(*pb.Response)
+			if ok {
+				//save response
+				handleValidResponse(res.nodeAddr, queryResp)
+				if queryResp != nil {
+					qc.Release(queryResp)
+				}
 			} else {
-				queryResp, ok := res.response.(*pb.Response)
-				if ok {
-					//save response
-					handleValidResponse(res.nodeAddr, queryResp)
-					if queryResp != nil {
-						qc.Release(queryResp)
-					}
-				} else {
-					if handleInvalidResponse != nil {
-						handleInvalidResponse(res.nodeAddr)
-					}
+				if handleInvalidResponse != nil {
+					handleInvalidResponse(res.nodeAddr)
 				}
 			}
 		case <-ctx.Done():
