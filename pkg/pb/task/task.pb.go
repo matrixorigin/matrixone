@@ -838,11 +838,11 @@ func (m *Account) GetName() string {
 }
 
 type CreateCdcDetails struct {
-	//cdc task uuid
+	// cdc task uuid
 	TaskId string `protobuf:"bytes,1,opt,name=TaskId,proto3" json:"TaskId,omitempty"`
-	//cdc task name in CreateCdc
+	// cdc task name in CreateCdc
 	TaskName string `protobuf:"bytes,2,opt,name=TaskName,proto3" json:"TaskName,omitempty"`
-	//cdc source account
+	// cdc source account
 	Accounts             []*Account `protobuf:"bytes,3,rep,name=Accounts,proto3" json:"Accounts,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}   `json:"-"`
 	XXX_unrecognized     []byte     `json:"-"`
@@ -1006,6 +1006,7 @@ type Details struct {
 	Username    string `protobuf:"bytes,4,opt,name=Username,proto3" json:"Username,omitempty"`
 	Error       string `protobuf:"bytes,5,opt,name=Error,proto3" json:"Error,omitempty"`
 	// Types that are valid to be assigned to Details:
+	//
 	//	*Details_Connector
 	//	*Details_CreateCdc
 	//	*Details_ISCP

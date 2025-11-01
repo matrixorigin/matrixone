@@ -461,3 +461,7 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int
 
 	return n, nil
 }
+
+func (m *StrHashMap) AllGroupHash() []uint64 {
+	return m.hashMap.AllGroupHash()
+}

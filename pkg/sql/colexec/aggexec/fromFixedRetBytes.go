@@ -15,8 +15,11 @@
 package aggexec
 
 import (
+	"bytes"
 	"fmt"
+	io "io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -219,9 +222,12 @@ func (exec *aggregatorFromFixedToBytes[from]) GetOptResult() SplitResult {
 
 func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 	encoded := EncodedAgg{
 		Info:    d,
@@ -232,9 +238,32 @@ func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
+func (exec *aggregatorFromFixedToBytes[from]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+}
+
+func (exec *aggregatorFromFixedToBytes[from]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
+		chunk, buf,
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+}
+
+func (exec *aggregatorFromFixedToBytes[from]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, bs, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	// exec.ret.setupT()
+	exec.execContext.decodeGroupContexts(bs, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
+	return nil
+}
+
 func (exec *aggregatorFromFixedToBytes[from]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// groups used above, dist is nil
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *aggregatorFromFixedToBytes[from]) init(
@@ -242,15 +271,15 @@ func (exec *aggregatorFromFixedToBytes[from]) init(
 	info singleAggInfo,
 	impl aggImplementation) {
 
-	if info.IsDistinct() {
-		exec.distinctHash = newDistinctHash()
-	}
-
 	var v string
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
 		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))
 	}
-	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v)
+
+	// XXX WTF
+	// this is fucked, now we do put in a distinct in this init.
+	// from marshal/unmarshal, the groups is used in its own special logic.
+	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v, info.IsDistinct())
 
 	exec.singleAggInfo = info
 	exec.singleAggExecExtraInformation = emptyExtraInfo
@@ -268,12 +297,6 @@ func (exec *aggregatorFromFixedToBytes[from]) init(
 func (exec *aggregatorFromFixedToBytes[from]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
-	}
-	// deal with distinct hash.
-	if exec.IsDistinct() {
-		if err := exec.distinctHash.grows(more); err != nil {
-			return err
-		}
 	}
 	// deal with execContext.
 	exec.execContext.growsGroupContext(more, exec.singleAggInfo.retType, exec.singleAggInfo.argType)

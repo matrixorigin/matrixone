@@ -14,7 +14,10 @@
 
 package fileservice
 
-import "context"
+import (
+	"context"
+	"os"
+)
 
 // MutableFileService is an extension interface to FileService that allow mutation
 type MutableFileService interface {
@@ -22,6 +25,13 @@ type MutableFileService interface {
 
 	// NewMutator creates a new mutator
 	NewMutator(ctx context.Context, filePath string) (Mutator, error)
+
+	// Raw os.File API
+	EnsureDir(ctx context.Context, filePath string) error
+	OpenFile(ctx context.Context, filePath string) (*os.File, error)
+	CreateFile(ctx context.Context, filePath string) (*os.File, error)
+	RemoveFile(ctx context.Context, filePath string) error
+	CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error)
 }
 
 type Mutator interface {

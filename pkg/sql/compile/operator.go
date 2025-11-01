@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -1744,8 +1743,15 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup() *mergegroup.MergeGroup {
-	arg := mergegroup.NewArgument()
+func constructMergeGroup(n *plan.Node) *group.MergeGroup {
+	arg := group.NewArgumentMergeGroup()
+	// here the n is a Group node, merge group is "generated" by the
+	// group node and then merge them
+	//
+	// XXX: merge group groupby and agg should also be set here.
+	// but right now we use batch.ExtraBuf1.   This is just wrong.
+	// should be here.
+	arg.SpillMem = n.SpillMem
 	return arg
 }
 
