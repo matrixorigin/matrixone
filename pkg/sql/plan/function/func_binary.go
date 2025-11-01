@@ -22,12 +22,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -677,7 +678,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				castType[i] = inputs[i]
 			} else {
 				castType[i] = minOid.ToType()
-				setTargetScaleFromSource(&inputs[i], &castType[i])
+				SetTargetScaleFromSource(&inputs[i], &castType[i])
 			}
 		}
 
@@ -1720,18 +1721,18 @@ func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	}
 }
 
-//func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
-//	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
-//	if err != nil {
-//		return 0, err
-//	}
-//	t, success := start.AddInterval(-diff, types.IntervalType(unit))
-//	if success {
-//		return t, nil
-//	} else {
-//		return 0, moerr.NewOutOfRangeNoCtx("time", "")
-//	}
-//}
+func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
+	if err != nil {
+		return 0, err
+	}
+	t, success := start.AddInterval(-diff, iTyp)
+	if success {
+		return t, nil
+	} else {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+}
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
@@ -1835,11 +1836,29 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	iTyp := types.IntervalType(unit)
 
 	scale := ivecs[0].GetType().Scale
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
 		return doTimestampSub(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
+	}, selectList)
+}
+
+func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Time](result)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	scale := ivecs[0].GetType().Scale
+	iTyp := types.IntervalType(unit)
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	return opBinaryFixedFixedToFixedWithErrorCheck[types.Time, int64, types.Time](ivecs, result, proc, length, func(v1 types.Time, v2 int64) (types.Time, error) {
+		return doTimeSub(v1, v2, iTyp)
 	}, selectList)
 }
 
@@ -2693,7 +2712,7 @@ func extractFromTime(unit string, t types.Time) (string, error) {
 	var value string
 	switch unit {
 	case "microsecond":
-		value = fmt.Sprintf("%d", int(t))
+		value = fmt.Sprintf("%d", int(t.MicroSec()))
 	case "second":
 		value = fmt.Sprintf("%02d", int(t.Sec()))
 	case "minute":
@@ -2717,6 +2736,45 @@ func extractFromTime(unit string, t types.Time) (string, error) {
 		value = fmt.Sprintf("%2d%2d", int(t.Hour()), int(t.Minute()))
 	}
 	return value, nil
+}
+
+func ExtractFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
+	}
+
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	v1, null1 := p1.GetStrValue(0)
+	if null1 {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	unit := functionUtil.QuickBytesToStr(v1)
+	zone := proc.GetSessionInfo().TimeZone
+	for i := uint64(0); i < uint64(length); i++ {
+		v2, null2 := p2.GetValue(i)
+		if null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			// Convert TIMESTAMP to DATETIME with full precision (scale=6) to preserve microseconds
+			dt := v2.ToDatetime(zone)
+			res, _ := extractFromDatetime(unit, dt)
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

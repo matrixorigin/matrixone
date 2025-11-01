@@ -864,14 +864,17 @@ func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func DatetimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	targetScale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Datetime, types.Timestamp](ivecs, result, proc, length, func(v types.Datetime) types.Timestamp {
-		return v.ToTimestamp(proc.GetSessionInfo().TimeZone)
+		ts := v.ToTimestamp(proc.GetSessionInfo().TimeZone)
+		return ts.TruncateToScale(targetScale)
 	}, selectList)
 }
 
 func TimestampToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	targetScale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Timestamp, types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) types.Timestamp {
-		return v
+		return v.TruncateToScale(targetScale)
 	}, selectList)
 }
 

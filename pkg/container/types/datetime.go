@@ -266,6 +266,31 @@ func (dt Datetime) ToTime(scale int32) Time {
 	return Time(base * scaleVal[scale])
 }
 
+// TruncateToScale truncates a datetime to the given scale (0-6).
+// Scale represents fractional seconds precision:
+//   - 0: seconds (no fractional part)
+//   - 1-5: fractional seconds with corresponding precision
+//   - 6: microseconds (full precision, no truncation)
+func (dt Datetime) TruncateToScale(scale int32) Datetime {
+	if scale == 6 {
+		return dt
+	}
+
+	// Get the date part (seconds since epoch)
+	secPart := (dt / MicroSecsPerSec) * MicroSecsPerSec
+	// Get the fractional part (microseconds within the second)
+	microPart := dt % MicroSecsPerSec
+
+	divisor := scaleVal[scale]
+	base := microPart / divisor
+	// Round up if the next digit >= 5
+	if microPart%divisor/scaleVal[scale+1] >= 5 {
+		base += 1
+	}
+
+	return secPart + base*divisor
+}
+
 func (dt Datetime) Clock() (hour, minute, sec int8) {
 	t := dt.sec() % SecsPerDay
 	hour = int8(t / SecsPerHour)

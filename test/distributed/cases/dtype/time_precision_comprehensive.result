@@ -1,0 +1,193 @@
+DROP DATABASE IF EXISTS test_time_precision;
+CREATE DATABASE test_time_precision;
+USE test_time_precision;
+DROP TABLE IF EXISTS t_time_basic;
+CREATE TABLE t_time_basic (
+id INT,
+t0 TIME(0),
+t3 TIME(3),
+t6 TIME(6)
+);
+INSERT INTO t_time_basic VALUES (1, '12:34:56.123456', '12:34:56.123456', '12:34:56.123456');
+SELECT id, t0, t3, t6,
+EXTRACT(MICROSECOND FROM t0) AS t0_micro,
+EXTRACT(MICROSECOND FROM t3) AS t3_micro,
+EXTRACT(MICROSECOND FROM t6) AS t6_micro
+FROM t_time_basic;
+id    t0    t3    t6    t0_micro    t3_micro    t6_micro
+1    12:34:56    12:34:56.123000000    12:34:56.123456000    0    123000    123456
+DROP TABLE t_time_basic;
+DROP TABLE IF EXISTS t_time_rounding;
+CREATE TABLE t_time_rounding (
+scale_val INT,
+input_str VARCHAR(20),
+t TIME(6)
+);
+INSERT INTO t_time_rounding VALUES (0, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(0)));
+INSERT INTO t_time_rounding VALUES (1, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(1)));
+INSERT INTO t_time_rounding VALUES (2, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(2)));
+INSERT INTO t_time_rounding VALUES (3, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(3)));
+INSERT INTO t_time_rounding VALUES (4, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(4)));
+INSERT INTO t_time_rounding VALUES (5, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(5)));
+INSERT INTO t_time_rounding VALUES (6, '12:34:56.123456', CAST('12:34:56.123456' AS TIME(6)));
+SELECT scale_val, input_str, t, EXTRACT(MICROSECOND FROM t) AS microseconds
+FROM t_time_rounding
+ORDER BY scale_val;
+scale_val    input_str    t    microseconds
+0    12:34:56.123456    12:34:56    0
+1    12:34:56.123456    12:34:56.100000000    100000
+2    12:34:56.123456    12:34:56.120000000    120000
+3    12:34:56.123456    12:34:56.123000000    123000
+4    12:34:56.123456    12:34:56.123500000    123500
+5    12:34:56.123456    12:34:56.123460000    123460
+6    12:34:56.123456    12:34:56.123456000    123456
+DROP TABLE t_time_rounding;
+DROP TABLE IF EXISTS t_time_boundary;
+CREATE TABLE t_time_boundary (
+id INT,
+description VARCHAR(50),
+t0 TIME(0)
+);
+INSERT INTO t_time_boundary VALUES (1, 'next second', CAST('12:34:56.999999' AS TIME(0)));
+INSERT INTO t_time_boundary VALUES (2, 'next minute', CAST('12:34:59.999999' AS TIME(0)));
+INSERT INTO t_time_boundary VALUES (3, 'next hour', CAST('12:59:59.999999' AS TIME(0)));
+INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.500000' AS TIME(0)));
+SELECT id, description, t0
+FROM t_time_boundary
+ORDER BY id;
+id    description    t0
+1    next second    12:34:57
+2    next minute    12:35:00
+3    next hour    13:00:00
+4    max time    839:00:00
+DROP TABLE t_time_boundary;
+DROP TABLE IF EXISTS t_time_negative;
+CREATE TABLE t_time_negative (
+id INT,
+t0 TIME(0),
+t3 TIME(3),
+t6 TIME(6)
+);
+INSERT INTO t_time_negative VALUES (1, '-12:34:56.123456', '-12:34:56.123456', '-12:34:56.123456');
+INSERT INTO t_time_negative VALUES (2, '-12:34:56.999999', '-12:34:56.999999', '-12:34:56.999999');
+SELECT id, t0, t3, t6,
+EXTRACT(MICROSECOND FROM t0) AS t0_micro,
+EXTRACT(MICROSECOND FROM t3) AS t3_micro,
+EXTRACT(MICROSECOND FROM t6) AS t6_micro
+FROM t_time_negative
+ORDER BY id;
+id    t0    t3    t6    t0_micro    t3_micro    t6_micro
+1    -12:34:56    -12:34:56.123000000    -12:34:56.123456000    0    -123000    -123456
+2    -12:34:57    -12:34:57    -12:34:56.999999000    0    0    -999999
+DROP TABLE t_time_negative;
+SELECT CAST(CAST('12:34:56.999999' AS TIME(6)) AS TIME(0)) AS time_6_to_0;
+time_6_to_0
+12:34:57
+SELECT CAST(CAST('12:34:56' AS TIME(0)) AS TIME(6)) AS time_0_to_6;
+time_0_to_6
+12:34:56
+SELECT CAST(CAST('12:34:56.789' AS TIME(3)) AS TIME(0)) AS time_3_to_0;
+time_3_to_0
+12:34:57
+SELECT TIMEDIFF('12:00:00', '10:30:00.123456') AS result,
+EXTRACT(MICROSECOND FROM TIMEDIFF('12:00:00', '10:30:00.123456')) AS microseconds;
+result    microseconds
+01:29:59.876544000    876544
+SELECT TIMEDIFF('12:34:56.789012', '10:20:30.123456') AS result,
+EXTRACT(MICROSECOND FROM TIMEDIFF('12:34:56.789012', '10:20:30.123456')) AS microseconds;
+result    microseconds
+02:14:26.665556000    665556
+DROP TABLE IF EXISTS t_time_update;
+CREATE TABLE t_time_update (
+id INT PRIMARY KEY,
+t0 TIME(0),
+t3 TIME(3)
+);
+INSERT INTO t_time_update VALUES (1, '12:00:00', '12:00:00.000');
+UPDATE t_time_update SET t0 = '12:34:56.789012' WHERE id = 1;
+UPDATE t_time_update SET t3 = '12:34:56.789012' WHERE id = 1;
+SELECT id, t0, t3
+FROM t_time_update;
+id    t0    t3
+1    12:34:57    12:34:56.789000000
+DROP TABLE t_time_update;
+DROP TABLE IF EXISTS t_time_where;
+CREATE TABLE t_time_where (
+id INT,
+t3 TIME(3)
+);
+INSERT INTO t_time_where VALUES (1, '12:34:56.789456');
+SELECT COUNT(*) AS match_with_rounded
+FROM t_time_where
+WHERE t3 = '12:34:56.789';
+match_with_rounded
+1
+SELECT COUNT(*) AS match_with_original
+FROM t_time_where
+WHERE t3 = '12:34:56.789456';
+match_with_original
+1
+DROP TABLE t_time_where;
+SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.000000' AS TIME(6)) AS time_0_eq_6_same;
+time_0_eq_6_same
+true
+SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.123456' AS TIME(6)) AS time_0_eq_6_diff;
+time_0_eq_6_diff
+false
+DROP TABLE IF EXISTS t_time_half;
+CREATE TABLE t_time_half (
+id INT,
+description VARCHAR(50),
+t0 TIME(0),
+t1 TIME(1),
+t2 TIME(2)
+);
+INSERT INTO t_time_half VALUES (1, 'scale 0 half', CAST('12:34:56.500000' AS TIME(0)), NULL, NULL);
+INSERT INTO t_time_half VALUES (2, 'scale 1 half', NULL, CAST('12:34:56.150000' AS TIME(1)), NULL);
+INSERT INTO t_time_half VALUES (3, 'scale 2 half', NULL, NULL, CAST('12:34:56.125000' AS TIME(2)));
+SELECT id, description, t0, t1, t2
+FROM t_time_half
+ORDER BY id;
+id    description    t0    t1    t2
+1    scale 0 half    12:34:57    null    null
+2    scale 1 half    null    12:34:56.200000000    null
+3    scale 2 half    null    null    12:34:56.130000000
+DROP TABLE t_time_half;
+DROP TABLE IF EXISTS t_time_dateadd;
+CREATE TABLE t_time_dateadd (
+id INT PRIMARY KEY,
+t0 TIME(0),
+t3 TIME(3),
+t6 TIME(6)
+);
+INSERT INTO t_time_dateadd VALUES
+(1, '12:34:56', '12:34:56.789', '12:34:56.123456');
+SELECT
+id,
+DATE_ADD(t0, INTERVAL 1 MINUTE) AS t0_add_min,
+EXTRACT(MICROSECOND FROM DATE_ADD(t0, INTERVAL 1 MINUTE)) AS t0_micro,
+DATE_ADD(t3, INTERVAL 1 HOUR) AS t3_add_hour,
+EXTRACT(MICROSECOND FROM DATE_ADD(t3, INTERVAL 1 HOUR)) AS t3_micro
+FROM t_time_dateadd;
+id    t0_add_min    t0_micro    t3_add_hour    t3_micro
+1    12:35:56    0    13:34:56.789000000    789000
+SELECT
+id,
+DATE_ADD(t0, INTERVAL 1 MICROSECOND) AS t0_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(t0, INTERVAL 1 MICROSECOND)) AS t0_result_micro,
+DATE_SUB(t0, INTERVAL 1 MICROSECOND) AS t0_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(t0, INTERVAL 1 MICROSECOND)) AS t0_sub_result_micro
+FROM t_time_dateadd;
+id    t0_add_micro    t0_result_micro    t0_sub_micro    t0_sub_result_micro
+1    12:34:56.000001000    1    12:34:55.999999000    999999
+SELECT
+id,
+DATE_ADD(t6, INTERVAL 100 MICROSECOND) AS t6_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(t6, INTERVAL 100 MICROSECOND)) AS result_micro,
+DATE_SUB(t6, INTERVAL 456 MICROSECOND) AS t6_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(t6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_time_dateadd;
+id    t6_add_micro    result_micro    t6_sub_micro    sub_result_micro
+1    12:34:56.123556000    123556    12:34:56.123000000    123000
+DROP TABLE t_time_dateadd;
+DROP DATABASE test_time_precision;

@@ -79,7 +79,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime())
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -98,7 +98,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano()).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err

@@ -197,6 +197,24 @@ func (ts Timestamp) ToDatetime(loc *time.Location) Datetime {
 	return Datetime(ts) + Datetime(offset)*MicroSecsPerSec
 }
 
+// TruncateToScale truncates a timestamp to the given scale (0-6).
+// Scale represents fractional seconds precision:
+//   - 0: seconds (no fractional part)
+//   - 1-5: fractional seconds with corresponding precision
+//   - 6: microseconds (full precision, no truncation)
+func (ts Timestamp) TruncateToScale(scale int32) Timestamp {
+	if scale == 6 {
+		return ts
+	}
+	divisor := int64(scaleTable[scale])
+	base := int64(ts) / divisor
+	// Round up if the next digit >= 5
+	if int64(ts)%divisor/(divisor/10) >= 5 {
+		base += 1
+	}
+	return Timestamp(base * divisor)
+}
+
 // FromClockUTC gets the utc time value in Timestamp
 func FromClockUTC(year int32, month, day, hour, minute, sec uint8, msec uint32) Timestamp {
 	days := DateFromCalendar(year, month, day)

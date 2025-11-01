@@ -124,7 +124,7 @@ func UdfArgTypeCast(from []types.Type, to []types.T) []types.Type {
 			castType[i] = from[i]
 		} else {
 			castType[i] = to[i].ToType()
-			setTargetScaleFromSource(&from[i], &castType[i])
+			SetTargetScaleFromSource(&from[i], &castType[i])
 		}
 	}
 	return castType
