@@ -146,23 +146,37 @@ func RequestMultipleCn(ctx context.Context,
 	if handleValidResponse == nil {
 		return moerr.NewInternalError(ctx, "invalid response handle function")
 	}
-	nodesLeft := len(nodes)
-	responseChan := make(chan nodeResponse, nodesLeft)
+
+	// Count valid nodes (non-empty addresses)
+	validNodes := 0
+	for _, node := range nodes {
+		if len(node) > 0 {
+			validNodes++
+		}
+	}
+
+	responseChan := make(chan nodeResponse, validNodes)
 
 	var retErr error
+	var successCount int
+	var failedNodes []string
+
+	// Track how many goroutines were actually started
+	var wg sync.WaitGroup
 
 	for _, node := range nodes {
 		// Invalid node address, ignore it.
 		if len(node) == 0 {
-			nodesLeft--
 			continue
 		}
 
+		wg.Add(1)
 		go func(addr string) {
+			defer wg.Done()
 			// gen request and send it
 			if genRequest != nil {
 				req := genRequest()
-				logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), node)
+				logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), addr)
 				resp, err := qc.SendMessage(ctx, addr, req)
 				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
 			}
@@ -170,19 +184,24 @@ func RequestMultipleCn(ctx context.Context,
 	}
 
 	// Wait for all responses.
-	for nodesLeft > 0 {
+	// Important: Always drain all responses to avoid goroutine leaks,
+	// even when context is canceled (goroutines may still write to channel)
+	responsesReceived := 0
+	for responsesReceived < validNodes {
 		select {
 		case res := <-responseChan:
+			responsesReceived++
 			if res.err != nil {
 				// Record first error
 				if retErr == nil {
 					retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
 				}
-				nodesLeft--
+				failedNodes = append(failedNodes, res.nodeAddr)
 				continue
 			}
 
 			// Only process response when successful
+			successCount++
 			queryResp, ok := res.response.(*pb.Response)
 			if ok {
 				//save response
@@ -196,9 +215,62 @@ func RequestMultipleCn(ctx context.Context,
 				}
 			}
 		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			// Record timeout error only if no previous error
+			if retErr == nil {
+				retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			}
+			if len(failedNodes) == 0 {
+				// Only record timeout info once
+				failedNodes = append(failedNodes, "context timeout")
+			}
+			// Continue receiving remaining responses to avoid goroutine leaks
+			// Don't break - continue the loop to drain channel
 		}
-		nodesLeft--
 	}
+
+	// Ensure all goroutines complete to avoid leaks
+	// Even if context is canceled, goroutines may still be executing SendMessage
+	// wg.Wait ensures we wait for all goroutines to finish writing to channel
+	// Channel has buffer capacity = validNodes, so all goroutines can write without blocking
+	wg.Wait()
+
+	// Drain any responses that were written after loop exited (shouldn't happen, but be safe)
+	// This handles edge case: goroutine writes to channel after wg.Wait() but before function returns
+	select {
+	case res := <-responseChan:
+		// Process late response
+		if res.err != nil {
+			if retErr == nil {
+				retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+			}
+			failedNodes = append(failedNodes, res.nodeAddr)
+		} else {
+			successCount++
+			if queryResp, ok := res.response.(*pb.Response); ok {
+				handleValidResponse(res.nodeAddr, queryResp)
+				if queryResp != nil {
+					qc.Release(queryResp)
+				}
+			}
+		}
+	default:
+		// Channel empty, all responses already processed
+	}
+
+	// Log error summary if any node failed
+	// This provides aggregated view without repeating individual node errors
+	// which are already logged by lower-level morpc layer
+	if retErr != nil {
+		logger.GetLogger("RequestMultipleCn").Errorf(
+			"[request failed] %s distributed request to %d nodes: %d succeeded, %d failed, failed nodes: %v, error: %v",
+			qc.ServiceID(),
+			len(nodes),
+			successCount,
+			len(failedNodes),
+			failedNodes,
+			retErr,
+		)
+	}
+
 	return retErr
 }

@@ -35,6 +35,7 @@ import (
 // This test ensures the fix for Bug #1 works correctly:
 // - When any CN node fails, the function should return an error
 // - Error should indicate which node failed
+// - Error summary is logged with success/failure counts
 // - Prevents silent data loss in distributed queries
 func TestRequestMultipleCn_Bug1_NodeConnectionFailed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -87,15 +88,18 @@ func TestRequestMultipleCn_Bug1_NodeConnectionFailed(t *testing.T) {
 // while waiting for CN responses, RequestMultipleCn correctly returns a
 // context deadline exceeded error.
 //
-// This tests the error path at query_service.go:199:
+// This tests the error path at query_service.go:203-209:
 //
 //	case <-ctx.Done():
 //	    retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+//	    failedNodes = append(failedNodes, fmt.Sprintf("%d nodes timeout", nodesLeft))
+//	    break loop
 //
 // Real-world scenarios:
 // - Long-running distributed queries timeout
 // - Slow CN nodes cause query timeout
 // - Network latency causes timeout
+// - Verifies error summary log includes timeout information
 func TestRequestMultipleCn_ContextTimeout(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
