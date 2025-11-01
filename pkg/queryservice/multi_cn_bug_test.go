@@ -82,3 +82,65 @@ func TestRequestMultipleCn_Bug1_NodeConnectionFailed(t *testing.T) {
 		t.Log("  - Prevents silent data loss in distributed queries")
 	})
 }
+
+// TestRequestMultipleCn_ContextTimeout verifies that when context times out
+// while waiting for CN responses, RequestMultipleCn correctly returns a
+// context deadline exceeded error.
+//
+// This tests the error path at query_service.go:199:
+//
+//	case <-ctx.Done():
+//	    retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+//
+// Real-world scenarios:
+// - Long-running distributed queries timeout
+// - Slow CN nodes cause query timeout
+// - Network latency causes timeout
+func TestRequestMultipleCn_ContextTimeout(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_multi_cn_timeout"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		// Create a context that times out very quickly (1ms)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		defer cancel()
+
+		// Simulate 2 CN nodes - both will timeout
+		node1 := addr
+		node2 := fmt.Sprintf("unix:///tmp/slow-cn-%d.sock", time.Now().Nanosecond())
+
+		var successCount int
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			if rsp != nil && rsp.GetCacheInfoResponse != nil {
+				successCount++
+			}
+		}
+
+		// Sleep a bit to ensure context times out before any response
+		time.Sleep(5 * time.Millisecond)
+
+		// Execute: context should timeout
+		err := RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, nil)
+
+		// Verify context timeout is correctly handled
+		t.Logf("RequestMultipleCn returned error: %v", err)
+		t.Logf("Success count: %d", successCount)
+
+		// Should return context deadline exceeded error
+		assert.Error(t, err, "Should return error when context times out")
+		assert.Contains(t, err.Error(), "context deadline exceeded", "Error should indicate timeout")
+
+		t.Log("")
+		t.Log("✅ Context timeout handling verified:")
+		t.Log("  - Context times out before CN responses")
+		t.Log("  - Function correctly returns timeout error")
+		t.Log("  - Error message clearly indicates deadline exceeded")
+		t.Log("  - Prevents queries from hanging indefinitely")
+	})
+}
