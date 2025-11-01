@@ -16,19 +16,17 @@ package iscp
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/prashantv/gostub"
@@ -56,7 +54,7 @@ func (r *MockRetriever) Next() *ISCPData {
 	return d
 }
 
-func (r *MockRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
+func (r *MockRetriever) UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	return nil
 }
@@ -115,6 +113,64 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 	}
 }
 
+func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
+	return &plan.TableDef{
+		Name: "test_orig_tbl",
+		Name2ColIndex: map[string]int32{
+			pkName:     0,
+			vecColName: 1,
+			"dummy":    2, // Add another col to make sure pk/vec col indices are used
+		},
+		Cols: []*plan.ColDef{
+			{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+			{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+			{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{pkName},
+			PkeyColName: pkName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:          "ivf_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivf_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centriods",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivf_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+		},
+	}
+}
+
+func newTestIvfConsumerInfo() *ConsumerInfo {
+	return &ConsumerInfo{
+		ConsumerType: 0,
+		DBName:       "test_db",
+		TableName:    "test_tbl",
+		IndexName:    "ivf_idx",
+	}
+}
+
 func newTestConsumerInfo() *ConsumerInfo {
 	return &ConsumerInfo{
 		ConsumerType: 0,
@@ -132,83 +188,16 @@ func newTestJobID() JobID {
 	}
 }
 
-type MockSQLExecutor struct {
-	txnexec executor.TxnExecutor
-	sqls    []string
-}
-
-// Exec exec a sql in a exists txn.
-func (exec *MockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-	exec.sqls = append(exec.sqls, sql)
-	//fmt.Printf("Exec %p %v\n", exec.sqls, exec.sqls)
-	return executor.Result{}, nil
-}
-
-var _ executor.SQLExecutor = new(MockSQLExecutor)
-
-func mockSqlExecutorFactory(uuid string) (executor.SQLExecutor, error) {
-	return &MockSQLExecutor{}, nil
-}
-
-type MockErrorTxnExecutor struct {
-	database string
-	ctx      context.Context
-	sqls     []string
-}
-
-func (exec *MockErrorTxnExecutor) Use(db string) {
-	exec.database = db
-}
-
-func (exec *MockErrorTxnExecutor) Exec(
-	sql string,
-	statementOption executor.StatementOption,
-) (executor.Result, error) {
-	if strings.Contains(sql, "FAILSQL") {
-		return executor.Result{}, moerr.NewInternalErrorNoCtx("db error")
-	} else if strings.Contains(sql, "MULTI_ERROR_NO_ROLLBACK") {
-		var errs error
-		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error"))
-		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error 2"))
-		return executor.Result{}, errs
-	} else if strings.Contains(sql, "MULTI_ERROR_ROLLBACK") {
-		var errs error
-		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error"))
-		errs = errors.Join(errs, moerr.NewQueryInterrupted(exec.ctx))
-		return executor.Result{}, errs
-	}
-
-	exec.sqls = append(exec.sqls, sql)
-	//fmt.Printf("APPEND %s", sql)
-	return executor.Result{}, nil
-}
-
-func (exec *MockErrorTxnExecutor) LockTable(table string) error {
-	return nil
-}
-
-func (exec *MockErrorTxnExecutor) Txn() client.TxnOperator {
-	return nil
-}
-
-// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
-// in a transaction.
-// NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
-// TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
-func (exec *MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
-	exec.txnexec = &MockErrorTxnExecutor{ctx: ctx}
-	err := execFunc(exec.txnexec)
-	exec.sqls = exec.txnexec.(*MockErrorTxnExecutor).sqls
-	//fmt.Printf("ExecTxn %v\n", exec.sqls)
-	return err
-}
-
 func TestConsumer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
-	defer sqlexecstub.Reset()
+	sqls := make([]string, 0, 1)
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	})
+	defer stub1.Reset()
 
 	r := &MockRetriever{
 		insertBatch: nil,
@@ -217,34 +206,49 @@ func TestConsumer(t *testing.T) {
 		dtype:       ISCPDataType_Snapshot,
 	}
 
-	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
 	cnUUID := "a-b-c-d"
-	info := newTestConsumerInfo()
+	info := newTestIvfConsumerInfo()
 	job := newTestJobID()
 
-	consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
+
+	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
 }
 
-func TestHnswSnapshot(t *testing.T) {
+func TestIvfSnapshot(t *testing.T) {
 
 	proc := testutil.NewProcess(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
-	defer sqlexecstub.Reset()
+	sqls := make([]string, 0, 1)
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	})
+	defer stub1.Reset()
 
-	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	/*
+	   sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
+	   defer sqlexecstub.Reset()
+	*/
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
-	info := newTestConsumerInfo()
+	info := newTestIvfConsumerInfo()
 	job := newTestJobID()
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
 
 	t.Run("snapshot", func(t *testing.T) {
-		consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 		require.NoError(t, err)
 
 		bat := testutil.NewBatchWithVectors(
@@ -270,16 +274,19 @@ func TestHnswSnapshot(t *testing.T) {
 		}
 		err = consumer.Consume(ctx, output)
 		require.NoError(t, err)
-		sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls
 		require.Equal(t, len(sqls), 1)
 		sql := sqls[0]
-		require.Equal(t, string(sql), `SELECT hnsw_cdc_update('test_db', 'test_tbl', 224, 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
+		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,CAST('[0.1, 0.2]' as VECF32(2))),ROW(2,CAST('[0.3, 0.4]' as VECF32(2))))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
 
+		require.Equal(t, string(sql), expected)
+
+		sqls = sqls[:0]
 		//fmt.Printf("Consume %p %v\n", consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls, consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls)
 	})
 
 	t.Run("noMoreData", func(t *testing.T) {
-		consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+		sqls = sqls[:0]
+		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 		require.NoError(t, err)
 
 		output := &MockRetriever{
@@ -290,27 +297,32 @@ func TestHnswSnapshot(t *testing.T) {
 		}
 		err = consumer.Consume(ctx, output)
 		require.NoError(t, err)
-		sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls
 		require.Equal(t, len(sqls), 0)
 	})
 }
 
-func TestHnswTail(t *testing.T) {
+func TestIvfTail(t *testing.T) {
 
 	proc := testutil.NewProcess(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
-	defer sqlexecstub.Reset()
+	sqls := make([]string, 0, 1)
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	})
+	defer stub1.Reset()
 
-	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
-	info := newTestConsumerInfo()
+	info := newTestIvfConsumerInfo()
 	job := newTestJobID()
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
 
-	consumer, err := NewConsumer(cnUUID, tblDef, job, info)
+	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 	require.NoError(t, err)
 
 	bat := testutil.NewBatchWithVectors(
@@ -357,25 +369,65 @@ func TestHnswTail(t *testing.T) {
 
 	err = consumer.Consume(ctx, output)
 	require.NoError(t, err)
-	sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).txnexec.(*MockErrorTxnExecutor).sqls
 
-	require.Equal(t, len(sqls), 1)
-	fmt.Printf("RES: %v\n", sqls)
+	//fmt.Printf("RES: %v\n", sqls)
+	require.Equal(t, len(sqls), 2)
 
 	row1 := []any{int64(1), []float32{0.1, 0.2}}
 	row2 := []any{int64(2), []float32{0.3, 0.4}}
 
-	writer, _ := NewHnswSqlWriter("hnsw", job, info, tblDef, tblDef.Indexes)
+	writer, err := NewIvfflatSqlWriter("ivfflat", job, info, tblDef, tblDef.Indexes)
+	require.NoError(t, err)
 	writer.Insert(ctx, row1)
 	writer.Insert(ctx, row2)
 	writer.Delete(ctx, row1)
 	writer.Delete(ctx, row2)
-	/*
-		cdcForJson.Start = "1-0"
-		cdcForJson.End = "2-0"
-	*/
 	expectedSqlBytes, _ := writer.ToSql()
 
+	//fmt.Printf("EEEEEEEEEEEE %s %s\n", expectedSqlBytes, sqls[0])
 	require.Equal(t, string(expectedSqlBytes), sqls[0])
 
+}
+
+func TestHnswConsumer(t *testing.T) {
+
+	//proc := testutil.NewProcess(t)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sqls := make([]string, 0, 1)
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	})
+	defer stub1.Reset()
+
+	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	info := newTestConsumerInfo()
+	job := newTestJobID()
+	/*
+		cnUUID := "a-b-c-d"
+		catalog.SetupDefines("")
+		cnEngine, cnClient, _ := testengine.New(ctx)
+	*/
+
+	t.Run("HnswSqlWriter", func(t *testing.T) {
+
+		row1 := []any{int64(1), []float32{0.1, 0.2}}
+		row2 := []any{int64(2), []float32{0.3, 0.4}}
+
+		writer, err := NewHnswSqlWriter("hnsw", job, info, tblDef, tblDef.Indexes)
+		require.NoError(t, err)
+		writer.Insert(ctx, row1)
+		writer.Insert(ctx, row2)
+		writer.Delete(ctx, row1)
+		writer.Delete(ctx, row2)
+		json, _ := writer.ToSql()
+
+		expectedSqlBytes := `{"cdc":[{"t":"I","pk":1,"v":[0.1,0.2]},{"t":"I","pk":2,"v":[0.3,0.4]},{"t":"D","pk":1},{"t":"D","pk":2}]}`
+		require.Equal(t, expectedSqlBytes, string(json))
+
+	})
 }

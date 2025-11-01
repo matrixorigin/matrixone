@@ -25,7 +25,6 @@ import (
 
 	fallocate "github.com/detailyang/go-fallocate"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 
@@ -41,20 +41,21 @@ import (
 )
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
 }
 
 // give blob
 func mock_runSql_streaming(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
 ) (executor.Result, error) {
 
+	proc := sqlproc.Proc
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
@@ -62,15 +63,15 @@ func mock_runSql_streaming(
 }
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql_2files(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql_2files(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch2Files(proc)}}, nil
 }
 
 // give blob
 func mock_runSql_streaming_2files(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
@@ -82,27 +83,17 @@ func mock_runSql_streaming_2files(
 		idx = 1
 	}
 
+	proc := sqlproc.Proc
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch2Files(proc, idx)}}
 	ch <- res
 	return executor.Result{}, nil
 }
 
-// give moindexes metadata [index_table_name, algo_table_type, algo_params, column_name]
-func mock_runCatalogSql(proc *process.Process, sql string) (executor.Result, error) {
-
-	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMoIndexesBatch(proc)}}, nil
-}
-
-// give moindexes metadata [index_table_name, algo_table_type, algo_params, column_name]
-func mock_runEmptyCatalogSql(proc *process.Process, sql string) (executor.Result, error) {
-
-	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
-}
-
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
 	runSql = mock_runSql
@@ -131,7 +122,7 @@ func TestHnsw(t *testing.T) {
 				cache.Cache.Once()
 
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -199,31 +190,6 @@ func TestFallocate(t *testing.T) {
 	require.Nil(t, err)
 	fallocate.Fallocate(f, 0, 10000)
 	f.Close()
-}
-
-func makeMoIndexesBatch(proc *process.Process) *batch.Batch {
-	param := "{\"op_type\": \"vector_l2_ops\", \"m\":\"128\",\"ef_construction\":\"256\", \"ef_search\":\"100\"}"
-	//	param := "{\"op_type\": \"vector_l2_ops\"}"
-	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // index_table_name
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // alog_table_type
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // algo_params
-	bat.Vecs[3] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // colname_name
-
-	// metadata
-	vector.AppendBytes(bat.Vecs[0], []byte("__meta"), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[1], []byte(catalog.Hnsw_TblType_Metadata), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[2], []byte(param), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
-
-	// storage
-	vector.AppendBytes(bat.Vecs[0], []byte("__storage"), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[1], []byte(catalog.Hnsw_TblType_Storage), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[2], []byte(param), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
-
-	bat.SetRowCount(2)
-	return bat
 }
 
 func makeMetaBatch2Files(proc *process.Process) *batch.Batch {

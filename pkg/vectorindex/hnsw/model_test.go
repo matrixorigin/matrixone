@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -52,7 +52,7 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 // give blob
 func mock_runSql_streaming_error(
 	ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 	ch chan executor.Result,
 	err_chan chan error,
@@ -71,12 +71,13 @@ func TestModelStreamError(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming_error
 
-	models, err := LoadMetadata[float32](proc, "db", "meta")
+	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -88,18 +89,18 @@ func TestModelStreamError(t *testing.T) {
 	defer idx.Destroy()
 
 	// load from file
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, false)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
 	fmt.Printf("err %v\n", err)
 	require.NotNil(t, err)
 
 	// load from memory
 	// view == false
-	err = idx.LoadIndexFromBuffer(proc, idxcfg, tblcfg, 0, false)
+	err = idx.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, false)
 	fmt.Printf("err %v\n", err)
 	require.NotNil(t, err)
 
 	// error from mock_runSql_streaming_error
-	err = idx.LoadIndexFromBuffer(proc, idxcfg, tblcfg, 0, true)
+	err = idx.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
 	fmt.Printf("err %v\n", err)
 	require.NotNil(t, err)
 }
@@ -121,12 +122,13 @@ func TestModelFromBuffer(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata[float32](proc, "db", "meta")
+	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -137,11 +139,11 @@ func TestModelFromBuffer(t *testing.T) {
 	idx := models[0]
 	defer idx.Destroy()
 
-	err = idx.LoadIndexFromBuffer(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	// double LoadIndex
-	err = idx.LoadIndexFromBuffer(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	doModelSearchTest[float32](t, idx, 0, fp32a)
@@ -166,12 +168,13 @@ func TestModelFromFileViewTrue(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata[float32](proc, "db", "meta")
+	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -182,11 +185,11 @@ func TestModelFromFileViewTrue(t *testing.T) {
 	idx := models[0]
 	defer idx.Destroy()
 
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	// double LoadIndex
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	doModelSearchTest[float32](t, idx, 0, fp32a)
@@ -212,12 +215,13 @@ func TestModel(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata[float32](proc, "db", "meta")
+	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -228,11 +232,11 @@ func TestModel(t *testing.T) {
 	idx := models[0]
 	defer idx.Destroy()
 
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	// double LoadIndex
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	doModelSearchTest[float32](t, idx, 0, fp32a)
@@ -242,7 +246,7 @@ func TestModel(t *testing.T) {
 	err = idx.Unload()
 	require.Nil(t, err)
 
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	doModelSearchTest[float32](t, idx, 0, fp32a)
@@ -278,7 +282,7 @@ func TestModel(t *testing.T) {
 		err = idx.Unload()
 		require.Nil(t, err)
 
-		err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+		err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 		require.Nil(t, err)
 
 		doModelSearchTest[float32](t, idx, uint64(key), v)
@@ -312,7 +316,7 @@ func TestModel(t *testing.T) {
 	require.NotNil(t, err)
 
 	// load again
-	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, view)
+	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
 	key = int64(1000)

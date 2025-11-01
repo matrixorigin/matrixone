@@ -254,7 +254,9 @@ const (
 		` account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'` +
-		`AND job_id = %d`
+		`AND job_id = %d ` +
+		`AND job_state != 4 ` +
+		`AND  JSON_EXTRACT(job_status, '$.LSN') = '%d'`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
@@ -841,6 +843,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 	newWatermark types.TS,
 	jobStatus string,
 	jobState int8,
+	expectPrevLSN uint64,
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
@@ -851,6 +854,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		tableID,
 		jobName,
 		jobID,
+		expectPrevLSN,
 	)
 }
 
