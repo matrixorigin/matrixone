@@ -1,9 +1,10 @@
 select reldatabase,relname,relkind from mo_catalog.mo_tables where relname = 'mo_increment_columns' and account_id = 0 order by reldatabase;
 reldatabase    relname    relkind
 mo_catalog    mo_increment_columns    
-select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and account_id = 0 and relname not like '__mo_index_unique__%' and relname != '__mo_account_lock' order by relname;
+select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and account_id = 0 and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
 relname    relkind
 mo_account    r
+mo_branch_metadata    r
 mo_iscp_log    r
 mo_cache    v
 mo_cdc_task    r
