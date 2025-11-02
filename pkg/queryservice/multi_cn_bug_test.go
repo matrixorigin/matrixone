@@ -60,7 +60,6 @@ func TestRequestMultipleCn_Bug1_NodeConnectionFailed(t *testing.T) {
 		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
 			if rsp != nil && rsp.GetCacheInfoResponse != nil {
 				successCount++
-				t.Logf("Received response from: %s", nodeAddr)
 			}
 		}
 
@@ -68,20 +67,9 @@ func TestRequestMultipleCn_Bug1_NodeConnectionFailed(t *testing.T) {
 		err := RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, nil)
 
 		// Verify correct behavior after fix
-		t.Logf("RequestMultipleCn returned error: %v", err)
-		t.Logf("Success count: %d (node1 succeeded, node2 failed)", successCount)
-
-		// After fix: should return error when node2 fails
 		assert.Error(t, err, "Should return error when node2 connection fails")
 		assert.Contains(t, err.Error(), "nonexistent", "Error message should indicate which node failed")
 		assert.Equal(t, 1, successCount, "Only node1 response should be processed")
-
-		t.Log("")
-		t.Log("✅ Fix verified: Error is correctly returned when CN node fails")
-		t.Log("  - 2 nodes, node2 connection failed")
-		t.Log("  - Function correctly returns error (not nil)")
-		t.Log("  - Error message indicates failed node")
-		t.Log("  - Prevents silent data loss in distributed queries")
 	})
 }
 
@@ -134,19 +122,8 @@ func TestRequestMultipleCn_ContextTimeout(t *testing.T) {
 		err := RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, nil)
 
 		// Verify context timeout is correctly handled
-		t.Logf("RequestMultipleCn returned error: %v", err)
-		t.Logf("Success count: %d", successCount)
-
-		// Should return context deadline exceeded error
 		assert.Error(t, err, "Should return error when context times out")
 		assert.Contains(t, err.Error(), "context deadline exceeded", "Error should indicate timeout")
-
-		t.Log("")
-		t.Log("✅ Context timeout handling verified:")
-		t.Log("  - Context times out before CN responses")
-		t.Log("  - Function correctly returns timeout error")
-		t.Log("  - Error message clearly indicates deadline exceeded")
-		t.Log("  - Prevents queries from hanging indefinitely")
 	})
 }
 
@@ -190,8 +167,6 @@ func TestRequestMultipleCn_HandlerPanic(t *testing.T) {
 		assert.Equal(t, 1, validCallCount, "handleValidResponse should be called once before panic")
 		assert.Equal(t, 1, invalidCallCount, "handleInvalidResponse should be called for panic")
 		assert.Equal(t, []string{addr}, invalidNodes, "Invalid nodes should contain the failed node")
-
-		t.Log("✅ Handler panic correctly caught, error returned, handleInvalidResponse called")
 	})
 }
 
@@ -243,8 +218,6 @@ func TestRequestMultipleCn_MixedFailures(t *testing.T) {
 		for _, node := range invalidNodes {
 			assert.Contains(t, []string{node2, node3}, node, "Invalid nodes should be real addresses")
 		}
-
-		t.Logf("✅ Mixed failures: %d valid calls, %d invalid calls, error: %v", len(validCallOrder), len(invalidNodes), err)
 	})
 }
 
@@ -279,8 +252,6 @@ func TestRequestMultipleCn_AllNodesFail(t *testing.T) {
 		// Verify error is returned with zero successes
 		assert.Error(t, err, "Should return error when all nodes fail")
 		assert.Equal(t, 0, successCount, "No nodes should succeed")
-
-		t.Log("✅ All nodes failure handled correctly: error returned, no successes")
 	})
 }
 
@@ -315,8 +286,6 @@ func TestRequestMultipleCn_EmptyNodeAddress(t *testing.T) {
 		// Verify empty address is skipped
 		assert.NoError(t, err, "Should succeed when valid nodes succeed")
 		assert.Equal(t, 2, successCount, "Should process 2 valid nodes")
-
-		t.Log("✅ Empty node addresses correctly skipped")
 	})
 }
 
@@ -357,8 +326,6 @@ func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 		// Verify no race conditions (test with -race flag)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, successCount, "All nodes should succeed")
-
-		t.Log("✅ Concurrent processing safe (run with -race to verify)")
 	})
 }
 
@@ -389,9 +356,6 @@ func TestRequestMultipleCn_NoGoroutineLeak(t *testing.T) {
 
 		// Execute: will timeout
 		_ = RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, nil)
-
-		// leaktest.AfterTest will verify no goroutine leaks
-		t.Log("✅ No goroutine leaks (verified by leaktest)")
 	})
 }
 
@@ -431,8 +395,6 @@ func TestRequestMultipleCn_InvalidResponseCallback(t *testing.T) {
 		assert.Error(t, err, "Should return error")
 		assert.Equal(t, 1, len(invalidNodes), "Should call handleInvalidResponse for failed node")
 		assert.Equal(t, node2, invalidNodes[0], "Invalid node should be the network failed node")
-
-		t.Log("✅ handleInvalidResponse correctly called for network failures")
 	})
 }
 
@@ -484,7 +446,5 @@ func TestRequestMultipleCn_FailedNodesOnlyRealAddresses(t *testing.T) {
 			assert.NotContains(t, failedNode, "timeout", "failedNodes should not contain 'timeout' string")
 			assert.NotContains(t, failedNode, "context", "failedNodes should not contain 'context' string")
 		}
-
-		t.Logf("✅ failedNodes contains only real addresses: %v", capturedFailedNodes)
 	})
 }
