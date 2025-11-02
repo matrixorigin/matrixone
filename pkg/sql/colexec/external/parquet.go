@@ -893,6 +893,24 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					return dictValues[int(idx)]
 				})
 			}
+		} else if st.Kind() == parquet.Float {
+			// Widening conversion: FLOAT32 → FLOAT64 (always safe)
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Float(), func(v float32) float64 {
+						return float64(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Float()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+					return float64(dictValues[int(idx)])
+				})
+			}
 		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			// Support STRING to FLOAT64 conversion
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {

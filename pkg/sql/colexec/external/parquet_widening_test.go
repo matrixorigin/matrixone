@@ -393,3 +393,106 @@ func TestParquet_WideningConversion_BackwardCompatibility(t *testing.T) {
 		require.Equal(t, values, got)
 	}
 }
+
+// TestParquet_WideningConversion_Float32ToFloat64 tests FLOAT32 → FLOAT64 widening conversion
+func TestParquet_WideningConversion_Float32ToFloat64(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	// Test 1: Plain encoding FLOAT32 → FLOAT64
+	{
+		st := parquet.FloatType
+		values := []float32{1.5, -2.75, 3.14159, 0.0, 123.456}
+		page := st.NewPage(0, len(values), encoding.FloatValues(values))
+
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+		w := parquet.NewWriter(&buf, schema)
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		col := f.Root().Column("c")
+		page2, err := col.Pages().ReadPage()
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp, "FLOAT32 → FLOAT64 should be supported")
+		require.NoError(t, mp.mapping(page2, proc, vec))
+
+		got := vector.MustFixedColWithTypeCheck[float64](vec)
+		require.Equal(t, len(values), len(got))
+		for i, v := range values {
+			require.InDelta(t, float64(v), got[i], 0.0001, "Value at index %d should be correctly widened", i)
+		}
+	}
+
+	// Test 2: Dictionary encoding FLOAT32 → FLOAT64
+	{
+		node := parquet.Encoded(parquet.Leaf(parquet.FloatType), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.FloatValue(1.5),
+			parquet.FloatValue(2.75),
+			parquet.FloatValue(1.5), // Repeat
+			parquet.FloatValue(3.14),
+			parquet.FloatValue(2.75), // Repeat
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp, "FLOAT32 → FLOAT64 with dictionary encoding should be supported")
+		require.NoError(t, mp.mapping(page, proc, vec))
+
+		got := vector.MustFixedColWithTypeCheck[float64](vec)
+		expected := []float64{1.5, 2.75, 1.5, 3.14, 2.75}
+		require.Equal(t, len(expected), len(got))
+		for i := range expected {
+			require.InDelta(t, expected[i], got[i], 0.0001)
+		}
+	}
+
+	// Test 3: Extreme float values
+	{
+		st := parquet.FloatType
+		values := []float32{
+			1.401298464324817e-45,   // Smallest positive float32
+			3.4028234663852886e+38,  // Largest positive float32
+			-3.4028234663852886e+38, // Largest negative float32
+		}
+		page := st.NewPage(0, len(values), encoding.FloatValues(values))
+
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+		w := parquet.NewWriter(&buf, schema)
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		col := f.Root().Column("c")
+		page2, err := col.Pages().ReadPage()
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page2, proc, vec))
+
+		got := vector.MustFixedColWithTypeCheck[float64](vec)
+		require.Equal(t, len(values), len(got))
+		for i, v := range values {
+			require.InDelta(t, float64(v), got[i], 1e-30)
+		}
+	}
+}
