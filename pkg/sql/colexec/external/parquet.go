@@ -1236,48 +1236,168 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_decimal64:
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			kind := st.Kind()
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				values, err := decodeDecimal64Values(proc.Ctx, kind, data)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DECIMAL64 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
 				if err != nil {
 					return err
 				}
-				return copyPageToVec(mp, page, proc, vec, values)
-			}
 
-			dictValues, err := decodeDecimal64Values(proc.Ctx, kind, dict.Page().Data())
-			if err != nil {
-				return err
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				// Get precision and scale from target type
+				precision := int32(dt.Width)
+				scale := int32(dt.Scale)
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Decimal64(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					decVal, parseErr := parseStringToDecimal64(strVal, precision, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as DECIMAL(%d,%d): %v", strVal, precision, scale, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, decVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
 			}
-			indexes := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
-				return dictValues[int(idx)]
-			})
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					values, err := decodeDecimal64Values(proc.Ctx, kind, data)
+					if err != nil {
+						return err
+					}
+					return copyPageToVec(mp, page, proc, vec, values)
+				}
+
+				dictValues, err := decodeDecimal64Values(proc.Ctx, kind, dict.Page().Data())
+				if err != nil {
+					return err
+				}
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
+					return dictValues[int(idx)]
+				})
+			}
 		}
 	case types.T_decimal128:
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			kind := st.Kind()
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				values, err := decodeDecimal128Values(proc.Ctx, kind, data)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DECIMAL128 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
 				if err != nil {
 					return err
 				}
-				return copyPageToVec(mp, page, proc, vec, values)
-			}
 
-			dictValues, err := decodeDecimal128Values(proc.Ctx, kind, dict.Page().Data())
-			if err != nil {
-				return err
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				// Get precision and scale from target type
+				precision := int32(dt.Width)
+				scale := int32(dt.Scale)
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Decimal128{}, true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					decVal, parseErr := parseStringToDecimal128(strVal, precision, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as DECIMAL(%d,%d): %v", strVal, precision, scale, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, decVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
 			}
-			indexes := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
-				return dictValues[int(idx)]
-			})
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					values, err := decodeDecimal128Values(proc.Ctx, kind, data)
+					if err != nil {
+						return err
+					}
+					return copyPageToVec(mp, page, proc, vec, values)
+				}
+
+				dictValues, err := decodeDecimal128Values(proc.Ctx, kind, dict.Page().Data())
+				if err != nil {
+					return err
+				}
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
+					return dictValues[int(idx)]
+				})
+			}
 		}
 	case types.T_decimal256:
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1788,4 +1908,70 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, err
 	}
 	return int(vec.Entries[0].Size), nil
+}
+
+// parseStringToDecimal64 converts a string to DECIMAL64 with given precision and scale.
+// It supports:
+// - Normal decimal numbers: "123.45"
+// - Scientific notation: "1.23e10", "1E5", "1.23E10" (both lowercase e and uppercase E)
+// - Negative numbers: "-123.45"
+// - Positive sign: "+123.45"
+// - Leading zeros: "0123.45"
+// The string should already be trimmed of whitespace.
+func parseStringToDecimal64(s string, precision, scale int32) (types.Decimal64, error) {
+	if s == "" {
+		return 0, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+
+	// Normalize the string to be more user-friendly:
+	// 1. Convert uppercase E to lowercase e (for scientific notation)
+	// 2. Remove leading positive sign (ParseDecimal64 doesn't support it)
+	s = normalizeDecimalString(s)
+
+	// Use existing ParseDecimal64 which handles:
+	// - Scientific notation (lowercase e only)
+	// - Normal decimals
+	// - Precision and scale validation
+	result, err := types.ParseDecimal64(s, precision, scale)
+	if err != nil {
+		return 0, err
+	}
+
+	return result, nil
+}
+
+// normalizeDecimalString normalizes a decimal string to match ParseDecimal expectations.
+// This allows us to support more user-friendly formats (like uppercase E and positive sign)
+// while using the existing ParseDecimal functions.
+func normalizeDecimalString(s string) string {
+	// Convert uppercase E to lowercase e (for scientific notation like "1E5" → "1e5")
+	// This makes us compatible with PostgreSQL, MySQL, SQL Server, Oracle
+	s = strings.ReplaceAll(s, "E", "e")
+
+	// Remove leading positive sign ("+123.45" → "123.45")
+	// ParseDecimal doesn't support it, but all major databases do
+	if len(s) > 0 && s[0] == '+' {
+		s = s[1:]
+	}
+
+	return s
+}
+
+// parseStringToDecimal128 converts a string to DECIMAL128 with given precision and scale.
+// It supports the same formats as parseStringToDecimal64.
+func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128, error) {
+	if s == "" {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+
+	// Normalize the string (same as DECIMAL64)
+	s = normalizeDecimalString(s)
+
+	// Use existing ParseDecimal128
+	result, err := types.ParseDecimal128(s, precision, scale)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+
+	return result, nil
 }
