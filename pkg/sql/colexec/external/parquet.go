@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -967,98 +968,217 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_date:
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		dateT := lt.Date
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
-		if dateT == nil {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				bs, _ := data.Data()
-				ls := types.DecodeSlice[int32](bs)
-				return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Date {
-					return types.DaysFromUnixEpochToDate(t)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DATE conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Date(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					dateVal, parseErr := types.ParseDateCast(strVal)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as DATE: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, dateVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		} else {
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			dateT := lt.Date
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
+			if dateT == nil {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					bs, _ := data.Data()
+					ls := types.DecodeSlice[int32](bs)
+					return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Date {
+						return types.DaysFromUnixEpochToDate(t)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				bs, _ := dictData.Data()
+				dictDates := types.DecodeSlice[int32](bs)
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Date {
+					return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
 				})
 			}
-
-			dictData := dict.Page().Data()
-			bs, _ := dictData.Data()
-			dictDates := types.DecodeSlice[int32](bs)
-			indexes := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Date {
-				return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
-			})
 		}
 	case types.T_timestamp:
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
-		tsT := lt.Timestamp
-		if tsT == nil || !tsT.IsAdjustedToUTC {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			switch {
-			case tsT.Unit.Nanos != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Timestamp, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.UnixNanoToTimestamp(v)
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
-						return converted[int(idx)]
-					})
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to TIMESTAMP conversion
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixNanoToTimestamp(v)
-				})
-			case tsT.Unit.Micros != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Timestamp, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.UnixMicroToTimestamp(v)
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
-						return converted[int(idx)]
-					})
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixMicroToTimestamp(v)
-				})
-			case tsT.Unit.Millis != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Timestamp, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.UnixMicroToTimestamp(v * 1000)
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
-						return converted[int(idx)]
-					})
+
+				// Get timezone from process
+				loc := proc.Base.SessionInfo.TimeZone
+				if loc == nil {
+					loc = time.UTC
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixMicroToTimestamp(v * 1000)
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					timestampVal, parseErr := types.ParseTimestamp(loc, strVal, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as TIMESTAMP: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, timestampVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		} else {
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
+			tsT := lt.Timestamp
+			if tsT == nil || !tsT.IsAdjustedToUTC {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				switch {
+				case tsT.Unit.Nanos != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Timestamp, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.UnixNanoToTimestamp(v)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+						return types.UnixNanoToTimestamp(v)
+					})
+				case tsT.Unit.Micros != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Timestamp, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.UnixMicroToTimestamp(v)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+						return types.UnixMicroToTimestamp(v)
+					})
+				case tsT.Unit.Millis != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Timestamp, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.UnixMicroToTimestamp(v * 1000)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+						return types.UnixMicroToTimestamp(v * 1000)
+					})
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				}
 			}
 		}
 	case types.T_datetime:
@@ -1127,65 +1247,122 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_time:
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		timeT := lt.Time
-		if timeT == nil {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			switch {
-			case timeT.Unit.Nanos != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Time, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Time(v / 1000)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to TIME conversion
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
 					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
-						return converted[int(idx)]
-					})
-				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
-					return types.Time(v / 1000)
-				})
-			case timeT.Unit.Micros != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					bs, _ := dictData.Data()
-					dictTimes := types.DecodeSlice[types.Time](bs)
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
-						return dictTimes[int(idx)]
-					})
-				}
-				bs, _ := data.Data()
-				return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
-			case timeT.Unit.Millis != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int32()
-					converted := make([]types.Time, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Time(v) * 1000
+					if isNull {
+						err := vector.AppendFixed(vec, types.Time(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
 					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
-						return converted[int(idx)]
-					})
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					timeVal, parseErr := types.ParseTime(strVal, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as TIME: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, timeVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
-					return types.Time(v) * 1000
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				return nil
+			}
+		} else {
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			timeT := lt.Time
+			if timeT == nil {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				switch {
+				case timeT.Unit.Nanos != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Time, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.Time(v / 1000)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
+						return types.Time(v / 1000)
+					})
+				case timeT.Unit.Micros != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						bs, _ := dictData.Data()
+						dictTimes := types.DecodeSlice[types.Time](bs)
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
+							return dictTimes[int(idx)]
+						})
+					}
+					bs, _ := data.Data()
+					return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
+				case timeT.Unit.Millis != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int32()
+						converted := make([]types.Time, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.Time(v) * 1000
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
+						return types.Time(v) * 1000
+					})
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				}
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
