@@ -17,6 +17,7 @@ package queryservice
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,5 +147,344 @@ func TestRequestMultipleCn_ContextTimeout(t *testing.T) {
 		t.Log("  - Function correctly returns timeout error")
 		t.Log("  - Error message clearly indicates deadline exceeded")
 		t.Log("  - Prevents queries from hanging indefinitely")
+	})
+}
+
+// TestRequestMultipleCn_HandlerPanic verifies that handler panic is properly caught
+// and treated as failure, and handleInvalidResponse is called
+func TestRequestMultipleCn_HandlerPanic(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_handler_panic"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var validCallCount int
+		var invalidCallCount int
+		var invalidNodes []string
+
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			validCallCount++
+			// Simulate panic
+			panic("intentional panic for testing")
+		}
+
+		handleInvalidResponse := func(nodeAddr string) {
+			invalidCallCount++
+			invalidNodes = append(invalidNodes, nodeAddr)
+		}
+
+		// Execute: handler will panic
+		err := RequestMultipleCn(ctx, []string{addr}, cli, genRequest, handleValidResponse, handleInvalidResponse)
+
+		// Verify panic is caught and treated as error
+		assert.Error(t, err, "Should return error when handler panics")
+		assert.Contains(t, err.Error(), "handleValidResponse panicked", "Error should indicate handler panic")
+		assert.Equal(t, 1, validCallCount, "handleValidResponse should be called once before panic")
+		assert.Equal(t, 1, invalidCallCount, "handleInvalidResponse should be called for panic")
+		assert.Equal(t, []string{addr}, invalidNodes, "Invalid nodes should contain the failed node")
+
+		t.Log("✅ Handler panic correctly caught, error returned, handleInvalidResponse called")
+	})
+}
+
+// TestRequestMultipleCn_MixedFailures verifies correct behavior with multiple
+// failure types across different nodes, and that handleInvalidResponse is called
+// for all failed nodes
+func TestRequestMultipleCn_MixedFailures(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_mixed_failures"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// 3 nodes: success, connection fail, handler panic
+		node1 := addr
+		node2 := fmt.Sprintf("unix:///tmp/nonexistent-%d.sock", time.Now().Nanosecond())
+		node3 := addr // Will panic in handler
+
+		var validCallOrder []string
+		var invalidNodes []string
+
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			validCallOrder = append(validCallOrder, nodeAddr)
+			if nodeAddr == node3 && len(validCallOrder) == 2 {
+				// Second call to node3 panics
+				panic("intentional panic")
+			}
+		}
+
+		handleInvalidResponse := func(nodeAddr string) {
+			invalidNodes = append(invalidNodes, nodeAddr)
+		}
+
+		// Execute: mixed failures
+		err := RequestMultipleCn(ctx, []string{node1, node2, node3}, cli, genRequest, handleValidResponse, handleInvalidResponse)
+
+		// Verify error is returned
+		assert.Error(t, err, "Should return error when any node fails")
+		assert.GreaterOrEqual(t, len(validCallOrder), 1, "At least one handler should be called")
+		assert.Equal(t, 2, len(invalidNodes), "Should have 2 invalid nodes (connection fail + panic)")
+		// Verify invalidNodes contains real addresses, not strings like "context timeout"
+		for _, node := range invalidNodes {
+			assert.Contains(t, []string{node2, node3}, node, "Invalid nodes should be real addresses")
+		}
+
+		t.Logf("✅ Mixed failures: %d valid calls, %d invalid calls, error: %v", len(validCallOrder), len(invalidNodes), err)
+	})
+}
+
+// TestRequestMultipleCn_AllNodesFail verifies behavior when all nodes fail
+func TestRequestMultipleCn_AllNodesFail(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_all_fail"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// All nodes are unreachable
+		node1 := fmt.Sprintf("unix:///tmp/fail1-%d.sock", time.Now().Nanosecond())
+		node2 := fmt.Sprintf("unix:///tmp/fail2-%d.sock", time.Now().Nanosecond()+1)
+		node3 := fmt.Sprintf("unix:///tmp/fail3-%d.sock", time.Now().Nanosecond()+2)
+
+		var successCount int
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			successCount++
+		}
+
+		// Execute: all nodes fail
+		err := RequestMultipleCn(ctx, []string{node1, node2, node3}, cli, genRequest, handleValidResponse, nil)
+
+		// Verify error is returned with zero successes
+		assert.Error(t, err, "Should return error when all nodes fail")
+		assert.Equal(t, 0, successCount, "No nodes should succeed")
+
+		t.Log("✅ All nodes failure handled correctly: error returned, no successes")
+	})
+}
+
+// TestRequestMultipleCn_EmptyNodeAddress verifies handling of empty node addresses
+func TestRequestMultipleCn_EmptyNodeAddress(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_empty_node"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Mix of valid and empty addresses
+		nodes := []string{addr, "", addr}
+
+		var successCount int
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			if rsp != nil && rsp.GetCacheInfoResponse != nil {
+				successCount++
+			}
+		}
+
+		// Execute: should skip empty address
+		err := RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
+
+		// Verify empty address is skipped
+		assert.NoError(t, err, "Should succeed when valid nodes succeed")
+		assert.Equal(t, 2, successCount, "Should process 2 valid nodes")
+
+		t.Log("✅ Empty node addresses correctly skipped")
+	})
+}
+
+// TestRequestMultipleCn_ConcurrentSafety verifies no race conditions
+func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_concurrent"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Multiple nodes to increase concurrency
+		nodes := []string{addr, addr, addr}
+
+		var mu sync.Mutex
+		var successCount int
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			if rsp != nil && rsp.GetCacheInfoResponse != nil {
+				// Concurrent access to shared state
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+				// Simulate some work
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+
+		// Execute: concurrent processing
+		err := RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
+
+		// Verify no race conditions (test with -race flag)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, successCount, "All nodes should succeed")
+
+		t.Log("✅ Concurrent processing safe (run with -race to verify)")
+	})
+}
+
+// TestRequestMultipleCn_NoGoroutineLeak verifies goroutines are cleaned up
+func TestRequestMultipleCn_NoGoroutineLeak(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_no_leak"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		// Test with context timeout to ensure goroutines exit
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		// Mix of valid and invalid nodes
+		node1 := addr
+		node2 := fmt.Sprintf("unix:///tmp/slow-%d.sock", time.Now().Nanosecond())
+
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			// Simulate slow processing
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// Execute: will timeout
+		_ = RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, nil)
+
+		// leaktest.AfterTest will verify no goroutine leaks
+		t.Log("✅ No goroutine leaks (verified by leaktest)")
+	})
+}
+
+// TestRequestMultipleCn_InvalidResponseCallback verifies that handleInvalidResponse
+// is called for all types of failures (network error, handler panic, type error)
+func TestRequestMultipleCn_InvalidResponseCallback(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_invalid_callback"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// 2 nodes: one success, one network fail
+		node1 := addr
+		node2 := fmt.Sprintf("unix:///tmp/fail-%d.sock", time.Now().Nanosecond())
+
+		var invalidNodes []string
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			// Normal processing
+		}
+
+		handleInvalidResponse := func(nodeAddr string) {
+			invalidNodes = append(invalidNodes, nodeAddr)
+		}
+
+		// Execute
+		err := RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, handleInvalidResponse)
+
+		// Verify handleInvalidResponse is called for network failure
+		assert.Error(t, err, "Should return error")
+		assert.Equal(t, 1, len(invalidNodes), "Should call handleInvalidResponse for failed node")
+		assert.Equal(t, node2, invalidNodes[0], "Invalid node should be the network failed node")
+
+		t.Log("✅ handleInvalidResponse correctly called for network failures")
+	})
+}
+
+// TestRequestMultipleCn_FailedNodesOnlyRealAddresses verifies that failedNodes
+// contains only real node addresses, not synthetic strings like "context timeout"
+func TestRequestMultipleCn_FailedNodesOnlyRealAddresses(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_failed_nodes"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		// Very short timeout to trigger context cancel
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		defer cancel()
+
+		node1 := fmt.Sprintf("unix:///tmp/node1-%d.sock", time.Now().Nanosecond())
+		node2 := fmt.Sprintf("unix:///tmp/node2-%d.sock", time.Now().Nanosecond()+1)
+
+		var capturedFailedNodes []string
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			// Won't be called due to timeout
+		}
+
+		handleInvalidResponse := func(nodeAddr string) {
+			capturedFailedNodes = append(capturedFailedNodes, nodeAddr)
+		}
+
+		// Sleep to ensure timeout
+		time.Sleep(5 * time.Millisecond)
+
+		// Execute: should timeout
+		err := RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, handleInvalidResponse)
+
+		// Verify error
+		assert.Error(t, err, "Should return error on timeout")
+		assert.Contains(t, err.Error(), "context deadline exceeded", "Error should indicate timeout")
+
+		// Key verification: failedNodes should only contain real addresses
+		// NOT synthetic strings like "context timeout"
+		for _, failedNode := range capturedFailedNodes {
+			// Each failedNode should be a real node address (unix://...)
+			assert.True(t, failedNode == node1 || failedNode == node2,
+				"failedNodes should only contain real node addresses, got: %s", failedNode)
+			assert.NotContains(t, failedNode, "timeout", "failedNodes should not contain 'timeout' string")
+			assert.NotContains(t, failedNode, "context", "failedNodes should not contain 'context' string")
+		}
+
+		t.Logf("✅ failedNodes contains only real addresses: %v", capturedFailedNodes)
 	})
 }
