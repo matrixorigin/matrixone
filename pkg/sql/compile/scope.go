@@ -288,6 +288,23 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 		submitPreScope := ants.Submit(
 			func() {
+				defer wg.Done()
+
+				defer func() {
+					// if scope.Run or scope.MergeRun or scope.RemoteRun panic,
+					// we should send the error to the preScopeResultReceiveChan.
+					// Otherwise, the preScopeResultReceiveChan will be blocked.
+					if e := recover(); e != nil {
+						err := moerr.ConvertPanicError(c.proc.Ctx, e)
+						c.proc.Error(
+							c.proc.Ctx, "panic in preScope",
+							zap.String("sql", c.sql),
+							zap.String("error", err.Error()),
+						)
+						preScopeResultReceiveChan <- err
+					}
+				}()
+
 				switch scope.Magic {
 				case Normal:
 					preScopeResultReceiveChan <- scope.Run(c)
@@ -300,14 +317,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 					preScopeResultReceiveChan <- err
 				}
-				wg.Done()
 			})
 
 		// build routine failed.
 		if submitPreScope != nil {
+			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			preScopeResultReceiveChan <- submitPreScope
-			wg.Done()
 		}
 	}
 
