@@ -883,6 +883,10 @@ func (d Date) DaysSinceUnixEpoch() int32 {
 	return int32(d) - unixEpochDays
 }
 
+func DaysFromUnixEpochToDate(days int32) Date {
+	return Date(days + unixEpochDays)
+}
+
 func GetUnixEpochSecs() int64 {
 	return unixEpochMicroSecs
 }

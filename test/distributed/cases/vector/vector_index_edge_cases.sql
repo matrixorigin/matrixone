@@ -1,0 +1,91 @@
+-- Test for edge cases in vector index with filters
+-- Covers branches not tested in main vector_index.sql
+
+-- Enable experimental vector index features
+SET experimental_ivf_index = 1;
+
+-- Setup test table
+drop table if exists test_vector_edge_cases;
+CREATE TABLE test_vector_edge_cases (
+    id INT PRIMARY KEY,
+    name VARCHAR(100),
+    score FLOAT,
+    embedding vecf32(16)
+);
+
+-- Create IVFFlat index
+CREATE INDEX idx_vec_edge USING ivfflat ON test_vector_edge_cases(embedding) lists=2 op_type "vector_l2_ops";
+
+-- Insert test data (reuse same data pattern as main test)
+INSERT INTO test_vector_edge_cases (id, name, score, embedding) VALUES 
+(1, 'Vector A', 5.0, '[0.3745401203632355,0.9507142901420593,0.7319939136505127,0.5986585021018982,0.15601864457130432,0.15599451959133148,0.058083612471818924,0.8661761283874512,0.6011149883270264,0.7080726027488708,0.02058449387550354,0.9699098467826843,0.8324426412582397,0.2123391181230545,0.1818249672651291,0.18340450525283813]'),
+(2, 'Vector B', 4.5, '[0.30461377859115601,0.09767211228609085,0.6842330098152161,0.4401524066925049,0.12203823030948639,0.49517691344022751,0.034388521313667297,0.909320890903473,0.258780837059021,0.662522285222173,0.31171107292175293,0.520068585872650146,0.46147936582565308,0.7815650105476379,0.11827442795038223,0.6399210095405579]'),
+(3, 'Vector C', 4.0, '[0.14335328340530396,0.9446688890457153,0.5218483209609985,0.41466194391250610,0.2645556330680847,0.7742336988449097,0.45615032315254211,0.5684339451789856,0.018789799883961678,0.6176354885101318,0.6120957136154175,0.6169339418411255,0.9437480568885803,0.6818202733993530,0.359507900573616,0.43703195452690125]'),
+(4, 'Vector D', 3.5, '[0.6976311802864075,0.06022547104209661,0.6667667031288147,0.670637905597687,0.2103825509548187,0.1289262980222702,0.3151593506336212,0.5239129662513733,0.5902447104454041,0.9516831226348877,0.0366089977324009,0.6233859658241272,0.3803848624229431,0.6927639842033386,0.34391663223505020,0.598843395709991]'),
+(5, 'Vector E', 3.0, '[0.2830425500869751,0.4904943168163300,0.8964447379112244,0.4557966589927673,0.6322378516197205,0.3488651216030121,0.9568869471549988,0.0186033826321363,0.7373419404029846,0.5926780104637146,0.15602891519665718,0.15564851462841034,0.05808360874652863,0.8661761283874512,0.601114988327026,0.7080726027488708]');
+
+-- ============================================================================
+-- Test Case 1: NO FILTER (covers line 286-289 in both ivfflat and hnsw)
+-- This should NOT trigger over-fetching, just use original limit
+-- ============================================================================
+-- @separator:table
+SELECT id, name, score FROM test_vector_edge_cases 
+ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
+LIMIT 3;
+
+-- ============================================================================
+-- Test Case 2: PARAMETERIZED LIMIT with FILTER (covers line 283-285)
+-- This tests the case where LIMIT is not a constant literal
+-- Note: In SQL test files, we can simulate this using expressions
+-- ============================================================================
+
+-- Test 2a: LIMIT as an expression (1+2 = 3)
+-- Should have filters but cannot calculate over-fetch factor at plan time
+-- @separator:table
+SELECT id, name, score FROM test_vector_edge_cases 
+WHERE score >= 4.0
+ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
+LIMIT (1+2);
+
+-- Test 2b: Subquery as LIMIT - NOT SUPPORTED in MatrixOne
+-- MatrixOne does not allow subqueries in LIMIT clause
+-- This test is commented out as it's expected to fail with syntax error
+-- -- @separator:table
+-- SELECT id, name, score FROM test_vector_edge_cases 
+-- WHERE score >= 4.0
+-- ORDER BY l2_distance(embedding, '[...]')
+-- LIMIT (SELECT 2);
+
+-- ============================================================================
+-- Test Case 3: Combination - verify standard constant LIMIT still works
+-- (This is a sanity check to ensure we didn't break the common case)
+-- ============================================================================
+-- @separator:table
+SELECT id, name, score FROM test_vector_edge_cases 
+WHERE score >= 4.0
+ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
+LIMIT 3;
+
+-- ============================================================================
+-- Test Case 4: EXPLAIN to verify plan differences
+-- ============================================================================
+
+-- EXPLAIN for case without filter (no over-fetch)
+-- @separator:table
+EXPLAIN SELECT id, name, score FROM test_vector_edge_cases 
+ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
+LIMIT 3;
+
+-- EXPLAIN for case with filter (should show over-fetch)
+-- @separator:table
+EXPLAIN SELECT id, name, score FROM test_vector_edge_cases 
+WHERE score >= 4.0
+ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
+LIMIT 3;
+
+-- Cleanup
+drop table test_vector_edge_cases;
+
+-- Restore default settings
+SET experimental_ivf_index = 0;
+
