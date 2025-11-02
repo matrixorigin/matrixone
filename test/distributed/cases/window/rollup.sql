@@ -501,4 +501,97 @@ order by
     sort_product_name asc;
 
 drop table sales_details;
+
+
+-- Test for issue #19998: IF with GROUPING should handle mixed string/numeric types
+-- This tests that IF(GROUPING(...), 'string', number) returns varchar without errors
+drop table if exists sales_mixed_types;
+create table sales_mixed_types (
+    year int,
+    quarter int,
+    region text,
+    amount decimal(10, 2)
+);
+
+insert into sales_mixed_types (year, quarter, region, amount) values
+(2021, 1, 'North', 10000),
+(2021, 1, 'South', 15000),
+(2021, 2, 'North', 20000),
+(2021, 2, 'South', 25000),
+(2022, 1, 'North', 30000),
+(2022, 1, 'South', 35000),
+(2022, 2, 'North', 40000),
+(2022, 2, 'South', 45000);
+
+-- Test 1: IF with string literal and numeric column (the original failing case)
+select
+    if(grouping(year), 'All years', year) AS year_label,
+    if(grouping(quarter), 'All quarters', quarter) as quarter_label,
+    region,
+    sum(amount) as total_sales
+from
+    sales_mixed_types
+group by
+    year,
+    quarter,
+    region with rollup
+order by year_label, quarter_label, region;
+
+-- Test 2: Mixed types in different order (number first, string second)
+select
+    if(grouping(year) = 0, year, 'Grand Total') AS year_label,
+    sum(amount) as total_sales
+from
+    sales_mixed_types
+group by
+    year with rollup
+order by year_label;
+
+-- Test 3: Multiple mixed-type IF expressions with GROUPING
+select
+    if(grouping(year), 'All', cast(year as char)) AS year_str,
+    if(grouping(quarter), 'Total', quarter) as quarter_val,
+    count(*) as cnt
+from
+    sales_mixed_types
+group by
+    year,
+    quarter with rollup
+order by year_str, quarter_val;
+
+-- Test 4: Nested IF with GROUPING and mixed types
+select
+    year,
+    if(grouping(region), if(grouping(year), 'Grand Total', 'Year Total'), region) as region_label,
+    sum(amount) as total_sales
+from
+    sales_mixed_types
+group by
+    year,
+    region with rollup
+order by year, region_label;
+
+-- Test 5: CASE expression with GROUPING (alternative to IF)
+select
+    case when grouping(year) = 1 then 'All years' else cast(year as char) end AS year_label,
+    case when grouping(quarter) = 1 then 'All quarters' else cast(quarter as char) end as quarter_label,
+    sum(amount) as total_sales
+from
+    sales_mixed_types
+group by
+    year,
+    quarter with rollup
+order by year_label, quarter_label;
+
+-- Test 6: Verify return type is varchar (can concatenate with strings)
+select
+    concat('Year: ', if(grouping(year), 'Total', year)) AS year_label,
+    sum(amount) as total_sales
+from
+    sales_mixed_types
+group by
+    year with rollup
+order by year_label;
+
+drop table sales_mixed_types;
 drop database rollup_test;
