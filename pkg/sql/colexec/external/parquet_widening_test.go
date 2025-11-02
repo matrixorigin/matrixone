@@ -158,11 +158,11 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 	{
 		node := parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary)
 		vals := []parquet.Value{
-			parquet.Uint32Value(100),
-			parquet.Uint32Value(200),
-			parquet.Uint32Value(100),
-			parquet.Uint32Value(4294967295), // MaxUint32
-			parquet.Uint32Value(200),
+			parquet.Int32Value(100),
+			parquet.Int32Value(200),
+			parquet.Int32Value(100),
+			parquet.Int32Value(-1), // Will be interpreted as MaxUint32 (4294967295) when read as uint32
+			parquet.Int32Value(200),
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
