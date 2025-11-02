@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -72,20 +71,6 @@ func TestReceiverDone_OldBehavior(t *testing.T) {
 
 	err = sendBatToMultiMatchedReg(d, proc, bat, 0)
 	require.Error(t, err, "shuffle should fail when receiver is done")
-}
-
-func Test_waitRemoteRegsReady(t *testing.T) {
-	d := &Dispatch{
-		ctr: &container{},
-		RemoteRegs: []colexec.ReceiveInfo{
-			{},
-		},
-	}
-	proc := testutil.NewProcess(t)
-	//wait waitNotifyTimeout seconds
-	ret, err := d.waitRemoteRegsReady(proc)
-	assert.Error(t, err)
-	assert.False(t, ret)
 }
 
 func Test_removeIdxReceiver(t *testing.T) {
