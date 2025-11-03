@@ -197,8 +197,38 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = pkType
 
-	// pushdown limit
-	tableFuncNode.Limit = DeepCopyExpr(limit)
+	// pushdown limit to Table Function
+	// When there are filters, over-fetch to get more candidates
+	// This ensures we have enough candidates after filtering
+	if len(scanNode.FilterList) > 0 {
+		// Over-fetch strategy: dynamically adjust factor based on limit size
+		// Smaller limits need more over-fetching due to higher variance
+		if limitConst := limit.GetLit(); limitConst != nil {
+			originalLimit := limitConst.GetU64Val()
+
+			// Use shared function to calculate over-fetch factor
+			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
+
+			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			tableFuncNode.Limit = &Expr{
+				Typ: limit.Typ,
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_U64Val{
+							U64Val: newLimit,
+						},
+					},
+				},
+			}
+		} else {
+			// If limit is not a constant, just copy it
+			tableFuncNode.Limit = DeepCopyExpr(limit)
+		}
+	} else {
+		// No filters, use original limit
+		tableFuncNode.Limit = DeepCopyExpr(limit)
+	}
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -227,10 +257,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		Children: []int32{scanNode.NodeId, tableFuncNodeID},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
-		Limit:    DeepCopyExpr(scanNode.Limit),
-		Offset:   DeepCopyExpr(scanNode.Offset),
+		// Don't set Limit/Offset on JOIN - they should be applied after SORT
 	}, ctx)
 
+	// Keep FilterList on scanNode so filters are applied during table scan
+	// Clear Limit/Offset from scanNode since they should be applied after SORT
 	scanNode.Limit = nil
 	scanNode.Offset = nil
 
@@ -254,6 +285,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		NodeType: plan.Node_SORT,
 		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
+		Limit:    limit,                         // Apply LIMIT after sorting
+		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
 	}, ctx)
 
 	projNode.Children[0] = sortByID

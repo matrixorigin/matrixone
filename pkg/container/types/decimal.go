@@ -1560,6 +1560,10 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				i++
 				continue
 			}
+			if x[i] == '+' && floatflag {
+				i++
+				continue
+			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
 			return
 		} else if !floatflag {
