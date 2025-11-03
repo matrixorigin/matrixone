@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	idxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/robfig/cron/v3"
 )
 

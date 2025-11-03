@@ -38,7 +38,7 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	idxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
