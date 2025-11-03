@@ -1,0 +1,93 @@
+drop database if exists test_string_to_datetime;
+create database test_string_to_datetime;
+use test_string_to_datetime;
+create table test_string_to_date(
+date_col date not null
+);
+load data infile {'filepath'='$resources/load_data/string_to_date.parq', 'format'='parquet'}
+into table test_string_to_date;
+select * from test_string_to_date order by date_col;
+date_col
+1970-01-01
+1999-12-25
+2000-06-15
+2024-01-01
+2024-12-31
+create table test_string_to_time(
+time_col time not null
+);
+load data infile {'filepath'='$resources/load_data/string_to_time.parq', 'format'='parquet'}
+into table test_string_to_time;
+select * from test_string_to_time order by time_col;
+time_col
+00:00:00
+01:15:30
+12:30:45
+15:45:00
+23:59:59
+create table test_string_to_time_scale(
+time_col time(6) not null
+);
+load data infile {'filepath'='$resources/load_data/string_to_time_scale.parq', 'format'='parquet'}
+into table test_string_to_time_scale;
+select * from test_string_to_time_scale order by time_col;
+time_col
+00:00:00.000001000
+01:15:30.500000000
+12:30:45.123456000
+23:59:59.999999000
+create table test_string_to_timestamp(
+timestamp_col timestamp not null
+);
+load data infile {'filepath'='$resources/load_data/string_to_timestamp.parq', 'format'='parquet'}
+into table test_string_to_timestamp;
+select * from test_string_to_timestamp order by timestamp_col;
+timestamp_col
+1970-01-01 00:00:00
+2000-06-15 10:20:30
+2024-01-01 12:30:45
+2024-12-31 23:59:59
+create table test_string_to_timestamp_scale(
+timestamp_col timestamp(6) not null
+);
+load data infile {'filepath'='$resources/load_data/string_to_timestamp_scale.parq', 'format'='parquet'}
+into table test_string_to_timestamp_scale;
+select * from test_string_to_timestamp_scale order by timestamp_col;
+timestamp_col
+1970-01-01 00:00:00.000001000
+2000-06-15 10:20:30.500000000
+2024-01-01 12:30:45.123456000
+2024-12-31 23:59:59.999999000
+create table test_datetime_nulls(
+id int not null,
+date_val date,
+time_val time,
+timestamp_val timestamp
+);
+load data infile {'filepath'='$resources/load_data/string_to_datetime_nulls.parq', 'format'='parquet'}
+into table test_datetime_nulls;
+select * from test_datetime_nulls order by id;
+id    date_val    time_val    timestamp_val
+1    2024-01-01    12:30:45    2024-01-01 12:30:45
+2    null    null    null
+3    2024-12-31    23:59:59    2024-12-31 23:59:59
+4    null    12:30:45    null
+create table test_datetime_special(
+date_val date not null,
+time_val time not null,
+timestamp_val timestamp not null
+);
+load data infile {'filepath'='$resources/load_data/string_to_datetime_special.parq', 'format'='parquet'}
+into table test_datetime_special;
+select * from test_datetime_special order by date_val;
+date_val    time_val    timestamp_val
+2024-01-01    12:30:45    2024-01-01 12:30:45
+2024-12-31    23:59:59    2024-12-31 23:59:59
+create table test_datetime_invalid(
+test_case varchar(50),
+date_val date
+);
+load data infile {'filepath'='$resources/load_data/string_to_datetime_invalid.parq', 'format'='parquet'}
+into table test_datetime_invalid;
+
+drop database test_string_to_datetime;
