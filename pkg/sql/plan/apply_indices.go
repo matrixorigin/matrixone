@@ -303,14 +303,10 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 				}
 
 			case catalog.MoIndexHnswAlgo.ToString():
-
-				if !builder.checkValidHnswDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
-					continue
+				newNodeID, err := builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
 				}
-
-				return builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode,
-					colRefCnt, idxColMap, multiTableIndex)
-
 			}
 		}
 	}

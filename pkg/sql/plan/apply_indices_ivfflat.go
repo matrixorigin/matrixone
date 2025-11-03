@@ -65,11 +65,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}
 
 	ctx := builder.ctxByNode[nodeID]
-	metadef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
-	entriesdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
+	metaDef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+	idxDef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
+	entriesDef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
 
-	opTypeAst, err := sonic.Get([]byte(metadef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
 	if err != nil {
 		return nodeID, nil
 	}
@@ -113,7 +113,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 
 	vecLitArg.Typ = vecColArg.Typ
 
-	keyPart := idxdef.Parts[0]
+	keyPart := idxDef.Parts[0]
 	partPos := scanNode.TableDef.Name2ColIndex[keyPart]
 	if vecColArg.GetCol().ColPos != partPos {
 		return nodeID, nil
@@ -140,16 +140,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	pkType := scanNode.TableDef.Cols[pkPos].Typ
 	partType := scanNode.TableDef.Cols[partPos].Typ
-	params := idxdef.IndexAlgoParams
+	params := idxDef.IndexAlgoParams
 
 	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
 			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
-		metadef.IndexTableName,
-		idxdef.IndexTableName,
+		metaDef.IndexTableName,
+		idxDef.IndexTableName,
 		nThread.(int64),
-		entriesdef.IndexTableName,
+		entriesDef.IndexTableName,
 		uint(nProbe),
 		pkType.Id,
 		scanNode.TableDef.Pkey.PkeyColName,
