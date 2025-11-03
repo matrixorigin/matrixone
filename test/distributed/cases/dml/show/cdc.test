@@ -4,6 +4,8 @@ create database if not exists test_cdc;
 use test_cdc;
 create pitr if not exists pitr_db for database test_cdc  range 2 'h';
 create cdc cdc_tpcc 'mysql://test_cdc_var_acc1#admin:111@127.0.0.1:6001' 'matrixone' 'mysql://test_cdc_var_acc1#admin:111@127.0.0.1:6001' 'test_cdc:test_cdc_bak' {'Level'='database'};
+-- @ignore:0
+select mo_ctl('cn','syncCommit','');
 -- @ignore:0,1,2,3,4,5,6,7
 show cdc task cdc_tpcc;
 drop cdc task cdc_tpcc;
