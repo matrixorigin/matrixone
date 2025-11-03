@@ -20,7 +20,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -46,10 +45,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		if distFnExpr == nil {
 			return nodeID, nil
 		}
-	}
-
-	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-		return nodeID, nil
 	}
 
 	var limit *plan.Expr
@@ -82,40 +77,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		return nodeID, nil
 	}
 
-	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
-		return nodeID, nil
-	}
-
-	if distFnArgs[1].GetCol() != nil {
-		if distFnArgs[0].GetCol() != nil {
-			return nodeID, nil
-		}
-
-		distFnArgs[0], distFnArgs[1] = distFnArgs[1], distFnArgs[0]
-	}
-
-	vecColArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[0], builder.compCtx.GetProcess(), false, true)
-	if vecColArg != nil {
-		distFnArgs[0] = vecColArg
-	}
-	vecLitArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[1], builder.compCtx.GetProcess(), false, true)
-	if vecLitArg != nil {
-		distFnArgs[1] = vecLitArg
-	}
-
-	if vecColArg.GetCol() == nil {
-		return nodeID, nil
-	}
-	if vecLitArg.GetLit() == nil {
-		return nodeID, nil
-	}
-
-	vecLitArg.Typ = vecColArg.Typ
-
 	keyPart := idxDef.Parts[0]
 	partPos := scanNode.TableDef.Name2ColIndex[keyPart]
-	if vecColArg.GetCol().ColPos != partPos {
+	_, vecLitArg, found := builder.getArgsFromDistFn(distFnExpr, partPos)
+	if !found {
 		return nodeID, nil
 	}
 
