@@ -222,7 +222,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		hashCodes[i] = (hashCode >> (64 - spillMaskBits*uint64(myLv))) & (spillNumBuckets - 1)
 	}
 
-	// tmp batch and bufferto write.   it is OK to pass in a nil vec, as
+	// tmp batch and buffer to write.   it is OK to pass in a nil vec, as
 	// ctr.groupByTypes is already initialized.
 	gbBatch := ctr.createNewGroupByBatch(proc, nil, aggBatchSize)
 	defer gbBatch.Clean(proc.Mp())
@@ -264,7 +264,6 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		// save aggs to buf
 		nAggs := int32(len(ctr.aggList))
 		buf.Write(types.EncodeInt32(&nAggs))
-		proc.DebugBreakDump(nAggs == 0)
 		for _, ag := range ctr.aggList {
 			ag.SaveIntermediateResult(cnt, flags, buf)
 		}
@@ -301,13 +300,14 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		return false, nil
 	}
 
-	// popped bkt must be freed.
+	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer bkt.free(proc)
 
 	// reposition to the start of the file.
 	bkt.file.Seek(0, io.SeekStart)
 
+	// we reset ctr state, and create a new group by batch.
 	ctr.resetForSpill(proc)
 	gbBatch := ctr.createNewGroupByBatch(proc, nil, aggBatchSize)
 	totalCnt := int64(0)
@@ -341,7 +341,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 
 		// load group by batch from the spill bucket.
-		gbBatch.SetRowCount(0)
+		gbBatch.CleanOnlyData()
 		gbBatch.PreExtend(proc.Mp(), int(cnt))
 		gbBatch.UnmarshalFromReader(bkt.file, proc.Mp())
 
@@ -463,7 +463,7 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 	ctr.currBatchIdx += 1
 
 	if curr == 0 {
-		// flush aggs.   this api is insane
+		// flush aggs final result to vectors, all aggs follow groupby columns.
 		for _, ag := range ctr.aggList {
 			vecs, err := ag.Flush()
 			if err != nil {

@@ -60,8 +60,6 @@ type Group struct {
 	GroupingFlag []bool
 
 	Aggs []aggexec.AggFuncExecExpression
-	// XXX To remove.  This is not used, but keep it for compatibility.
-	PreAllocSize uint64
 }
 
 type spillBucket struct {
@@ -128,7 +126,6 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	if m == 0 {
 		ctr.spillMem = common.GiB
 	} else {
-		// ctr.spillMem = min(max(m, common.MiB), common.TiB)
 		ctr.spillMem = m
 	}
 }

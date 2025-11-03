@@ -40,7 +40,7 @@ sum(a)    max(c)    avg(d)    avg(f)
 500000500000    foobar9zoo    500000.000000000000    500000.0
 select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
-) tmp;
+) tmpt;
 count(a)    sum(d)    sum(f)
 9999    45000000.00    4.5E7
 select 'set max_dop to 1 ... ';
@@ -51,15 +51,15 @@ select 'set agg_spill_mem to 50MB ... ';
 set agg_spill_mem to 50MB ... 
 set agg_spill_mem to 50MB ... 
 set @@agg_spill_mem = 60000000;
-select count(*) from (select a, b, c from t group by a, b, c) tmpt;
+select count(*) from (select a, b, c from t group by a, b, c) tmptt;
 count(*)
 1000000
-select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as f from t group by a, c) tmpt;
+select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as f from t group by a, c) tmptt;
 sum(a)    max(c)    avg(d)    avg(f)
 500000500000    foobar9zoo    500000.000000000000    500000.0
 select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
-) tmp;
+) tmptt;
 count(a)    sum(d)    sum(f)
 9999    45000000.00    4.5E7
 explain analyze select a, b, c from t group by a, b, c;
@@ -67,7 +67,7 @@ ap query plan on one cn(24 core)
 Project
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=30.52 MiB OutputSize=30.52 MiB MemorySize=256.00 KiB (min=256.00 KiB, max=256.00 KiB)
   ->  Aggregate
-        Analyze: timeConsumed=1390ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=30.52 MiB MemorySize=57.50 MiB (min=57.50 MiB, max=57.50 MiB) SpillSize=115.00 MiB (min=115.00 MiB, max=115.00 MiB)
+        Analyze: timeConsumed=1430ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=30.52 MiB MemorySize=57.50 MiB (min=57.50 MiB, max=57.50 MiB) SpillSize=115.00 MiB (min=115.00 MiB, max=115.00 MiB)
         Group Key: t.a, t.b, t.c shuffle: range(t.a)
         ->  Table Scan on qetest.t
               Analyze: timeConsumed=9ms waitTime=0ms inputBlocks=246 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=61.04 MiB OutputSize=61.04 MiB MemorySize=512.00 KiB (min=512.00 KiB, max=512.00 KiB)
@@ -76,7 +76,7 @@ ap query plan on one cn(24 core)
 Project
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=49.59 MiB OutputSize=49.59 MiB MemorySize=416.00 KiB (min=416.00 KiB, max=416.00 KiB)
   ->  Aggregate
-        Analyze: timeConsumed=7202ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=49.59 MiB MemorySize=60.76 MiB (min=60.76 MiB, max=60.76 MiB) SpillSize=242.75 MiB (min=242.75 MiB, max=242.75 MiB)
+        Analyze: timeConsumed=7013ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=49.59 MiB MemorySize=60.76 MiB (min=60.76 MiB, max=60.76 MiB) SpillSize=242.90 MiB (min=242.90 MiB, max=242.90 MiB)
         Group Key: t.a, t.c shuffle: range(t.a)
         Aggregate Functions: avg(t.d), avg(t.f)
         ->  Table Scan on qetest.t
@@ -86,11 +86,11 @@ tp query plan
 Project
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=9999 outputRows=9999 (min=9999, max=9999) InputSize=351.53 KiB OutputSize=351.53 KiB MemorySize=288.00 KiB (min=288.00 KiB, max=288.00 KiB)
   ->  Aggregate
-        Analyze: timeConsumed=558ms waitTime=0ms inputRows=19998 outputRows=9999 (min=9999, max=9999) InputSize=390.59 KiB OutputSize=351.53 KiB MemorySize=2.57 GiB (min=2.57 GiB, max=2.57 GiB)
+        Analyze: timeConsumed=442ms waitTime=0ms inputRows=19998 outputRows=9999 (min=9999, max=9999) InputSize=390.59 KiB OutputSize=351.53 KiB MemorySize=2.57 GiB (min=2.57 GiB, max=2.57 GiB)
         Group Key: t.a
         Aggregate Functions: starcount(1), sum(t.d), sum(t.f)
         ->  Table Scan on qetest.t
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=4 inputRows=32768 outputRows=19998 (min=19998, max=19998) InputSize=640.00 KiB OutputSize=390.59 KiB MemorySize=315.75 KiB (min=123.75 KiB, max=160.00 KiB)
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=4 inputRows=32768 outputRows=19998 (min=19998, max=19998) InputSize=640.00 KiB OutputSize=390.59 KiB MemorySize=318.74 KiB (min=126.74 KiB, max=160.00 KiB)
               Filter Cond: (t.a < 10000)
               Block Filter Cond: (t.a < 10000)
 drop database qetest;

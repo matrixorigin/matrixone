@@ -169,7 +169,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Group:
 		t := sourceOp.(*group.Group)
 		op := group.NewArgument()
-		op.PreAllocSize = t.PreAllocSize
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
@@ -1546,22 +1545,12 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 
-	var preAllocSize uint64 = 0
-	if n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-		if cn.NodeType == plan.Node_TABLE_SCAN && len(cn.FilterList) == 0 {
-			// if group on scan without filter, stats for hashmap is accurate to do preAlloc
-			// tune it up a little bit in case it is not so average after shuffle
-			preAllocSize = uint64(n.Stats.HashmapStats.HashmapSize / float64(shuffleDop) * 1.05)
-		}
-	}
-
 	arg := group.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.NeedEval = needEval
 	arg.SpillMem = n.SpillMem
 	arg.GroupingFlag = n.GroupingFlag
 	arg.Exprs = n.GroupBy
-	arg.PreAllocSize = preAllocSize
 	return arg
 }
 

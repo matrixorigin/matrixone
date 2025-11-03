@@ -23,12 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-var makeAggExec = aggexec.MakeAgg
 
 const (
 	// we use this size as preferred output batch size, which is typical
@@ -207,8 +204,10 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			// all handled, going to eval mode.
 			//
 			// XXX: Note that this test, r.Batch == nil is treated as ExecStop.
-			// I am not sure this is correct, but some code has already done this, notably
-			// value scan.
+			// I am not sure this is correct, but our code depends on this.
+			// Esp, some table function will produce ExecNext result with nil
+			// batch as end of data.   Shuffle, on the otherhand may product
+			// more batches after sending a ExecStop result.
 			//
 			// if r.Status == vm.ExecStop || r.Batch == nil {
 			if r.Batch == nil {
@@ -223,6 +222,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if len(group.ctr.aggList) != len(group.Aggs) {
 				group.ctr.aggList, err = group.ctr.makeAggList(proc, group.Aggs)
+				if err != nil {
+					return vm.CancelResult, err
+				}
 			}
 
 			// build one batch.
@@ -389,7 +391,6 @@ func (ctr *container) appendGroupByBatch(
 	currBatch := ctr.groupByBatches[len(ctr.groupByBatches)-1]
 	spaceLeft := aggBatchSize - currBatch.RowCount()
 
-	// the countNonZeroAndFindKth is so fucked up,
 	toIncrease, kth := countNonZeroAndFindKth(insertList, spaceLeft)
 	if toIncrease == 0 {
 		// there is nothing in the insertList
@@ -460,7 +461,8 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 
 	batch := group.ctr.groupByBatches[curr]
 
-	// serialize aggs to ExtraBuf1.
+	// XXX: serialize aggs to ExtraBuf1, only need to do this for the first
+	// batch.  This really should be set at plan time.
 	if curr == 0 {
 		var buf1 bytes.Buffer
 		buf1.Write(types.EncodeInt32(&group.ctr.mtyp))
@@ -474,7 +476,10 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		batch.ExtraBuf1 = buf1.Bytes()
 	}
 
-	// serialize curr chunk of aggList entries to batch
+	// XXX: Serialize chunk of aggList entries to batch.
+	// This is also a pretty bad design, we would really like to
+	// dump group state to a vector and put the vector into the batch.
+	// But well,
 	var buf2 bytes.Buffer
 	nAggs := int32(len(group.ctr.aggList))
 	buf2.Write(types.EncodeInt32(&nAggs))
@@ -490,11 +495,10 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 
 // given buckets, and a specific bucket, compute the flags for vector union.
 func computeChunkFlags(bucketIdx []uint64, bucket uint64, chunkSize int) (int64, [][]uint8) {
-	// compute the number of chunks,
+	// compute the number of chunks, and last chunk size
 	nChunks := (len(bucketIdx) + chunkSize - 1) / chunkSize
 	lastChunkSize := len(bucketIdx) - (chunkSize * (nChunks - 1))
 
-	// return values
 	cnt := int64(0)
 	flags := make([][]uint8, nChunks)
 	for i := range flags {
