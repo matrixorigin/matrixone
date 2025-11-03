@@ -1,0 +1,411 @@
+DROP DATABASE IF EXISTS charset_error_test;
+CREATE DATABASE charset_error_test;
+USE charset_error_test;
+CREATE TABLE t_byte_boundary (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_byte_boundary VALUES (1, 'A');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 1;
+id    LENGTH(data)    CHAR_LENGTH(data)
+1    1    1
+INSERT INTO t_byte_boundary VALUES (2, '中');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 2;
+id    LENGTH(data)    CHAR_LENGTH(data)
+2    3    1
+INSERT INTO t_byte_boundary VALUES (3, '€');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 3;
+id    LENGTH(data)    CHAR_LENGTH(data)
+3    3    1
+INSERT INTO t_byte_boundary VALUES (4, '😀');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 4;
+id    LENGTH(data)    CHAR_LENGTH(data)
+4    4    1
+CREATE TABLE t_varchar_limit (
+id INT PRIMARY KEY,
+data VARCHAR(10)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_varchar_limit VALUES (1, '0123456789');
+INSERT INTO t_varchar_limit VALUES (2, '零一二三四五六七八九');
+INSERT INTO t_varchar_limit VALUES (3, '😀😃😄😁😆😅🤣😂🙂🙃');
+SELECT id, data, LENGTH(data), CHAR_LENGTH(data) FROM t_varchar_limit ORDER BY id;
+id    data    LENGTH(data)    CHAR_LENGTH(data)
+1    0123456789    10    10
+2    零一二三四五六七八九    30    10
+3    😀😃😄😁😆😅🤣😂🙂🙃    40    10
+CREATE TABLE t_char_padding (
+id INT PRIMARY KEY,
+data CHAR(10)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO t_char_padding VALUES (1, 'test');
+INSERT INTO t_char_padding VALUES (2, 'test      ');  -- explicit spaces
+INSERT INTO t_char_padding VALUES (3, '测');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_char_padding ORDER BY id;
+id    LENGTH(data)    CHAR_LENGTH(data)
+1    4    4
+2    10    10
+3    3    1
+CREATE TABLE t_null_handling (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_null_handling VALUES (1, NULL);
+INSERT INTO t_null_handling VALUES (2, '');
+INSERT INTO t_null_handling VALUES (3, 'NULL');
+SELECT id, data, data IS NULL as is_null, (data = '') as is_empty, LENGTH(data) as len FROM t_null_handling ORDER BY id;
+id    data    is_null    is_empty    len
+1    null    true    null    null
+2        false    true    0
+3    NULL    false    false    4
+SELECT CONCAT('Hello', NULL, 'World');
+CONCAT(Hello, null, World)
+null
+SELECT CONCAT('你好', NULL, '世界');
+CONCAT(你好, null, 世界)
+null
+SELECT CONCAT_WS(',', 'A', NULL, 'B', NULL, 'C');
+CONCAT_WS(,, A, null, B, null, C)
+A,B,C
+CREATE TABLE t_invalid_utf8 (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_invalid_utf8 VALUES (1, 'Valid UTF-8');
+INSERT INTO t_invalid_utf8 VALUES (2, '有效的UTF-8');
+SELECT * FROM t_invalid_utf8 ORDER BY id;
+id    data
+1    Valid UTF-8
+2    有效的UTF-8
+CREATE TABLE t_substring_edge (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_substring_edge VALUES (1, '你好世界');
+SELECT SUBSTRING(data, -2) FROM t_substring_edge WHERE id = 1;
+SUBSTRING(data, -2)
+世界
+SELECT SUBSTRING(data, -2, 1) FROM t_substring_edge WHERE id = 1;
+SUBSTRING(data, -2, 1)
+世
+SELECT SUBSTRING(data, 0) FROM t_substring_edge WHERE id = 1;
+SUBSTRING(data, 0)
+
+SELECT SUBSTRING(data, 100) FROM t_substring_edge WHERE id = 1;
+SUBSTRING(data, 100)
+
+SELECT SUBSTRING(data, 1, -1) FROM t_substring_edge WHERE id = 1;
+SUBSTRING(data, 1, -1)
+
+SELECT SUBSTRING(data, 1, 0) FROM t_substring_edge WHERE id = 1;
+SUBSTRING(data, 1, 0)
+
+CREATE TABLE t_length_test (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_length_test VALUES (1, '');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 1;
+id    LENGTH(data)    CHAR_LENGTH(data)
+1    0    0
+INSERT INTO t_length_test VALUES (2, 'A');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 2;
+id    LENGTH(data)    CHAR_LENGTH(data)
+2    1    1
+INSERT INTO t_length_test VALUES (3, 'Ü');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 3;
+id    LENGTH(data)    CHAR_LENGTH(data)
+3    2    1
+INSERT INTO t_length_test VALUES (4, '中');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 4;
+id    LENGTH(data)    CHAR_LENGTH(data)
+4    3    1
+INSERT INTO t_length_test VALUES (5, '𝄞');  -- Musical symbol
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 5;
+id    LENGTH(data)    CHAR_LENGTH(data)
+5    4    1
+INSERT INTO t_length_test VALUES (6, 'A中😀');
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 6;
+id    LENGTH(data)    CHAR_LENGTH(data)
+6    8    3
+CREATE TABLE t_case_conversion (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_case_conversion VALUES (1, 'Hello World');
+SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 1;
+id    UPPER(data)    LOWER(data)
+1    HELLO WORLD    hello world
+INSERT INTO t_case_conversion VALUES (2, 'Café');
+SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 2;
+id    UPPER(data)    LOWER(data)
+2    CAFÉ    café
+INSERT INTO t_case_conversion VALUES (3, 'Straße');
+SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 3;
+id    UPPER(data)    LOWER(data)
+3    STRAßE    straße
+INSERT INTO t_case_conversion VALUES (4, 'Ελληνικά');
+SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 4;
+id    UPPER(data)    LOWER(data)
+4    ΕΛΛΗΝΙΚΆ    ελληνικά
+INSERT INTO t_case_conversion VALUES (5, 'Привет');
+SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 5;
+id    UPPER(data)    LOWER(data)
+5    ПРИВЕТ    привет
+INSERT INTO t_case_conversion VALUES (6, '你好世界');
+SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 6;
+id    UPPER(data)    LOWER(data)
+6    你好世界    你好世界
+CREATE TABLE t_special_unicode (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO t_special_unicode VALUES (1, 'test test');      -- Regular space
+INSERT INTO t_special_unicode VALUES (2, 'test test');     -- Non-breaking space (looks same)
+SELECT COUNT(*) FROM t_special_unicode WHERE data = 'test test';
+COUNT(*)
+2
+INSERT INTO t_special_unicode VALUES (3, 'test­ing');
+SELECT * FROM t_special_unicode ORDER BY id;
+id    data
+1    test test
+2    test test
+3    test­ing
+CREATE TABLE t_normalization (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_normalization VALUES (1, 'café');
+SELECT id, data, LENGTH(data), CHAR_LENGTH(data) FROM t_normalization ORDER BY id;
+id    data    LENGTH(data)    CHAR_LENGTH(data)
+1    café    5    4
+CREATE TABLE t_query_collate (
+id INT PRIMARY KEY,
+name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_query_collate VALUES (1, 'Apple');
+INSERT INTO t_query_collate VALUES (2, 'apple');
+SELECT * FROM t_query_collate WHERE name = 'apple' ORDER BY id;
+id    name
+2    apple
+SELECT * FROM t_query_collate WHERE name COLLATE utf8mb4_general_ci = 'apple' ORDER BY id;
+id    name
+2    apple
+CREATE TABLE t_type_conversion (
+id INT PRIMARY KEY,
+str_val VARCHAR(100),
+int_val INT
+) CHARACTER SET utf8mb4;
+INSERT INTO t_type_conversion VALUES (1, '123', 123);
+INSERT INTO t_type_conversion VALUES (2, '456', 456);
+SELECT * FROM t_type_conversion WHERE str_val = 123 ORDER BY id;
+id    str_val    int_val
+1    123    123
+SELECT * FROM t_type_conversion WHERE str_val = int_val ORDER BY id;
+id    str_val    int_val
+1    123    123
+2    456    456
+CREATE TABLE t_coalesce (
+id INT PRIMARY KEY,
+col1 VARCHAR(100),
+col2 VARCHAR(100),
+col3 VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_coalesce VALUES (1, NULL, NULL, 'Default');
+INSERT INTO t_coalesce VALUES (2, NULL, 'Second', 'Default');
+INSERT INTO t_coalesce VALUES (3, 'First', 'Second', 'Default');
+INSERT INTO t_coalesce VALUES (4, NULL, NULL, NULL);
+SELECT id, COALESCE(col1, col2, col3) as result FROM t_coalesce ORDER BY id;
+id    result
+1    Default
+2    Second
+3    First
+4    null
+SELECT id, COALESCE(col1, col2, col3, 'Fallback') as result FROM t_coalesce ORDER BY id;
+id    result
+1    Default
+2    Second
+3    First
+4    Fallback
+SELECT IFNULL(NULL, '默认值');
+IFNULL(null, 默认值)
+默认值
+SELECT IFNULL('Value', '默认值');
+IFNULL(Value, 默认值)
+Value
+SELECT IF(1=1, '真', '假');
+IF(1 = 1, 真, 假)
+真
+SELECT IF(1=2, '真', '假');
+IF(1 = 2, 真, 假)
+假
+CREATE TABLE t_case_when (
+id INT PRIMARY KEY,
+status VARCHAR(50)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_case_when VALUES (1, 'active');
+INSERT INTO t_case_when VALUES (2, 'inactive');
+INSERT INTO t_case_when VALUES (3, 'pending');
+INSERT INTO t_case_when VALUES (4, NULL);
+SELECT id, status,
+CASE status
+WHEN 'active' THEN '活动'
+WHEN 'inactive' THEN '非活动'
+WHEN 'pending' THEN '待定'
+ELSE '未知'
+END as status_cn
+FROM t_case_when ORDER BY id;
+id    status    status_cn
+1    active    活动
+2    inactive    非活动
+3    pending    待定
+4    null    未知
+CREATE TABLE t_only_spaces (
+id INT PRIMARY KEY,
+data VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO t_only_spaces VALUES (1, ' ');
+INSERT INTO t_only_spaces VALUES (2, '  ');
+INSERT INTO t_only_spaces VALUES (3, '   ');
+INSERT INTO t_only_spaces VALUES (4, '    ');
+SELECT id, LENGTH(data), CHAR_LENGTH(data), data = '' FROM t_only_spaces ORDER BY id;
+id    LENGTH(data)    CHAR_LENGTH(data)    data = 
+1    1    1    false
+2    2    2    false
+3    3    3    false
+4    4    4    false
+SELECT id, LENGTH(TRIM(data)) FROM t_only_spaces ORDER BY id;
+id    LENGTH(TRIM(data))
+1    0
+2    0
+3    0
+4    0
+SELECT REPEAT('A', 5);
+REPEAT(A, 5)
+AAAAA
+SELECT REPEAT('中', 5);
+REPEAT(中, 5)
+中中中中中
+SELECT REPEAT('😀', 5);
+REPEAT(😀, 5)
+😀😀😀😀😀
+SELECT LENGTH(REPEAT('A', 10)), CHAR_LENGTH(REPEAT('A', 10));
+LENGTH(REPEAT(A, 10))    CHAR_LENGTH(REPEAT(A, 10))
+10    10
+SELECT LENGTH(REPEAT('中', 10)), CHAR_LENGTH(REPEAT('中', 10));
+LENGTH(REPEAT(中, 10))    CHAR_LENGTH(REPEAT(中, 10))
+30    10
+SELECT LENGTH(REPEAT('😀', 10)), CHAR_LENGTH(REPEAT('😀', 10));
+LENGTH(REPEAT(😀, 10))    CHAR_LENGTH(REPEAT(😀, 10))
+40    10
+SELECT LENGTH(SPACE(10)), CHAR_LENGTH(SPACE(10));
+LENGTH(SPACE(10))    CHAR_LENGTH(SPACE(10))
+10    10
+SELECT LENGTH(CONCAT('[', SPACE(5), ']')) as total_len;
+total_len
+7
+SELECT ASCII('A'), ASCII('a'), ASCII('0');
+ASCII(A)    ASCII(a)    ASCII(0)
+65    97    48
+SELECT ASCII('中'), ASCII('😀');
+ASCII(中)    ASCII(😀)
+228    240
+SELECT ORD('A'), ORD('中'), ORD('😀');
+not supported: function or operator 'ord'
+SELECT CHAR(65, 66, 67);
+not supported: function or operator 'char'
+SELECT CHAR(228, 184, 173);  -- UTF-8 bytes for '中'
+not supported: function or operator 'char'
+CREATE TABLE t_strcmp (
+id INT PRIMARY KEY,
+val1 VARCHAR(100),
+val2 VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO t_strcmp VALUES (1, 'Apple', 'apple');
+INSERT INTO t_strcmp VALUES (2, 'Apple', 'Banana');
+INSERT INTO t_strcmp VALUES (3, 'Banana', 'Apple');
+SELECT id, val1, val2, STRCMP(val1, val2) as cmp FROM t_strcmp ORDER BY id;
+id    val1    val2    cmp
+1    Apple    apple    -1
+2    Apple    Banana    -1
+3    Banana    Apple    1
+CREATE TABLE t_duplicate_key (
+id INT PRIMARY KEY,
+name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO t_duplicate_key VALUES (1, 'Test');
+SELECT * FROM t_duplicate_key;
+id    name
+1    Test
+CREATE TABLE t_fulltext (
+id INT PRIMARY KEY,
+content TEXT,
+FULLTEXT KEY idx_content (content)
+) CHARACTER SET utf8mb4;
+internal error: experimental_fulltext_index is not enabled
+INSERT INTO t_fulltext VALUES (1, 'The quick brown fox jumps over the lazy dog');
+no such table charset_error_test.t_fulltext
+INSERT INTO t_fulltext VALUES (2, 'Quick brown foxes');
+no such table charset_error_test.t_fulltext
+INSERT INTO t_fulltext VALUES (3, '快速的棕色狐狸跳过懒狗');
+no such table charset_error_test.t_fulltext
+SELECT * FROM t_fulltext ORDER BY id;
+SQL parser error: table "t_fulltext" does not exist
+CREATE TABLE t_json_charset (
+id INT PRIMARY KEY,
+data JSON
+) CHARACTER SET utf8mb4;
+INSERT INTO t_json_charset VALUES (1, '{"name": "John", "age": 30}');
+INSERT INTO t_json_charset VALUES (2, '{"name": "张三", "age": 25}');
+INSERT INTO t_json_charset VALUES (3, '{"emoji": "😀", "text": "Hello"}');
+SELECT * FROM t_json_charset ORDER BY id;
+id    data
+1    {"age": 30, "name": "John"}
+2    {"age": 25, "name": "张三"}
+3    {"emoji": "😀", "text": "Hello"}
+SELECT id, JSON_EXTRACT(data, '$.name') as name FROM t_json_charset ORDER BY id;
+id    name
+1    "John"
+2    "张三"
+3    null
+CREATE TABLE t_long_ops (
+id INT PRIMARY KEY,
+data TEXT
+) CHARACTER SET utf8mb4;
+INSERT INTO t_long_ops VALUES (1, REPEAT('A', 10000));
+INSERT INTO t_long_ops VALUES (2, REPEAT('中', 5000));
+SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_long_ops ORDER BY id;
+id    LENGTH(data)    CHAR_LENGTH(data)
+1    10000    10000
+2    15000    5000
+SELECT LENGTH(CONCAT(
+(SELECT data FROM t_long_ops WHERE id = 1),
+(SELECT data FROM t_long_ops WHERE id = 2)
+));
+LENGTH(CONCAT((select data from t_long_ops where id = 1), (select data from t_long_ops where id = 2)))
+25000
+CREATE TABLE t_binary_attr (
+id INT PRIMARY KEY,
+data VARCHAR(100) BINARY
+) CHARACTER SET utf8mb4;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 25 near " BINARY
+) CHARACTER SET utf8mb4;";
+INSERT INTO t_binary_attr VALUES (1, 'Test');
+no such table charset_error_test.t_binary_attr
+INSERT INTO t_binary_attr VALUES (2, 'test');
+no such table charset_error_test.t_binary_attr
+INSERT INTO t_binary_attr VALUES (3, 'TEST');
+no such table charset_error_test.t_binary_attr
+SELECT * FROM t_binary_attr WHERE data = 'test' ORDER BY id;
+SQL parser error: table "t_binary_attr" does not exist
+SELECT COUNT(*) FROM t_binary_attr WHERE data = 'Test';
+SQL parser error: table "t_binary_attr" does not exist
+CREATE TABLE `测试表` (
+`编号` INT PRIMARY KEY,
+`名称` VARCHAR(100)
+) CHARACTER SET utf8mb4;
+INSERT INTO `测试表` VALUES (1, '测试数据');
+SELECT * FROM `测试表`;
+编号    名称
+1    测试数据
+DROP TABLE `测试表`;
+DROP DATABASE IF EXISTS charset_error_test;
