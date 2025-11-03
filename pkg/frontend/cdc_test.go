@@ -3087,17 +3087,17 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	stubSinker := gostub.Stub(
 		&cdc.NewSinker,
 		func(
-			cdc.UriInfo,
-			uint64,
-			string,
-			*cdc.DbTableInfo,
-			*cdc.CDCWatermarkUpdater,
-			*plan.TableDef,
-			int,
-			time.Duration,
-			*cdc.ActiveRoutine,
-			uint64,
-			string,
+			sinkUri cdc.UriInfo,
+			accountId uint64,
+			taskId string,
+			dbTblInfo *cdc.DbTableInfo,
+			watermarkUpdater cdc.WatermarkUpdater,
+			tableDef *plan.TableDef,
+			retryTimes int,
+			retryDuration time.Duration,
+			ar *cdc.ActiveRoutine,
+			maxSqlLength uint64,
+			sendSqlTimeout string,
 		) (cdc.Sinker, error) {
 			return &mockSinker{}, nil
 		})
