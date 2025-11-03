@@ -3871,18 +3871,18 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 	// Build create pitr sql
 	sql := fmt.Sprintf(`insert into mo_catalog.mo_pitr(
-                               pitr_id, 
-                               pitr_name, 
-                               create_account, 
-                               create_time, 
-                               modified_time, 
-                               level, 
-                               account_id, 
-                               account_name, 
-                               database_name, 
-                               table_name, 
-                               obj_id, 
-                               pitr_length, 
+                               pitr_id,
+                               pitr_name,
+                               create_account,
+                               create_time,
+                               modified_time,
+                               level,
+                               account_id,
+                               account_name,
+                               database_name,
+                               table_name,
+                               obj_id,
+                               pitr_length,
                                pitr_unit,
                                pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
 		newUUid,
@@ -4540,7 +4540,6 @@ var initAesKeyBySqlExecutor = func(
 		encryptedKey,
 		[]byte(config.GetParameterUnit(ctx).SV.KeyEncryptionKey),
 	)
-	logutil.Infof("DEBUG-1: %v:%v", encryptedKey, err)
 	return
 }
 
