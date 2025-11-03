@@ -192,12 +192,15 @@ func TestScanAndProcess(t *testing.T) {
 
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
-	rm, _ := objectio.InjectCDCScanTable("fast scan")
+
+	// Enable fast scan mode for testing
+	td.SetFastScan(true)
+	defer td.SetFastScan(false)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go td.scanTableLoop(ctx)
 	time.Sleep(200 * time.Millisecond)
-	defer rm()
 	fault.Disable()
 }
 

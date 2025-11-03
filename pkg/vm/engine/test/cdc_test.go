@@ -114,9 +114,11 @@ func TestCDCRetryFromZero(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 
-	rmFn, err := objectio.InjectCDCScanTable("fast scan")
-	require.NoError(t, err)
-	defer rmFn()
+	// Enable fast scan mode for testing
+	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
+	tableDetector.SetFastScan(true)
+	defer tableDetector.SetFastScan(false)
+
 	executor := NewMockCDCExecutor(
 		t,
 		disttaeEngine,
@@ -261,14 +263,15 @@ func TestRetryRollback(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 
+	// Enable fast scan mode for testing
+	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
+	tableDetector.SetFastScan(true)
+	defer tableDetector.SetFastScan(false)
+
 	// Inject commit error using InjectCDCExecutor
 	rmFn, err := objectio.InjectCDCExecutor("commit error")
 	require.NoError(t, err)
 	defer rmFn()
-
-	rmFn2, err := objectio.InjectCDCScanTable("fast scan")
-	require.NoError(t, err)
-	defer rmFn2()
 
 	executor := NewMockCDCExecutor(
 		t,
@@ -398,9 +401,10 @@ func TestTruncateTable(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 
-	rmFn, err := objectio.InjectCDCScanTable("fast scan")
-	require.NoError(t, err)
-	defer rmFn()
+	// Enable fast scan mode for testing
+	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
+	tableDetector.SetFastScan(true)
+	defer tableDetector.SetFastScan(false)
 
 	executor := NewMockCDCExecutor(
 		t,
@@ -562,9 +566,10 @@ func TestRestartCDC(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 
-	rmFn, err := objectio.InjectCDCScanTable("fast scan")
-	require.NoError(t, err)
-	defer rmFn()
+	// Enable fast scan mode for testing
+	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
+	tableDetector.SetFastScan(true)
+	defer tableDetector.SetFastScan(false)
 
 	// Create and start first CDC executor
 	executor1 := NewMockCDCExecutor(

@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -180,6 +178,14 @@ type TableDetector struct {
 	lastMp          map[uint32]TblMap
 	mu              sync.Mutex
 	cdcStateManager *CDCStateManager
+
+	// fastScan enables fast scanning for tests (1ms ticker instead of 15s)
+	fastScan bool
+}
+
+// SetFastScan enables or disables fast scan mode (for testing)
+func (s *TableDetector) SetFastScan(enabled bool) {
+	s.fastScan = enabled
 }
 
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
@@ -277,8 +283,8 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Info("CDC-TableDetector-Scan-Start")
 	defer logutil.Info("CDC-TableDetector-Scan-End")
 
-	var tickerDuration, retryTickerDuration time.Duration
-	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
+	var tickerDuration, retryTickerDuration time.Duration // Use fastScan config first, fall back to injection for backward compatibility
+	if s.fastScan {
 		tickerDuration = 1 * time.Millisecond
 		retryTickerDuration = 1 * time.Millisecond
 	} else {
