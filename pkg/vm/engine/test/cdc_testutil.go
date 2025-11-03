@@ -816,7 +816,7 @@ func StubCDCSinkAndWatermarkUpdater(
 				TableName: tbl.SourceTblName,
 			}
 			errMsg, ok := mockWatermarkUpdater.GetErrMsg(watermarkKey)
-			if ok {
+			if !ok {
 				return false, 0, 0, nil
 			}
 			retryable, startTS, retryTimes := cdc.ParseRetryableError(errMsg)

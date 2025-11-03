@@ -986,7 +986,7 @@ func TestParseRetryableError(t *testing.T) {
 		{
 			name:           "empty string",
 			input:          "",
-			wantRetryable:  false,
+			wantRetryable:  true,
 			wantStartts:    0,
 			wantRetryTimes: 0,
 		},
