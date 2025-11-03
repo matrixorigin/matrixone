@@ -45,6 +45,11 @@ type DataRetrieverConsumer interface {
 	Close()
 }
 
+func (iterCtx *IterationContext) String() string {
+	return fmt.Sprintf("%d-%d-%v, %v->%v, lsn=%v, ids=%v",
+		iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.fromTS.ToString(), iterCtx.toTS.ToString(), iterCtx.lsn, iterCtx.jobIDs)
+}
+
 func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
@@ -289,6 +294,10 @@ func ExecuteIteration(
 	changeHandelWg := sync.WaitGroup{}
 	changeHandelWg.Add(1)
 	go func() {
+		var dataLength int
+		defer func() {
+			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
+		}()
 		defer cancel()
 		defer changeHandelWg.Done()
 		for {
@@ -299,6 +308,9 @@ func ExecuteIteration(
 			}
 			var data *ISCPData
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+			if insertData != nil {
+				dataLength += insertData.RowCount()
+			}
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
