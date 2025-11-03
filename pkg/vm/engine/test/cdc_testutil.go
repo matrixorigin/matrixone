@@ -753,11 +753,37 @@ func StubCDCSinkAndWatermarkUpdater(
 	*gostub.Stubs,
 	*gostub.Stubs,
 	*gostub.Stubs,
+	*gostub.Stubs,
 	*MockWatermarkUpdater,
 	chan string,
 ) {
 	errChan := make(chan string, 10)
 	mockWatermarkUpdater := NewMockWatermarkUpdater()
+
+	// Create a new TableDetector for each test
+	cnUUID := engine.Engine.GetService()
+	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing SQL executor")
+	}
+	sqlExecutor := v.(executor.SQLExecutor)
+
+	testTableDetector := &cdc.TableDetector{
+		Mp:                   make(map[uint32]cdc.TblMap),
+		Callbacks:            make(map[string]cdc.TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+	}
+	testTableDetector.SetExec(sqlExecutor)
+	testTableDetector.SetCDCStateManager(cdc.NewCDCStateManager())
+	testTableDetector.SetScanTableFn(testTableDetector.ScanTable)
+	// Enable fast scan for testing
+	testTableDetector.SetFastScan(true)
+
 	stub1 := gostub.Stub(
 		&cdc.GetCDCWatermarkUpdater,
 		func(
@@ -823,7 +849,13 @@ func StubCDCSinkAndWatermarkUpdater(
 			return !retryable, startTS, retryTimes, nil
 		},
 	)
-	return stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan
+	stub6 := gostub.Stub(
+		&cdc.GetTableDetector,
+		func(cnUUID string) *cdc.TableDetector {
+			return testTableDetector
+		},
+	)
+	return stub1, stub2, stub3, stub4, stub5, stub6, mockWatermarkUpdater, errChan
 }
 
 // MockRetrieveCdcTask mocks the retrieveCdcTask function for testing

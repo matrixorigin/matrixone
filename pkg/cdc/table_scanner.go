@@ -188,6 +188,26 @@ func (s *TableDetector) SetFastScan(enabled bool) {
 	s.fastScan = enabled
 }
 
+// SetExec sets the SQL executor (for testing)
+func (s *TableDetector) SetExec(exec executor.SQLExecutor) {
+	s.exec = exec
+}
+
+// SetCDCStateManager sets the CDC state manager (for testing)
+func (s *TableDetector) SetCDCStateManager(manager *CDCStateManager) {
+	s.cdcStateManager = manager
+}
+
+// SetScanTableFn sets the scan table function (for testing)
+func (s *TableDetector) SetScanTableFn(fn func() error) {
+	s.scanTableFn = fn
+}
+
+// ScanTable exposes the scanTable method (for testing)
+func (s *TableDetector) ScanTable() error {
+	return s.scanTable()
+}
+
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
 	s.Lock()
 	defer s.Unlock()

@@ -89,12 +89,13 @@ func TestCDCRetryFromZero(t *testing.T) {
 	appendFn(0)
 
 	// new cdc executor with stubs
-	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	stub1, stub2, stub3, stub4, stub5, stub6, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
 	defer stub1.Reset()
 	defer stub2.Reset()
 	defer stub3.Reset()
 	defer stub4.Reset()
 	defer stub5.Reset()
+	defer stub6.Reset()
 	// Define tables to track
 	tables := cdc.PatternTuples{
 		Pts: []*cdc.PatternTuple{
@@ -113,11 +114,6 @@ func TestCDCRetryFromZero(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-
-	// Enable fast scan mode for testing
-	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
-	tableDetector.SetFastScan(true)
-	defer tableDetector.SetFastScan(false)
 
 	executor := NewMockCDCExecutor(
 		t,
@@ -237,12 +233,13 @@ func TestRetryRollback(t *testing.T) {
 	appendFn(0)
 
 	// new cdc executor with stubs
-	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, _ := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	stub1, stub2, stub3, stub4, stub5, stub6, mockWatermarkUpdater, _ := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
 	defer stub1.Reset()
 	defer stub2.Reset()
 	defer stub3.Reset()
 	defer stub4.Reset()
 	defer stub5.Reset()
+	defer stub6.Reset()
 
 	// Define tables to track
 	tables := cdc.PatternTuples{
@@ -262,11 +259,6 @@ func TestRetryRollback(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-
-	// Enable fast scan mode for testing
-	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
-	tableDetector.SetFastScan(true)
-	defer tableDetector.SetFastScan(false)
 
 	// Inject commit error using InjectCDCExecutor
 	rmFn, err := objectio.InjectCDCExecutor("commit error")
@@ -375,12 +367,13 @@ func TestTruncateTable(t *testing.T) {
 	appendFn(1)
 
 	// Setup CDC executor with stubs
-	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	stub1, stub2, stub3, stub4, stub5, stub6, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
 	defer stub1.Reset()
 	defer stub2.Reset()
 	defer stub3.Reset()
 	defer stub4.Reset()
 	defer stub5.Reset()
+	defer stub6.Reset()
 
 	// Define tables to track
 	tables := cdc.PatternTuples{
@@ -400,11 +393,6 @@ func TestTruncateTable(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-
-	// Enable fast scan mode for testing
-	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
-	tableDetector.SetFastScan(true)
-	defer tableDetector.SetFastScan(false)
 
 	executor := NewMockCDCExecutor(
 		t,
@@ -540,12 +528,13 @@ func TestRestartCDC(t *testing.T) {
 	}
 
 	// Setup CDC executor with stubs
-	stub1, stub2, stub3, stub4, stub5, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
+	stub1, stub2, stub3, stub4, stub5, stub6, mockWatermarkUpdater, errChan := StubCDCSinkAndWatermarkUpdater(disttaeEngine, accountId)
 	defer stub1.Reset()
 	defer stub2.Reset()
 	defer stub3.Reset()
 	defer stub4.Reset()
 	defer stub5.Reset()
+	defer stub6.Reset()
 
 	// Define tables to track
 	tables := cdc.PatternTuples{
@@ -565,11 +554,6 @@ func TestRestartCDC(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-
-	// Enable fast scan mode for testing
-	tableDetector := cdc.GetTableDetector(disttaeEngine.Engine.GetService())
-	tableDetector.SetFastScan(true)
-	defer tableDetector.SetFastScan(false)
 
 	// Create and start first CDC executor
 	executor1 := NewMockCDCExecutor(
