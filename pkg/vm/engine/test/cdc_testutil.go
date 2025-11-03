@@ -40,7 +40,6 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -109,11 +108,11 @@ func (m *mockCDCIE) setStringError(err error) {
 	m.stringErr = err
 }
 
-func (m *mockCDCIE) Exec(ctx context.Context, s string, options internalExecutor.SessionOverrideOptions) error {
+func (m *mockCDCIE) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
 	panic("implement me")
 }
 
-func (m *mockCDCIE) Query(ctx context.Context, s string, options internalExecutor.SessionOverrideOptions) internalExecutor.InternalExecResult {
+func (m *mockCDCIE) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
 	if m.err != nil {
 		return &internalExecResult{
 			batch: nil,
@@ -137,7 +136,7 @@ func (m *mockCDCIE) Query(ctx context.Context, s string, options internalExecuto
 		err:   err,
 	}
 }
-func (m *mockCDCIE) ApplySessionOverride(options internalExecutor.SessionOverrideOptions) {
+func (m *mockCDCIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
 	panic("implement me")
 }
 

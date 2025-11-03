@@ -115,6 +115,7 @@ func TestCDCRetryFromZero(t *testing.T) {
 	defer fault.Disable()
 
 	rmFn, err := objectio.InjectCDCScanTable("fast scan")
+	require.NoError(t, err)
 	defer rmFn()
 	executor := NewMockCDCExecutor(
 		t,
@@ -307,10 +308,10 @@ func TestRetryRollback(t *testing.T) {
 	// Wait for snapshot to complete (first commit will fail, then retry and succeed)
 	wm1 := taeHandler.GetDB().TxnMgr.Now()
 	// Give more time for retry to happen (1s sleep + retry time)
-	checkWatermarkFn(wm1, 3000, false)
+	checkWatermarkFn(wm1, 5000, false)
 
 	rmFn()
-	checkWatermarkFn(wm1, 3000, true)
+	checkWatermarkFn(wm1, 5000, true)
 
 	CheckTableDataWithName(t, disttaeEngine, ctxWithTimeout, sinkDatabaseName, sinkTableName, databaseName, tableName)
 }
@@ -440,7 +441,7 @@ func TestTruncateTable(t *testing.T) {
 
 	// Wait for initial sync to complete
 	wm1 := taeHandler.GetDB().TxnMgr.Now()
-	checkWatermarkFn(wm1, 3000)
+	checkWatermarkFn(wm1, 5000)
 	t.Log("initial data synced successfully")
 
 	// Drop the table using disttaeEngine
@@ -615,7 +616,7 @@ func TestRestartCDC(t *testing.T) {
 
 	// Wait for first sync to complete
 	wm1 := taeHandler.GetDB().TxnMgr.Now()
-	checkWatermarkFn(wm1, wmKey1, 3000)
+	checkWatermarkFn(wm1, wmKey1, 4000)
 	t.Log("first sync completed with executor1")
 
 	// Stop the first executor

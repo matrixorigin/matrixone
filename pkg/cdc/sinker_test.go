@@ -190,9 +190,22 @@ func TestNewSinker(t *testing.T) {
 				defer stub.Reset()
 			}
 
-			sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, uint64, string, *DbTableInfo, *CDCWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
-				return nil
-			})
+			sinkerStub := gostub.Stub(
+				&NewMysqlSinker,
+				func(
+					mysql Sink,
+					accountId uint64,
+					taskId string,
+					dbTblInfo *DbTableInfo,
+					watermarkUpdater WatermarkUpdater,
+					tableDef *plan.TableDef,
+					ar *ActiveRoutine,
+					maxSqlLength uint64,
+					isMO bool,
+				) Sinker{
+					return nil
+				},
+			)
 			defer sinkerStub.Reset()
 
 			got, err := NewSinker(

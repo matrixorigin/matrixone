@@ -339,8 +339,12 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
+	var callbacks []TableCallback
 	s.mu.Lock()
 	s.handling = true
+	for _, cb := range s.Callbacks {
+		callbacks = append(callbacks, cb)
+	}
 	s.mu.Unlock()
 
 	var err error

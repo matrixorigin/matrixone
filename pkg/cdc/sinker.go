@@ -1013,11 +1013,6 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() (stopRetry bool, er
 		}
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 
-		// return if success
-		if err == nil {
-			return
-		}
-
 		logutil.Errorf("CDC-MySQLSink retry failed, err: %v", err)
 		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(dur)
