@@ -290,21 +290,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			func() {
 				defer wg.Done()
 
-				defer func() {
-					// if scope.Run or scope.MergeRun or scope.RemoteRun panic,
-					// we should send the error to the preScopeResultReceiveChan.
-					// Otherwise, the preScopeResultReceiveChan will be blocked.
-					if e := recover(); e != nil {
-						err := moerr.ConvertPanicError(c.proc.Ctx, e)
-						c.proc.Error(
-							c.proc.Ctx, "panic in preScope",
-							zap.String("sql", c.sql),
-							zap.String("error", err.Error()),
-						)
-						preScopeResultReceiveChan <- err
-					}
-				}()
-
 				switch scope.Magic {
 				case Normal:
 					preScopeResultReceiveChan <- scope.Run(c)
