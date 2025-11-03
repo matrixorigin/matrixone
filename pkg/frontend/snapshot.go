@@ -526,6 +526,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		bh.Close()
 	}()
 
+	if len(stmt.AccountName) == 0 && stmt.Level != tree.RESTORELEVELCLUSTER {
+		stmt.AccountName = tree.Identifier(ses.GetTenantInfo().GetTenant())
+	}
+
 	srcAccountName := string(stmt.AccountName)
 	dbName := string(stmt.DatabaseName)
 	tblName := string(stmt.TableName)

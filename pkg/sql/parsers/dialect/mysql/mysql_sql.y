@@ -539,7 +539,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <str> json_type_opt
+%type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
 
 // case statement
 %type <statement> case_stmt
@@ -585,7 +585,7 @@ import (
 %type <limit> limit_opt limit_clause
 %type <str> insert_column optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
@@ -1247,10 +1247,78 @@ pitr_value:
         $$ = $1.(int64)
     }
    
-    
 
 snapshot_restore_stmt:
-    RESTORE CLUSTER FROM SNAPSHOT ident
+    RESTORE DATABASE restore_db_scope restore_snapshot_name restore_to_account_name_opt
+    {
+        var account tree.Identifier
+        var database tree.Identifier
+        switch len($3) {
+        case 1:
+            database = $3[0]
+        case 2:
+            account = $3[0]
+            database = $3[1]
+        default:
+            yylex.Error("invalid restore database target")
+            goto ret1
+        }
+
+        snapshotName := tree.Identifier($4)
+        result := &tree.RestoreSnapShot{
+            Level:        tree.RESTORELEVELDATABASE,
+            DatabaseName: database,
+            SnapShotName: snapshotName,
+        }
+
+        if len(account) > 0 {
+            result.AccountName = account
+        }
+
+        if len($5) > 0 {
+            result.ToAccountName = tree.Identifier($5)
+        }
+
+        $$ = result
+    }
+|   RESTORE TABLE restore_table_scope restore_snapshot_name restore_to_account_name_opt
+    {
+        var account tree.Identifier
+        var database tree.Identifier
+        var table tree.Identifier
+
+        switch len($3) {
+        case 2:
+            database = $3[0]
+            table = $3[1]
+        case 3:
+            account = $3[0]
+            database = $3[1]
+            table = $3[2]
+        default:
+            yylex.Error("invalid restore table target")
+            goto ret1
+        }
+
+        snapshotName := tree.Identifier($4)
+        result := &tree.RestoreSnapShot{
+            Level:        tree.RESTORELEVELTABLE,
+            DatabaseName: database,
+            TableName:    table,
+            SnapShotName: snapshotName,
+        }
+
+        if len(account) > 0 {
+            result.AccountName = account
+        }
+
+        if len($5) > 0 {
+            result.ToAccountName = tree.Identifier($5)
+        }
+
+        $$ = result
+    }
+|   RESTORE CLUSTER FROM SNAPSHOT ident
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELCLUSTER,
@@ -1293,6 +1361,64 @@ snapshot_restore_stmt:
             SnapShotName:tree.Identifier($6.Compare()),
             ToAccountName: tree.Identifier($9.Compare()),
         }
+    }
+
+
+restore_db_scope:
+    ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+    }
+|   ident '.' ident
+    {
+        $$ = tree.IdentifierList{
+            tree.Identifier($1.Compare()),
+            tree.Identifier($3.Compare()),
+        }
+    }
+
+restore_table_scope:
+    ident '.' ident
+    {
+        $$ = tree.IdentifierList{
+            tree.Identifier($1.Compare()),
+            tree.Identifier($3.Compare()),
+        }
+    }
+|   ident '.' ident '.' ident
+    {
+        $$ = tree.IdentifierList{
+            tree.Identifier($1.Compare()),
+            tree.Identifier($3.Compare()),
+            tree.Identifier($5.Compare()),
+        }
+    }
+
+restore_snapshot_name:
+    '{' SNAPSHOT '=' ident '}'
+    {
+        $$ = $4.Compare()
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = strings.ToLower($4)
+    }
+|   FROM SNAPSHOT ident
+    {
+        $$ = $3.Compare()
+    }
+|   FROM SNAPSHOT STRING
+    {
+        $$ = strings.ToLower($3)
+    }
+
+restore_to_account_name_opt:
+    {
+        $$ = ""
+    }
+|   TO ACCOUNT ident
+    {
+        $$ = $3.Compare()
     }
 
 

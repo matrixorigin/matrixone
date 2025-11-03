@@ -158,7 +158,7 @@ select * from TimeOff;
 select * from PerformanceReviews;
 
 
-restore account sys database Company table Departments from snapshot sys_sp;
+restore table sys.Company.Departments{snapshot="sys_sp"};
 select * from Departments;
 select * from Employees;
 select * from Positions;

@@ -476,7 +476,7 @@ drop table students;
 select * from StudentCoursesView;
 -- @session
 
-restore account acc01 database test02 table students from snapshot sp07;
+restore table acc01.test02.students{snapshot="sp07"};
 restore account acc01 from snapshot sp07;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -486,7 +486,7 @@ select * from Enrollments;
 select * from StudentCoursesView;
 -- @session
 
-restore account acc01 database test02 table Enrollments from snapshot sp07;
+restore table acc01.test02.Enrollments{snapshot="sp07"};
 restore account acc01 from snapshot sp07;
 
 -- @session:id=1&user=acc01:test_account&password=111

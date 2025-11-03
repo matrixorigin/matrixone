@@ -131,9 +131,9 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 cluster_sp    2025-07-19 05:48:55.833493    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
-restore account acc01 database snapshot_read from snapshot cluster_sp;
+restore database acc01.snapshot_read{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 database test_snapshot_restore from snapshot cluster_sp;
+restore database acc01.test_snapshot_restore{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
 restore account acc01 from snapshot cluster_sp;
 select count(*) from snapshot_read.test_snapshot_read;
@@ -485,11 +485,11 @@ cluster_sp    2025-07-19 05:48:58.608249    cluster
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
-restore account acc01 database Company from snapshot cluster_sp;
+restore database acc01.Company{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 database Projects from snapshot cluster_sp;
+restore database acc01.Projects{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 database Payroll from snapshot cluster_sp;
+restore database acc01.Payroll{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
 restore account acc01 from snapshot cluster_sp;
 select * from Company.Departments;
@@ -938,11 +938,11 @@ account_sp    2025-07-19 05:49:00.179124    account    acc01
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
-restore account acc01 database Company from snapshot account_sp;
+restore database acc01.Company{snapshot="account_sp"};
 internal error: can't restore database from other account's snapshot
-restore account acc01 database Projects from snapshot account_sp;
+restore database acc01.Projects{snapshot="account_sp"};
 internal error: can't restore database from other account's snapshot
-restore account acc01 database Payroll from snapshot account_sp;
+restore database acc01.Payroll{snapshot="account_sp"};
 internal error: can't restore database from other account's snapshot
 restore account acc01 from snapshot account_sp;
 select * from Company.Departments;
@@ -1316,11 +1316,11 @@ create snapshot cluster_sp for cluster;
 drop database if exists School;
 drop database if exists University;
 drop database if exists EducationSystem;
-restore account acc01 database School from snapshot cluster_sp;
+restore database acc01.School{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 database University from snapshot cluster_sp;
+restore database acc01.University{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 database EducationSystem from snapshot cluster_sp;
+restore database acc01.EducationSystem{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
 restore account acc01 from snapshot cluster_sp;
 select * from School.Students;

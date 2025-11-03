@@ -443,13 +443,13 @@ drop table students;
 select * from StudentCoursesView;
 select * from StudentCoursesView {snapshot = 'sp07'};
 
-restore account acc01 database test02 table students from snapshot sp07;
+restore table acc01.test02.students{snapshot="sp07"};
 select * from Students;
 select * from Students {snapshot = 'sp07'};
 select * from Enrollments;
 select * from Enrollments {snapshot = 'sp07'};
 select * from StudentCoursesView;
-restore account acc01 database test02 table Enrollments from snapshot sp07;
+restore table acc01.test02.Enrollments{snapshot="sp07"};
 select * from Enrollments;
 select * from Enrollments {snapshot = 'sp07'};
 select * from StudentCoursesView;

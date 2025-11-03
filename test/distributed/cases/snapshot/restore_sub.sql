@@ -265,8 +265,8 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account;
 
 drop database sub05;
-restore account sys database sub05 table t4 from snapshot sp05;
-restore account sys database sub05 from snapshot sp05;
+restore table sys.sub05.t4{snapshot="sp05"};
+restore database sys.sub05{snapshot="sp05"};
 use sub05;
 show tables;
 select * from t1;

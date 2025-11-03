@@ -25,9 +25,9 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account sys database snapshot_read from snapshot sp_01;
+restore database sys.snapshot_read{snapshot="sp_01"};
 restore account sys from snapshot sp_01;
-restore account sys database mo_catalog from snapshot sp_01;
+restore database sys.mo_catalog{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
@@ -66,7 +66,7 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account acc01 database snapshot_read from snapshot sp_01;
+restore database acc01.snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
@@ -104,8 +104,8 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account sys database snapshot_read table test_snapshot_read from snapshot sp_01;
-restore account sys database snapshot_read table users from snapshot sp_01;
+restore table sys.snapshot_read.test_snapshot_read{snapshot="sp_01"};
+restore table sys.snapshot_read.users{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
@@ -144,8 +144,8 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account acc01 database snapshot_read table test_snapshot_read from snapshot sp_01;
-restore account acc01 database snapshot_read table users from snapshot sp_01;
+restore table acc01.snapshot_read.test_snapshot_read{snapshot="sp_01"};
+restore table acc01.snapshot_read.users{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
@@ -185,9 +185,9 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account sys database snapshot_read table test_snapshot_read from snapshot sp_01;
-restore account sys database snapshot_read table users from snapshot sp_01;
-restore account sys database mo_catalog from snapshot sp_01;
+restore table sys.snapshot_read.test_snapshot_read{snapshot="sp_01"};
+restore table sys.snapshot_read.users{snapshot="sp_01"};
+restore database sys.mo_catalog{snapshot="sp_01"};
 restore account sys from snapshot sp_01;
 
 select count(*) from snapshot_read.test_snapshot_read;

@@ -34,7 +34,7 @@ constraint c1 foreign key (deptno) references test03.pri01(deptno));
 
 insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,10);
 
-restore account sys database test03 from snapshot sp01 ;
+restore database sys.test03{snapshot="sp01"};
 
 drop snapshot sp01;
 drop database if exists test02;

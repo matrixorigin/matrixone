@@ -285,9 +285,9 @@ pub04    acc01    test04    *    pub to sys account    2025-07-18 22:50:58    su
 drop snapshot if exists sp05;
 create snapshot sp05 for account;
 drop database sub05;
-restore account sys database sub05 table t4 from snapshot sp05;
+restore table sys.sub05.t4{snapshot="sp05"};
 internal error: can't restore to table for sub db
-restore account sys database sub05 from snapshot sp05;
+restore database sys.sub05{snapshot="sp05"};
 show databases;
 Database
 information_schema
@@ -516,7 +516,7 @@ drop publication pub_full01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22:50:59    2
-restore account sys database pub_fulltext_table from snapshot sp_pub01;
+restore database sys.pub_fulltext_table{snapshot="sp_pub01"};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;

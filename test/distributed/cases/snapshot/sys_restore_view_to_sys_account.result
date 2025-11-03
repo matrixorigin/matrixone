@@ -660,7 +660,7 @@ Alice    Chemistry    Ms. Lee    2024-01-20
 Alice    Mathematics    Mr. Smith    2024-01-10
 Bob    Physics    Dr. Johnson    2024-01-15
 Charlie    Mathematics    Mr. Smith    2024-02-01
-restore account sys database test02 table students from snapshot sp07;
+restore table sys.test02.students{snapshot="sp07"};
 select * from Students;
 studentid    name    grade
 1    Alice    3.50
@@ -681,7 +681,7 @@ studentid    courseid    enrollmentdate
 3    101    2024-02-01
 select * from StudentCoursesView;
 SQL parser error: table "enrollments" does not exist
-restore account sys database test02 table Enrollments from snapshot sp07;
+restore table sys.test02.Enrollments{snapshot="sp07"};
 select * from Enrollments;
 studentid    courseid    enrollmentdate
 1    101    2024-01-10

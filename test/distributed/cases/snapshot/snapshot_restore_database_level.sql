@@ -26,7 +26,7 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account sys database snapshot_read from snapshot sp_01;
+restore database sys.snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
@@ -61,7 +61,7 @@ drop table test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account sys database snapshot_read from snapshot sp_01;
+restore database sys.snapshot_read{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
@@ -99,7 +99,7 @@ drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account sys database snapshot_read from snapshot sp_01;
+restore database sys.snapshot_read{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
@@ -138,7 +138,7 @@ INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account test_account database snapshot_read from snapshot sp_01;
+restore database test_account.snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
@@ -173,7 +173,7 @@ drop table test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account test_account database snapshot_read from snapshot sp_01;
+restore database test_account.snapshot_read{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
@@ -211,7 +211,7 @@ drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
-restore account test_account database snapshot_read from snapshot sp_01;
+restore database test_account.snapshot_read{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 
@@ -273,7 +273,7 @@ drop table students;
 drop table users;
 -- @session
 
-restore account test_account database snapshot_read from snapshot sp_01;
+restore database test_account.snapshot_read{snapshot="sp_01"};
 restore account test_account from snapshot sp_01;
 
 -- @session:id=3&user=test_account:test_user&password=111
@@ -286,7 +286,7 @@ select count(*) from snapshot_read.users;
 drop database snapshot_read;
 -- @session
 
-restore account test_account database snapshot_read from snapshot sp_01;
+restore database test_account.snapshot_read{snapshot="sp_01"};
 restore account test_account from snapshot sp_01;
 
 -- @session:id=3&user=test_account:test_user&password=111
@@ -362,4 +362,3 @@ select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop account test_account;
 drop account acc02;
-

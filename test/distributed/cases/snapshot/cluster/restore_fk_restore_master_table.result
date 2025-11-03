@@ -248,7 +248,7 @@ performancereviewid    employeeid    reviewdate    reviewerid
 4    4    2020-04-04    5
 5    5    2020-05-05    6
 6    6    2020-06-06    1
-restore account sys database Company table Departments from snapshot sys_sp;
+restore table sys.Company.Departments{snapshot="sys_sp"};
 select * from Departments;
 departmentid    name    managerid
 1    Research and Development    null
