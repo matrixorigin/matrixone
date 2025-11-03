@@ -303,7 +303,7 @@ func TestSnapshotManager(t *testing.T) {
 		assert.NotNil(t, mgr)
 		assert.NotNil(t, mgr.tables)
 		assert.Equal(t, 20, mgr.config.MaxSnapshotsPerTable)
-		assert.Equal(t, 5*time.Hour, mgr.config.MaxAge)
+		assert.Equal(t, 1*time.Hour, mgr.config.MaxAge)
 	})
 
 	t.Run("Init", func(t *testing.T) {
@@ -560,7 +560,7 @@ func TestSnapshotGCConfig(t *testing.T) {
 
 		assert.Equal(t, true, config.Enabled)
 		assert.Equal(t, 30*time.Minute, config.GCInterval)
-		assert.Equal(t, 5*time.Hour, config.MaxAge)
+		assert.Equal(t, 1*time.Hour, config.MaxAge)
 		assert.Equal(t, 20, config.MaxSnapshotsPerTable)
 		assert.Equal(t, 1000, config.MaxTotalSnapshots)
 	})

@@ -38,7 +38,7 @@ def test_basic_connection():
         print("✓ SQLAlchemy engine created successfully")
 
         # Test transaction
-        with client.transaction() as tx:
+        with client.session() as tx:
             result = tx.execute("SELECT 2 as transaction_value")
             print(f"✓ Transaction executed successfully: {result.fetchone()}")
 

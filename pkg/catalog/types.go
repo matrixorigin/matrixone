@@ -175,6 +175,8 @@ const (
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 
 	MO_INDEX_UPDATE = "mo_index_update"
+
+	MO_BRANCH_METADATA = "mo_branch_metadata"
 )
 
 func IsSystemTable(id uint64) bool {

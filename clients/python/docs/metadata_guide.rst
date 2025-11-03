@@ -17,6 +17,136 @@ The metadata module provides the following key features:
 - **Structured Schema**: Fixed schema with 13 predefined columns
 - **Column Selection**: Choose specific columns to return
 - **Type Safety**: Strongly typed data structures for metadata rows
+- **Transaction Support**: Metadata operations within transactions
+
+Transaction-Aware Metadata Operations (Recommended)
+----------------------------------------------------
+
+Use ``client.session()`` for metadata analysis within transactions:
+
+Metadata Analysis in Transaction
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import Base, Column, Integer, String
+   from sqlalchemy import select, insert, func
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Analyze metadata within transaction
+   with client.session() as session:
+       # Insert test data
+       session.execute(
+           insert(User).values(name='Alice', email='alice@example.com')
+       )
+       session.execute(
+           insert(User).values(name='Bob', email='bob@example.com')
+       )
+       
+       # Scan metadata within same transaction
+       metadata_rows = session.metadata.scan(
+           dbname='test',
+           tablename='users',
+           columns='*'
+       )
+       
+       for row in metadata_rows:
+           print(f"Column: {row.col_name}")
+           print(f"  Rows: {row.rows_cnt}")
+           print(f"  Nulls: {row.null_cnt}")
+           print(f"  Size: {row.origin_size}")
+       
+       # Get table statistics
+       stats = session.metadata.get_table_brief_stats(
+           dbname='test',
+           tablename='users'
+       )
+       print(f"Total rows: {stats['users']['row_cnt']}")
+       
+       # All operations commit together
+   
+   client.disconnect()
+
+Metadata-Driven Table Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select, func
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Use metadata to drive table operations
+   with client.session() as session:
+       # Scan table metadata
+       metadata_rows = session.metadata.scan(
+           dbname='test',
+           tablename='large_table'
+       )
+       
+       # Analyze null counts
+       high_null_columns = [
+           row.col_name for row in metadata_rows
+           if row.null_cnt > row.rows_cnt * 0.5  # > 50% nulls
+       ]
+       
+       if high_null_columns:
+           print(f"Columns with high null rate: {high_null_columns}")
+           
+           # Optionally clean up or report
+           for col in high_null_columns:
+               # Could update, log, or alert
+               pass
+       
+       # Get detailed statistics
+       stats = session.metadata.get_table_brief_stats(
+           dbname='test',
+           tablename='large_table'
+       )
+       
+       # All analysis within transaction
+   
+   client.disconnect()
+
+Cross-Table Metadata Comparison
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select
+   
+   client = Client()
+   client.connect(database='test')
+   
+   # Compare metadata across tables
+   with client.session() as session:
+       # Scan multiple tables
+       users_meta = session.metadata.scan(dbname='test', tablename='users')
+       orders_meta = session.metadata.scan(dbname='test', tablename='orders')
+       
+       # Compare sizes
+       users_size = sum(row.origin_size for row in users_meta)
+       orders_size = sum(row.origin_size for row in orders_meta)
+       
+       print(f"Users table size: {users_size} bytes")
+       print(f"Orders table size: {orders_size} bytes")
+       
+       # Get brief stats for both
+       users_stats = session.metadata.get_table_brief_stats('test', 'users')
+       orders_stats = session.metadata.get_table_brief_stats('test', 'orders')
+       
+       print(f"Users: {users_stats['users']['row_cnt']} rows")
+       print(f"Orders: {orders_stats['orders']['row_cnt']} rows")
+       
+       # All operations atomic
+   
+   client.disconnect()
 
 Basic Usage
 -----------

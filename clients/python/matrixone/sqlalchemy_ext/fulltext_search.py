@@ -81,8 +81,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import Boolean
-from sqlalchemy.sql import and_, not_, or_, text
-from sqlalchemy.sql.elements import ClauseElement
+from sqlalchemy.sql import and_, or_, text
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.ext.compiler import compiles
 
 if TYPE_CHECKING:
     from ..client import Client
@@ -685,7 +686,7 @@ class FulltextQueryBuilder:
         return self.as_sql(table, columns, mode, include_score=True)
 
 
-class FulltextFilter(ClauseElement):
+class FulltextFilter(ColumnElement):
     """Advanced fulltext filter for integrating fulltext search with ORM queries.
 
     This class wraps FulltextQueryBuilder to provide seamless integration
@@ -753,14 +754,34 @@ class FulltextFilter(ClauseElement):
         - Use fulltext_and/fulltext_or for combining with other conditions
     """
 
+    # Disable SQL compilation caching for this class
+    # We set this to False because FulltextFilter has complex internal state
+    # (query_builder, columns, mode) that affects SQL generation, and we haven't
+    # implemented the cache key generation methods (__visit_name__, _cache_key_traversal)
+    # Setting to False is the safe choice - it disables caching but ensures correctness
+    inherit_cache = False
+
     def __init__(self, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN):
         super().__init__()
         self.columns = columns
         self.mode = mode
         self.query_builder = FulltextQueryBuilder()
         self._natural_query = None  # Store natural language query separately
-        # Set SQLAlchemy type info for compatibility
         self.type = Boolean()
+
+    def __bool__(self):
+        """
+        Override bool to prevent SQLAlchemy from treating this as a boolean value.
+        This is important for proper WHERE clause generation.
+        """
+        raise NotImplementedError(
+            "FulltextFilter cannot be used as a boolean value directly. "
+            "Use it within SQLAlchemy expressions like select().where()"
+        )
+
+    def self_group(self, against=None):
+        """Override self_group to return self without wrapping."""
+        return self
 
     def columns(self, *columns: str) -> "FulltextFilter":
         """Set the columns to search in."""
@@ -852,13 +873,6 @@ class FulltextFilter(ClauseElement):
             return f"MATCH({columns_str}) AGAINST('{query_string}' WITH QUERY EXPANSION)"
         else:
             return f"MATCH({columns_str}) AGAINST('{query_string}')"
-
-    def _compiler_dispatch(self, visitor, **kw):
-        """SQLAlchemy compiler dispatch method for complete compatibility."""
-        # Generate the MATCH() AGAINST() SQL
-        sql_text = self.compile()
-        # Return a text clause that SQLAlchemy can handle
-        return visitor.process(text(sql_text), **kw)
 
     def label(self, name: str):
         """Create a labeled version for use in SELECT clauses.
@@ -954,6 +968,30 @@ class FulltextFilter(ClauseElement):
             else:
                 processed_conditions.append(condition)
         return or_(*processed_conditions)
+
+
+# Custom compiler for FulltextFilter to prevent "= 1" wrapping
+@compiles(FulltextFilter)
+def visit_fulltext_filter(element, compiler, **kw):
+    """
+    Custom compiler for FulltextFilter that generates MATCH() AGAINST() SQL.
+
+    This ensures that in WHERE clauses, we get:
+        WHERE MATCH(...) AGAINST(...)
+
+    Instead of:
+        WHERE MATCH(...) AGAINST(...) = 1
+    """
+    # Get the MATCH() AGAINST() SQL
+    match_sql = element.compile()
+
+    # In WHERE context, SQLAlchemy expects a boolean comparison
+    # For MATCH() AGAINST(), the expression itself returns a boolean/score
+    # We need to return it without the "= 1" wrapper
+    #
+    # The trick is to check if we're in a boolean context
+    # If we are, return the expression as-is (it's already a valid boolean expression)
+    return match_sql
 
 
 # Convenience functions for common use cases
@@ -1147,34 +1185,9 @@ def group() -> FulltextGroup:
     return FulltextGroup("or")
 
 
-# Import generic logical adapters at the end to avoid circular imports
-try:
-    from .adapters import logical_and, logical_not, logical_or
-except ImportError:
-    # Fallback implementations if adapters module is not available
-    def logical_and(*conditions):
-        processed_conditions = []
-        for condition in conditions:
-            if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
-                processed_conditions.append(text(f"({condition.compile()})"))
-            else:
-                processed_conditions.append(condition)
-        return and_(*processed_conditions)
-
-    def logical_or(*conditions):
-        processed_conditions = []
-        for condition in conditions:
-            if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
-                processed_conditions.append(text(f"({condition.compile()})"))
-            else:
-                processed_conditions.append(condition)
-        return or_(*processed_conditions)
-
-    def logical_not(condition):
-        if hasattr(condition, 'compile') and callable(getattr(condition, 'compile')):
-            return text(f"NOT ({condition.compile()})")
-        else:
-            return not_(condition)
+# Note: logical_and, logical_or, logical_not are no longer needed.
+# Since FulltextFilter now inherits from ColumnElement, you can use
+# SQLAlchemy's and_(), or_(), not_() directly with FulltextFilter objects.
 
 
 # Remove old FulltextTerm and FulltextQuery classes as they are replaced by FulltextQueryBuilder
@@ -1645,14 +1658,17 @@ class FulltextIndexManager:
         # Set the algorithm
         self.client.execute(f'SET ft_relevancy_algorithm = "{algorithm}"')
 
-        # Create the index
-        success = FulltextIndex.create_index(
-            engine=self.client.get_sqlalchemy_engine(),
-            table_name=table_name,
-            name=name,
-            columns=columns,
-            algorithm=algorithm,
-        )
+        # Create the index using session connection
+        with self.client.session() as session:
+            conn = session.connection()
+            success = FulltextIndex.create_index(
+                bind=conn,
+                table_name=table_name,
+                name=name,
+                columns=columns,
+                algorithm=algorithm,
+            )
+            session.commit()
 
         return success
 
@@ -1671,7 +1687,11 @@ class FulltextIndexManager:
         """
         from .fulltext_index import FulltextIndex
 
-        success = FulltextIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
+        # Drop the index using session connection
+        with self.client.session() as session:
+            conn = session.connection()
+            success = FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
+            session.commit()
 
         return success
 

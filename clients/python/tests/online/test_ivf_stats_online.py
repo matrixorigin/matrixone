@@ -126,7 +126,7 @@ class TestIVFStatsSync:
 
     def test_get_ivf_stats_within_transaction(self, test_client, test_table):
         """Test get_ivf_stats within transaction context"""
-        with test_client.transaction() as tx:
+        with test_client.session() as tx:
             stats = tx.vector_ops.get_ivf_stats(test_table, "embedding")
 
             # Verify structure
@@ -317,7 +317,7 @@ class TestIVFStatsAsync:
     @pytest.mark.asyncio
     async def test_async_get_ivf_stats_within_transaction(self, test_async_client, test_async_table):
         """Test async get_ivf_stats within transaction context"""
-        async with test_async_client.transaction() as tx:
+        async with test_async_client.session() as tx:
             stats = await tx.vector_ops.get_ivf_stats(test_async_table, "embedding")
 
             # Verify structure

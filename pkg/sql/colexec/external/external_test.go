@@ -389,14 +389,25 @@ func TestReadDirSymlink(t *testing.T) {
 
 	root, err := os.MkdirTemp("", "*")
 	assert.Nil(t, err)
+
+	// Resolve root to its canonical path to handle symlinks (e.g., /var -> /private/var on macOS)
+	root, err = filepath.EvalSymlinks(root)
+	assert.Nil(t, err)
+
 	t.Cleanup(func() {
 		_ = os.RemoveAll(root)
 	})
 
 	evChan := make(chan notify.EventInfo, 1024)
 	err = notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
-	assert.Nil(t, err)
-	defer notify.Stop(evChan)
+	// File system watching may fail on some platforms or in CI environments, so we don't fail the test
+	if err != nil {
+		t.Logf("Warning: notify.Watch failed (non-fatal): %v", err)
+		evChan = nil
+	}
+	if evChan != nil {
+		defer notify.Stop(evChan)
+	}
 
 	testDone := make(chan struct{})
 	fsLogDone := make(chan struct{})
@@ -404,6 +415,9 @@ func TestReadDirSymlink(t *testing.T) {
 		defer func() {
 			close(fsLogDone)
 		}()
+		if evChan == nil {
+			return
+		}
 		for {
 			select {
 			case ev := <-evChan:
@@ -446,10 +460,12 @@ func TestReadDirSymlink(t *testing.T) {
 	err = f.Close()
 	assert.Nil(t, err)
 
-	// ensure symlink is valid
+	// ensure symlink is valid - compare using EvalSymlinks on both sides
 	actual, err := filepath.EvalSymlinks(filepath.Join(root, "a", "b", "d"))
 	assert.Nil(t, err)
-	assert.Equal(t, filepath.Join(root, "a", "b", "c"), actual)
+	expected, err := filepath.EvalSymlinks(filepath.Join(root, "a", "b", "c"))
+	assert.Nil(t, err)
+	assert.Equal(t, expected, actual)
 
 	// read a/b/d/foo
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")

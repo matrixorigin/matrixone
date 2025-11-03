@@ -34,6 +34,10 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
   - Natural language and boolean search modes
   - Multi-column indexes with relevance scoring
 - 📊 **Metadata Analysis**: Table and column metadata analysis with statistics
+- 📤 **Data Export**: Pandas-style export with intuitive ``to_csv()`` and ``to_jsonl()`` methods
+  - Export to local files or external stages (``stage://`` protocol)
+  - Support for raw SQL, SQLAlchemy, and MatrixOne queries
+  - Transaction-aware exports for consistency
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently
@@ -99,6 +103,37 @@ conda activate matrixone
 pip install matrixone-python-sdk
 ```
 
+## ⚠️ Important: Column Naming Convention
+
+**🚨 CRITICAL: Always use lowercase with underscores (snake_case) for column names!**
+
+MatrixOne does not support SQL standard double-quoted identifiers in queries, which causes issues with camelCase column names when using SQLAlchemy ORM.
+
+```python
+# ❌ DON'T: CamelCase column names (will fail in SELECT queries)
+class User(Base):
+    userName = Column(String(50))      # CREATE succeeds, SELECT fails!
+    userId = Column(Integer)           # Will cause SQL syntax errors
+
+# ✅ DO: Use lowercase with underscores (snake_case)
+class User(Base):
+    user_name = Column(String(50))     # Works perfectly
+    user_id = Column(Integer)          # All operations succeed
+```
+
+**Why this matters:**
+- ✅ CREATE TABLE works with both styles (uses backticks)
+- ✅ INSERT works with both styles  
+- ❌ **SELECT fails with camelCase** (uses double quotes, not supported by MatrixOne)
+
+**Example of the problem:**
+```python
+# CamelCase generates: SELECT "userName" FROM user  ❌ Fails!
+# snake_case generates: SELECT user_name FROM user  ✅ Works!
+```
+
+---
+
 ## Quick Start
 
 ### Basic Usage
@@ -143,38 +178,237 @@ client.disconnect()
 > 
 > By default, all features (IVF, HNSW, fulltext) are automatically enabled via `on_connect=[ConnectionAction.ENABLE_ALL]`.
 
+### Transaction Management (Recommended)
+
+Use `client.session()` for atomic transactions with automatic commit/rollback:
+
+```python
+from matrixone import Client
+from sqlalchemy import select, insert, update, delete
+
+client = Client()
+client.connect(database='test')
+
+# Transaction with automatic commit/rollback
+with client.session() as session:
+    # All operations are atomic
+    session.execute(insert(User).values(name='Alice', age=30))
+    session.execute(update(User).where(User.age < 18).values(status='minor'))
+    
+    # Query within transaction
+    stmt = select(User).where(User.age > 25)
+    result = session.execute(stmt)
+    users = result.scalars().all()
+    # Commits automatically on success, rolls back on error
+
+client.disconnect()
+```
+
+**Why use sessions?**
+- ✅ Atomic operations - all succeed or fail together
+- ✅ Automatic rollback on errors
+- ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
+- ✅ Full SQLAlchemy ORM support
+
+### Data Loading (Pandas-Style)
+
+Load bulk data from files with pandas-compatible API:
+
+```python
+from matrixone import Client
+from matrixone.orm import declarative_base, Column, Integer, String
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+
+client = Client()
+client.connect(database='test')
+client.create_table(User)
+
+# CSV loading (pandas-style)
+client.load_data.read_csv('users.csv', table=User, skiprows=1)
+
+# Custom separator (pandas-style)
+client.load_data.read_csv('users.txt', table=User, sep='|')
+
+# JSON Lines (pandas-style)
+client.load_data.read_json('events.jsonl', table='events', lines=True)
+
+# Parquet (pandas-style)
+client.load_data.read_parquet('data.parquet', table=User)
+
+# From stage
+client.load_data.read_csv_stage('s3_stage', 'users.csv', table=User)
+
+client.disconnect()
+```
+
+### Data Export (Pandas-Style)
+
+Export query results with pandas-compatible API:
+
+```python
+from matrixone import Client
+from sqlalchemy import select
+
+client = Client()
+client.connect(database='test')
+
+# CSV export (pandas-style)
+client.export.to_csv('/tmp/users.csv', "SELECT * FROM users")
+
+# TSV export
+client.export.to_csv('/tmp/users.tsv', "SELECT * FROM users", sep='\t')
+
+# JSONL export
+client.export.to_jsonl('/tmp/users.jsonl', "SELECT * FROM users")
+
+# Export with SQLAlchemy
+stmt = select(User).where(User.age > 25)
+client.export.to_csv('/tmp/adults.csv', stmt)
+
+# Export to external stage (using stage:// protocol)
+client.export.to_csv('stage://s3_stage/backup.csv', stmt)
+
+# Export to external stage (using convenience method)
+client.export.to_csv_stage('s3_stage', 'backup2.csv', stmt)
+
+client.disconnect()
+```
+
+### Wrapping Existing Sessions (For Legacy Code)
+
+If you have existing SQLAlchemy code, wrap your sessions to add MatrixOne features:
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from matrixone import Client
+from matrixone.session import Session as MatrixOneSession
+
+# Your existing SQLAlchemy code
+engine = create_engine('mysql+pymysql://root:111@localhost:6001/test')
+SessionFactory = sessionmaker(bind=engine)
+sqlalchemy_session = SessionFactory()
+
+# Create MatrixOne client
+mo_client = Client()
+mo_client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+
+# Wrap existing session with MatrixOne features
+mo_session = MatrixOneSession(
+    client=mo_client,
+    wrap_session=sqlalchemy_session
+)
+
+# Now use both SQLAlchemy and MatrixOne features
+mo_session.execute("SELECT * FROM users")  # Standard SQLAlchemy
+mo_session.stage.create_s3('backup', bucket='my-backups')  # MatrixOne feature
+mo_session.snapshots.create('backup', level='database')  # MatrixOne feature
+mo_session.commit()
+mo_session.close()
+```
+
+**Perfect for:**
+- 🔄 Migrating legacy projects incrementally
+- 🏢 Adding MatrixOne to existing applications
+- 📦 Testing new features without refactoring
+
+### SQLAlchemy ORM Integration
+
+The SDK provides seamless SQLAlchemy integration:
+
+```python
+from matrixone import Client
+from matrixone.orm import Base, Column, Integer, String, select, insert, update
+
+# Define ORM models
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100))
+    email = Column(String(255))
+    age = Column(Integer)
+
+client = Client()
+client.connect(database='test')
+
+# Create table from model
+client.create_table(User)
+
+# ORM-style operations
+stmt = insert(User).values(name='John', email='john@example.com', age=30)
+client.execute(stmt)
+
+stmt = select(User).where(User.age > 25)
+result = client.execute(stmt)
+for user in result.scalars():
+    print(f"{user.name}: {user.email}")
+
+client.disconnect()
+```
+
+**Recommended approach:**
+- ✅ Use SQLAlchemy statements (`select`, `insert`, `update`, `delete`)
+- ✅ Use `session()` for multi-statement transactions
+- ✅ Use `client.execute()` for single-statement operations
+
 ### Async Usage
+
+Full async/await support with async sessions:
 
 ```python
 import asyncio
 from matrixone import AsyncClient
+from sqlalchemy import select, insert, update
 
 async def main():
     client = AsyncClient()
-    await client.connect(
-        host='localhost',
-        port=6001,
-        user='root',
-        password='111',
-        database='test'
-    )
+    await client.connect(database='test')
     
-    result = await client.execute("SELECT 1 as test")
+    # Basic async query
+    result = await client.execute(select(User).where(User.age > 25))
     print(result.fetchall())
+    
+    # Async transaction
+    async with client.session() as session:
+        # All operations are atomic
+        await session.execute(insert(User).values(name='Alice', age=30))
+        await session.execute(update(User).where(User.age < 18).values(status='minor'))
+        
+        # Concurrent queries
+        user_result, order_result = await asyncio.gather(
+            session.execute(select(User)),
+            session.execute(select(Order))
+        )
+        # Commits automatically
     
     await client.disconnect()
 
 asyncio.run(main())
 ```
 
+**Async advantages:**
+- ✅ Non-blocking operations
+- ✅ Concurrent execution with `asyncio.gather()`
+- ✅ Perfect for web frameworks (FastAPI, aiohttp)
+
 ### Snapshot Management
 
+Create and manage database snapshots. Use `session()` for atomic operations:
+
 ```python
-# Create a snapshot
+from matrixone import SnapshotLevel
+
+# Single snapshot operation
 snapshot = client.snapshots.create(
-    'my_snapshot',
-    'cluster',
-    description='Backup before migration'
+    name='my_snapshot',
+    level=SnapshotLevel.DATABASE,
+    database='production'
 )
 
 # List snapshots
@@ -182,12 +416,22 @@ snapshots = client.snapshots.list()
 for snap in snapshots:
     print(f"Snapshot: {snap.name}, Created: {snap.created_at}")
 
-# Clone database from snapshot
-client.clone.clone_database(
-    'new_database',
-    'old_database',
-    snapshot_name='my_snapshot'
-)
+# Atomic snapshot + clone in transaction
+with client.session() as session:
+    # Create snapshot
+    snapshot = session.snapshots.create(
+        name='daily_backup',
+        level=SnapshotLevel.DATABASE,
+        database='production'
+    )
+    
+    # Clone from snapshot atomically
+    session.clone.clone_database(
+        target_db='production_copy',
+        source_db='production',
+        snapshot_name='daily_backup'
+    )
+    # Both operations commit together
 ```
 
 ### Version Management

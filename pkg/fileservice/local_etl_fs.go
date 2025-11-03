@@ -68,6 +68,11 @@ func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
 			defer f.Close()
 		}
 
+		// resolve symlinks in the path to get the canonical path
+		rootPath, err = filepath.EvalSymlinks(rootPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &LocalETLFS{

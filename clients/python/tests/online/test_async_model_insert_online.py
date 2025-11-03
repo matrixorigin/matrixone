@@ -271,13 +271,13 @@ class TestAsyncModelInsert:
         """Test inserting records within a transaction using model class with async client"""
         client, test_db = await self._setup_test_environment()
         try:
-            async with client.transaction() as tx:
+            async with client.session() as tx:
                 # Insert a user within transaction
                 result = await tx.insert(
                     AsyncUser, {'id': 100, 'name': 'Transaction User', 'email': 'tx@example.com', 'age': 45}
                 )
 
-                assert result.affected_rows == 1
+                assert result.rowcount == 1
 
                 # Verify within transaction
                 user = await tx.query(AsyncUser).filter_by(id=100).first()

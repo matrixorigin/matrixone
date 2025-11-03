@@ -194,13 +194,13 @@ class TestLoggerIntegration:
 
         try:
             # Test transaction logging
-            with client.transaction():
+            with client.session():
                 client.execute("SELECT 1 as test_value")
                 client.execute("SELECT 2 as test_value")
 
             # Test rollback logging
             try:
-                with client.transaction():
+                with client.session():
                     client.execute("SELECT 1 as test_value")
                     client.execute("INVALID SQL")  # This should cause rollback
             except Exception as e:
@@ -233,7 +233,7 @@ class TestLoggerIntegration:
             assert result is not None
 
             # Test async transaction logging
-            async with client.transaction():
+            async with client.session():
                 await client.execute("SELECT 1 as test_value")
                 await client.execute("SELECT 2 as test_value")
 

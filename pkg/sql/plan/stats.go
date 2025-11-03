@@ -49,6 +49,15 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
+// RowSizeThreshold Regardless of the table,
+// the minimum row size is 100.
+// However, due to inaccurate statistical information,
+// the RowSizeThreshold is tentatively set at 128,
+// and it is only used for tables with vector indexes
+const RowSizeThreshold = 128
+const LargeBlockThresholdForOneCN = 4
+const LargeBlockThresholdForMultiCN = 32
+
 // for test
 var ForceScanOnMultiCN atomic.Bool
 
@@ -341,13 +350,29 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_decimal64:
-			s.MinValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf()))
+			// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
+			// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
+			// IMPORTANT: Use ZoneMap's scale, not TableDef's scale
+			// ZoneMap stores the scale from when data was written (may differ from current schema after ALTER TABLE)
+			scale := info.ColumnZMs[i].GetScale()
+			minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
+			maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
+			minFloat := types.Decimal64ToFloat64(minDec, scale)
+			maxFloat := types.Decimal64ToFloat64(maxDec, scale)
+			s.MinValMap[colName] = minFloat
+			s.MaxValMap[colName] = maxFloat
+
 		case types.T_decimal128:
-			val := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
-			s.MinValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
-			val = types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
-			s.MaxValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
+			// Fix: Use actual scale from ZoneMap (not TableDef)
+			// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
+			scale := info.ColumnZMs[i].GetScale()
+			minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+			maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+			minFloat := types.Decimal128ToFloat64(minDec, scale)
+			maxFloat := types.Decimal128ToFloat64(maxDec, scale)
+			s.MinValMap[colName] = minFloat
+			s.MaxValMap[colName] = maxFloat
+
 		}
 
 		if info.ShuffleRanges[i] != nil {
@@ -523,6 +548,97 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 	return 0.01
 }
 
+// calcSelectivityByMinMaxForDecimal handles decimal types with proper scale conversion
+func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *plan.Expr) (ret float64) {
+	if max < min {
+		return 0.1
+	}
+
+	// Extract literal expressions with type information (which includes scale)
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) < 2 {
+		return 0.1
+	}
+
+	// Get scale from the literal expr's type
+	var val1, val2 float64
+	var ok bool
+
+	switch funcName {
+	case ">", ">=", "<", "<=":
+		lit := fn.Args[1].GetLit()
+		if lit == nil {
+			return 0.1
+		}
+		// Use the expr's type which contains scale information
+		scale := fn.Args[1].Typ.Scale
+		val1, ok = getDecimalLiteralValue(lit, scale)
+		if !ok {
+			return 0.1
+		}
+
+		switch funcName {
+		case ">", ">=":
+			// If value is greater than max, almost no rows will match
+			if val1 > max {
+				return 0.00000001
+			}
+			ret = (max - val1 + 1) / (max - min)
+		case "<", "<=":
+			// If value is less than min, almost no rows will match
+			if val1 < min {
+				return 0.00000001
+			}
+			ret = (val1 - min + 1) / (max - min)
+		}
+
+	case "between":
+		lit1 := fn.Args[1].GetLit()
+		lit2 := fn.Args[2].GetLit()
+		if lit1 == nil || lit2 == nil {
+			return 0.1
+		}
+		scale1 := fn.Args[1].Typ.Scale
+		scale2 := fn.Args[2].Typ.Scale
+		val1, ok = getDecimalLiteralValue(lit1, scale1)
+		if !ok {
+			return 0.1
+		}
+		val2, ok = getDecimalLiteralValue(lit2, scale2)
+		if !ok {
+			return 0.1
+		}
+		ret = (val2 - val1 + 1) / (max - min)
+	default:
+		return 0.1
+	}
+
+	if ret < 0 {
+		// Value out of range, return low selectivity
+		return 0.00000001
+	}
+	if ret > 1 {
+		return 1.0
+	}
+	return ret
+}
+
+// getDecimalLiteralValue extracts the actual float64 value from a decimal literal using its scale
+func getDecimalLiteralValue(lit *plan.Literal, scale int32) (float64, bool) {
+	if val64, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+		dec64 := types.Decimal64(val64.Decimal64Val.A)
+		return types.Decimal64ToFloat64(dec64, scale), true
+	}
+	if val128, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		dec128 := types.Decimal128{
+			B0_63:   uint64(val128.Decimal128Val.A),
+			B64_127: uint64(val128.Decimal128Val.B),
+		}
+		return types.Decimal128ToFloat64(dec128, scale), true
+	}
+	return 0, false
+}
+
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	var ok bool
 	var val1, val2 float64
@@ -548,6 +664,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	default:
 		ret = 0.1
 	}
+
 	if ret < 0 {
 		// val out of range, return low sel
 		return 0.00000001
@@ -619,6 +736,8 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 		}
 	case types.T_decimal64:
 		if val, valOk := lit.Value.(*plan.Literal_Decimal64Val); valOk {
+			// Note: This path is only used for non-decimal column types
+			// For decimal columns, use calcSelectivityByMinMaxForDecimal instead
 			return float64(val.Decimal64Val.A), true
 		}
 	case types.T_decimal128:
@@ -658,6 +777,12 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 		switch colFnName {
 		case "":
+			// CRITICAL FIX: For decimal types, we need to pass the expr to get scale information
+			// Decimal literals store internal scaled values, need proper conversion
+			if typ == types.T_decimal64 || typ == types.T_decimal128 {
+				return calcSelectivityByMinMaxForDecimal(
+					funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], expr)
+			}
 			return calcSelectivityByMinMax(
 				funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], typ, literals)
 		case "year":
@@ -1419,6 +1544,19 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
+	// SizeMap stores approximate persisted bytes per column; divide by total rows to get bytes/row
+	{
+		var totalSize uint64
+		for _, v := range s.SizeMap {
+			totalSize += v
+		}
+		if stats.TableCnt > 0 {
+			stats.Rowsize = float64(totalSize) / stats.TableCnt
+		} else {
+			stats.Rowsize = 0
+		}
+	}
 	return stats
 }
 
@@ -1641,18 +1779,42 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func calcDOP(ncpu, blocks int32, isPrepare bool) int32 {
-	if ncpu <= 0 || blocks <= 16 {
+// dop tuning constants
+const (
+	// base block-to-core mapping for dop estimation
+	dopBlocksBaseUnit    int32 = 16 // default: every ~16 blocks add a core
+	dopBlocksPrepareUnit int32 = 64 // prepare: more conservative
+)
+
+func calcDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
+	if ncpu <= 0 {
 		return 1
 	}
-	ret := blocks/16 + 1
+
+	baseUnit := dopBlocksBaseUnit
 	if isPrepare {
-		ret = blocks/64 + 1
+		baseUnit = dopBlocksPrepareUnit
 	}
-	if ret <= ncpu {
-		return ret
+
+	blocks := stats.BlockNum
+	var ret int32 = 1
+	if blocks > 0 {
+		ret = blocks/baseUnit + 1
 	}
-	return ncpu
+
+	rs := stats.Rowsize
+	if rs >= RowSizeThreshold {
+		// very wide rows: be aggressive
+		ret = stats.BlockNum
+	}
+
+	if ret > ncpu {
+		ret = ncpu
+	}
+	if ret < 1 {
+		ret = 1
+	}
+	return ret
 }
 
 // set node dop and left child recursively
@@ -1686,7 +1848,7 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 			setNodeDOP(p, rootID, dop)
 		}
 	} else {
-		node.Stats.Dop = calcDOP(ncpu, node.Stats.BlockNum, p.IsPrepare)
+		node.Stats.Dop = calcDOP(ncpu, node.Stats, p.IsPrepare)
 	}
 }
 
@@ -1728,6 +1890,16 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		} else {
 			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
 				ret = ExecTypeAP_ONECN
+			}
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN &&
+			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
+			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
+			stats.Rowsize > RowSizeThreshold &&
+			stats.BlockNum > LargeBlockThresholdForOneCN {
+			ret = ExecTypeAP_ONECN
+			if stats.BlockNum > LargeBlockThresholdForMultiCN {
+				ret = ExecTypeAP_MULTICN
 			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {

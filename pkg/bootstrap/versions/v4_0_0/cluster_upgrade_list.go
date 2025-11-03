@@ -25,6 +25,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_task,
 	upg_mo_index_update_new,
+	upg_create_mo_branch_metadata,
 }
 
 var upg_mo_iscp_task = versions.UpgradeEntry{
@@ -45,5 +46,16 @@ var upg_mo_index_update_new = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoIndexUpdateDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEX_UPDATE)
+	},
+}
+
+var upg_create_mo_branch_metadata = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_BRANCH_METADATA,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogBranchMetadataDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
+		return exist, err
 	},
 }

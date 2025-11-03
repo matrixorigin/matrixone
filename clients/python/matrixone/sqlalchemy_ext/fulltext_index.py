@@ -170,23 +170,6 @@ class FulltextIndex(Index):
             name='ftidx_content'
         )
 
-        # Create index within existing transaction
-        with engine.begin() as conn:
-            success = FulltextIndex.create_index_in_transaction(
-                connection=conn,
-                table_name='my_table',
-                name='ftidx_content',
-                columns=['title', 'content']
-            )
-
-        # Drop index within existing transaction
-        with engine.begin() as conn:
-            success = FulltextIndex.drop_index_in_transaction(
-                connection=conn,
-                table_name='my_table',
-                name='ftidx_content'
-            )
-
     2. Instance Methods (Useful for reusable index configurations)::
 
         # Create index object
@@ -197,14 +180,6 @@ class FulltextIndex(Index):
 
         # Drop index using instance method
         success = index.drop(engine, 'my_table')
-
-        # Create index within existing transaction
-        with engine.begin() as conn:
-            success = index.create_in_transaction(conn, 'my_table')
-
-        # Drop index within existing transaction
-        with engine.begin() as conn:
-            success = index.drop_in_transaction(conn, 'my_table')
 
     3. SQLAlchemy ORM Integration::
 
@@ -221,19 +196,20 @@ class FulltextIndex(Index):
         # Or create index separately
         FulltextIndex.create_index(engine, 'documents', 'ftidx_doc', ['title', 'content'])
 
-    4. Using client.fulltext_index.create() method::
+    4. Using client.fulltext_index manager (recommended)::
 
-        # Using client.fulltext_index.create() method
+        # Auto-commit mode
         client.fulltext_index.create(
             'my_table', 'ftidx_content', ['title', 'content'],
             algorithm=FulltextAlgorithmType.BM25
         )
 
-        # Using client.fulltext_index.create_in_transaction() method
-        with client.transaction() as tx:
-            client.fulltext_index.create_in_transaction(
-                tx, 'my_table', 'ftidx_content', ['title', 'content']
+        # Transaction context mode
+        with client.session() as session:
+            session.fulltext_index.create(
+                'my_table', 'ftidx_content', ['title', 'content']
             )
+            session.commit()
     """
 
     def __init__(
@@ -310,7 +286,7 @@ class FulltextIndex(Index):
     @classmethod
     def create_index(
         cls,
-        engine,
+        bind,
         table_name: str,
         name: str,
         columns: Union[str, List[str]],
@@ -324,7 +300,7 @@ class FulltextIndex(Index):
         parser support for specialized content types (JSON, Chinese text, etc.).
 
         Args:
-            engine: SQLAlchemy engine instance
+            bind: SQLAlchemy connection (from session.connection() or engine.begin())
             table_name (str): Target table name (e.g., 'articles', 'documents')
             name (str): Index name (e.g., 'ftidx_content', 'idx_search')
             columns (str or list): Column(s) to index
@@ -349,28 +325,23 @@ class FulltextIndex(Index):
 
         Examples::
 
-            # Basic fulltext index
-            FulltextIndex.create_index(
-                engine, 'articles', 'ftidx_content', 'content'
-            )
+            # With session connection (recommended)
+            with client.session() as session:
+                conn = session.connection()
+                FulltextIndex.create_index(
+                    conn, 'articles', 'ftidx_content', 'content'
+                )
+                session.commit()
 
-            # Multiple columns with BM25
-            FulltextIndex.create_index(
-                engine, 'articles', 'ftidx_search', ['title', 'content'],
-                algorithm=FulltextAlgorithmType.BM25
-            )
-
-            # JSON parser
-            FulltextIndex.create_index(
-                engine, 'products', 'ftidx_json', 'details',
-                parser=FulltextParserType.JSON
-            )
-
-            # NGRAM parser
-            FulltextIndex.create_index(
-                engine, 'chinese_articles', 'ftidx_chinese', ['title', 'body'],
-                parser=FulltextParserType.NGRAM
-            )
+            # With async session connection
+            async with async_client.session() as session:
+                conn = await session.connection()
+                await conn.run_sync(
+                    lambda sync_conn: FulltextIndex.create_index(
+                        sync_conn, 'articles', 'ftidx_content', 'content'
+                    )
+                )
+                await session.commit()
         """
         try:
             if isinstance(columns, str):
@@ -381,8 +352,8 @@ class FulltextIndex(Index):
             if parser:
                 sql += f" WITH PARSER {parser}"
 
-            with engine.begin() as conn:
-                _exec_sql_safe(conn, sql)
+            # Directly use the provided connection
+            _exec_sql_safe(bind, sql)
 
             return True
         except Exception as e:
@@ -390,89 +361,13 @@ class FulltextIndex(Index):
             return False
 
     @classmethod
-    def create_index_in_transaction(
-        cls,
-        connection,
-        table_name: str,
-        name: str,
-        columns: Union[str, List[str]],
-        algorithm: str = FulltextAlgorithmType.TF_IDF,
-        parser: str = None,
-    ) -> bool:
-        """
-        Create a fulltext index within an existing transaction.
-
-        Use this method when you need to create a fulltext index as part of a
-        larger transaction, ensuring atomic operations.
-
-        Args:
-            connection: Active SQLAlchemy connection within a transaction
-            table_name (str): Target table name
-            name (str): Index name
-            columns (str or list): Column(s) to index
-
-                * Single: "content" or ["content"]
-                * Multiple: ["title", "content"]
-
-            algorithm (str): Algorithm type (stored for reference)
-
-                * FulltextAlgorithmType.TF_IDF (default)
-                * FulltextAlgorithmType.BM25
-
-            parser (str, optional): Parser type
-
-                * None (default): Standard parser
-                * FulltextParserType.JSON: For JSON documents
-                * FulltextParserType.NGRAM: For Chinese/Asian languages
-
-        Returns:
-            bool: True if succeeded, False otherwise
-
-        Examples::
-
-            # Basic usage within transaction
-            with engine.begin() as conn:
-                FulltextIndex.create_index_in_transaction(
-                    conn, 'articles', 'ftidx_content', 'content'
-                )
-
-            # With JSON parser
-            with engine.begin() as conn:
-                FulltextIndex.create_index_in_transaction(
-                    conn, 'products', 'ftidx_json', 'details',
-                    parser=FulltextParserType.JSON
-                )
-
-            # With NGRAM parser
-            with engine.begin() as conn:
-                FulltextIndex.create_index_in_transaction(
-                    conn, 'chinese_docs', 'ftidx_chinese', ['title', 'body'],
-                    parser=FulltextParserType.NGRAM
-                )
-        """
-        try:
-            if isinstance(columns, str):
-                columns = [columns]
-
-            columns_str = ", ".join(columns)
-            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
-            if parser:
-                sql += f" WITH PARSER {parser}"
-
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create fulltext index in transaction: {e}")
-            return False
-
-    @classmethod
-    def drop_index(cls, engine, table_name: str, name: str) -> bool:
+    def drop_index(cls, bind, table_name: str, name: str) -> bool:
         """
         Drop a fulltext index using ORM-style method.
 
         Args:
 
-            engine: SQLAlchemy engine
+            bind: SQLAlchemy connection (from session.connection() or engine.begin())
             table_name: Target table name
             name: Index name
 
@@ -483,35 +378,12 @@ class FulltextIndex(Index):
         try:
             sql = f"DROP INDEX {name} ON {table_name}"
 
-            with engine.begin() as conn:
-                _exec_sql_safe(conn, sql)
+            # Directly use the provided connection
+            _exec_sql_safe(bind, sql)
 
             return True
         except Exception as e:
             print(f"Failed to drop fulltext index: {e}")
-            return False
-
-    @classmethod
-    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
-        """
-        Drop a fulltext index within an existing transaction.
-
-        Args:
-
-            connection: SQLAlchemy connection
-            table_name: Target table name
-            name: Index name
-
-        Returns:
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop fulltext index in transaction: {e}")
             return False
 
     def create(self, engine, table_name: str) -> bool:
@@ -560,48 +432,6 @@ class FulltextIndex(Index):
             return True
         except Exception as e:
             print(f"Failed to drop fulltext index: {e}")
-            return False
-
-    def create_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Create this fulltext index within an existing transaction.
-
-        Args:
-
-            connection: SQLAlchemy connection
-            table_name: Target table name
-
-        Returns:
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = self._create_index_sql(table_name)
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to create fulltext index in transaction: {e}")
-            return False
-
-    def drop_in_transaction(self, connection, table_name: str) -> bool:
-        """
-        Drop this fulltext index within an existing transaction.
-
-        Args:
-
-            connection: SQLAlchemy connection
-            table_name: Target table name
-
-        Returns:
-
-            bool: True if successful, False otherwise
-        """
-        try:
-            sql = f"DROP INDEX {self.name} ON {table_name}"
-            _exec_sql_safe(connection, sql)
-            return True
-        except Exception as e:
-            print(f"Failed to drop fulltext index in transaction: {e}")
             return False
 
 

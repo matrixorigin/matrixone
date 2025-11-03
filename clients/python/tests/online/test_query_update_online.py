@@ -331,7 +331,7 @@ class TestQueryUpdateOnline:
         """
         )
 
-        with test_client.transaction() as tx:
+        with test_client.session() as tx:
             # Ensure we're using the test database in transaction context
             test_client.execute(f"USE {test_database}")
             # Update the test record in a transaction
@@ -366,7 +366,7 @@ class TestQueryUpdateOnline:
 
         # Test transaction rollback
         try:
-            with test_client.transaction() as tx:
+            with test_client.session() as tx:
                 # Ensure we're using the test database in transaction context
                 tx.execute(f"USE {test_database}")
                 # Update the test record using transaction connection

@@ -3,6 +3,42 @@ ORM Usage Guide
 
 This guide provides comprehensive information on using the MatrixOne Python SDK with modern ORM patterns and advanced query building capabilities.
 
+.. danger::
+   **🚨 CRITICAL: Column Naming Convention**
+   
+   **Always use lowercase with underscores (snake_case) for column names!**
+   
+   MatrixOne does not support SQL standard double-quoted identifiers in queries, which causes 
+   issues with camelCase column names when using SQLAlchemy ORM.
+   
+   .. code-block:: python
+   
+      # ❌ DON'T: CamelCase column names (will fail in SELECT queries)
+      class User(Base):
+          userName = Column(String(50))      # CREATE succeeds, SELECT fails!
+          userId = Column(Integer)           # Will cause SQL syntax errors
+      
+      # ✅ DO: Use lowercase with underscores (snake_case)
+      class User(Base):
+          user_name = Column(String(50))     # Works perfectly
+          user_id = Column(Integer)          # All operations succeed
+   
+   **Problem demonstration:**
+   
+   .. code-block:: sql
+   
+      -- CamelCase generates:
+      SELECT "userName" FROM user  -- ❌ Fails with SQL syntax error!
+      
+      -- snake_case generates:
+      SELECT user_name FROM user   -- ✅ Works perfectly!
+   
+   **Why this happens:**
+   
+   - CREATE TABLE uses backticks: ``CREATE TABLE user (`userName` VARCHAR(50))`` ✅ Works
+   - SELECT uses double quotes: ``SELECT "userName" FROM user`` ❌ MatrixOne doesn't support
+   - Solution: Use snake_case to avoid any quoting: ``SELECT user_name FROM user`` ✅ Works
+
 Overview
 --------
 
@@ -15,6 +51,132 @@ The MatrixOne Python SDK provides powerful ORM capabilities that integrate seaml
 * **Transaction Management**: Comprehensive transaction support with ORM
 * **Async Support**: Full async/await support with `AsyncClient`
 * **Type Safety**: Complete type hints and validation
+
+Transaction-Aware ORM Operations (Recommended)
+------------------------------------------------
+
+Use ``client.session()`` for atomic ORM operations with automatic commit/rollback. This is the recommended approach for multi-statement operations.
+
+Basic Transaction with ORM
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from matrixone.orm import Base, Column, Integer, String
+   from sqlalchemy import select, insert, update, delete
+
+   # Define ORM model
+   Base = declarative_base()
+   
+   class User(Base):
+       __tablename__ = 'users'
+       id = Column(Integer, primary_key=True)
+       name = Column(String(100))
+       email = Column(String(255))
+       age = Column(Integer)
+       status = Column(String(20))
+
+   client = Client()
+   client.connect(database='test')
+   client.create_table(User)
+
+   # Transaction with automatic commit/rollback
+   with client.session() as session:
+       # All operations are atomic
+       session.execute(insert(User).values(name='Alice', email='alice@example.com', age=30))
+       session.execute(update(User).where(User.age < 18).values(status='minor'))
+       
+       # Query within transaction
+       stmt = select(User).where(User.age > 25)
+       result = session.execute(stmt)
+       users = result.scalars().all()
+       for user in users:
+           print(f"User: {user.name}, Age: {user.age}")
+       # Commits automatically on success
+
+   client.disconnect()
+
+**Key Features:**
+
+- ✅ All operations succeed or fail together
+- ✅ Automatic rollback on errors
+- ✅ Access to all MatrixOne managers within session
+- ✅ Full SQLAlchemy ORM support
+
+Complex Transactions with Multiple Tables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import select, insert, update, and_, func
+
+   # Define models
+   class Order(Base):
+       __tablename__ = 'orders'
+       id = Column(Integer, primary_key=True)
+       user_id = Column(Integer)
+       amount = Column(Decimal(10, 2))
+       status = Column(String(20))
+
+   client = Client()
+   client.connect(database='test')
+
+   # Complex transaction with multiple operations
+   with client.session() as session:
+       # Insert order
+       session.execute(
+           insert(Order).values(user_id=1, amount=100.00, status='pending')
+       )
+       
+       # Update user status
+       session.execute(
+           update(User).where(User.id == 1).values(status='has_orders')
+       )
+       
+       # Query with JOIN (if needed)
+       stmt = select(User, Order).join(Order, User.id == Order.user_id)
+       result = session.execute(stmt)
+       
+       # Calculate totals
+       stmt = select(func.sum(Order.amount)).where(Order.user_id == 1)
+       total = session.execute(stmt).scalar()
+       
+       print(f"Total orders: ${total}")
+       # All operations commit together
+
+   client.disconnect()
+
+Transaction Error Handling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from matrixone import Client
+   from sqlalchemy import insert
+
+   client = Client()
+   client.connect(database='test')
+
+   # Automatic rollback on error
+   try:
+       with client.session() as session:
+           session.execute(insert(User).values(name='Bob', age=25))
+           
+           # This will fail and trigger automatic rollback
+           session.execute(insert(InvalidTable).values(data='test'))
+           
+           # Bob will NOT be inserted due to rollback
+   except Exception as e:
+       print(f"Transaction failed and rolled back: {e}")
+
+   # Verify rollback worked
+   stmt = select(func.count(User.id)).where(User.name == 'Bob')
+   count = client.execute(stmt).scalar()
+   print(f"Bob count: {count}")  # Should be 0
+
+   client.disconnect()
 
 Modern Query Builder Usage
 ---------------------------

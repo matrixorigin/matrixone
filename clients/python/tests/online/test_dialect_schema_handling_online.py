@@ -146,6 +146,9 @@ class TestMatrixOneDialectSchemaHandlingOnline:
 
     def test_type_compiler_with_standard_types_online(self, engine, metadata):
         """Test type compiler with standard SQLAlchemy types using real database connection."""
+        from sqlalchemy import BINARY, VARBINARY, BLOB, SmallInteger
+        from sqlalchemy.dialects.mysql import TINYINT
+
         # Create a test table with various standard types
         test_table = Table(
             'test_type_compiler_table',
@@ -160,6 +163,11 @@ class TestMatrixOneDialectSchemaHandlingOnline:
             Column('created_at', DateTime),
             Column('updated_at', Time),
             Column('timestamp', TIMESTAMP),
+            Column('binary_data', BINARY(32)),
+            Column('var_binary_data', VARBINARY(64)),
+            Column('blob_data', BLOB),
+            Column('tiny_int_col', TINYINT),
+            Column('small_int_col', SmallInteger),
         )
 
         try:

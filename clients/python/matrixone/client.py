@@ -23,23 +23,28 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
-    from .sqlalchemy_ext import VectorOpType
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session as SQLAlchemySession
 
-from .account import AccountManager, TransactionAccountManager
+from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
+from .fulltext_manager import FulltextIndexManager
+from .load_data import LoadDataManager
+from .stage import StageManager
 from .logger import MatrixOneLogger, create_default_logger
-from .metadata import MetadataManager, TransactionMetadataManager
+from .metadata import MetadataManager
 from .moctl import MoCtlManager
-from .pitr import PitrManager, TransactionPitrManager
-from .pubsub import PubSubManager, TransactionPubSubManager
-from .restore import RestoreManager, TransactionRestoreManager
-from .snapshot import CloneManager, Snapshot, SnapshotLevel, SnapshotManager
+from .pitr import PitrManager
+from .pubsub import PubSubManager
+from .restore import RestoreManager
+from .snapshot import SnapshotManager
+from .clone import CloneManager
 from .sqlalchemy_ext import MatrixOneDialect
+from .vector_manager import VectorManager
 from .version import get_version_manager
 
 
@@ -221,6 +226,9 @@ class Client(BaseMatrixOneClient):
         self._vector_data = None
         self._fulltext_index = None
         self._metadata = None
+        self._load_data = None
+        self._stage = None
+        self._export = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -725,7 +733,7 @@ class Client(BaseMatrixOneClient):
 
         Note:
 
-            This method is used internally by VectorManager, TransactionWrapper,
+            This method is used internally by VectorManager, Session,
             and other SDK components. External users should use execute() instead.
         """
         import time
@@ -768,49 +776,263 @@ class Client(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise
 
-    def execute(self, sql: str, params: Optional[Tuple] = None) -> "ResultSet":
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> "ResultSet":
         """
-            Execute SQL query using connection pool.
+        Execute SQL query or SQLAlchemy statement without transaction isolation.
 
-            This is the primary method for executing SQL statements against the MatrixOne
-            database. It supports both SELECT queries (returning data) and DML operations
-            (INSERT, UPDATE, DELETE) that modify data.
+        This method executes queries directly using the connection pool, without wrapping
+        them in a transaction. Each statement executes independently with auto-commit enabled.
+        For atomic multi-statement operations, use `client.session()` instead.
 
-            Args::
+        The method supports both SQLAlchemy ORM-style statements (recommended) and string SQL
+        with parameter binding. It's ideal for single-statement operations like SELECT queries,
+        simple INSERT/UPDATE/DELETE, or DDL statements.
 
-                sql (str): SQL query string. Can include '?' placeholders for parameter binding.
-                params (Optional[Tuple]): Query parameters to replace '?' placeholders in the SQL.
-                                        Parameters are automatically escaped to prevent SQL injection.
+        Key Features:
 
-            Returns::
+        - **ORM-style statements**: Full support for SQLAlchemy select(), insert(), update(), delete()
+        - **Parameter binding**: Automatic escaping of parameters to prevent SQL injection
+        - **Query logging**: Integrated logging with performance tracking
+        - **Auto-commit**: Each statement commits immediately (no transaction isolation)
+        - **Connection pooling**: Efficient connection reuse from pool
+        - **Type safety**: ResultSet with structured access to query results
 
-                ResultSet: Object containing query results with the following attributes:
-                    - columns: List of column names
-                    - rows: List of tuples containing row data
-                    - affected_rows: Number of rows affected (for DML operations)
-                    - fetchall(): Method to get all rows as a list
-                    - fetchone(): Method to get the next row
-                    - fetchmany(size): Method to get multiple rows
+        Args:
+            sql_or_stmt (str | SQLAlchemy statement): The SQL query to execute. Can be:
+                - SQLAlchemy select() statement (recommended)
+                - SQLAlchemy insert() statement (recommended)
+                - SQLAlchemy update() statement (recommended)
+                - SQLAlchemy delete() statement (recommended)
+                - String SQL with '?' placeholders for parameters
+                - SQLAlchemy text() statement
 
-            Raises::
+            params (Optional[Tuple]): Query parameters for string SQL only. Values are
+                substituted for '?' placeholders in order. Automatically escaped to prevent
+                SQL injection. Ignored for SQLAlchemy statements (use .values() or .where()
+                with bound parameters instead).
 
-                ConnectionError: If not connected to database
-                QueryError: If query execution fails
+            _log_mode (Optional[str]): Override SQL logging mode for this query only.
+                Options: 'off', 'simple', 'full'. If None, uses client's global sql_log_mode
+                setting. Useful for debugging specific queries or disabling logs for
+                frequently-executed statements.
 
-            Examples
+        Returns:
+            ResultSet: Query result object with:
+                - columns: List[str] - Column names
+                - rows: List[Tuple] - Row data as tuples
+                - affected_rows: int - Number of rows affected by DML operations
+                - fetchall() -> List[Row] - Get all rows as list
+                - fetchone() -> Optional[Row] - Get next row or None
+                - fetchmany(size) -> List[Row] - Get next N rows
 
-        # SELECT query
-                >>> result = client.execute("SELECT * FROM users WHERE age > ?", (25,))
-                >>> for row in result.fetchall():
-                ...     print(row)
+        Raises:
+            ConnectionError: If not connected to database
+            QueryError: If query execution fails or SQL syntax is invalid
 
-                # INSERT query
-                >>> result = client.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("John", 30))
-                >>> print(f"Inserted {result.affected_rows} rows")
+        Usage Examples::
 
-                # UPDATE query
-                >>> result = client.execute("UPDATE users SET age = ? WHERE name = ?", (31, "John"))
-                >>> print(f"Updated {result.affected_rows} rows")
+            from matrixone import Client
+            from sqlalchemy import select, insert, update, delete, and_, or_, func
+            from sqlalchemy.orm import declarative_base
+
+            Base = declarative_base()
+
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+                status = Column(String(20))
+
+            class Order(Base):
+                __tablename__ = 'orders'
+                id = Column(Integer, primary_key=True)
+                user_id = Column(Integer)
+                amount = Column(Float)
+
+            client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # ========================================
+            # SQLAlchemy SELECT Statements (Recommended)
+            # ========================================
+
+            # Basic SELECT with WHERE clause
+            stmt = select(User).where(User.age > 25)
+            result = client.execute(stmt)
+            for user in result.fetchall():
+                print(f"User: {user.name}, Age: {user.age}")
+
+            # SELECT specific columns
+            stmt = select(User.name, User.email).where(User.status == 'active')
+            result = client.execute(stmt)
+            for name, email in result.fetchall():
+                print(f"{name}: {email}")
+
+            # Complex WHERE with AND/OR
+            stmt = select(User).where(
+                and_(
+                    User.age > 18,
+                    or_(
+                        User.status == 'active',
+                        User.status == 'pending'
+                    )
+                )
+            )
+            result = client.execute(stmt)
+
+            # SELECT with JOIN
+            stmt = select(User, Order).join(Order, User.id == Order.user_id)
+            result = client.execute(stmt)
+            for user, order in result.fetchall():
+                print(f"{user.name} ordered ${order.amount}")
+
+            # SELECT with aggregation
+            stmt = select(func.count(User.id), func.avg(User.age)).where(User.status == 'active')
+            result = client.execute(stmt)
+            count, avg_age = result.fetchone()
+            print(f"Active users: {count}, Average age: {avg_age}")
+
+            # SELECT with ORDER BY and LIMIT
+            stmt = select(User).where(User.age > 25).order_by(User.age.desc()).limit(10)
+            result = client.execute(stmt)
+
+            # ========================================
+            # SQLAlchemy INSERT Statements (Recommended)
+            # ========================================
+
+            # Single INSERT
+            stmt = insert(User).values(name='John', email='john@example.com', age=30)
+            result = client.execute(stmt)
+            print(f"Inserted {result.affected_rows} rows")
+
+            # Bulk INSERT
+            stmt = insert(User).values([
+                {'name': 'Alice', 'email': 'alice@example.com', 'age': 28},
+                {'name': 'Bob', 'email': 'bob@example.com', 'age': 35},
+                {'name': 'Carol', 'email': 'carol@example.com', 'age': 42}
+            ])
+            result = client.execute(stmt)
+            print(f"Inserted {result.affected_rows} rows")
+
+            # ========================================
+            # SQLAlchemy UPDATE Statements (Recommended)
+            # ========================================
+
+            # Simple UPDATE
+            stmt = update(User).where(User.id == 1).values(email='newemail@example.com')
+            result = client.execute(stmt)
+            print(f"Updated {result.affected_rows} rows")
+
+            # Conditional UPDATE
+            stmt = update(User).where(User.age < 18).values(status='minor')
+            result = client.execute(stmt)
+
+            # UPDATE with expressions
+            stmt = update(Order).values(total=Order.quantity * Order.price)
+            result = client.execute(stmt)
+
+            # UPDATE multiple columns
+            stmt = update(User).where(User.id == 1).values(
+                name='Updated Name',
+                email='updated@example.com',
+                status='active'
+            )
+            result = client.execute(stmt)
+
+            # ========================================
+            # SQLAlchemy DELETE Statements (Recommended)
+            # ========================================
+
+            # Simple DELETE
+            stmt = delete(User).where(User.id == 1)
+            result = client.execute(stmt)
+            print(f"Deleted {result.affected_rows} rows")
+
+            # Conditional DELETE
+            stmt = delete(User).where(User.status == 'deleted')
+            result = client.execute(stmt)
+
+            # DELETE with complex condition
+            stmt = delete(User).where(
+                and_(
+                    User.age < 18,
+                    User.status == 'inactive'
+                )
+            )
+            result = client.execute(stmt)
+
+            # ========================================
+            # String SQL with Parameters (Alternative)
+            # ========================================
+
+            # SELECT with parameters
+            result = client.execute(
+                "SELECT * FROM users WHERE age > ? AND status = ?",
+                (25, 'active')
+            )
+
+            # INSERT with parameters
+            result = client.execute(
+                "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+                ('David', 'david@example.com', 28)
+            )
+
+            # UPDATE with parameters
+            result = client.execute(
+                "UPDATE users SET status = ? WHERE age < ?",
+                ('minor', 18)
+            )
+
+            # DELETE with parameters
+            result = client.execute(
+                "DELETE FROM users WHERE status = ?",
+                ('inactive',)
+            )
+
+            # ========================================
+            # Query Logging Control
+            # ========================================
+
+            # Disable logging for frequently executed query
+            result = client.execute(
+                select(User).where(User.id == 1),
+                _log_mode='off'
+            )
+
+            # Force full SQL logging for debugging
+            result = client.execute(
+                select(User).where(User.name.like('%test%')),
+                _log_mode='full'
+            )
+
+            # Simple logging (operation type only)
+            result = client.execute(
+                update(User).values(status='processed'),
+                _log_mode='simple'
+            )
+
+        Important Notes:
+
+        - **No transaction isolation**: Each execute() call commits immediately
+        - **Use session() for transactions**: For atomic multi-statement operations
+        - **ORM-style preferred**: Use SQLAlchemy statements for better type safety
+        - **Auto-commit behavior**: Changes are permanent immediately after execute()
+        - **Thread-safe**: Uses connection pooling for concurrent access
+
+        Best Practices:
+
+        1. **Prefer ORM-style statements**: Use select(), insert(), update(), delete()
+        2. **Use parameters**: Always use parameter binding to prevent SQL injection
+        3. **Session for transactions**: Use client.session() for atomic operations
+        4. **Disable logging in production**: Use _log_mode='off' for hot paths
+        5. **Handle exceptions**: Wrap execute() in try-except for error handling
+
+        See Also:
+
+            - Client.session(): For transaction-aware operations
+            - Session.execute(): Execute within transaction context
+            - AsyncClient.execute(): Async version for async/await workflows
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
@@ -820,8 +1042,42 @@ class Client(BaseMatrixOneClient):
         start_time = time.time()
 
         try:
-            # Handle parameter substitution for MatrixOne compatibility
-            final_sql = self._substitute_parameters(sql, params)
+            # Check if this is a SQLAlchemy statement
+            if not isinstance(sql_or_stmt, str):
+                # SQLAlchemy statement - delegate to session for consistent behavior
+                with self.session() as session:
+                    result = session.execute(sql_or_stmt, params)
+
+                    # Convert SQLAlchemy result to ResultSet
+                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                        # SELECT query
+                        columns = list(result.keys())
+                        rows = result.fetchall()
+                        result_set = ResultSet(columns, rows)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            len(rows),
+                            success=True,
+                            override_sql_log_mode=_log_mode,
+                        )
+                        return result_set
+                    else:
+                        # INSERT/UPDATE/DELETE query
+                        result_set = ResultSet([], [], affected_rows=result.rowcount)
+                        execution_time = time.time() - start_time
+                        self.logger.log_query(
+                            f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
+                            execution_time,
+                            result.rowcount,
+                            success=True,
+                            override_sql_log_mode=_log_mode,
+                        )
+                        return result_set
+
+            # String SQL - original implementation
+            final_sql = self._substitute_parameters(sql_or_stmt, params)
 
             with self._engine.begin() as conn:
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
@@ -843,12 +1099,16 @@ class Client(BaseMatrixOneClient):
                     columns = list(result.keys())
                     rows = result.fetchall()
                     result_set = ResultSet(columns, rows)
-                    self.logger.log_query(sql, execution_time, len(rows), success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
+                    )
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(sql, execution_time, result.rowcount, success=True)
+                    self.logger.log_query(
+                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
+                    )
                     return result_set
 
         except Exception as e:
@@ -857,7 +1117,8 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                self.logger.log_query(sql, execution_time, success=False)
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
                 # If logging fails, print to stderr as fallback but continue with error handling
@@ -913,7 +1174,8 @@ class Client(BaseMatrixOneClient):
 
             elif 'syntax error' in error_msg.lower() or '1064' in error_msg:
                 # SQL syntax error
-                sql_preview = sql[:200] + '...' if len(sql) > 200 else sql
+                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_preview = sql_display[:200] + '...' if len(sql_display) > 200 else sql_display
                 raise QueryError(f"SQL syntax error: {error_msg}\n" f"Query: {sql_preview}") from None
 
             elif 'column' in error_msg.lower() and ('unknown' in error_msg.lower() or 'not found' in error_msg.lower()):
@@ -1265,48 +1527,247 @@ class Client(BaseMatrixOneClient):
         yield snapshot_client
 
     @contextmanager
-    def transaction(self) -> Generator[TransactionWrapper, None, None]:
+    def session(self) -> Generator[Session, None, None]:
         """
-        Transaction context manager
+        Create a transaction-aware session for atomic database operations.
 
-        Usage
+        This method returns a MatrixOne Session that extends SQLAlchemy Session with
+        MatrixOne-specific features. All operations within the session are executed
+        atomically - they either all succeed or all fail together.
 
-            with client.transaction() as tx:
-            # MatrixOne operations
-            tx.execute("INSERT INTO users ...")
-            tx.execute("UPDATE users ...")
+        The session is a context manager that automatically handles transaction lifecycle:
+        - Commits the transaction when the context exits normally
+        - Rolls back the transaction if any exception occurs
+        - Cleans up database resources automatically
 
-            # Snapshot and clone operations within transaction
-            tx.snapshots.create("snap1", "table", database="db1", table="t1")
-            tx.clone.clone_database("target_db", "source_db")
+        Key Features:
 
-            # SQLAlchemy operations in the same transaction
-            session = tx.get_sqlalchemy_session()
-            session.add(user)
-            session.commit()
+        - **Full SQLAlchemy ORM**: All standard SQLAlchemy Session methods (add, delete, query, etc.)
+        - **Atomic transactions**: Multiple operations commit or rollback together
+        - **MatrixOne managers**: Access to snapshots, clones, vector ops, etc.
+        - **ORM-style operations**: Use SQLAlchemy select(), insert(), update(), delete()
+        - **Automatic cleanup**: Transaction and connection resources managed automatically
+        - **Query logging**: Integrated query logging with performance tracking
+
+        Available Managers (transaction-aware):
+
+        - session.snapshots: SnapshotManager for creating/managing snapshots
+        - session.clone: CloneManager for cloning databases and tables
+        - session.restore: RestoreManager for restoring from snapshots
+        - session.pitr: PitrManager for point-in-time recovery
+        - session.pubsub: PubSubManager for publish-subscribe operations
+        - session.account: AccountManager for account/user management
+        - session.vector_ops: VectorManager for vector operations and indexing
+        - session.fulltext_index: FulltextIndexManager for fulltext search
+        - session.metadata: MetadataManager for table metadata analysis
+        - session.load_data: LoadDataManager for bulk data loading
+        - session.stage: StageManager for external stage management
+
+        Returns:
+            Generator[Session, None, None]: Context manager that yields a MatrixOne Session
+
+        Raises:
+            ConnectionError: If client is not connected to database
+
+        Usage Examples::
+
+            from matrixone import Client
+            from sqlalchemy import select, insert, update, delete
+            from sqlalchemy.orm import declarative_base
+
+            Base = declarative_base()
+
+            class User(Base):
+                __tablename__ = 'users'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                email = Column(String(255))
+                age = Column(Integer)
+
+            client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+
+            # ========================================
+            # Example 1: Basic Transaction with ORM-style SQL
+            # ========================================
+            with client.session() as session:
+                # Insert using SQLAlchemy insert()
+                session.execute(insert(User).values(name='John', email='john@example.com', age=30))
+
+                # Update using SQLAlchemy update()
+                session.execute(update(User).where(User.age < 18).values(status='minor'))
+
+                # Select using SQLAlchemy select()
+                stmt = select(User).where(User.age > 25)
+                result = session.execute(stmt)
+                for user in result.scalars():
+                    print(f"User: {user.name}")
+
+                # Delete using SQLAlchemy delete()
+                session.execute(delete(User).where(User.status == 'inactive'))
+                # All operations commit atomically
+
+            # ========================================
+            # Example 2: SQLAlchemy ORM Operations
+            # ========================================
+            with client.session() as session:
+                # Create new objects
+                user1 = User(name='Alice', email='alice@example.com', age=28)
+                user2 = User(name='Bob', email='bob@example.com', age=35)
+
+                # Add to session
+                session.add(user1)
+                session.add(user2)
+
+                # Query using ORM
+                stmt = select(User).where(User.name == 'Alice')
+                result = session.execute(stmt)
+                alice = result.scalar_one()
+
+                # Update object
+                alice.email = 'newemail@example.com'
+
+                # Commit (or let context manager do it)
+                session.commit()
+
+            # ========================================
+            # Example 3: MatrixOne Snapshot Operations
+            # ========================================
+            with client.session() as session:
+                # Create snapshot within transaction
+                from matrixone import SnapshotLevel
+
+                snapshot = session.snapshots.create(
+                    name='daily_backup',
+                    level=SnapshotLevel.DATABASE,
+                    database='production'
+                )
+
+                # Clone database using snapshot
+                session.clone.clone_database(
+                    target_db='prod_copy',
+                    source_db='production',
+                    snapshot_name='daily_backup'
+                )
+                # Both operations commit atomically
+
+            # ========================================
+            # Example 4: Bulk Data Loading with Stages
+            # ========================================
+            with client.session() as session:
+                # Create stage using simple interface
+                session.stage.create_local('import_stage', '/data/imports/')
+
+                # Load data from stage using ORM model
+                session.load_data.from_stage_csv('import_stage', 'users.csv', User)
+
+                # Update statistics after loading
+                session.execute("ANALYZE TABLE users")
+                # All operations are atomic
+
+            # ========================================
+            # Example 5: Error Handling and Rollback
+            # ========================================
+            try:
+                with client.session() as session:
+                    session.execute(insert(User).values(name='Charlie', age=40))
+                    session.execute(insert(InvalidTable).values(data='test'))  # This fails
+                    # Transaction automatically rolls back - Charlie is NOT inserted
+            except Exception as e:
+                print(f"Transaction failed and rolled back: {e}")
+
+            # ========================================
+            # Example 6: Manual Transaction Control
+            # ========================================
+            with client.session() as session:
+                try:
+                    session.execute(insert(User).values(name='David', age=25))
+                    session.execute(update(Account).values(balance=Account.balance - 100))
+
+                    # Verify before committing
+                    stmt = select(Account.balance)
+                    balance = session.execute(stmt).scalar()
+
+                    if balance >= 0:
+                        session.commit()  # Explicit commit
+                    else:
+                        session.rollback()  # Explicit rollback
+                        print("Insufficient balance")
+                except Exception as e:
+                    session.rollback()
+                    raise
+
+            # ========================================
+            # Example 7: Complex Multi-Manager Transaction
+            # ========================================
+            with client.session() as session:
+                # Create publication
+                session.pubsub.create_database_publication(
+                    name='analytics_pub',
+                    database='analytics',
+                    account='subscriber_account'
+                )
+
+                # Create S3 stage for exports
+                session.stage.create_s3(
+                    name='export_stage',
+                    bucket='my-bucket',
+                    path='exports/',
+                    aws_key_id='key',
+                    aws_secret_key='secret'
+                )
+
+                # Load fresh data using ORM model
+                session.load_data.from_csv('/data/latest.csv', Analytics)
+
+                # Create snapshot after load
+                session.snapshots.create(
+                    name='post_load_snapshot',
+                    level=SnapshotLevel.DATABASE,
+                    database='analytics'
+                )
+                # All operations commit together
+
+        Best Practices:
+
+        1. **Always use context manager**: Use `with client.session()` for automatic cleanup
+        2. **Keep transactions short**: Long transactions can block other operations
+        3. **Handle exceptions**: Wrap session code in try-except for error handling
+        4. **Use ORM-style SQL**: Prefer SQLAlchemy insert(), update(), select(), delete()
+        5. **Avoid nested sessions**: SQLAlchemy doesn't support true nested transactions
+        6. **Test rollback behavior**: Ensure your application handles rollbacks correctly
+
+        See Also:
+
+            - Session: The session class returned by this method
+            - AsyncClient.session(): Async version for async/await workflows
+            - Client.execute(): Non-transactional query execution
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
-        tx_wrapper = None
+        session_wrapper = None
         try:
-            # Use engine's connection pool for transaction
-            with self._engine.begin() as conn:
-                tx_wrapper = TransactionWrapper(conn, self)
-                yield tx_wrapper
+            # Create session from engine (standard SQLAlchemy pattern)
+            # Session will automatically acquire connection from pool
+            session_wrapper = Session(bind=self._engine, client=self)
 
-                # Commit SQLAlchemy session first
-                tx_wrapper.commit_sqlalchemy()
+            # Begin transaction explicitly
+            session_wrapper.begin()
 
-        except Exception as e:
-            # Rollback SQLAlchemy session first
-            if tx_wrapper:
-                tx_wrapper.rollback_sqlalchemy()
-            raise e
+            yield session_wrapper
+
+            # Commit the transaction on success
+            session_wrapper.commit()
+
+        except Exception:
+            # Rollback on error
+            if session_wrapper:
+                session_wrapper.rollback()
+            raise
         finally:
-            # Clean up SQLAlchemy resources
-            if tx_wrapper:
-                tx_wrapper.close_sqlalchemy()
+            # Close session (returns connection to pool)
+            if session_wrapper:
+                session_wrapper.close()
 
     @property
     def snapshots(self) -> Optional[SnapshotManager]:
@@ -1342,6 +1803,29 @@ class Client(BaseMatrixOneClient):
     def account(self) -> Optional[AccountManager]:
         """Get account manager"""
         return self._account
+
+    @property
+    def load_data(self) -> Optional[LoadDataManager]:
+        """Get load data manager"""
+        if self._load_data is None:
+            self._load_data = LoadDataManager(self)
+        return self._load_data
+
+    @property
+    def stage(self) -> Optional[StageManager]:
+        """Get stage manager for external stage operations"""
+        if self._stage is None:
+            self._stage = StageManager(self)
+        return self._stage
+
+    @property
+    def export(self):
+        """Get export manager for data export operations (INTO OUTFILE, INTO STAGE)"""
+        if self._export is None:
+            from .export import ExportManager
+
+            self._export = ExportManager(self)
+        return self._export
 
     @property
     def vector_ops(self) -> Optional["VectorManager"]:
@@ -1529,14 +2013,14 @@ class Client(BaseMatrixOneClient):
         if not version_string:
             return None
 
-        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v后面为空)
+        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v followed by nothing)
         dev_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v$"
         dev_match = re.search(dev_pattern, version_string.strip())
         if dev_match:
             # Development version - assign highest version number
             return "999.0.0"
 
-        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v后面有版本号)
+        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by version number)
         release_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)"
         release_match = re.search(release_pattern, version_string.strip())
         if release_match:
@@ -1778,6 +2262,7 @@ class Client(BaseMatrixOneClient):
                             fulltext_sql += f" WITH PARSER {index.parser}"
                         try:
                             _exec_sql(fulltext_sql)
+                            self.logger.info(f"✓ Created fulltext index '{index.name}'")
                         except Exception as e:
                             self.logger.warning(f"Failed to create fulltext index {index.name}: {e}")
                     elif isinstance(index, VectorIndex):
@@ -1785,13 +2270,17 @@ class Client(BaseMatrixOneClient):
                         try:
                             vector_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
                             _exec_sql(vector_sql)
+                            self.logger.info(f"✓ Created vector index '{index.name}'")
                         except Exception as e:
                             self.logger.warning(f"Failed to create vector index {index.name}: {e}")
                     else:
-                        # Create regular index
+                        # Create regular index using manual SQL to avoid dialect issues
                         try:
-                            index_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
+                            columns_str = ', '.join([str(col.name) for col in index.columns])
+                            unique_str = 'UNIQUE ' if index.unique else ''
+                            index_sql = f"CREATE {unique_str}INDEX {index.name} ON {table_name} ({columns_str})"
                             _exec_sql(index_sql)
+                            self.logger.info(f"✓ Created index '{index.name}'")
                         except Exception as e:
                             self.logger.warning(f"Failed to create index {index.name}: {e}")
 
@@ -1911,139 +2400,6 @@ class Client(BaseMatrixOneClient):
 
         return self
 
-    def create_table_in_transaction(self, table_name: str, columns: dict, connection, **kwargs) -> "Client":
-        """
-        Create a table with a simplified interface within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            columns: Dictionary mapping column names to their types (same format as create_table)
-            connection: SQLAlchemy connection object (required for transaction support)
-            **kwargs: Additional table parameters
-
-        Returns::
-
-            Client: Self for chaining
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        from sqlalchemy.schema import CreateTable
-
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table using the provided connection
-        table = builder.build()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=connection.dialect))
-        connection.execute(sql)
-
-        return self
-
     def drop_table(self, table_name_or_model) -> "Client":
         """
             Drop a table.
@@ -2080,32 +2436,6 @@ class Client(BaseMatrixOneClient):
                 from sqlalchemy import text
 
                 conn.execute(text(sql))
-
-        return self
-
-    def drop_table_in_transaction(self, table_name: str, connection) -> "Client":
-        """
-        Drop a table within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table to drop
-            connection: SQLAlchemy connection object (required for transaction support)
-
-        Returns::
-
-            Client: Self for chaining
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        sql = f"DROP TABLE IF EXISTS {table_name}"
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
 
         return self
 
@@ -2281,158 +2611,6 @@ class Client(BaseMatrixOneClient):
 
         return self
 
-    def create_table_with_index_in_transaction(
-        self, table_name: str, columns: dict, connection, indexes: list = None, **kwargs
-    ) -> "Client":
-        """
-        Create a table with vector indexes within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            columns: Dictionary mapping column names to their types (same format as create_table)
-            connection: SQLAlchemy connection object (required for transaction support)
-            indexes: List of index definitions (same format as create_table_with_index)
-            **kwargs: Additional table parameters
-
-        Returns::
-
-            Client: Self for chaining
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        from sqlalchemy.schema import CreateTable
-
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table using the provided connection
-        table = builder.build()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=connection.dialect))
-        connection.execute(sql)
-
-        # Create indexes if specified
-        if indexes:
-            for index_def in indexes:
-                index_name = index_def["name"]
-                column_name = index_def["column"]
-                index_type = index_def["type"]
-                params = index_def.get("params", {})
-
-                # Create the index using separated APIs
-                if index_type == "ivfflat":
-                    self.vector_index.create_ivf(table_name=table_name, name=index_name, column=column_name, **params)
-                elif index_type == "hnsw":
-                    self.vector_index.create_hnsw(table_name=table_name, name=index_name, column=column_name, **params)
-                else:
-                    raise ValueError(f"Unsupported index type: {index_type}")
-
-        return self
-
     def create_table_orm(self, table_name: str, *columns, **kwargs) -> "Client":
         """
         Create a table using SQLAlchemy ORM-style column definitions.
@@ -2508,66 +2686,6 @@ class Client(BaseMatrixOneClient):
         else:
             # No special indexing needed, create normally
             table.create(engine)
-
-        return self
-
-    def create_table_orm_in_transaction(self, table_name: str, connection, *columns, **kwargs) -> "Client":
-        """
-        Create a table using SQLAlchemy ORM-style definitions within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            connection: SQLAlchemy connection object (required for transaction support)
-            *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
-            **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
-
-        Returns::
-
-            Client: Self for chaining
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        from sqlalchemy import MetaData, Table
-        from sqlalchemy.schema import CreateTable
-
-        # Create metadata and table
-        metadata = MetaData()
-        table = Table(table_name, metadata, *columns)
-
-        # Check if we need to enable HNSW or IVF indexing
-        enable_hnsw = kwargs.get("enable_hnsw", False)
-        enable_ivf = kwargs.get("enable_ivf", False)
-
-        # Check if table has vector indexes that need special handling
-        has_hnsw_index = False
-        has_ivf_index = False
-
-        for item in table.indexes:
-            if hasattr(item, "index_type"):
-                # Check for HNSW index type (string comparison)
-                if str(item.index_type).lower() == "hnsw":
-                    has_hnsw_index = True
-                elif str(item.index_type).lower() == "ivfflat":
-                    has_ivf_index = True
-
-        # Enable appropriate indexing if needed (within transaction)
-        if has_hnsw_index or enable_hnsw:
-            from .sqlalchemy_ext import create_hnsw_config
-
-            hnsw_config = create_hnsw_config(self._engine)
-            hnsw_config.enable_hnsw_indexing(connection)
-        if has_ivf_index or enable_ivf:
-            from .sqlalchemy_ext import create_ivf_config
-
-            ivf_config = create_ivf_config(self._engine)
-            ivf_config.enable_ivf_indexing()
-
-        # Create table using the provided connection
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=connection.dialect))
-        connection.execute(sql)
 
         return self
 
@@ -2948,115 +3066,188 @@ class SnapshotClient:
         return self.client.execute(final_sql)
 
 
-class TransactionWrapper:
+class Session(SQLAlchemySession):
     """
-    Transaction wrapper for executing queries within a MatrixOne transaction.
+    MatrixOne Session - extends SQLAlchemy Session with MatrixOne features.
 
-    This class provides a transaction context for executing multiple database
-    operations atomically. It wraps a SQLAlchemy connection and provides
-    access to all MatrixOne managers (snapshots, clone, restore, PITR, etc.)
-    within the transaction context.
+    This class inherits from SQLAlchemy Session and provides a transaction context
+    for executing multiple database operations atomically, while adding MatrixOne-specific
+    capabilities like snapshots, clones, vector operations, and fulltext search.
 
     Key Features:
 
+    - **Full SQLAlchemy Session API** - All inherited methods work as expected
     - Atomic transaction execution with automatic rollback on errors
-    - Access to all MatrixOne managers within transaction context
-    - SQLAlchemy session integration
+    - Access to all MatrixOne managers within session context
+    - Support for both SQLAlchemy statements and string SQL
     - Automatic commit/rollback handling
-    - Support for nested transactions
 
     Available Managers:
-    - snapshots: TransactionSnapshotManager for snapshot operations
-    - clone: TransactionCloneManager for clone operations
-    - restore: TransactionRestoreManager for restore operations
-    - pitr: TransactionPitrManager for point-in-time recovery
-    - pubsub: TransactionPubSubManager for pub/sub operations
-    - account: TransactionAccountManager for account operations
-    - vector: TransactionVectorManager for vector operations
+    - snapshots: SnapshotManager for snapshot operations
+    - clone: CloneManager for clone operations
+    - restore: RestoreManager for restore operations
+    - pitr: PitrManager for point-in-time recovery
+    - pubsub: PubSubManager for pub/sub operations
+    - account: AccountManager for account operations
+    - vector_ops: TransactionVectorIndexManager for vector operations
     - fulltext_index: TransactionFulltextIndexManager for fulltext operations
 
     Usage Examples
 
     .. code-block:: python
 
-            # Basic transaction usage
-            with client.transaction() as tx:
-                tx.execute("INSERT INTO users (name) VALUES (?)", ("John",))
-                tx.execute("INSERT INTO orders (user_id, amount) VALUES (?, ?)", (1, 100.0))
-                # Transaction commits automatically on success
+            # Standard SQLAlchemy usage
+            from sqlalchemy import select
+            with client.session() as session:
+                # Execute SQLAlchemy statements
+                stmt = select(User).where(User.age > 25)
+                result = session.execute(stmt)
+                users = result.scalars().all()  # Returns ORM objects
 
-            # Using managers within transaction
-            with client.transaction() as tx:
-                # Create snapshot within transaction
-                tx.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
-
-                # Clone database within transaction
-                tx.clone.clone_database("new_db", "source_db")
-
-                # Vector operations within transaction
-                tx.vector.create_table("vectors", {"id": "int", "embedding": "vector(384,f32)"})
-
-            # SQLAlchemy session integration
-            with client.transaction() as tx:
-                session = tx.get_sqlalchemy_session()
-                user = User(name="John")
+                # ORM operations
+                user = User(name="John", age=30)
                 session.add(user)
                 session.commit()
 
-    Note: This class is automatically created by the Client's transaction()
+            # MatrixOne features
+            with client.session() as session:
+                # Snapshot operations
+                session.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
+
+                # Clone operations
+                session.clone.clone_database("new_db", "source_db")
+
+    Note: This class is automatically created by the Client's session()
     context manager and should not be instantiated directly.
     """
 
-    def __init__(self, connection, client):
-        self.connection = connection
-        self.client = client
-        # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this transaction
-        self.snapshots = TransactionSnapshotManager(client, self)
-        self.clone = TransactionCloneManager(client, self)
-        self.restore = TransactionRestoreManager(client, self)
-        self.pitr = TransactionPitrManager(client, self)
-        self.pubsub = TransactionPubSubManager(client, self)
-        self.account = TransactionAccountManager(self)
-        self.vector_ops = TransactionVectorIndexManager(client, self)
-        self.fulltext_index = TransactionFulltextIndexManager(client, self)
-        self.metadata = TransactionMetadataManager(client, self)
-        # SQLAlchemy integration
-        self._sqlalchemy_session = None
+    def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
+        """
+        Initialize MatrixOne Session.
 
-    def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
-        """Execute SQL within transaction"""
+        Args:
+            bind: SQLAlchemy Engine or Connection to bind to
+            client: MatrixOne Client instance
+            wrap_session: Existing SQLAlchemy Session to wrap with MatrixOne features
+            **kwargs: Additional arguments passed to SQLAlchemy Session
+        """
+        if wrap_session is not None:
+            # Wrap existing SQLAlchemy session with MatrixOne features
+            self.__dict__.update(wrap_session.__dict__)
+        else:
+            # Initialize parent SQLAlchemy Session with engine/connection
+            super().__init__(bind=bind, expire_on_commit=False, **kwargs)
+
+        # Store MatrixOne client reference
+        self.client = client
+
+        # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this session
+        # Use executor pattern: managers use this session as executor
+        self.snapshots = SnapshotManager(client, executor=self)
+        self.clone = CloneManager(client, executor=self)
+        self.restore = RestoreManager(client, executor=self)
+        self.pitr = PitrManager(client, executor=self)
+        self.pubsub = PubSubManager(client, executor=self)
+        self.account = AccountManager(client, executor=self)
+        self.vector_ops = VectorManager(client, executor=self)
+        self.fulltext_index = FulltextIndexManager(client, executor=self)
+        self.metadata = MetadataManager(client, executor=self)
+        self.load_data = LoadDataManager(client, executor=self)
+        self.stage = StageManager(client, executor=self)
+        from .export import ExportManager
+
+        self.export = ExportManager(self)
+
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
+        """
+        Execute SQL or SQLAlchemy statement within session.
+
+        Overrides SQLAlchemy Session.execute() to add:
+        - Support for string SQL with MatrixOne parameter substitution
+        - Query logging with optional per-operation log mode override
+
+        Args:
+            sql_or_stmt: SQL string or SQLAlchemy statement (select, update, delete, insert, text)
+            params: Query parameters (only used for string SQL with '?' placeholders)
+            **kwargs: Additional arguments passed to parent execute(). Supports special parameter:
+
+                - _log_mode (str): Override SQL logging mode for this operation only.
+                  Options: 'off', 'simple', 'full'. Useful for debugging
+                  specific operations without changing global settings.
+
+        Returns:
+            sqlalchemy.engine.Result: SQLAlchemy Result object
+
+        Examples::
+
+            # SQLAlchemy statements
+            from sqlalchemy import select, update
+            with client.session() as session:
+                stmt = select(User).where(User.age > 25)
+                result = session.execute(stmt)
+                users = result.scalars().all()
+
+            # String SQL (MatrixOne extension)
+            with client.session() as session:
+                result = session.execute("INSERT INTO users (name) VALUES (?)", ("John",))
+                print(f"Inserted {result.rowcount} rows")
+
+            # Debugging with temporary logging override
+            with client.session() as session:
+                # Enable full logging for this query only
+                result = session.execute("SELECT * FROM large_table", _log_mode='full')
+        """
         import time
 
         start_time = time.time()
 
+        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
+        _log_mode = kwargs.pop('_log_mode', None)
+
         try:
-            # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-            # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-            if hasattr(self.connection, 'exec_driver_sql'):
-                # Escape % to %% for pymysql's format string handling
-                escaped_sql = sql.replace('%', '%%')
-                result = self.connection.exec_driver_sql(escaped_sql)
-            else:
-                # Fallback for testing or older SQLAlchemy versions
+            # Check if this is a string SQL
+            if isinstance(sql_or_stmt, str):
+                # String SQL - apply MatrixOne parameter substitution
+                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
+                original_sql = sql_or_stmt
+
                 from sqlalchemy import text
 
-                result = self.connection.execute(text(sql), params or {})
+                # Call parent's execute() with text()
+                result = super().execute(text(final_sql), **kwargs)
+            else:
+                # SQLAlchemy statement - call parent's execute() directly
+                result = super().execute(sql_or_stmt, params, **kwargs)
+                original_sql = f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+
             execution_time = time.time() - start_time
 
-            if result.returns_rows:
-                columns = list(result.keys())
-                rows = result.fetchall()
-                self.client.logger.log_query(sql, execution_time, len(rows), success=True)
-                return ResultSet(columns, rows)
+            # Log query
+            if hasattr(result, 'returns_rows') and result.returns_rows:
+                self.client.logger.log_query(
+                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
+                )
             else:
-                self.client.logger.log_query(sql, execution_time, result.rowcount, success=True)
-                return ResultSet([], [], affected_rows=result.rowcount)
+                self.client.logger.log_query(
+                    original_sql,
+                    execution_time,
+                    getattr(result, 'rowcount', 0),
+                    success=True,
+                    override_sql_log_mode=_log_mode,
+                )
+
+            return result
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self.client.logger.log_query(sql, execution_time, success=False)
-            self.client.logger.log_error(e, context="Transaction query execution")
-            raise QueryError(f"Transaction query execution failed: {e}")
+            self.client.logger.log_query(
+                original_sql if 'original_sql' in locals() else str(sql_or_stmt),
+                execution_time,
+                success=False,
+                override_sql_log_mode=_log_mode,
+            )
+            self.client.logger.log_error(e, context="Session query execution")
+            raise QueryError(f"Session query execution failed: {e}")
 
     def get_connection(self):
         """
@@ -3064,42 +3255,9 @@ class TransactionWrapper:
 
         Returns::
 
-            SQLAlchemy Connection instance bound to this transaction
+            SQLAlchemy Connection instance bound to this session
         """
-        return self.connection
-
-    def get_sqlalchemy_session(self):
-        """
-        Get SQLAlchemy session that uses the same transaction
-
-        Returns::
-
-            SQLAlchemy Session instance bound to this transaction
-        """
-        if self._sqlalchemy_session is None:
-            from sqlalchemy.orm import sessionmaker
-
-            # Create session factory using the client's engine
-            Session = sessionmaker(bind=self.client._engine)
-            self._sqlalchemy_session = Session(bind=self.connection)
-
-        return self._sqlalchemy_session
-
-    def commit_sqlalchemy(self) -> None:
-        """Commit SQLAlchemy session"""
-        if self._sqlalchemy_session:
-            self._sqlalchemy_session.commit()
-
-    def rollback_sqlalchemy(self) -> None:
-        """Rollback SQLAlchemy session"""
-        if self._sqlalchemy_session:
-            self._sqlalchemy_session.rollback()
-
-    def close_sqlalchemy(self) -> None:
-        """Close SQLAlchemy session"""
-        if self._sqlalchemy_session:
-            self._sqlalchemy_session.close()
-            self._sqlalchemy_session = None
+        return self.get_bind()
 
     def insert(self, table_name: str, data: dict[str, Any]) -> ResultSet:
         """
@@ -3221,9 +3379,9 @@ class TransactionWrapper:
 
                 return query
 
-    def create_table(self, table_name: str, columns: dict, **kwargs) -> "TransactionWrapper":
+    def create_table(self, table_name: str, columns: dict, **kwargs) -> "Session":
         """
-        Create a table within MatrixOne transaction.
+        Create a table within MatrixOne session.
 
         Args::
 
@@ -3233,7 +3391,7 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
 
@@ -3345,14 +3503,14 @@ class TransactionWrapper:
         # Create table using transaction wrapper's execute method
         table = builder.build()
         create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
         self.execute(sql)
 
         return self
 
-    def drop_table(self, table_name: str) -> "TransactionWrapper":
+    def drop_table(self, table_name: str) -> "Session":
         """
-        Drop a table within MatrixOne transaction.
+        Drop a table within MatrixOne session.
 
         Args::
 
@@ -3360,17 +3518,15 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         sql = f"DROP TABLE IF EXISTS {table_name}"
         self.execute(sql)
         return self
 
-    def create_table_with_index(
-        self, table_name: str, columns: dict, indexes: list = None, **kwargs
-    ) -> "TransactionWrapper":
+    def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "Session":
         """
-        Create a table with vector indexes within MatrixOne transaction.
+        Create a table with vector indexes within MatrixOne session.
 
         Args::
 
@@ -3381,7 +3537,7 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
 
@@ -3493,7 +3649,7 @@ class TransactionWrapper:
         # Create table using transaction wrapper's execute method
         table = builder.build()
         create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
         self.execute(sql)
 
         # Create indexes if specified
@@ -3514,9 +3670,9 @@ class TransactionWrapper:
 
         return self
 
-    def create_table_orm(self, table_name: str, *columns, **kwargs) -> "TransactionWrapper":
+    def create_table_orm(self, table_name: str, *columns, **kwargs) -> "Session":
         """
-        Create a table using SQLAlchemy ORM-style definitions within MatrixOne transaction.
+        Create a table using SQLAlchemy ORM-style definitions within MatrixOne session.
 
         Args::
 
@@ -3526,7 +3682,7 @@ class TransactionWrapper:
 
         Returns::
 
-            TransactionWrapper: Self for chaining
+            Session: Self for chaining
         """
         from sqlalchemy import MetaData, Table
         from sqlalchemy.schema import CreateTable
@@ -3565,163 +3721,17 @@ class TransactionWrapper:
 
         # Create table using transaction wrapper's execute method
         create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
         self.execute(sql)
 
         return self
 
-
-class TransactionSnapshotManager(SnapshotManager):
-    """Snapshot manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    def create(
-        self,
-        name: str,
-        level: Union[str, SnapshotLevel],
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> Snapshot:
-        """Create snapshot within transaction"""
-        return super().create(name, level, database, table, description, self.transaction_wrapper)
-
-    def get(self, name: str) -> Snapshot:
-        """Get snapshot within transaction"""
-        return super().get(name, self.transaction_wrapper)
-
-    def delete(self, name: str) -> None:
-        """Delete snapshot within transaction"""
-        return super().delete(name, self.transaction_wrapper)
-
-
-class TransactionCloneManager(CloneManager):
-    """Clone manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    def clone_database(
-        self,
-        target_db: str,
-        source_db: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone database within transaction"""
-        return super().clone_database(target_db, source_db, snapshot_name, if_not_exists, self.transaction_wrapper)
-
-    def clone_table(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone table within transaction"""
-        return super().clone_table(target_table, source_table, snapshot_name, if_not_exists, self.transaction_wrapper)
-
-    def clone_database_with_snapshot(
-        self, target_db: str, source_db: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone database with snapshot within transaction"""
-        return super().clone_database_with_snapshot(
-            target_db, source_db, snapshot_name, if_not_exists, self.transaction_wrapper
-        )
-
-    def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone table with snapshot within transaction"""
-        return super().clone_table_with_snapshot(
-            target_table, source_table, snapshot_name, if_not_exists, self.transaction_wrapper
-        )
-
-
-class VectorManager:
-    """
-    Unified vector manager for MatrixOne vector operations and chain operations.
-
-    This class provides comprehensive vector functionality including vector table
-    creation, vector indexing, vector data operations, and vector similarity search.
-    It supports both IVF (Inverted File) and HNSW (Hierarchical Navigable Small World)
-    indexing algorithms for efficient vector similarity search.
-
-    Key Features:
-
-    - Vector table creation with configurable dimensions and precision
-    - Vector index creation and management (IVF, HNSW)
-    - Vector data insertion and batch operations
-    - Vector similarity search with multiple distance metrics
-    - Vector range search for distance-based filtering
-    - Integration with MatrixOne's vector capabilities
-    - Support for both f32 and f64 vector precision
-
-    Supported Index Types:
-    - IVF (Inverted File): Good for large datasets, requires training
-    - HNSW: Good for high-dimensional vectors, no training required
-
-    Supported Distance Metrics:
-    - L2 (Euclidean) distance: Standard Euclidean distance
-    - Cosine similarity: Cosine of the angle between vectors
-    - Inner product: Dot product of vectors
-
-    Supported Operations:
-
-    - Vector table creation with various column types
-    - Vector index creation with configurable parameters
-    - Vector data insertion and batch operations
-    - Vector similarity search and distance calculations
-    - Vector range search for distance-based filtering
-    - Vector index management and optimization
-
-    Usage Examples::
-
-        # Initialize vector manager
-        vector_ops = client.vector_ops
-
-        # Create IVF index
-        vector_ops.create_ivf(
-            table_name="documents",
-            name="idx_embedding_ivf",
-            column="embedding",
-            lists=100
-        )
-
-        # Create HNSW index
-        vector_ops.create_hnsw(
-            table_name="documents",
-            name="idx_embedding_hnsw",
-            column="embedding",
-            m=16,
-            ef_construction=200
-        )
-
-        # Similarity search
-        results = vector_ops.similarity_search(
-            table_name="documents",
-            vector_column="embedding",
-            query_vector=[0.1, 0.2, 0.3, ...],
-            limit=10
-        )
-
-    Note: Vector operations require appropriate vector data and indexing strategies. Vector dimensions
-    and precision must match your embedding model requirements.
-    """
-
-    def __init__(self, client):
-        self.client = client
-
-    def _get_ivf_index_table_names(
+    async def _get_ivf_index_table_names(
         self,
         database: str,
         table_name: str,
         column_name: str,
-        connection: Connection,
+        connection,
     ) -> Dict[str, str]:
         """
         Get the table names of the IVF index tables.
@@ -3735,21 +3745,14 @@ class VectorManager:
             f"AND t.reldatabase = '{database}' "
             f"AND i.algo='ivfflat'"
         )
-        result = self.client._execute_with_logging(connection, sql, context="Get IVF index table names")
-        # +-----------------+-----------------------------------------------------------+
-        # | algo_table_type | index_table_name                                          |
-        # +-----------------+-----------------------------------------------------------+
-        # | metadata        | __mo_index_secondary_01999b6b-414c-71dc-ab7f-8399ab06cb64 |
-        # | centroids       | __mo_index_secondary_01999b6b-414c-7311-98d2-9de6a0f591ee |
-        # | entries         | __mo_index_secondary_01999b6b-414c-7324-90f0-695d791d574f |
-        # +-----------------+-----------------------------------------------------------+
+        result = await self.client._execute_with_logging(connection, sql, context="Get IVF index table names")
         return {row[0]: row[1] for row in result}
 
-    def _get_ivf_buckets_distribution(
+    async def _get_ivf_buckets_distribution(
         self,
         database: str,
         table_name: str,
-        connection: Connection,
+        connection,
     ) -> Dict[str, List[int]]:
         """
         Get the buckets distribution of the IVF index tables.
@@ -3762,1177 +3765,10 @@ class VectorManager:
             f"FROM `{database}`.`{table_name}` "
             f"GROUP BY `__mo_index_centroid_fk_id`, `__mo_index_centroid_fk_version`"
         )
-        result = self.client._execute_with_logging(connection, sql, context="Get IVF buckets distribution")
+        result = await self.client._execute_with_logging(connection, sql, context="Get IVF buckets distribution")
         rows = result.fetchall()
-        # +----------------+-------------+------------------+
-        # | centroid_count | centroid_id | centroid_version |
-        # +----------------+-------------+------------------+
-        # |             51 |           0 |                0 |
-        # |             32 |           1 |                0 |
-        # |             62 |           2 |                0 |
-        # |             40 |           3 |                0 |
-        # |             60 |           4 |                0 |
-        # +----------------+-------------+------------------+
-
-        # Output:
-        # {
-        # "centroid_count": [51, 32, 62, 40, 60],
-        # "centroid_id": [0, 1, 2, 3, 4],
-        # "centroid_version": [0, 0, 0, 0, 0]
-        # }
-
         return {
             "centroid_count": [row[0] for row in rows],
             "centroid_id": [row[1] for row in rows],
             "centroid_version": [row[2] for row in rows],
         }
-
-    def create_ivf(
-        self,
-        table_name_or_model,
-        name: str,
-        column: str,
-        lists: int = 100,
-        op_type: VectorOpType = None,
-    ) -> "VectorManager":
-        """
-            Create an IVFFLAT vector index using chain operations.
-
-            IVFFLAT (Inverted File with Flat Compression) is a vector index type
-            that provides good performance for similarity search on large datasets.
-            It supports insert, update, and delete operations.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Name of the index
-                column: Vector column to index
-                lists: Number of lists for IVFFLAT (default: 100). More lists for larger datasets
-                op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
-
-            Returns::
-
-                VectorManager: Self for chaining
-
-            Example
-
-        # Create IVF index by table name
-                client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=50)
-
-                # Create IVF index by model class
-                client.vector_ops.create_ivf(DocumentModel, "idx_embedding", "embedding", lists=100)
-        """
-        from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Use default if not provided
-        if op_type is None:
-            op_type = VectorOpType.VECTOR_L2_OPS
-
-        success = IVFVectorIndex.create_index(
-            engine=self.client.get_sqlalchemy_engine(),
-            table_name=table_name,
-            name=name,
-            column=column,
-            lists=lists,
-            op_type=op_type,
-        )
-
-        if not success:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}")
-
-        # Add summary log
-        op_type_str = op_type.value if hasattr(op_type, 'value') else op_type
-        self.client.logger.info(
-            f"✓ Created IVF index '{name}' on {table_name}.{column} | " f"lists={lists} | op_type={op_type_str}"
-        )
-
-        return self
-
-    def create_hnsw(
-        self,
-        table_name_or_model,
-        name: str,
-        column: str,
-        m: int = 16,
-        ef_construction: int = 200,
-        ef_search: int = 50,
-        op_type: VectorOpType = None,
-    ) -> "VectorManager":
-        """
-            Create an HNSW vector index using chain operations.
-
-            HNSW (Hierarchical Navigable Small World) is a vector index type
-            that provides excellent search performance but is read-only.
-            It does not support insert, update, or delete operations.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Name of the index
-                column: Vector column to index
-                m: Number of bi-directional links for HNSW (default: 16)
-                ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-                ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-                op_type: Vector operation type (VectorOpType enum, default: VectorOpType.VECTOR_L2_OPS)
-
-            Returns::
-
-                VectorManager: Self for chaining
-
-            Example
-
-        # Create HNSW index by table name
-                client.vector_ops.create_hnsw("documents", "idx_embedding", "embedding", m=32)
-
-                # Create HNSW index by model class
-                client.vector_ops.create_hnsw(DocumentModel, "idx_embedding", "embedding", m=16)
-        """
-        from .sqlalchemy_ext import HnswVectorIndex, VectorOpType
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Use default if not provided
-        if op_type is None:
-            op_type = VectorOpType.VECTOR_L2_OPS
-
-        # Build index creation SQL
-        success = HnswVectorIndex.create_index(
-            engine=self.client.get_sqlalchemy_engine(),
-            table_name=table_name,
-            name=name,
-            column=column,
-            m=m,
-            ef_construction=ef_construction,
-            ef_search=ef_search,
-            op_type=op_type,
-        )
-
-        if not success:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}")
-
-        # Add summary log
-        op_type_str = op_type.value if hasattr(op_type, 'value') else op_type
-        self.client.logger.info(
-            f"✓ Created HNSW index '{name}' on {table_name}.{column} | "
-            f"m={m} | ef_construction={ef_construction} | ef_search={ef_search} | op_type={op_type_str}"
-        )
-
-        return self
-
-    def create_ivf_in_transaction(
-        self,
-        table_name: str,
-        name: str,
-        column: str,
-        connection,
-        lists: int = 100,
-        op_type: str = "vector_l2_ops",
-    ) -> "VectorManager":
-        """
-        Create an IVFFLAT vector index within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            name: Name of the index
-            column: Vector column to index
-            connection: SQLAlchemy connection object (required for transaction support)
-            lists: Number of lists for IVFFLAT (default: 100)
-            op_type: Vector operation type (default: vector_l2_ops)
-
-        Returns::
-
-            VectorManager: Self for chaining
-
-        Raises::
-
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        # Enable IVF indexing if needed
-        from .sqlalchemy_ext import create_ivf_config
-
-        ivf_config = create_ivf_config(self.client._engine)
-        ivf_config.enable_ivf_indexing()
-        ivf_config.set_probe_limit(1)
-
-        # Build CREATE INDEX statement
-        sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
-
-        # Create the index
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
-
-        return self
-
-    def create_hnsw_in_transaction(
-        self,
-        table_name: str,
-        name: str,
-        column: str,
-        connection,
-        m: int = 16,
-        ef_construction: int = 200,
-        ef_search: int = 50,
-        op_type: str = "vector_l2_ops",
-    ) -> "VectorManager":
-        """
-        Create an HNSW vector index within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            name: Name of the index
-            column: Vector column to index
-            connection: SQLAlchemy connection object (required for transaction support)
-            m: Number of bi-directional links for HNSW (default: 16)
-            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
-            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
-            op_type: Vector operation type (default: vector_l2_ops)
-
-        Returns::
-
-            VectorManager: Self for chaining
-
-        Raises::
-
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        # Enable HNSW indexing if needed
-        from .sqlalchemy_ext import create_hnsw_config
-
-        hnsw_config = create_hnsw_config(self.client._engine)
-        hnsw_config.enable_hnsw_indexing(connection)
-
-        # Build CREATE INDEX statement
-        sql = (
-            f"CREATE INDEX {name} USING hnsw ON {table_name}({column}) "
-            f"M {m} EF_CONSTRUCTION {ef_construction} EF_SEARCH {ef_search} "
-            f"op_type '{op_type}'"
-        )
-
-        # Create the index
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
-
-        return self
-
-    def drop(self, table_name_or_model, name: str) -> "VectorManager":
-        """
-        Drop a vector index using chain operations.
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Name of the index to drop
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        from .sqlalchemy_ext import VectorIndex
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        success = VectorIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
-
-        if not success:
-            raise Exception(f"Failed to drop vector index {name} from table {table_name}")
-
-        # Add summary log
-        self.client.logger.info(f"✓ Dropped vector index '{name}' from {table_name}")
-
-        return self
-
-    def enable_ivf(self, probe_limit: int = 1) -> "VectorManager":
-        """
-        Enable IVF indexing with chain operations.
-
-        Args::
-
-            probe_limit: Probe limit for IVF search
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        from .sqlalchemy_ext import create_ivf_config
-
-        ivf_config = create_ivf_config(self.client.get_sqlalchemy_engine())
-        if not ivf_config.is_ivf_supported():
-            raise Exception("IVF indexing is not supported in this MatrixOne version")
-
-        if not ivf_config.enable_ivf_indexing():
-            raise Exception("Failed to enable IVF indexing")
-
-        if not ivf_config.set_probe_limit(probe_limit):
-            raise Exception("Failed to set probe limit")
-
-        return self
-
-    def disable_ivf(self) -> "VectorManager":
-        """
-        Disable IVF indexing with chain operations.
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        from .sqlalchemy_ext import create_ivf_config
-
-        ivf_config = create_ivf_config(self.client.get_sqlalchemy_engine())
-        if not ivf_config.disable_ivf_indexing():
-            raise Exception("Failed to disable IVF indexing")
-
-        return self
-
-    def enable_hnsw(self) -> "VectorManager":
-        """
-        Enable HNSW indexing with chain operations.
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        from .sqlalchemy_ext import create_hnsw_config
-
-        hnsw_config = create_hnsw_config(self.client.get_sqlalchemy_engine())
-        if not hnsw_config.enable_hnsw_indexing():
-            raise Exception("Failed to enable HNSW indexing")
-
-        return self
-
-    def disable_hnsw(self) -> "VectorManager":
-        """
-        Disable HNSW indexing with chain operations.
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        from .sqlalchemy_ext import create_hnsw_config
-
-        hnsw_config = create_hnsw_config(self.client.get_sqlalchemy_engine())
-        if not hnsw_config.disable_hnsw_indexing():
-            raise Exception("Failed to disable HNSW indexing")
-
-        return self
-
-    # Data operations
-    def insert(self, table_name: str, data: dict) -> "VectorManager":
-        """
-        Insert vector data using chain operations.
-
-        Args::
-
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        self.client.insert(table_name, data)
-        return self
-
-    def insert_in_transaction(self, table_name: str, data: dict, connection) -> "VectorManager":
-        """
-        Insert vector data within an existing SQLAlchemy transaction.
-
-        Args::
-
-            table_name: Name of the table
-            data: Data to insert (dict with column names as keys)
-            connection: SQLAlchemy connection object (required for transaction support)
-
-        Returns::
-
-            VectorManager: Self for chaining
-
-        Raises::
-
-            ValueError: If connection is not provided
-        """
-        if connection is None:
-            raise ValueError("connection parameter is required for transaction operations")
-
-        # Build INSERT statement
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert vectors to string format
-        formatted_values = []
-        for value in values:
-            if isinstance(value, list):
-                formatted_values.append("[" + ",".join(map(str, value)) + "]")
-            else:
-                # Escape single quotes
-                formatted_values.append(str(value).replace("'", "''"))
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join([f"'{v}'" for v in formatted_values])
-
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
-
-        if hasattr(connection, 'exec_driver_sql'):
-            connection.exec_driver_sql(sql)
-        else:
-            from sqlalchemy import text
-
-            connection.execute(text(sql))
-
-        return self
-
-    def batch_insert(self, table_name: str, data_list: list) -> "VectorManager":
-        """
-        Batch insert vector data using chain operations.
-
-        Args::
-
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
-
-        Returns::
-
-            VectorManager: Self for chaining
-        """
-        self.client.batch_insert(table_name, data_list)
-        return self
-
-    def similarity_search(
-        self,
-        table_name_or_model,
-        vector_column: str,
-        query_vector: list,
-        limit: int = 10,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        where_conditions: list = None,
-        where_params: list = None,
-        connection=None,
-        _log_mode: str = None,
-    ) -> list:
-        """
-        Perform similarity search using chain operations.
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            vector_column: Name of the vector column
-            query_vector: Query vector as list
-            limit: Number of results to return
-            distance_type: Type of distance calculation (l2, cosine, inner_product)
-            select_columns: List of columns to select (None means all columns)
-            where_conditions: List of WHERE conditions
-            where_params: List of parameters for WHERE conditions
-            connection: Optional existing database connection (for transaction support)
-            _log_mode: Override SQL logging mode for this operation ('off', 'auto', 'simple', 'full')
-
-        Returns::
-
-            List of search results
-
-        Example::
-
-            # Basic similarity search
-            results = client.vector_ops.similarity_search(
-                "documents", "embedding", [0.1, 0.2, 0.3], limit=5
-            )
-
-            # Search with filtering
-            results = client.vector_ops.similarity_search(
-                "documents", "embedding", [0.1, 0.2, 0.3], limit=5,
-                where_conditions=["category = ?"], where_params=["AI"]
-            )
-        """
-        from .sql_builder import DistanceFunction, build_vector_similarity_query
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Convert distance type to enum
-        if distance_type == "l2":
-            distance_func = DistanceFunction.L2  # Use L2 for consistency with ORM l2_distance()
-        elif distance_type == "l2_sq":
-            distance_func = DistanceFunction.L2_SQ  # Explicitly use squared distance if needed
-        elif distance_type == "cosine":
-            distance_func = DistanceFunction.COSINE
-        elif distance_type == "inner_product":
-            distance_func = DistanceFunction.INNER_PRODUCT
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
-
-        # Build query using unified SQL builder
-        sql = build_vector_similarity_query(
-            table_name=table_name,
-            vector_column=vector_column,
-            query_vector=query_vector,
-            distance_func=distance_func,
-            limit=limit,
-            select_columns=select_columns,
-            where_conditions=where_conditions,
-            where_params=where_params,
-        )
-
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = self.client._execute_with_logging(
-                connection, sql, context="Vector similarity search", override_sql_log_mode=_log_mode
-            )
-            return result.fetchall()
-        else:
-            # Create new connection
-            with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = self.client._execute_with_logging(
-                    conn, sql, context="Vector similarity search", override_sql_log_mode=_log_mode
-                )
-                return result.fetchall()
-
-    def range_search(
-        self,
-        table_name: str,
-        vector_column: str,
-        query_vector: list,
-        max_distance: float,
-        distance_type: str = "l2",
-        select_columns: list = None,
-        connection=None,
-    ) -> list:
-        """
-        Perform range search using chain operations.
-
-        Args::
-
-            table_name: Name of the table
-            vector_column: Name of the vector column
-            query_vector: Query vector as list
-            max_distance: Maximum distance threshold
-            distance_type: Type of distance calculation
-            select_columns: List of columns to select (None means all columns)
-            connection: Optional existing database connection (for transaction support)
-
-        Returns::
-
-            List of search results within range
-        """
-        # Convert vector to string format
-        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
-
-        # Build distance function based on type
-        if distance_type == "l2":
-            distance_func = "l2_distance"
-        elif distance_type == "cosine":
-            distance_func = "cosine_distance"
-        elif distance_type == "inner_product":
-            distance_func = "inner_product"
-        else:
-            raise ValueError(f"Unsupported distance type: {distance_type}")
-
-        # Build SELECT clause
-        if select_columns is None:
-            select_clause = "*"
-        else:
-            # Ensure vector_column is included for distance calculation
-            columns_to_select = list(select_columns)
-            if vector_column not in columns_to_select:
-                columns_to_select.append(vector_column)
-            select_clause = ", ".join(columns_to_select)
-
-        # Build SQL query
-        sql = f"""
-        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
-        FROM {table_name}
-        WHERE {distance_func}({vector_column}, '{vector_str}') <= {max_distance}
-        ORDER BY distance
-        """
-
-        if connection is not None:
-            # Use existing connection (for transaction support)
-            result = self.client._execute_with_logging(connection, sql, context="Vector range search")
-            return result.fetchall()
-        else:
-            # Create new connection
-            with self.client.get_sqlalchemy_engine().begin() as conn:
-                result = self.client._execute_with_logging(conn, sql, context="Vector range search")
-                return result.fetchall()
-
-    def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
-        """
-        Get IVF index statistics for monitoring and optimization.
-
-        This method provides critical insights into IVF index health and performance.
-        It helps evaluate whether the current IVF index configuration is optimal
-        and whether the index needs to be rebuilt.
-
-        Key Use Cases:
-
-        - **Index Health Monitoring**: Check if centroid count matches expected lists parameter
-        - **Load Balancing Analysis**: Evaluate if vectors are evenly distributed across centroids
-        - **Performance Optimization**: Identify when to rebuild the index for better performance
-        - **Capacity Planning**: Understand data distribution patterns
-
-        Critical Metrics to Monitor:
-
-        - **Centroid Count**: Should match the 'lists' parameter used during index creation
-        - **Load Distribution**: Each centroid should have roughly equal numbers of vectors
-        - **Centroid Versions**: Should be consistent (usually all 0 for stable indexes)
-
-        When to Rebuild Index:
-
-        - Centroid count doesn't match expected lists parameter
-        - Significant imbalance in centroid load distribution (>2x difference between min/max)
-        - Performance degradation in similarity search queries
-        - After major data changes (bulk inserts, updates, deletes)
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            column_name: Name of the vector column (optional, will be inferred if not provided)
-
-        Returns::
-
-            Dict containing IVF index statistics including:
-            - index_tables: Dictionary mapping table types to table names
-            - distribution: Dictionary containing:
-                - centroid_count: List of row counts per centroid
-                - centroid_id: List of centroid identifiers
-                - centroid_version: List of centroid versions
-            - database: Database name
-            - table_name: Table name
-            - column_name: Vector column name
-
-        Raises::
-
-            Exception: If IVF index is not found or if there are errors retrieving stats
-
-        Examples::
-
-            # Monitor index health
-            stats = client.vector_ops.get_ivf_stats("documents", "embedding")
-
-            # Check centroid distribution
-            centroid_counts = stats['distribution']['centroid_count']
-            total_centroids = len(centroid_counts)
-            min_count = min(centroid_counts)
-            max_count = max(centroid_counts)
-
-            print(f"Total centroids: {total_centroids}")
-            print(f"Min vectors per centroid: {min_count}")
-            print(f"Max vectors per centroid: {max_count}")
-            print(f"Load balance ratio: {max_count/min_count:.2f}")
-
-            # Check if index needs rebuilding
-            expected_centroids = 100  # Original lists parameter
-            if total_centroids != expected_centroids:
-                print(f"⚠️  Centroid count mismatch! Expected: {expected_centroids}, Actual: {total_centroids}")
-
-            if max_count / min_count > 2.0:
-                print("⚠️  Poor load balance! Consider rebuilding index.")
-
-            # Get stats using model class
-            stats = client.vector_ops.get_ivf_stats(MyModel, "vector_col")
-        """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Get database name from connection params
-        database = self.client._connection_params.get('database')
-        if not database:
-            raise Exception("No database connection found. Please connect to a database first.")
-
-        # If column_name is not provided, try to infer it
-        if not column_name:
-            # Query the table schema to find vector columns
-            with self.client.get_sqlalchemy_engine().begin() as conn:
-                schema_sql = (
-                    f"SELECT column_name, data_type "
-                    f"FROM information_schema.columns "
-                    f"WHERE table_schema = '{database}' "
-                    f"AND table_name = '{table_name}' "
-                    f"AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')"
-                )
-                result = self.client._execute_with_logging(conn, schema_sql, context="Auto-detect vector column")
-                vector_columns = result.fetchall()
-
-                if not vector_columns:
-                    raise Exception(f"No vector columns found in table {table_name}")
-                elif len(vector_columns) == 1:
-                    column_name = vector_columns[0][0]
-                else:
-                    # Multiple vector columns found, raise error asking user to specify
-                    column_names = [col[0] for col in vector_columns]
-                    raise Exception(
-                        f"Multiple vector columns found in table {table_name}: {column_names}. "
-                        f"Please specify the column_name parameter."
-                    )
-
-        # Get IVF index table names
-        with self.client.get_sqlalchemy_engine().begin() as conn:
-            index_tables = self._get_ivf_index_table_names(database, table_name, column_name, conn)
-
-            if not index_tables:
-                raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
-
-            # Get the entries table name for distribution analysis
-            entries_table = index_tables.get('entries')
-            if not entries_table:
-                raise Exception("No entries table found in IVF index")
-
-            # Get bucket distribution
-            distribution = self._get_ivf_buckets_distribution(database, entries_table, conn)
-
-        return {
-            'index_tables': index_tables,
-            'distribution': distribution,
-            'database': database,
-            'table_name': table_name,
-            'column_name': column_name,
-        }
-
-
-class TransactionVectorIndexManager(VectorManager):
-    """Vector index manager that executes operations within a transaction"""
-
-    def __init__(self, client, transaction_wrapper):
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
-        """Execute SQL within transaction"""
-        return self.transaction_wrapper.execute(sql, params)
-
-    def create_ivf(
-        self,
-        table_name: str,
-        name: str,
-        column: str,
-        lists: int = 100,
-        op_type: VectorOpType = None,
-    ) -> "TransactionVectorIndexManager":
-        """Create an IVFFLAT vector index within transaction"""
-        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
-
-        # Use default if not provided
-        index_type = VectorIndexType.IVFFLAT
-        if op_type is None:
-            op_type = VectorOpType.VECTOR_L2_OPS
-
-        # Create index using transaction wrapper's execute method
-        index = VectorIndex(name, column, index_type, lists, op_type)
-
-        try:
-            # Enable IVF indexing within transaction
-            self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
-            self.transaction_wrapper.execute("SET probe_limit = 1")
-
-            sql = index.create_sql(table_name)
-            self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name} in transaction: {e}")
-
-    def create_hnsw(
-        self,
-        table_name: str,
-        name: str,
-        column: str,
-        m: int = 16,
-        ef_construction: int = 200,
-        ef_search: int = 50,
-        op_type: VectorOpType = None,
-    ) -> "TransactionVectorIndexManager":
-        """Create an HNSW vector index within transaction"""
-        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
-
-        # Use default if not provided
-        index_type = VectorIndexType.HNSW
-        if op_type is None:
-            op_type = VectorOpType.VECTOR_L2_OPS
-
-        # Create index using transaction wrapper's execute method
-        index = VectorIndex(name, column, index_type, None, op_type, m, ef_construction, ef_search)
-
-        try:
-            # Enable HNSW indexing within transaction
-            self.transaction_wrapper.execute("SET experimental_hnsw_index = 1")
-
-            sql = index.create_sql(table_name)
-            self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name} in transaction: {e}")
-
-    def drop(self, table_name: str, name: str) -> "TransactionVectorIndexManager":
-        """Drop a vector index within transaction"""
-        # Drop index using transaction wrapper's execute method
-        sql = f"DROP INDEX {name} ON {table_name}"
-
-        try:
-            self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to drop vector index {name} from table {table_name} in transaction: {e}")
-
-    def get_ivf_stats(self, table_name_or_model, column_name: str = None) -> Dict[str, Any]:
-        """
-            Get IVF index statistics for a table within transaction.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                column_name: Name of the vector column (optional, will be inferred if not provided)
-
-            Returns::
-
-                Dict containing IVF index statistics including:
-                - index_tables: Dictionary mapping table types to table names
-                - distribution: Dictionary containing bucket distribution data
-                - database: Database name
-                - table_name: Table name
-                - column_name: Vector column name
-
-            Raises::
-
-                Exception: If IVF index is not found or if there are errors retrieving stats
-
-            Examples
-
-        # Get stats for a table with vector column within transaction
-                with client.transaction() as tx:
-                    stats = tx.vector_ops.get_ivf_stats("my_table", "embedding")
-                    print(f"Index tables: {stats['index_tables']}")
-                    print(f"Distribution: {stats['distribution']}")
-        """
-        from sqlalchemy import text
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        # Get database name from connection params
-        database = self.client._connection_params.get('database')
-        if not database:
-            raise Exception("No database connection found. Please connect to a database first.")
-
-        # If column_name is not provided, try to infer it
-        if not column_name:
-            # Query the table schema to find vector columns using transaction connection
-            schema_sql = text(
-                f"""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = '{database}'
-                AND table_name = '{table_name}'
-                AND (data_type LIKE '%VEC%' OR data_type LIKE '%vec%')
-            """
-            )
-            result = self.transaction_wrapper.execute(schema_sql)
-            vector_columns = result.fetchall()
-
-            if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
-            elif len(vector_columns) == 1:
-                column_name = vector_columns[0][0]
-            else:
-                # Multiple vector columns found, raise error asking user to specify
-                column_names = [col[0] for col in vector_columns]
-                raise Exception(
-                    f"Multiple vector columns found in table {table_name}: {column_names}. "
-                    f"Please specify the column_name parameter."
-                )
-
-        # Get connection from transaction wrapper
-        connection = self.transaction_wrapper.get_connection()
-
-        # Get IVF index table names
-        index_tables = self._get_ivf_index_table_names(database, table_name, column_name, connection)
-
-        if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
-
-        # Get the entries table name for distribution analysis
-        entries_table = index_tables.get('entries')
-        if not entries_table:
-            raise Exception("No entries table found in IVF index")
-
-        # Get bucket distribution
-        distribution = self._get_ivf_buckets_distribution(database, entries_table, connection)
-
-        return {
-            'index_tables': index_tables,
-            'distribution': distribution,
-            'database': database,
-            'table_name': table_name,
-            'column_name': column_name,
-        }
-
-
-class FulltextIndexManager:
-    """
-    Fulltext index manager for MatrixOne fulltext search operations.
-
-    This class provides comprehensive fulltext indexing functionality for
-    enabling fast text search capabilities in MatrixOne databases. It supports
-    various fulltext algorithms and provides chain operations for efficient
-    index management.
-
-    Key Features:
-
-    - Fulltext index creation and management
-    - Support for multiple fulltext algorithms (TF-IDF, BM25)
-    - Multi-column fulltext indexing
-    - Index optimization and maintenance
-    - Integration with MatrixOne's fulltext search capabilities
-    - Chain operations for efficient index management
-
-    Supported Algorithms:
-    - TF-IDF: Term Frequency-Inverse Document Frequency (default)
-    - BM25: Best Matching 25 algorithm for improved relevance scoring
-
-    Supported Operations:
-
-    - Create fulltext indexes on single or multiple columns
-    - Drop fulltext indexes
-    - List and query existing fulltext indexes
-    - Index optimization and maintenance
-    - Integration with fulltext search queries
-
-    Usage Examples::
-
-        # Initialize fulltext index manager
-        fulltext = client.fulltext_index
-
-        # Create fulltext index on single column
-        fulltext.create(
-            "documents",
-            name="idx_content",
-            columns="content",
-            algorithm="BM25"
-        )
-
-        # Create fulltext index on multiple columns
-        fulltext.create(
-            "articles",
-            name="idx_title_content",
-            columns=["title", "content"],
-            algorithm="TF-IDF"
-        )
-
-    Note: Fulltext indexes improve text search performance but require additional storage space.
-    """
-
-    def __init__(self, client: "Client"):
-        """Initialize fulltext index manager"""
-        self.client = client
-
-    def create(
-        self, table_name_or_model, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
-    ) -> "FulltextIndexManager":
-        """
-            Create a fulltext index using chain operations.
-
-            Args::
-
-                table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-                name: Index name
-                columns: Column(s) to index
-                algorithm: Fulltext algorithm type (TF-IDF or BM25)
-
-            Returns::
-
-                FulltextIndexManager: Self for chaining
-
-            Example
-
-        # Create fulltext index by table name
-                client.fulltext_index.create("articles", "idx_content", ["title", "content"])
-
-                # Create fulltext index by model class
-                client.fulltext_index.create(ArticleModel, "idx_content", ["title", "content"])
-
-                # Create with BM25 algorithm
-                client.fulltext_index.create("articles", "idx_bm25", "content", algorithm="BM25")
-        """
-        from .sqlalchemy_ext import FulltextIndex
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        success = FulltextIndex.create_index(
-            engine=self.client.get_sqlalchemy_engine(),
-            table_name=table_name,
-            name=name,
-            columns=columns,
-            algorithm=algorithm,
-        )
-
-        if not success:
-            raise Exception(f"Failed to create fulltext index {name} on table {table_name}")
-
-        return self
-
-    def create_in_transaction(
-        self,
-        transaction_wrapper,
-        table_name: str,
-        name: str,
-        columns: Union[str, List[str]],
-        algorithm: str = "TF-IDF",
-    ) -> "FulltextIndexManager":
-        """
-        Create a fulltext index within an existing transaction.
-
-        Args::
-
-            transaction_wrapper: Transaction wrapper
-            table_name: Target table name
-            name: Index name
-            columns: Column(s) to index
-            algorithm: Fulltext algorithm type
-
-        Returns::
-
-            FulltextIndexManager: Self for chaining
-        """
-        from .sqlalchemy_ext import FulltextIndex
-
-        success = FulltextIndex.create_index_in_transaction(
-            connection=transaction_wrapper.connection,
-            table_name=table_name,
-            name=name,
-            columns=columns,
-            algorithm=algorithm,
-        )
-
-        if not success:
-            raise Exception(f"Failed to create fulltext index {name} on table {table_name} in transaction")
-
-        return self
-
-    def drop(self, table_name_or_model, name: str) -> "FulltextIndexManager":
-        """
-        Drop a fulltext index using chain operations.
-
-        Args::
-
-            table_name_or_model: Either a table name (str) or a SQLAlchemy model class
-            name: Index name
-
-        Returns::
-
-            FulltextIndexManager: Self for chaining
-        """
-        from .sqlalchemy_ext import FulltextIndex
-
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            table_name = table_name_or_model.__tablename__
-        else:
-            table_name = table_name_or_model
-
-        success = FulltextIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
-
-        if not success:
-            raise Exception(f"Failed to drop fulltext index {name} from table {table_name}")
-
-        return self
-
-    def enable_fulltext(self) -> "FulltextIndexManager":
-        """
-        Enable fulltext indexing with chain operations.
-
-        Returns::
-
-            FulltextIndexManager: Self for chaining
-        """
-        try:
-            self.client.execute("SET experimental_fulltext_index = 1")
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to enable fulltext indexing: {e}")
-
-    def disable_fulltext(self) -> "FulltextIndexManager":
-        """
-        Disable fulltext indexing with chain operations.
-
-        Returns::
-
-            FulltextIndexManager: Self for chaining
-        """
-        try:
-            self.client.execute("SET experimental_fulltext_index = 0")
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to disable fulltext indexing: {e}")
-
-
-class TransactionFulltextIndexManager(FulltextIndexManager):
-    """Fulltext index manager that executes operations within a transaction"""
-
-    def __init__(self, client: "Client", transaction_wrapper):
-        """Initialize transaction fulltext index manager"""
-        super().__init__(client)
-        self.transaction_wrapper = transaction_wrapper
-
-    def create(
-        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
-    ) -> "TransactionFulltextIndexManager":
-        """Create a fulltext index within transaction"""
-        try:
-            if isinstance(columns, str):
-                columns = [columns]
-
-            columns_str = ", ".join(columns)
-            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
-
-            self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to create fulltext index {name} on table {table_name} in transaction: {e}")
-
-    def drop(self, table_name: str, name: str) -> "TransactionFulltextIndexManager":
-        """Drop a fulltext index within transaction"""
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
-            self.transaction_wrapper.execute(sql)
-            return self
-        except Exception as e:
-            raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")

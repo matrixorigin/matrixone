@@ -227,6 +227,21 @@ func (tTxnOp *testTxnOperator) SetFootPrints(id int, enter bool) {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) Set(string, any) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tTxnOp *testTxnOperator) Get(string) (any, bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tTxnOp *testTxnOperator) Delete(string) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

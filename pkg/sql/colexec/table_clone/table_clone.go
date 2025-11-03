@@ -213,6 +213,9 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		tc.OpAnalyzer.Reset()
 	}
 
+	txnMeta := proc.GetTxnOperator().Txn()
+	proc.GetTxnOperator().GetWorkspace().SetCloneTxn(txnMeta.SnapshotTS.PhysicalTime)
+
 	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, false)
 	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
 

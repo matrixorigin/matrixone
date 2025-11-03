@@ -56,7 +56,7 @@ from matrixone.sqlalchemy_ext.fulltext_search import (
     natural_match,
     group,
 )
-from matrixone.sqlalchemy_ext.adapters import logical_and, logical_or, logical_not
+from sqlalchemy import and_, or_, not_
 
 # Test model for logical adapter tests
 Base = declarative_base()
