@@ -260,7 +260,7 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 		if err != nil {
 			return err
 		}
-		if err := vecs[i].UnmarshalWithReader(bytes.NewReader(bs), nil); err != nil {
+		if err := vecs[i].UnmarshalWithReader(bytes.NewReader(bs), mp); err != nil {
 			return err
 		}
 	}

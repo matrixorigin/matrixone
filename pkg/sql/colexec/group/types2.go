@@ -58,9 +58,8 @@ type Group struct {
 	// group-by column.
 	Exprs        []*plan.Expr
 	GroupingFlag []bool
-	// agg info and agg column.
-	Aggs []aggexec.AggFuncExecExpression
 
+	Aggs []aggexec.AggFuncExecExpression
 	// XXX To remove.  This is not used, but keep it for compatibility.
 	PreAllocSize uint64
 }
@@ -68,6 +67,7 @@ type Group struct {
 type spillBucket struct {
 	lv   int      // spill level
 	name string   // spill bucket name
+	cnt  int64    // number of rows in this spill bucket
 	file *os.File // spill file
 }
 
@@ -113,22 +113,23 @@ func (ctr *container) isSpilling() bool {
 	return len(ctr.currentSpillBkt) > 0
 }
 
-func (ctr *container) setSpillMem(m int64) {
+func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression) {
 	// BUG #22725
 	// We simply cannot spill distinct agg at this moment.
-	for _, ag := range ctr.aggList {
+	for _, ag := range aggs {
 		if ag.IsDistinct() {
 			// Set to TiB, effectively disabling spill for distinct agg.
 			// If we cannot fix this before TB mem is commonly available
 			// it will be very sad.
 			ctr.spillMem = common.TiB
-			break
+			return
 		}
 	}
 	if m == 0 {
 		ctr.spillMem = common.GiB
 	} else {
-		ctr.spillMem = min(max(m, common.MiB), common.TiB)
+		// ctr.spillMem = min(max(m, common.MiB), common.TiB)
+		ctr.spillMem = m
 	}
 }
 

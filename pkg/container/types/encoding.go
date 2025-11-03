@@ -687,8 +687,21 @@ func ReadInt64(r io.Reader) (int64, error) {
 	return DecodeInt64(buf), nil
 }
 
+func ReadUint64(r io.Reader) (uint64, error) {
+	buf := make([]byte, 8)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeUint64(buf), nil
+}
+
 func WriteInt64(w io.Writer, v int64) error {
 	w.Write(EncodeInt64(&v))
+	return nil
+}
+
+func WriteUint64(w io.Writer, v uint64) error {
+	w.Write(EncodeUint64(&v))
 	return nil
 }
 

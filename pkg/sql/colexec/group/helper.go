@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -210,6 +211,11 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		}
 	}
 
+	// nothing to spill,
+	if ctr.hr.IsEmpty() {
+		return nil
+	}
+
 	// compute spill bucket.
 	hashCodes := ctr.hr.Hash.AllGroupHash()
 	for i, hashCode := range hashCodes {
@@ -233,8 +239,8 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 		// extend the group by batch to the new size, set row count to 0, then we union
 		// group by batches to the parent batch.
+		gbBatch.CleanOnlyData()
 		gbBatch.PreExtend(proc.Mp(), int(cnt))
-		gbBatch.SetRowCount(0)
 
 		for nthBatch, gb := range ctr.groupByBatches {
 			for j := range gb.Vecs {
@@ -250,11 +256,24 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		// write batch to buf
 		gbBatch.MarshalBinaryWithBuffer(buf, false)
 
+		// write marker
+		var magic uint64 = 0x12345678DEADBEEF
+		buf.Write(types.EncodeInt64(&cnt))
+		buf.Write(types.EncodeUint64(&magic))
+
 		// save aggs to buf
+		nAggs := int32(len(ctr.aggList))
+		buf.Write(types.EncodeInt32(&nAggs))
+		proc.DebugBreakDump(nAggs == 0)
 		for _, ag := range ctr.aggList {
 			ag.SaveIntermediateResult(cnt, flags, buf)
 		}
 
+		magic = 0xdeadbeef12345678
+		buf.Write(types.EncodeInt64(&cnt))
+		buf.Write(types.EncodeUint64(&magic))
+
+		ctr.currentSpillBkt[i].cnt += cnt
 		ctr.currentSpillBkt[i].file.Write(buf.Bytes())
 	}
 
@@ -264,7 +283,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 }
 
 // load spilled data from the spill bucket queue.
-func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer) (bool, error) {
+func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (bool, error) {
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
 		if ctr.spillBkts == nil {
@@ -289,25 +308,36 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	// reposition to the start of the file.
 	bkt.file.Seek(0, io.SeekStart)
 
-	// Here, spill has already called ctr.resetForSpill(proc),
-	// so we do not need to reset it again.  But init empty hash table.
-	if ctr.hr.IsEmpty() {
-		if err := ctr.buildHashTable(proc); err != nil {
-			return false, err
-		}
-	}
-
+	ctr.resetForSpill(proc)
 	gbBatch := ctr.createNewGroupByBatch(proc, nil, aggBatchSize)
+	totalCnt := int64(0)
 
 	for {
 		// load next batch from the spill bucket.
 		cnt, err := types.ReadInt64(bkt.file)
 		if err != nil {
-			// here should be EOF.  Check
-			break
+			if err == io.EOF {
+				break
+			} else {
+				return false, err
+			}
 		}
 		if cnt == 0 {
 			continue
+		}
+		totalCnt += cnt
+
+		if len(ctr.aggList) != len(aggExprs) {
+			ctr.aggList, err = ctr.makeAggList(proc, aggExprs)
+			if err != nil {
+				return false, err
+			}
+		}
+		if len(ctr.spillAggList) != len(aggExprs) {
+			ctr.spillAggList, err = ctr.makeAggList(proc, aggExprs)
+			if err != nil {
+				return false, err
+			}
 		}
 
 		// load group by batch from the spill bucket.
@@ -315,9 +345,55 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		gbBatch.PreExtend(proc.Mp(), int(cnt))
 		gbBatch.UnmarshalFromReader(bkt.file, proc.Mp())
 
+		checkMagic, err := types.ReadUint64(bkt.file)
+		if err != nil {
+			return false, err
+		}
+		if checkMagic != uint64(cnt) {
+			return false, moerr.NewInternalError(proc.Ctx, "spill groupby cnt mismatch")
+		}
+
+		checkMagic, err = types.ReadUint64(bkt.file)
+		if err != nil {
+			return false, err
+		}
+		if checkMagic != 0x12345678DEADBEEF {
+			return false, moerr.NewInternalError(proc.Ctx, "spill groupby magic number mismatch")
+		}
+
+		nAggs, err := types.ReadInt32(bkt.file)
+		if err != nil {
+			return false, err
+		}
+		if nAggs != int32(len(ctr.spillAggList)) {
+			return false, moerr.NewInternalError(proc.Ctx, "spill agg cnt mismatch")
+		}
+
 		// load aggs from the spill bucket.
 		for _, ag := range ctr.spillAggList {
 			ag.UnmarshalFromReader(bkt.file, proc.Mp())
+		}
+
+		checkMagic, err = types.ReadUint64(bkt.file)
+		if err != nil {
+			return false, err
+		}
+		if checkMagic != uint64(cnt) {
+			return false, moerr.NewInternalError(proc.Ctx, "spill agg cnt mismatch")
+		}
+
+		checkMagic, err = types.ReadUint64(bkt.file)
+		if err != nil {
+			return false, err
+		}
+		if checkMagic != 0xDEADBEEF12345678 {
+			return false, moerr.NewInternalError(proc.Ctx, "spill agg magic number mismatch")
+		}
+
+		if ctr.hr.IsEmpty() {
+			if err = ctr.buildHashTable(proc); err != nil {
+				return false, err
+			}
 		}
 
 		// insert group by batch into the hash table.
@@ -357,6 +433,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			if err := ctr.spillDataToDisk(proc, bkt); err != nil {
 				return false, err
 			}
+
 		}
 	}
 
@@ -365,13 +442,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if err := ctr.spillDataToDisk(proc, bkt); err != nil {
 			return false, err
 		}
-		return ctr.loadSpilledData(proc, opAnalyzer)
+		return ctr.loadSpilledData(proc, opAnalyzer, aggExprs)
 	}
 
 	return true, nil
 }
 
-func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, bool, error) {
+func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, error) {
 	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
 	// now we need to flush the final result of agg to output batches.
 	if ctr.currBatchIdx >= len(ctr.groupByBatches) ||
@@ -379,19 +456,18 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 			ctr.groupByBatches[ctr.currBatchIdx].RowCount() == 0) {
 		// exhauseed all batches, or, last group by batch has no data,
 		// done.
-		return vm.CancelResult, false, nil
+		return vm.CancelResult, nil
 	}
 
 	curr := ctr.currBatchIdx
 	ctr.currBatchIdx += 1
-	hasMore := ctr.currBatchIdx < len(ctr.groupByBatches)
 
 	if curr == 0 {
 		// flush aggs.   this api is insane
 		for _, ag := range ctr.aggList {
 			vecs, err := ag.Flush()
 			if err != nil {
-				return vm.CancelResult, false, err
+				return vm.CancelResult, err
 			}
 			for j := range vecs {
 				ctr.groupByBatches[j].Vecs = append(
@@ -404,29 +480,29 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 	batch := ctr.groupByBatches[curr]
 	res := vm.NewCallResult()
 	res.Batch = batch
-	return res, hasMore, nil
+	return res, nil
 }
 
-func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer process.Analyzer) (vm.CallResult, error) {
+func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (vm.CallResult, error) {
 	// read next result batch
-	res, hasMore, err := ctr.getNextFinalResult(proc)
+	res, err := ctr.getNextFinalResult(proc)
 	if err != nil {
 		return vm.CancelResult, err
 	}
 
-	if !hasMore {
-		hasMore, err = ctr.loadSpilledData(proc, opAnalyzer)
-		if err != nil {
-			return vm.CancelResult, err
-		}
+	// or should we check res.Status == vm.ExecStop
+	if res.Batch != nil {
+		return res, nil
 	}
 
-	// really no more data
-	if !hasMore {
-		ctr.state = vm.End
+	loaded, err := ctr.loadSpilledData(proc, opAnalyzer, aggExprs)
+	if err != nil {
+		return vm.CancelResult, err
+	}
+	if loaded {
+		return ctr.outputOneBatchFinal(proc, opAnalyzer, aggExprs)
 	}
 	return res, nil
-
 }
 
 func (ctr *container) memUsed() int64 {
@@ -447,11 +523,52 @@ func (ctr *container) memUsed() int64 {
 }
 
 func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
+
 	memUsed := ctr.memUsed()
 	opAnalyzer.SetMemUsed(memUsed)
-	needSpill := memUsed > ctr.spillMem
+
+	// spill less than 10K, used only for debug.
+	// in this case, we spill when there are more than
+	// this many groups
+	var needSpill bool
+	if ctr.spillMem < 10000 {
+		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
+	} else {
+		needSpill = memUsed > ctr.spillMem
+	}
+
 	if needSpill {
 		opAnalyzer.Spill(memUsed)
 	}
 	return needSpill
+}
+
+func (ctr *container) makeAggList(proc *process.Process, aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {
+	var err error
+	aggList := make([]aggexec.AggFuncExec, len(aggExprs))
+	for i, agExpr := range aggExprs {
+		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
+		for j, arg := range agExpr.GetArgExpressions() {
+			typs[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		}
+		aggList[i], err = aggexec.MakeAgg(proc, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		if err != nil {
+			return nil, err
+		}
+		if config := agExpr.GetExtraConfig(); config != nil {
+			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
+				return nil, err
+			}
+		}
+		if ctr.mtyp == H0 {
+			if err := aggList[i].GroupGrow(1); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if ctr.mtyp != H0 {
+		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
+	}
+	return aggList, nil
 }

@@ -36,7 +36,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	if err := mergeGroup.PrepareProjection(proc); err != nil {
 		return err
 	}
-	mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem)
+	mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
 	return nil
 }
 
@@ -99,41 +99,20 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			if err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
 				return vm.CancelResult, err
 			}
-			if _, err := mergeGroup.ctr.loadSpilledData(proc, mergeGroup.OpAnalyzer); err != nil {
+			if _, err := mergeGroup.ctr.loadSpilledData(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs); err != nil {
 				return vm.CancelResult, err
 			}
 		}
 
 		// output the final result.
-		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer)
+		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs)
 
 	case vm.Eval:
-		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer)
+		return mergeGroup.ctr.outputOneBatchFinal(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs)
 	case vm.End:
 		return vm.CancelResult, nil
 	}
 	return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "bug: unknown merge group state")
-}
-
-func (mergeGroup *MergeGroup) makeAggList(proc *process.Process, aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {
-	var err error
-	aggList := make([]aggexec.AggFuncExec, len(aggExprs))
-	for i, agExpr := range aggExprs {
-		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
-		for j, arg := range agExpr.GetArgExpressions() {
-			typs[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
-		}
-		aggList[i], err = aggexec.MakeAgg(proc, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
-		if err != nil {
-			return nil, err
-		}
-		if config := agExpr.GetExtraConfig(); config != nil {
-			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return aggList, nil
 }
 
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
@@ -170,22 +149,13 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				}
 				mergeGroup.Aggs = append(mergeGroup.Aggs, agExpr)
 			}
+			mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
 
-			if mergeGroup.ctr.aggList, err = mergeGroup.makeAggList(proc, mergeGroup.Aggs); err != nil {
+			if mergeGroup.ctr.aggList, err = mergeGroup.ctr.makeAggList(proc, mergeGroup.Aggs); err != nil {
 				return false, err
 			}
-			if mergeGroup.ctr.spillAggList, err = mergeGroup.makeAggList(proc, mergeGroup.Aggs); err != nil {
+			if mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(proc, mergeGroup.Aggs); err != nil {
 				return false, err
-			}
-
-			for i := range mergeGroup.ctr.aggList {
-				if mergeGroup.ctr.mtyp == H0 {
-					if err := mergeGroup.ctr.aggList[i].GroupGrow(1); err != nil {
-						return false, err
-					}
-				} else {
-					aggexec.SyncAggregatorsToChunkSize(mergeGroup.ctr.aggList, aggBatchSize)
-				}
 			}
 		}
 	}
