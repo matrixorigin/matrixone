@@ -295,13 +295,15 @@ func (exec *aggregatorFromFixedToFixed[from, to]) marshal() ([]byte, error) {
 func (exec *aggregatorFromFixedToFixed[from, to]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodingsForFlags(cnt, flags))
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	start := exec.ret.optSplitResult.optInformation.chunkSize * chunk
+	chunkNGroup := exec.ret.optSplitResult.getNthChunkSize(chunk)
 	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
-		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodingsForChunk(start, chunkNGroup))
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {

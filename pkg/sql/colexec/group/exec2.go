@@ -61,9 +61,9 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 
 	if group.NeedEval {
-		group.ctr.setSpillMem(group.SpillMem)
+		group.ctr.setSpillMem(group.SpillMem, group.Aggs)
 	} else {
-		group.ctr.setSpillMem(group.SpillMem / 8)
+		group.ctr.setSpillMem(group.SpillMem/8, group.Aggs)
 	}
 	return nil
 }
@@ -149,25 +149,9 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				}
 			}
 		} else {
-			group.ctr.aggList = make([]aggexec.AggFuncExec, len(group.Aggs))
-			for i, ag := range group.Aggs {
-				group.ctr.aggList[i], err = makeAggExec(proc, ag.GetAggID(), ag.IsDistinct(), group.ctr.aggArgEvaluate[i].Typ...)
-				if err != nil {
-					return err
-				}
-
-				if config := ag.GetExtraConfig(); config != nil {
-					if err = group.ctr.aggList[i].SetExtraInformation(config, 0); err != nil {
-						return err
-					}
-				}
-				if group.ctr.mtyp == H0 {
-					group.ctr.aggList[i].GroupGrow(1)
-				}
-			}
-
-			if group.ctr.mtyp != H0 {
-				aggexec.SyncAggregatorsToChunkSize(group.ctr.aggList, aggBatchSize)
+			group.ctr.aggList, err = group.ctr.makeAggList(proc, group.Aggs)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -200,7 +184,10 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 
 // main entry of the group operator.
 func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
+	var err error
+
+	var isCancel bool
+	if err, isCancel = vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
@@ -211,8 +198,8 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	case vm.Build:
 		// receive all data, loop till exhuasted.
 		for !group.ctr.inputDone {
-
-			r, err := vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
+			var r vm.CallResult
+			r, err = vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
 			if err != nil {
 				return vm.CancelResult, err
 			}
@@ -234,8 +221,13 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
+			if len(group.ctr.aggList) != len(group.Aggs) {
+				group.ctr.aggList, err = group.ctr.makeAggList(proc, group.Aggs)
+			}
+
 			// build one batch.
-			needSpill, err := group.buildOneBatch(proc, r.Batch)
+			var needSpill bool
+			needSpill, err = group.buildOneBatch(proc, r.Batch)
 			if err != nil {
 				return vm.CancelResult, err
 			}
@@ -254,10 +246,10 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+			if err = group.ctr.spillDataToDisk(proc, nil); err != nil {
 				return vm.CancelResult, err
 			}
-			if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer); err != nil {
+			if _, err = group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -270,13 +262,14 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	case vm.End:
 		return vm.CancelResult, nil
 	}
-	return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "bug: unknown group state")
+
+	err = moerr.NewInternalError(proc.Ctx, "bug: unknown group state")
+	return vm.CancelResult, err
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 
 	var err error
-
 	// evaluate the group by and agg args, no matter what mtyp,
 	// we need to do this first.
 	if err = group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
@@ -432,7 +425,7 @@ func (ctr *container) appendGroupByBatch(
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
 	if group.NeedEval {
-		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer)
+		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
 		// no need to eval, we are in streaming mode.  spill never happen
 		// here.
@@ -499,12 +492,17 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 func computeChunkFlags(bucketIdx []uint64, bucket uint64, chunkSize int) (int64, [][]uint8) {
 	// compute the number of chunks,
 	nChunks := (len(bucketIdx) + chunkSize - 1) / chunkSize
+	lastChunkSize := len(bucketIdx) - (chunkSize * (nChunks - 1))
 
 	// return values
 	cnt := int64(0)
 	flags := make([][]uint8, nChunks)
 	for i := range flags {
-		flags[i] = make([]uint8, chunkSize)
+		if i+1 == nChunks {
+			flags[i] = make([]uint8, lastChunkSize)
+		} else {
+			flags[i] = make([]uint8, chunkSize)
+		}
 	}
 
 	nextX := 0

@@ -131,13 +131,15 @@ func (exec *aggregatorFromBytesToBytes) unmarshal(_ *mpool.MPool, result, emptie
 func (exec *aggregatorFromBytesToBytes) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
-		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodingsForFlags(cnt, flags))
 }
 
 func (exec *aggregatorFromBytesToBytes) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	start := exec.ret.optSplitResult.optInformation.chunkSize * chunk
+	chunkNGroup := exec.ret.optSplitResult.getNthChunkSize(chunk)
 	return marshalChunkToBuffer[dummyBinaryMarshaler](
 		chunk, buf,
-		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodings())
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodingsForChunk(start, chunkNGroup))
 }
 
 func (exec *aggregatorFromBytesToBytes) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
