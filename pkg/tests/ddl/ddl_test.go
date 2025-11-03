@@ -210,34 +210,52 @@ func TestCDCCases(t *testing.T) {
 
 			conn := "mysql://dump:#admin:111@127.0.0.1:" + port
 
-			mustExec := func(sql string, opts executor.Options) {
-				res, err := exec.Exec(ctx, sql, opts)
-				require.NoError(t, err, "sql: %s", sql)
-				res.Close()
+			mustExec := func(dbUsed string, sql string) {
+				testutils.ExecSQLWithReadResult(t, dbUsed, cn1, nil, sql)
 			}
-			rows := func(sql string, opts executor.Options) int {
-				res, err := exec.Exec(ctx, sql, opts)
-				require.NoError(t, err, "sql: %s", sql)
+			rows := func(dbUsed string, query string) int {
 				cnt := 0
-				for _, b := range res.Batches {
-					cnt += b.RowCount()
-				}
-				res.Close()
+				countSQL := "select count(*) from (" + query + ") as t"
+				testutils.ExecSQLWithReadResult(t, dbUsed, cn1, func(i int, s string, r executor.Result) {
+					cnt = testutils.ReadCount(r)
+				}, countSQL)
 				return cnt
 			}
-			rowExists := func(sql string, opts executor.Options) bool { return rows(sql, opts) > 0 }
+			rowExists := func(dbUsed string, sql string) bool { return rows(dbUsed, sql) > 0 }
 
 			// setup schema
-			mustExec("create database "+db, executor.Options{})
-			mustExec("create table "+table+" (col1 int)", executor.Options{}.WithDatabase(db))
+			mustExec("", "create database "+db)
+			mustExec(db, "create table "+table+" (col1 int)")
 
 			// ensure PITR for CDC precondition
-			mustExec("create pitr if not exists pitr_db for database "+db+" range 3 'h' internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "create pitr if not exists pitr_db for database "+db+" range 3 'h' internal")
 
 			// helper: verify mo_catalog.mo_cdc_task by task_name
 			verifyTaskPresent := func(taskName string, expect bool) {
 				s := "select task_name from mo_catalog.mo_cdc_task where task_name='" + taskName + "'"
-				ok := rowExists(s, executor.Options{})
+				deadline := time.Now().Add(3 * time.Second)
+				backoff := 50 * time.Millisecond
+				for {
+					ok := rowExists("", s)
+					if expect {
+						if ok {
+							break
+						}
+					} else {
+						if !ok {
+							break
+						}
+					}
+					if time.Now().After(deadline) {
+						// timeout; let final assert fire
+						break
+					}
+					time.Sleep(backoff)
+					if backoff < 400*time.Millisecond {
+						backoff *= 2
+					}
+				}
+				ok := rowExists("", s)
 				if expect {
 					require.True(t, ok, "expected task %s present", taskName)
 				} else {
@@ -246,20 +264,20 @@ func TestCDCCases(t *testing.T) {
 			}
 
 			// Case 1: database-level CDC
-			mustExec("create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal")
 			verifyTaskPresent(cdcTaskDB, true)
 
 			// Case 2: table-level CDC
-			mustExec("create cdc "+cdcTaskTbl+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {'Level'='table'} internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "create cdc "+cdcTaskTbl+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {'Level'='table'} internal")
 			verifyTaskPresent(cdcTaskTbl, true)
 
 			// Case 3: account-level CDC (all)
-			mustExec("create cdc "+cdcTaskAcc+" '"+conn+"' 'matrixone' '"+conn+"' '*.*' {'Level'='account'} internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "create cdc "+cdcTaskAcc+" '"+conn+"' 'matrixone' '"+conn+"' '*.*' {'Level'='account'} internal")
 			verifyTaskPresent(cdcTaskAcc, true)
 
 			// Case 3.1: database-level with rich options
 			cdcTaskOpts1 := "cdc_task_opts1"
-			mustExec("create cdc "+cdcTaskOpts1+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+			mustExec(db, "create cdc "+cdcTaskOpts1+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
 				"'Level'='database',"+
 				"'NoFull'='true',"+
 				"'MaxSqlLength'='8192',"+
@@ -269,18 +287,18 @@ func TestCDCCases(t *testing.T) {
 				"'Exclude'='.*',"+
 				"'StartTs'='2025-01-02T03:04:05Z',"+
 				"'EndTs'='2025-01-02T04:05:06Z'"+
-				"} internal", executor.Options{}.WithDatabase(db))
+				"} internal")
 			verifyTaskPresent(cdcTaskOpts1, true)
 			// Validate the no_full flag via where clause
-			require.Greater(t, rows("select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskOpts1+"' and no_full=true", executor.Options{}), 0)
+			require.Greater(t, rows("", "select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskOpts1+"' and no_full=true"), 0)
 
 			// Case 3.2: table-level with frequency in hours
 			cdcTaskOpts2 := "cdc_task_opts2"
-			mustExec("create cdc "+cdcTaskOpts2+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
+			mustExec(db, "create cdc "+cdcTaskOpts2+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
 				"'Level'='table',"+
 				"'NoFull'='false',"+
 				"'Frequency'='2h'"+
-				"} internal", executor.Options{}.WithDatabase(db))
+				"} internal")
 			verifyTaskPresent(cdcTaskOpts2, true)
 
 			// Case 3.3: invalid exclude regex (should error)
@@ -319,45 +337,45 @@ func TestCDCCases(t *testing.T) {
 
 			// Case 3.11: StartTs only (valid) should succeed
 			cdcTaskStartOnly := "cdc_task_start_only"
-			mustExec("create cdc "+cdcTaskStartOnly+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+			mustExec(db, "create cdc "+cdcTaskStartOnly+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
 				"'Level'='database','StartTs'='2025-01-02T01:02:03Z'"+
-				"} internal", executor.Options{}.WithDatabase(db))
+				"} internal")
 			verifyTaskPresent(cdcTaskStartOnly, true)
 
 			// Case 3.12: EndTs only (valid) should succeed
 			cdcTaskEndOnly := "cdc_task_end_only"
-			mustExec("create cdc "+cdcTaskEndOnly+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+			mustExec(db, "create cdc "+cdcTaskEndOnly+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
 				"'Level'='database','EndTs'='2025-01-02T06:07:08Z'"+
-				"} internal", executor.Options{}.WithDatabase(db))
+				"} internal")
 			verifyTaskPresent(cdcTaskEndOnly, true)
 
 			// Case 3.13: valid Exclude regex should succeed
 			cdcTaskExclude := "cdc_task_exclude"
-			mustExec("create cdc "+cdcTaskExclude+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+			mustExec(db, "create cdc "+cdcTaskExclude+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
 				"'Level'='database','Exclude'='^ignore_'"+
-				"} internal", executor.Options{}.WithDatabase(db))
+				"} internal")
 			verifyTaskPresent(cdcTaskExclude, true)
 
 			// Case 4: if not exists should pass when exists
-			mustExec("create cdc if not exists "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "create cdc if not exists "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal")
 
 			// Case 5: duplicate create should error
 			_, err = exec.Exec(ctx, "create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
 			require.Error(t, err)
 
 			// Validation selects for presence
-			require.Greater(t, rows("select * from mo_catalog.mo_cdc_task", executor.Options{}), 0)
+			require.Greater(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)
 
 			// Drop specific task and validate absence
-			mustExec("drop cdc task "+cdcTaskTbl+" internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "drop cdc task "+cdcTaskTbl+" internal")
 			verifyTaskPresent(cdcTaskTbl, false)
 
 			// Drop all and validate empty
-			mustExec("drop cdc all internal", executor.Options{}.WithDatabase(db))
-			require.Equal(t, rows("select * from mo_catalog.mo_cdc_task", executor.Options{}), 0)
+			mustExec(db, "drop cdc all internal")
+			require.Equal(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)
 
 			// cleanup PITR
-			mustExec("drop pitr pitr_db internal", executor.Options{}.WithDatabase(db))
+			mustExec(db, "drop pitr pitr_db internal")
 		},
 	)
 }

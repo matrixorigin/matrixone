@@ -15,6 +15,9 @@
 package agg
 
 import (
+	"context"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -54,7 +57,7 @@ func RegisterSum2(id int64) {
 		nil,
 		nil,
 		aggSumInitResult[int64],
-		aggSumFill[int64, int64], aggSumFills[int64, int64], aggSumMerge[int64, int64], nil)
+		aggSumInt64Fill, aggSumInt64Fills, aggSumInt64Merge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), SumReturnType, true),
@@ -253,5 +256,80 @@ func aggSumMerge[from numeric, to numericWithMaxScale](
 	resultGetter1, resultGetter2 aggexec.AggGetter[to],
 	resultSetter aggexec.AggSetter[to]) error {
 	resultSetter(resultGetter1() + resultGetter2())
+	return nil
+}
+
+// Specialized SUM functions for int64 with overflow checking
+// These match MySQL 8.0 strict mode behavior
+
+func addInt64SumWithOverflowCheck(v1, v2 int64) (int64, error) {
+	result := v1 + v2
+	// Overflow detection: same as SELECT arithmetic
+	// Note: use >= and <= to catch the case where result wraps to exactly 0
+	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
+		return 0, moerr.NewOutOfRangef(context.Background(), "int64", "SUM overflow in (%d + %d)", v1, v2)
+	}
+	return result, nil
+}
+
+func mulInt64SumWithOverflowCheck(v1, v2 int64) (int64, error) {
+	if v1 == 0 || v2 == 0 {
+		return 0, nil
+	}
+	if v1 == math.MinInt64 && v2 == -1 || v2 == math.MinInt64 && v1 == -1 {
+		return 0, moerr.NewOutOfRangef(context.Background(), "int64", "SUM overflow in (%d * %d)", v1, v2)
+	}
+	result := v1 * v2
+	if result/v2 != v1 {
+		return 0, moerr.NewOutOfRangef(context.Background(), "int64", "SUM overflow in (%d * %d)", v1, v2)
+	}
+	return result, nil
+}
+
+func aggSumInt64Fill(
+	execContext aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value int64, isEmpty bool,
+	resultGetter aggexec.AggGetter[int64], resultSetter aggexec.AggSetter[int64]) error {
+
+	result, err := addInt64SumWithOverflowCheck(resultGetter(), value)
+	if err != nil {
+		return err
+	}
+	resultSetter(result)
+	return nil
+}
+
+func aggSumInt64Fills(
+	execContext aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value int64, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[int64], resultSetter aggexec.AggSetter[int64]) error {
+
+	// First: value * count
+	product, err := mulInt64SumWithOverflowCheck(value, int64(count))
+	if err != nil {
+		return err
+	}
+
+	// Then: result + product
+	result, err := addInt64SumWithOverflowCheck(resultGetter(), product)
+	if err != nil {
+		return err
+	}
+	resultSetter(result)
+	return nil
+}
+
+func aggSumInt64Merge(
+	ctx1, ctx2 aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[int64],
+	resultSetter aggexec.AggSetter[int64]) error {
+
+	result, err := addInt64SumWithOverflowCheck(resultGetter1(), resultGetter2())
+	if err != nil {
+		return err
+	}
+	resultSetter(result)
 	return nil
 }

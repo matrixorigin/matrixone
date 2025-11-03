@@ -131,7 +131,7 @@ func buildCloneTable(
 	)
 
 	if err = checkPrivilege(
-		ctx.GetContext(), stmt, opAccount, srcAccount, dstAccount, srcTblDef, dstTableName, dstDatabaseName, bindCtx.snapshot,
+		ctx.GetContext(), opAccount, srcAccount, srcTblDef, dstDatabaseName, bindCtx.snapshot, stmt.StmtType,
 	); err != nil {
 		return nil, err
 	}
@@ -139,8 +139,6 @@ func buildCloneTable(
 	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt); err != nil {
 		return nil, err
 	}
-
-	ctx.GetProcess().GetTxnOperator().GetWorkspace().SetCloneTxn(bindCtx.snapshot.TS.PhysicalTime)
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -163,17 +161,17 @@ func buildCloneTable(
 
 func checkPrivilege(
 	ctx context.Context,
-	stmt *tree.CloneTable,
 	opAccount uint32,
 	srcAccount uint32,
-	dstAccount uint32,
 	srcTblDef *TableDef,
-	dstTableName string,
 	dstDatabaseName string,
 	scanSnapshot *Snapshot,
+	cloneType tree.CloneStmtType,
 ) (err error) {
 
 	var (
+		misMsg string
+
 		snapshotMisMatch = false
 	)
 
@@ -182,14 +180,33 @@ func checkPrivilege(
 		case tree.SNAPSHOTLEVELCLUSTER.String():
 		case tree.SNAPSHOTLEVELACCOUNT.String():
 			if scanSnapshot.ExtraInfo.ObjId != uint64(srcAccount) {
+				misMsg = fmt.Sprintf(
+					"account-level snapshot(%s) does not belong to the account(%d)",
+					scanSnapshot.ExtraInfo.Name, srcAccount,
+				)
 				snapshotMisMatch = true
 			}
 		case tree.SNAPSHOTLEVELDATABASE.String():
-			if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.DbId) {
+			if cloneType == tree.CloneCluster || cloneType == tree.CloneAccount {
 				snapshotMisMatch = true
+				misMsg = "cannot use a database-level snapshot to clone cluster/account"
+			} else if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.DbId) {
+				snapshotMisMatch = true
+				misMsg = fmt.Sprintf(
+					"database-level snapshot(%s) does not belong to the database(%s)",
+					scanSnapshot.ExtraInfo.Name, srcTblDef.DbName,
+				)
 			}
 		case tree.SNAPSHOTLEVELTABLE.String():
-			if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.TblId) {
+			if cloneType == tree.CloneCluster || cloneType == tree.CloneAccount ||
+				cloneType == tree.WithinAccCloneDB || cloneType == tree.BetweenAccCloneDB {
+				snapshotMisMatch = true
+				misMsg = "cannot use a table-level snapshot to clone cluster/account/database"
+			} else if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.TblId) {
+				misMsg = fmt.Sprintf(
+					"table-level snapshot(%s) does not belong to the table(%s-%s)",
+					scanSnapshot.ExtraInfo.Name, srcTblDef.DbName, srcTblDef.Name,
+				)
 				snapshotMisMatch = true
 			}
 		}
@@ -211,9 +228,7 @@ func checkPrivilege(
 					srcTblDef.TblId)),
 		)
 
-		return moerr.NewInternalErrorNoCtxf(
-			"the snapshot %s doesnot contain the table %s", scanSnapshot.ExtraInfo.Name, srcTblDef.Name,
-		)
+		return moerr.NewInternalErrorNoCtx(misMsg)
 	}
 
 	// 1. only sys can clone from system databases
