@@ -667,7 +667,22 @@ year,
 quarter,
 region with rollup
 order by total_sales desc;
-[unknown result because it is related to issue#19998]
+year    quarter    region    total_sales
+All years    Quarter    null    220000.00
+2022    Quarter    null    150000.00
+2022    2    null    85000.00
+2021    Quarter    null    70000.00
+2022    1    null    65000.00
+2021    2    null    45000.00
+2022    2    South    45000.00
+2022    2    North    40000.00
+2022    1    South    35000.00
+2022    1    North    30000.00
+2021    1    null    25000.00
+2021    2    South    25000.00
+2021    2    North    20000.00
+2021    1    South    15000.00
+2021    1    North    10000.00
 drop table sales;
 drop table if exists sales_details;
 create table sales_details (
@@ -755,4 +770,127 @@ null    null    null    null    null    null    null    null    13500.00    9999
 2022    Q1    null    null    null    null    null    null    4500.00    2022    Q1    ZZZ    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 2022    null    null    null    null    null    null    null    4500.00    2022    ZZ    ZZZ    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 drop table sales_details;
+drop table if exists sales_mixed_types;
+create table sales_mixed_types (
+year int,
+quarter int,
+region text,
+amount decimal(10, 2)
+);
+insert into sales_mixed_types (year, quarter, region, amount) values
+(2021, 1, 'North', 10000),
+(2021, 1, 'South', 15000),
+(2021, 2, 'North', 20000),
+(2021, 2, 'South', 25000),
+(2022, 1, 'North', 30000),
+(2022, 1, 'South', 35000),
+(2022, 2, 'North', 40000),
+(2022, 2, 'South', 45000);
+select
+if(grouping(year), 'All years', year) AS year_label,
+if(grouping(quarter), 'All quarters', quarter) as quarter_label,
+region,
+sum(amount) as total_sales
+from
+sales_mixed_types
+group by
+year,
+quarter,
+region with rollup
+order by year_label, quarter_label, region;
+year_label    quarter_label    region    total_sales
+2021    1    North    10000.00
+2021    1    South    15000.00
+2021    1    null    25000.00
+2021    2    North    20000.00
+2021    2    South    25000.00
+2021    2    null    45000.00
+2021    All quarters    null    70000.00
+2022    1    North    30000.00
+2022    1    South    35000.00
+2022    1    null    65000.00
+2022    2    North    40000.00
+2022    2    South    45000.00
+2022    2    null    85000.00
+2022    All quarters    null    150000.00
+All years    All quarters    null    220000.00
+select
+if(grouping(year) = 0, year, 'Grand Total') AS year_label,
+sum(amount) as total_sales
+from
+sales_mixed_types
+group by
+year with rollup
+order by year_label;
+year_label    total_sales
+2021    70000.00
+2022    150000.00
+Grand Total    220000.00
+select
+if(grouping(year), 'All', cast(year as char)) AS year_str,
+if(grouping(quarter), 'Total', quarter) as quarter_val,
+count(*) as cnt
+from
+sales_mixed_types
+group by
+year,
+quarter with rollup
+order by year_str, quarter_val;
+year_str    quarter_val    cnt
+2021    1    2
+2021    2    2
+2021    Total    4
+2022    1    2
+2022    2    2
+2022    Total    4
+All    Total    8
+select
+year,
+if(grouping(region), if(grouping(year), 'Grand Total', 'Year Total'), region) as region_label,
+sum(amount) as total_sales
+from
+sales_mixed_types
+group by
+year,
+region with rollup
+order by year, region_label;
+year    region_label    total_sales
+null    Grand Total    220000.00
+2021    North    30000.00
+2021    South    40000.00
+2021    Year Total    70000.00
+2022    North    70000.00
+2022    South    80000.00
+2022    Year Total    150000.00
+select
+case when grouping(year) = 1 then 'All years' else cast(year as char) end AS year_label,
+case when grouping(quarter) = 1 then 'All quarters' else cast(quarter as char) end as quarter_label,
+sum(amount) as total_sales
+from
+sales_mixed_types
+group by
+year,
+quarter with rollup
+order by year_label, quarter_label;
+year_label    quarter_label    total_sales
+2021    1    25000.00
+2021    2    45000.00
+2021    All quarters    70000.00
+2022    1    65000.00
+2022    2    85000.00
+2022    All quarters    150000.00
+All years    All quarters    220000.00
+select
+concat('Year: ', if(grouping(year), 'Total', year)) AS year_label,
+sum(amount) as total_sales
+from
+sales_mixed_types
+group by
+year with rollup
+order by year_label;
+year_label    total_sales
+Year: 2021    70000.00
+Year: 2022    150000.00
+Year: Total    220000.00
+drop table sales_mixed_types;
 drop database rollup_test;
