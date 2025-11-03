@@ -783,7 +783,11 @@ func StubCDCSinkAndWatermarkUpdater(
 	stub3 := gostub.Stub(
 		&frontend.UpdateErrMsg,
 		func(ctx context.Context, exec *frontend.CDCTaskExecutor, errMsg string) error {
-			errChan <- errMsg
+			// Only send non-empty error messages to errChan
+			if errMsg != "" {
+				logutil.Infof("MockWatermarkUpdater UpdateErrMsg: %s", errMsg)
+				errChan <- errMsg
+			}
 			return nil
 		},
 	)
