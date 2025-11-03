@@ -78,3 +78,61 @@ insert into insert_ignore_09 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222
 insert ignore into insert_ignore_09 select result, result from generate_series(1,10000000) g;
 select count(*) from insert_ignore_09;
 select count(*) from insert_ignore_09 where c1 != c2;
+
+-- Test case for INSERT IGNORE with many duplicate primary keys
+-- This test reproduces the index out of range panic issue
+-- Root cause: InputBatchRowCount not updated after Batches.Shrink removes duplicates in hashmap builder
+drop table if exists t_insert_ignore_panic;
+create table t_insert_ignore_panic (
+    pk varchar(50) not null,
+    col1 varchar(20),
+    primary key (pk)
+);
+
+insert ignore into t_insert_ignore_panic (pk, col1) values ('pk001', 'val1xx');
+
+-- Insert 35 rows with 12 duplicates (result: 23 unique rows)
+-- Before fix: would panic with "index out of range [29] with length 29"
+-- After fix: should successfully insert 23 rows
+insert ignore into t_insert_ignore_panic (pk, col1) values
+('pk001', 'val1'),
+('pk002', 'val2'),
+('pk003', 'val3'),
+('pk001', 'dup1'),  -- duplicate
+('pk004', 'val4'),
+('pk005', 'val5'),
+('pk002', 'dup2'),  -- duplicate
+('pk006', 'val6'),
+('pk007', 'val7'),
+('pk003', 'dup3'),  -- duplicate
+('pk008', 'val8'),
+('pk009', 'val9'),
+('pk004', 'dup4'),  -- duplicate
+('pk010', 'val10'),
+('pk011', 'val11'),
+('pk005', 'dup5'),  -- duplicate
+('pk012', 'val12'),
+('pk013', 'val13'),
+('pk006', 'dup6'),  -- duplicate
+('pk014', 'val14'),
+('pk015', 'val15'),
+('pk007', 'dup7'),  -- duplicate
+('pk016', 'val16'),
+('pk017', 'val17'),
+('pk008', 'dup8'),  -- duplicate
+('pk018', 'val18'),
+('pk019', 'val19'),
+('pk009', 'dup9'),  -- duplicate
+('pk020', 'val20'),
+('pk021', 'val21'),
+('pk010', 'dup10'),  -- duplicate
+('pk022', 'val22'),
+('pk023', 'val23'),
+('pk011', 'dup11'),  -- duplicate
+('pk012', 'dup12');  -- duplicate
+
+-- Verify: should have exactly 23 rows
+select count(*) from t_insert_ignore_panic;
+
+
+
