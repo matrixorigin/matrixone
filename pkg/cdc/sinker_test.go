@@ -202,7 +202,7 @@ func TestNewSinker(t *testing.T) {
 					ar *ActiveRoutine,
 					maxSqlLength uint64,
 					isMO bool,
-				) Sinker{
+				) Sinker {
 					return nil
 				},
 			)
