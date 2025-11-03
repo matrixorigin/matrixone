@@ -526,7 +526,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *group.Group:
 		in.Agg = &pipeline.Group{
-			PreAllocSize: t.PreAllocSize,
 			NeedEval:     t.NeedEval,
 			SpillMem:     t.SpillMem,
 			GroupingFlag: t.GroupingFlag,
@@ -1062,7 +1061,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Group:
 		t := opr.GetAgg()
 		arg := group.NewArgument()
-		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag

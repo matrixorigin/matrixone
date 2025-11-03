@@ -60,9 +60,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			// all handled, going to eval mode.
 			//
 			// XXX: Note that this test, r.Batch == nil is treated as ExecStop.
-			// I am not sure this is correct, but some code has already done this, notably
-			// value scan.
-			//
 			// if r.Status == vm.ExecStop || r.Batch == nil {
 			if r.Batch == nil {
 				mergeGroup.ctr.state = vm.Eval

@@ -38,7 +38,7 @@ select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as 
 
 select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
-) tmp;
+) tmpt;
 
 -- force dop to 1, so it is easier to trigger spill
 select 'set max_dop to 1 ... ';
@@ -48,12 +48,12 @@ select 'set agg_spill_mem to 50MB ... ';
 set @@agg_spill_mem = 60000000; 
 -- rerun queries
 
-select count(*) from (select a, b, c from t group by a, b, c) tmpt;
-select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as f from t group by a, c) tmpt;
+select count(*) from (select a, b, c from t group by a, b, c) tmptt;
+select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as f from t group by a, c) tmptt;
 
 select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
-) tmp;
+) tmptt;
 
 -- A much better way is to run explain analyze, but these all depends on issue 22721
 
