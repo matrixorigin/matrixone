@@ -193,7 +193,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		},
 	})
 
-	joinnodeID := builder.appendNode(&plan.Node{
+	joinNodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{scanNode.NodeId, tableFuncNodeID},
 		JoinType: plan.Node_INNER,
@@ -224,7 +224,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
-		Children: []int32{joinnodeID},
+		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
 		Limit:    limit,                         // Apply LIMIT after sorting
 		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
