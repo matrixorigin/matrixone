@@ -1894,6 +1894,11 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 		}
 	}
 	length := l.Len()
+	length2 := l2.Len()
+	// Ensure l and l2 have matching lengths to avoid panic
+	if length != length2 {
+		return nil, nil, moerr.NewInternalErrorNoCtxf("file list and size list length mismatch: %d vs %d", length, length2)
+	}
 	for j := 0; j < length; j++ {
 		fileList = append(fileList, l.Front().Value.(string))
 		l.Remove(l.Front())
