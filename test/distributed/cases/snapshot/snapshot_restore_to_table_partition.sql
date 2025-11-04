@@ -40,7 +40,7 @@ show create table acc_test04.index03;
 -- @session
 
 --sys
-restore table acc01.acc_test04.index03{snapshot="sp04"};
+restore table acc_test04.index03{snapshot="sp04"};
 restore account acc01 from snapshot sp04 to account acc02;
 
 

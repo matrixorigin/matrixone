@@ -73,17 +73,17 @@ use test01;
 drop table aff01;
 drop table pri01;
 
-restore table sys.test01.aff01{snapshot="sp01"};
+restore table test01.aff01{snapshot="sp01"};
 
 show databases;
 use test01;
 show tables;
 
-restore table sys.test01.pri01{snapshot="sp01"};
+restore table test01.pri01{snapshot="sp01"};
 show tables;
 select * from pri01;
 
-restore table sys.test01.aff01{snapshot="sp01"};
+restore table test01.aff01{snapshot="sp01"};
 show tables;
 select * from aff01;
 show create table pri01;
@@ -165,17 +165,17 @@ use test01;
 drop table aff01;
 drop table pri01;
 
-restore table acc01.test01.aff01{snapshot="sp01"};
+restore table test01.aff01{snapshot="sp01"};
 
 show databases;
 use test01;
 show tables;
 
-restore table acc01.test01.pri01{snapshot="sp01"};
+restore table test01.pri01{snapshot="sp01"};
 show tables;
 select * from pri01;
 
-restore table acc01.test01.aff01{snapshot="sp01"};
+restore table test01.aff01{snapshot="sp01"};
 show tables;
 select * from aff01;
 show create table pri01;
@@ -245,7 +245,7 @@ create snapshot sp03 for account;
 drop database test02;
 drop database test01;
 
-restore table sys.test02.aff01{snapshot="sp03"};
+restore table test02.aff01{snapshot="sp03"};
 
 show databases;
 use test02;
@@ -276,7 +276,7 @@ create snapshot sp04 for account;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 
-restore table sys.test04.f1{snapshot="sp04"};
+restore table test04.f1{snapshot="sp04"};
 
 use test04;
 show tables;
@@ -309,7 +309,7 @@ create snapshot sp05 for account acc01;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 
-restore table acc01.test05.f1{snapshot="sp05"};
+restore table test05.f1{snapshot="sp05"};
 
 use test04;
 show tables;
@@ -350,7 +350,7 @@ insert into f1 values (4,600);
 use test07;
 insert into c1 values (2,9);
 
-restore table acc01.test06.f1{snapshot="sp06"};
+restore table test06.f1{snapshot="sp06"};
 restore account acc01 from snapshot sp06;
 
 use test06;
@@ -396,7 +396,7 @@ create snapshot sp07 for account;
 insert into foreign01 values(3, '323214321321', 32, 1);
 insert into foreign02 values(3,2,10);
 
-restore table sys.test07.foreign02{snapshot="sp07"};
+restore table test07.foreign02{snapshot="sp07"};
 select * from foreign01;
 select * from foreign02;
 
@@ -436,7 +436,7 @@ create snapshot sp08 for account acc01;
 insert into foreign01 values(3, '323214321321', 32, 1);
 insert into foreign02 values(3,2,10);
 
-restore table acc01.test08.foreign02{snapshot="sp08"};
+restore table test08.foreign02{snapshot="sp08"};
 select * from foreign01;
 select * from foreign02;
 

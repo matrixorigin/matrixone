@@ -31,7 +31,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 10
-restore database sys.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -69,7 +69,7 @@ select count(*) from snapshot_read.test_snapshot_read;
 SQL parser error: table "test_snapshot_read" does not exist
 select count(*) from snapshot_read.users;
 SQL parser error: table "users" does not exist
-restore database sys.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -106,7 +106,7 @@ select count(*) from snapshot_read.test_snapshot_read;
 Unknown database snapshot_read
 select count(*) from snapshot_read.users;
 Unknown database snapshot_read
-restore database sys.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -151,7 +151,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 10
-restore database test_account.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -189,7 +189,7 @@ select count(*) from snapshot_read.test_snapshot_read;
 SQL parser error: table "test_snapshot_read" does not exist
 select count(*) from snapshot_read.users;
 SQL parser error: table "users" does not exist
-restore database test_account.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -226,7 +226,7 @@ select count(*) from snapshot_read.test_snapshot_read;
 Unknown database snapshot_read
 select count(*) from snapshot_read.users;
 Unknown database snapshot_read
-restore database test_account.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -278,7 +278,7 @@ create snapshot sp_01 for account test_account;
 use snapshot_read;
 drop table students;
 drop table users;
-restore database test_account.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 internal error: can't restore database from other account's snapshot
 restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.students;
@@ -288,7 +288,7 @@ select count(*) from snapshot_read.users;
 count(*)
 11
 drop database snapshot_read;
-restore database test_account.snapshot_read{snapshot="sp_01"};
+restore database snapshot_read{snapshot="sp_01"};
 internal error: can't restore database from other account's snapshot
 restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.students;

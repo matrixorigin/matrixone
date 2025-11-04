@@ -270,8 +270,8 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account;
 
 drop database sub05;
-restore table sys.sub05.t4{snapshot="sp05"};
-restore database sys.sub05{snapshot="sp05"};
+restore table sub05.t4{snapshot="sp05"};
+restore database sub05{snapshot="sp05"};
 show databases;
 use sub05;
 show tables;
@@ -516,7 +516,7 @@ drop publication pub_full01;
 show subscriptions;
 -- @session
 
-restore database sys.pub_fulltext_table{snapshot="sp_pub01"};
+restore database pub_fulltext_table{snapshot="sp_pub01"};
 -- @ignore:5,6
 show publications;
 

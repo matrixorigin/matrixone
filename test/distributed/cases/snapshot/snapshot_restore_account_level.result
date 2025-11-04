@@ -623,7 +623,7 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop snapshot if exists snapshot_01;
 create snapshot snapshot_01 for account;
-restore database sys.mo_catalog{snapshot="snapshot_01"};
+restore database mo_catalog{snapshot="snapshot_01"};
 internal error: can't restore db: mo_catalog
 drop snapshot if exists snapshot_01;
 drop snapshot if exists snapshot_01;

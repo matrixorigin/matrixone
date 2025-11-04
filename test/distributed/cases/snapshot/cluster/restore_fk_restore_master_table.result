@@ -183,7 +183,7 @@ create snapshot sys_sp for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sys_sp    2025-07-19 05:49:20.575154    account    sys        
-restore account sys database Company from snapshot sys_sp;
+restore database Company{snapshot="sys_sp"};
 select * from Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -248,7 +248,7 @@ performancereviewid    employeeid    reviewdate    reviewerid
 4    4    2020-04-04    5
 5    5    2020-05-05    6
 6    6    2020-06-06    1
-restore table sys.Company.Departments{snapshot="sys_sp"};
+restore table Company.Departments{snapshot="sys_sp"};
 select * from Departments;
 departmentid    name    managerid
 1    Research and Development    null

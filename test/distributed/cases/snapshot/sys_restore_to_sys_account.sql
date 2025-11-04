@@ -522,7 +522,7 @@ create snapshot sp13 for account;
 insert into db04.table01 values (200);
 insert into db05.table01 values (400);
 
-restore database sys.db04{snapshot="sp13"};
+restore database db04{snapshot="sp13"};
 
 show databases;
 use db04;
@@ -573,8 +573,8 @@ drop database db08;
 drop snapshot if exists sp15;
 create snapshot sp15 for account;
 
-restore database sys.db07{snapshot="sp15"};
-restore database sys.db08{snapshot="sp15"};
+restore database db07{snapshot="sp15"};
+restore database db08{snapshot="sp15"};
 
 show databases;
 use db07;
@@ -603,7 +603,7 @@ drop snapshot if exists sp15;
 create snapshot sp15 for account;
 insert into db08 (col1) values (3000);
 
-restore database sys.db{snapshot="sp15"};
+restore database db{snapshot="sp15"};
 drop snapshot sp15;
 drop database db08;
 
@@ -667,8 +667,8 @@ select * from index01;
 use db10;
 truncate index03;
 
-restore table sys.db09.index01{snapshot="sp16"};
-restore table sys.db10.index03{snapshot="sp16"};
+restore table db09.index01{snapshot="sp16"};
+restore table db10.index03{snapshot="sp16"};
 
 use db09;
 select * from index02;
@@ -707,17 +707,17 @@ insert into pri01 values (234222, -3923.2342342);
 drop snapshot if exists sp18;
 create snapshot sp18 for account;
 
-restore table sys.db11.pri01{snapshot="sp18"};
+restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
 select * from pri01;
 select count(*) from pri01;
 
-restore table sys.db11.pri01{snapshot="sp17"};
+restore table db11.pri01{snapshot="sp17"};
 show create table pri01;
 select * from pri01;
 select count(*) from pri01;
 
-restore table sys.db11.pri01{snapshot="sp18"};
+restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
 select * from pri01;
 select count(*) from pri01;

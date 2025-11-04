@@ -66,7 +66,7 @@ use test02;
 show tables;
 
 drop database if exists test02;
-restore database a1.test02{snapshot="sp02_restore_lower"};
+restore database test02{snapshot="sp02_restore_lower"};
 
 use test02;
 show tables;

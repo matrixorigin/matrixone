@@ -147,7 +147,7 @@ create snapshot sys_sp for account;
 show snapshots;
 
 -- restore 
-restore account sys database Company from snapshot sys_sp;
+restore database Company{snapshot="sys_sp"};
 select * from Departments;
 select * from Employees;
 select * from Positions;
@@ -158,7 +158,7 @@ select * from TimeOff;
 select * from PerformanceReviews;
 
 
-restore table sys.Company.Departments{snapshot="sys_sp"};
+restore table Company.Departments{snapshot="sys_sp"};
 select * from Departments;
 select * from Employees;
 select * from Positions;

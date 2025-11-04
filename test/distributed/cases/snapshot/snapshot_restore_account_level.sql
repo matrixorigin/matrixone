@@ -617,7 +617,7 @@ show snapshots;
 
 drop snapshot if exists snapshot_01;
 create snapshot snapshot_01 for account;
-restore database sys.mo_catalog{snapshot="snapshot_01"};
+restore database mo_catalog{snapshot="snapshot_01"};
 drop snapshot if exists snapshot_01;
 
 drop snapshot if exists snapshot_01;

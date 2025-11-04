@@ -21,11 +21,11 @@ count(*)
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_02'};
 count(*)
 50
-restore table sys.snapshot_read.test_snapshot_read{snapshot="snapshot_01"};
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
-restore table sys.snapshot_read.test_snapshot_read{snapshot="snapshot_02"};
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_02"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 50
@@ -59,7 +59,7 @@ id    username    email
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 id    username    email
 3    alice_jones    alice.jones@gmail.com
-restore table sys.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 id    username    email
 1    john_doe    john@example.com
@@ -101,7 +101,7 @@ create snapshot sp_01 for account;
 drop table users;
 select count(*) from snapshot_read.users;
 SQL parser error: table "users" does not exist
-restore table sys.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 count(*)
 11
@@ -127,7 +127,7 @@ create snapshot sp_01 for account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
 Unknown database snapshot_read
-restore table sys.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 count(*)
 11
@@ -157,11 +157,11 @@ count(*)
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_02'};
 count(*)
 50
-restore table test_account.snapshot_read.test_snapshot_read{snapshot="snapshot_01"};
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
-restore table test_account.snapshot_read.test_snapshot_read{snapshot="snapshot_02"};
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_02"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 50
@@ -195,7 +195,7 @@ id    username    email
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 id    username    email
 3    alice_jones    alice.jones@gmail.com
-restore table test_account.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 id    username    email
 1    john_doe    john@example.com
@@ -237,7 +237,7 @@ create snapshot sp_01 for account test_account;
 drop table users;
 select count(*) from snapshot_read.users;
 SQL parser error: table "users" does not exist
-restore table test_account.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 count(*)
 11
@@ -263,7 +263,7 @@ create snapshot sp_01 for account test_account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
 Unknown database snapshot_read
-restore table test_account.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 count(*)
 11
@@ -297,7 +297,7 @@ DELETE FROM snapshot_read.users;
 select count(*) from snapshot_read.users;
 count(*)
 0
-restore table test_account.snapshot_read.users{snapshot="sp_01"};
+restore table snapshot_read.users{snapshot="sp_01"};
 internal error: can't restore table from other account's snapshot
 restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.users;
@@ -331,7 +331,7 @@ delete from test_snapshot_read where a <= 50;
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 50
-restore table sys.snapshot_read.test_snapshot_read{snapshot="sp_01"};
+restore table snapshot_read.test_snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100

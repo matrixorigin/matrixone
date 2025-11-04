@@ -2664,9 +2664,6 @@ var (
 			output: "restore account account_01 database db1 from snapshot snapshot_01 to account account_02",
 		},
 		{
-			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
-		},
-		{
 			input:  "restore table account_01.db1.t1{snapshot=\"snapshot_01\"}",
 			output: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
 		},

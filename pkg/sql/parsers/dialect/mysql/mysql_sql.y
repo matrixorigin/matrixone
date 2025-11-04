@@ -319,7 +319,6 @@ import (
 
 %token <str> OUT INOUT
 
-
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT SAVEPOINT
 %token <str> CHAIN NO RELEASE PRIORITY QUICK
@@ -361,14 +360,12 @@ import (
 // publication
 %token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
 
-
 // MO table option
 %token <str> PROPERTIES
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC
-
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -849,7 +846,6 @@ import (
 start_command:
     stmt_type
 
-
 stmt_type:
     block_stmt
     {
@@ -961,7 +957,6 @@ normal_stmt:
 |   resume_cdc_stmt
 |   restart_cdc_stmt
 |   branch_stmt
-
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -1240,7 +1235,6 @@ create_pitr_stmt:
         }
     }
 
-
 pitr_value:
     INTEGRAL
     {
@@ -1334,25 +1328,6 @@ snapshot_restore_stmt:
             SnapShotName:tree.Identifier($6.Compare()),
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            SnapShotName: tree.Identifier($8.Compare()),
-        }
-    }
-|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELTABLE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            TableName: tree.Identifier($7.Compare()),
-            SnapShotName: tree.Identifier($10.Compare()),
-        }
-    }
 |   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
     {
         $$ = &tree.RestoreSnapShot{ 
@@ -1362,7 +1337,6 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($9.Compare()),
         }
     }
-
 
 restore_db_scope:
     ident
@@ -1420,7 +1394,6 @@ restore_to_account_name_opt:
     {
         $$ = $3.Compare()
     }
-
 
 restore_pitr_stmt:
    RESTORE FROM PITR ident STRING
@@ -1533,7 +1506,6 @@ call_stmt:
             Args: $4,
         }
     }
-
 
 leave_stmt:
     LEAVE ident
@@ -1698,9 +1670,6 @@ mo_dump_stmt:
             ExportParams: ep,
         }
     }
-
-
-
 
 load_data_stmt:
     LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt strict_opt
@@ -2250,7 +2219,6 @@ object_type:
     {
         $$ = tree.OBJECT_TYPE_ACCOUNT
     }
-
 
 priv_list:
     priv_elem
@@ -3187,7 +3155,6 @@ prepare_stmt:
         $$ = tree.NewPrepareVar(tree.Identifier($2), $4)
     }
 
-
 execute_stmt:
     execute_sym stmt_name
     {
@@ -3353,7 +3320,6 @@ explain_foramt_value:
     JSON
 |   TEXT
 
-
 prepare_sym:
     PREPARE
 
@@ -3397,7 +3363,6 @@ utility_option_arg:
     TRUE                    { $$ = "true" }
 |   FALSE                        { $$ = "false" }
 |   explain_foramt_value                    { $$ = $1 }
-
 
 analyze_stmt:
     ANALYZE TABLE table_name '(' column_list ')'
@@ -3443,7 +3408,6 @@ opt_retry:
         }
         $$ = res
     }
-
 
 alter_stmt:
     alter_user_stmt
@@ -3534,7 +3498,6 @@ rename_option:
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
     }
-
 
 alter_option_list:
     alter_option
@@ -3961,7 +3924,6 @@ visibility:
    	    $$ = tree.VISIBLE_TYPE_INVISIBLE
     }
 
-
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
@@ -4090,7 +4052,6 @@ alter_user_stmt:
         commentOrAttribute := $6
         $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
     }
-
 
 default_role_opt:
     {
@@ -4659,7 +4620,6 @@ show_upgrade_stmt:
     	$$ = &tree.ShowAccountUpgrade{}
     }
 
-
 show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
     {
@@ -4697,8 +4657,6 @@ table_column_name:
     {
         $$ = $2
     }
-
-
 
 from_or_in:
     FROM
@@ -4996,8 +4954,6 @@ delete_without_using_stmt:
             TableRefs: tree.TableExprs{$7},
         }
     }
-
-
 
 delete_with_using_stmt:
     DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
@@ -5467,7 +5423,6 @@ force_quote_opt:
     {
         $$ = $3
     }
-
 
 force_quote_list:
     ident
@@ -6283,7 +6238,6 @@ values_stmt:
         }
     }
 
-
 row_constructor_list:
     row_constructor
     {
@@ -6315,7 +6269,6 @@ optype:
     {
         $$ = $1
     }
-
 
 optype_opt:
 	  '(' optype ')'
@@ -6706,7 +6659,6 @@ opt_lang:
         $$ = $2
     }
 
-
 create_function_stmt:
     CREATE replace_opt FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang func_body_import STRING func_handler_opt
     {
@@ -6810,7 +6762,6 @@ func_body_import:
     {
     	$$ = true
     }
-
 
 func_handler_opt:
     {
@@ -7113,7 +7064,6 @@ create_publication_accounts:
 	    }
     }
 
-
 create_stage_stmt:
     CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
     {
@@ -7242,7 +7192,6 @@ alter_stage_stmt:
         var comment = $9
         $$ = tree.NewAlterStage(ifNotExists, name, urlOption, credentialsOption, statusOption, comment)
     }
-
 
 alter_publication_stmt:
     ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt alter_publication_table_opt comment_opt
@@ -7417,7 +7366,6 @@ user_comment_or_attribute_opt:
 //    {
 //        $$ = &tree.ResourceOptionMaxUserConnections{Count: $2.(int64)}
 //    }
-
 
 //require_clause_opt:
 //    {
@@ -8075,7 +8023,6 @@ replace_opt:
         $$ = true
     }
 
-
 branch_stmt:
     DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
     {
@@ -8124,7 +8071,6 @@ branch_stmt:
     	t.ConflictOpt = $7
     	$$ = t
     }
-
 
 diff_output_opt:
     {
@@ -10182,8 +10128,6 @@ simple_expr:
 	$$ = val		
     }
 
-
-
 search_pattern:
     STRING
     {
@@ -10576,7 +10520,6 @@ window_frame_clause_opt:
     {
         $$ = $1
     }
-
 
 window_partition_by:
    PARTITION BY expression_list
@@ -11070,7 +11013,6 @@ function_call_generic:
             Exprs: tree.Exprs{column},
         }
     }
-
 
 trim_direction:
     BOTH
@@ -11767,7 +11709,6 @@ literal:
     {
         $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
-
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -13257,7 +13198,6 @@ not_keyword:
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
 |   BITMAP_COUNT
-
 
 //mo_keywords:
 //    PROPERTIES
