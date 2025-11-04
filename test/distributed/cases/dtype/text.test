@@ -127,3 +127,97 @@ select * from t1 where a not like 'a%' order by a desc;
 select * from t1 where a like "\__cdef" order by 1 desc;
 select * from t1 where a not like "%d_\_";
 drop table t1;
+
+drop database if exists text_test;
+create database text_test;
+use text_test;
+drop table if exists kb_portal_article_order;
+drop table if exists kb_portal_article_item;
+create table kb_portal_article_order (
+  id bigint primary key,
+  uniqueCode varchar(64) not null,
+  spaceId int not null,
+  title varchar(200),
+  esId varchar(64),
+  originalName varchar(200)
+);
+
+create table kb_portal_article_item (
+  id bigint primary key,
+  uniqueCode varchar(64) not null,
+  rtfContent text
+);
+
+insert into kb_portal_article_order values
+(1,'U001',12,'Q-小','E1','orig1'),
+(2,'U002',12,'Q-中','E2','orig2'),
+(3,'U003',12,'Q-大','E3','orig3'),
+(4,'U004',12,'Q-超大','E4','orig4'),
+(5,'U005',99,'Q-其他','E5','orig5');
+insert into kb_portal_article_item values (11,'U001','abc');
+insert into kb_portal_article_item values (12,'U002', repeat('a',65535));
+insert into kb_portal_article_item values (13,'U003', repeat('b',65536));
+insert into kb_portal_article_item values (14,'U004', repeat('c',217554));
+insert into kb_portal_article_item values (15,'U005', null);
+-- small text
+SELECT a.title,a.id,a.uniqueCode,a.esId,a.originalName,a.title,
+       CHAR_LENGTH(i.rtfContent) as ar
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND a.uniqueCode='U001';
+
+-- boundary=65535，期望成功，ar=65535
+SELECT a.id, CHAR_LENGTH(i.rtfContent) ar
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND a.uniqueCode='U002';
+
+-- exceed 65536
+SELECT a.id, CHAR_LENGTH(i.rtfContent) ar
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND a.uniqueCode='U003';
+
+-- length=217554
+SELECT a.id, CHAR_LENGTH(i.rtfContent) ar
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND a.uniqueCode='U004';
+
+-- clearly truncates and then takes the length (when the business is acceptable)
+SELECT a.id, CHAR_LENGTH(SUBSTRING(i.rtfContent,1,65535)) as ar_trunc
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND a.uniqueCode in ('U003','U004');
+
+-- only counts the length threshold (to avoid returning the entire text) : Conditional side truncation
+SELECT a.id
+FROM kb_portal_article_order a
+JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND CHAR_LENGTH(SUBSTRING(i.rtfContent,1,65535)) = 65535;
+
+-- checks for NULL lines (no error should be reported, return NULL)
+SELECT a.id, CHAR_LENGTH(i.rtfContent) as ar
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.uniqueCode='U005';
+
+-- text containing Chinese characters (multiple bytes) : The number of characters does not equal the number of bytes
+update kb_portal_article_item
+set rtfContent = repeat('科技', 1000) -- 2000 字符，字节数更大
+where uniqueCode='U001';
+
+SELECT a.id,
+       CHAR_LENGTH(i.rtfContent) as char_len,
+       LENGTH(i.rtfContent) as byte_len
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.uniqueCode='U001';
+
+-- Aggregation Statistics (Only for data not out of bounds)
+SELECT a.spaceId, count(*) as cnt, max(CHAR_LENGTH(i.rtfContent)) as max_chars
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
+WHERE a.spaceId=12 AND a.uniqueCode in ('U001','U002')
+GROUP BY a.spaceId;
+drop database text_test;
