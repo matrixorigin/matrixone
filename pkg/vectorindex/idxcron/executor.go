@@ -39,6 +39,10 @@ import (
 +----------------+---------------------+------+------+---------+-------+---------+
 */
 const (
+	Type_I64    = "I64"
+	Type_F64    = "F64"
+	Type_String = "S"
+
 	Action_Ivfflat_Reindex      = "ivfflat_reindex"
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
 	Action_Wildcard             = "*"
