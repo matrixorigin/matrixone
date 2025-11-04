@@ -140,6 +140,16 @@ var (
 	CdcMysqlConnErrorCounter = cdcErrorCounter.WithLabelValues("mysql-conn")
 	CdcMysqlSinkErrorCounter = cdcErrorCounter.WithLabelValues("mysql-sink")
 
+	cdcRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_retry_count",
+			Help:      "Count of CDC retry attempts",
+		}, []string{"component"})
+	CdcReaderRetryCounter = cdcRetryCounter.WithLabelValues("reader")
+	CdcSinkerRetryCounter = cdcRetryCounter.WithLabelValues("sinker")
+
 	cdcProcessingRecordCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",

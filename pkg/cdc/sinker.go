@@ -305,9 +305,12 @@ var NewMysqlSinker = func(
 	if ok {
 		_ = sinkImpl.conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
 		maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
-		logutil.Infof("CDC-MySQLSinker (%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+		logutil.Info("CDC-Sinker-MaxPacket",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Uint64("max_allowed_packet", maxAllowedPacket))
 	} else {
-		logutil.Warnf("CDC-MySQLSinker (%v) mysql is not a mysqlSink", s.dbTblInfo)
+		logutil.Warn("CDC-Sinker-NotMySQLSink",
+			zap.String("table", s.dbTblInfo.String()))
 		maxAllowedPacket = maxSqlLength
 	}
 
@@ -394,9 +397,9 @@ var NewMysqlSinker = func(
 }
 
 func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
-	logutil.Infof("CDC-MySQLSinker (%v).Run: start", s.dbTblInfo)
+	logutil.Info("CDC-Sinker-Start", zap.String("table", s.dbTblInfo.String()))
 	defer func() {
-		logutil.Infof("CDC-MySQLSinker (%v).Run: end", s.dbTblInfo)
+		logutil.Info("CDC-Sinker-End", zap.String("table", s.dbTblInfo.String()))
 	}()
 
 	for sqlBuffer := range s.sqlBufSendCh {
@@ -409,26 +412,36 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 			// dummy sql, do nothing
 		} else if bytes.Equal(sqlBuffer, begin) {
 			if err := s.mysql.SendBegin(ctx); err != nil {
-				logutil.Errorf("CDC-MySQLSinker (%v) SendBegin, err: %v", s.dbTblInfo, err)
-				// record error
+				logutil.Error("CDC-Sinker-SendBegin-Error",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Error(err))
 				s.SetError(err)
 			}
 		} else if bytes.Equal(sqlBuffer, commit) {
 			if err := s.mysql.SendCommit(ctx); err != nil {
-				logutil.Errorf("CDC-MySQLSinker (%v) SendCommit, err: %v", s.dbTblInfo, err)
-				// record error
+				logutil.Error("CDC-Sinker-SendCommit-Error",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Error(err))
 				s.SetError(err)
 			}
 		} else if bytes.Equal(sqlBuffer, rollback) {
 			if err := s.mysql.SendRollback(ctx); err != nil {
-				logutil.Errorf("CDC-MySQLSinker (%v) SendRollback, err: %v", s.dbTblInfo, err)
-				// record error
+				logutil.Error("CDC-Sinker-SendRollback-Error",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Error(err))
 				s.SetError(err)
 			}
 		} else {
 			if err := s.mysql.Send(ctx, ar, sqlBuffer, true); err != nil {
-				logutil.Errorf("CDC-MySQLSinker (%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuffer[sqlBufReserved:])
-				// record error
+				// Only log first 500 chars of SQL to avoid huge logs
+				sqlSnippet := string(sqlBuffer[sqlBufReserved:])
+				if len(sqlSnippet) > 500 {
+					sqlSnippet = sqlSnippet[:500] + "..."
+				}
+				logutil.Error("CDC-Sinker-SendSQL-Error",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.String("sql", sqlSnippet),
+					zap.Error(err))
 				s.SetError(err)
 			}
 		}
@@ -940,13 +953,17 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 		}
 
 		if err != nil {
-
 			s.infoRecordedTxnSQLs(err)
 
-			logutil.Errorf("CDC-MySQLSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
-			//logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:])
+			// Log SQL snippet (first 500 chars)
+			sqlSnippet := string(sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
+			if len(sqlSnippet) > 500 {
+				sqlSnippet = sqlSnippet[:500] + "..."
+			}
+			logutil.Error("CDC-Sinker-SendSQL-Failed",
+				zap.String("sql", sqlSnippet),
+				zap.Error(err))
 		}
-		//logutil.Infof("cdc mysqlSink Send success, sql: %s", sqlBuf[sqlBufReserved:])
 		return
 	}
 
@@ -994,6 +1011,7 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() (stopRetry bool, er
 		return (retryTimes == -1 || retry < retryTimes) && time.Since(startTime) < retryDuration
 	}
 	dur := time.Second
+	firstError := true
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		select {
 		case <-ctx.Done():
@@ -1013,12 +1031,22 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() (stopRetry bool, er
 		}
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 
-		logutil.Errorf("CDC-MySQLSink retry failed, err: %v", err)
-		v2.CdcMysqlSinkErrorCounter.Inc()
+		// Record error counter only on first failure
+		if firstError {
+			v2.CdcMysqlSinkErrorCounter.Inc()
+			firstError = false
+		}
+		// Record every retry attempt
+		v2.CdcSinkerRetryCounter.Inc()
+
+		// Log only first 3 retries and every 10th retry to reduce log volume
+		if retry < 3 || retry%10 == 0 {
+			logutil.Errorf("CDC-Sinker-Retry: attempt=%d, err=%v", retry+1, err)
+		}
 		time.Sleep(dur)
 		dur *= 2
 	}
-	return moerr.NewInternalError(ctx, "CDC-MySQLSink retry exceed retryTimes or retryDuration")
+	return moerr.NewInternalError(ctx, "CDC-Sinker-RetryExceeded: max retries or duration exceeded")
 }
 
 //type matrixoneSink struct {

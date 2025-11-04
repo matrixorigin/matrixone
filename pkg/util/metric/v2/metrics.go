@@ -209,6 +209,7 @@ func initFrontendMetrics() {
 	registry.MustRegister(sqlLengthHistogram)
 	registry.MustRegister(cdcRecordCounter)
 	registry.MustRegister(cdcErrorCounter)
+	registry.MustRegister(cdcRetryCounter)
 	registry.MustRegister(cdcProcessingRecordCountGauge)
 	registry.MustRegister(cdcMemoryGauge)
 	registry.MustRegister(cdcDurationHistogram)

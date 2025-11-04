@@ -145,8 +145,8 @@ func (reader *tableReader) Close() {
 
 func (reader *tableReader) forceNextInterval(wait time.Duration) {
 	logutil.Info(
-		"CDC-TableReader-ResetNextInterval",
-		zap.String("info", reader.info.String()),
+		"CDC-Reader-ForceInterval",
+		zap.String("table", reader.info.String()),
 		zap.Duration("wait", wait),
 	)
 	reader.force = true
@@ -160,8 +160,8 @@ func (reader *tableReader) Run(
 	key := GenDbTblKey(reader.info.GetSourceDbName(), reader.info.GetSourceTblName())
 	if _, loaded := reader.runningReaders.LoadOrStore(key, reader); loaded {
 		logutil.Warn(
-			"CDC-TableReader-DuplicateRunning",
-			zap.String("info", reader.info.String()),
+			"CDC-Reader-DuplicateRunning",
+			zap.String("table", reader.info.String()),
 			zap.String("task-id", reader.taskId),
 			zap.Uint64("account-id", reader.accountId),
 		)
@@ -169,8 +169,8 @@ func (reader *tableReader) Run(
 		return
 	}
 	logutil.Info(
-		"CDC-TableReader-RunStart",
-		zap.String("info", reader.info.String()),
+		"CDC-Reader-Start",
+		zap.String("table", reader.info.String()),
 		zap.Uint64("account-id", reader.accountId),
 		zap.String("task-id", reader.taskId),
 	)
@@ -208,9 +208,9 @@ func (reader *tableReader) Run(
 				errMsg,
 			); err != nil {
 				logutil.Error(
-					"CDC-TableReader-UpdateWatermarkErrMsgFailed",
-					zap.String("info", reader.info.String()),
-					zap.String("save-err-msg", errMsg),
+					"CDC-Reader-UpdateWatermark-Error",
+					zap.String("table", reader.info.String()),
+					zap.String("err-msg", errMsg),
 					zap.Error(err),
 				)
 			}
@@ -221,8 +221,8 @@ func (reader *tableReader) Run(
 			detector.cdcStateManager.RemoveActiveRunner(reader.info)
 		}
 		logutil.Info(
-			"CDC-TableReader-RunEnd",
-			zap.String("info", reader.info.String()),
+			"CDC-Reader-End",
+			zap.String("table", reader.info.String()),
 			zap.Uint64("account-id", reader.accountId),
 			zap.String("task-id", reader.taskId),
 		)
@@ -230,7 +230,9 @@ func (reader *tableReader) Run(
 
 	lastSync, err := reader.getLastSyncTime(ctx)
 	if err != nil {
-		logutil.Errorf("CDC-TableReader GetLastSyncTime failed: %v", err)
+		logutil.Error("CDC-Reader-GetLastSyncTime-Error",
+			zap.String("table", reader.info.String()),
+			zap.Error(err))
 		lastSync = time.Time{}
 	}
 
@@ -266,13 +268,15 @@ func (reader *tableReader) Run(
 			reader.force = false
 			reader.tick.Reset(reader.frequency)
 			logutil.Info(
-				"CDC-TableReader-ResetNextInterval",
-				zap.String("info", reader.info.String()),
+				"CDC-Reader-ResetInterval",
+				zap.String("table", reader.info.String()),
 				zap.Duration("frequency", reader.frequency),
 			)
 		}
 		if retryable, err = reader.readTable(ctx, ar); err != nil {
-			logutil.Errorf("CDC-TableReader (%v) failed, err: %v", reader.info, err)
+			logutil.Error("CDC-Reader-ReadTable-Error",
+				zap.String("table", reader.info.String()),
+				zap.Error(err))
 			return
 		}
 
@@ -371,8 +375,8 @@ func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (re
 			&watermark,
 		)
 		logutil.Info(
-			"CDC-TableReader-ResetWatermark",
-			zap.String("info", reader.info.String()),
+			"CDC-Reader-ResetWatermark",
+			zap.String("table", reader.info.String()),
 			zap.Uint64("account-id", reader.accountId),
 			zap.String("task-id", reader.taskId),
 			zap.String("watermark", watermark.ToString()),
@@ -479,7 +483,7 @@ func (reader *tableReader) readTableWithTxn(
 		// e.g. encounter errors, or interrupted by user (pause/cancel)
 		if !current.Equal(&toTs) {
 			logutil.Error(
-				"CDC-TableReader-ReadTableWithTxnEndAbnormally",
+				"CDC-Reader-ReadTxn-Abnormal",
 				zap.String("info", reader.info.String()),
 				zap.Uint64("account-id", reader.accountId),
 				zap.String("task-id", reader.taskId),
@@ -493,7 +497,7 @@ func (reader *tableReader) readTableWithTxn(
 				reader.sinker.SendDummy()
 				if rollbackErr := reader.sinker.Error(); rollbackErr != nil {
 					logutil.Error(
-						"CDC-TableReader-SendRollbackFailed",
+						"CDC-Reader-Rollback-Error",
 						zap.String("info", reader.info.String()),
 						zap.String("task-id", reader.taskId),
 						zap.Uint64("account-id", reader.accountId),
@@ -563,7 +567,7 @@ func (reader *tableReader) readTableWithTxn(
 						&toTs,
 					); err != nil {
 						logutil.Error(
-							"CDC-TableReader-UpdateWatermarkOnlyFailed",
+							"CDC-Reader-UpdateWatermark-Error",
 							zap.String("info", reader.info.String()),
 							zap.String("task-id", reader.taskId),
 							zap.Uint64("account-id", reader.accountId),

@@ -371,8 +371,8 @@ func (s *TableDetector) UnRegister(id string) {
 }
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
-	logutil.Info("CDC-TableDetector-Scan-Start")
-	defer logutil.Info("CDC-TableDetector-Scan-End")
+	logutil.Info("CDC-Scanner-Start")
+	defer logutil.Info("CDC-Scanner-End")
 
 	var tickerDuration, retryTickerDuration time.Duration // Use fastScan config first, fall back to injection for backward compatibility
 	if s.fastScan {
@@ -412,7 +412,7 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	if err := s.scanTableFn(); err != nil {
-		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
+		logutil.Error("CDC-Scanner-ScanTable-Error", zap.Error(err))
 		return
 	}
 
@@ -431,9 +431,9 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	}
 
 	if err != nil {
-		logutil.Warn("CDC-TableDetector-Callback-Failed", zap.Error(err))
+		logutil.Warn("CDC-Scanner-Callback-Failed", zap.Error(err))
 	} else {
-		logutil.Info("CDC-TableDetector-Callback-Success")
+		logutil.Info("CDC-Scanner-Callback-Success")
 		s.clearLastMp()
 	}
 }
