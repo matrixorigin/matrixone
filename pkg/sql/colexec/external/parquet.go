@@ -21,6 +21,9 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -190,286 +193,992 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_uint8:
-		if st.Kind() != parquet.Int32 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			dict := page.Dictionary()
-			data := page.Data()
-			if dict == nil {
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint8 {
-					return uint8(v)
+		if st.Kind() == parquet.Int32 {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				dict := page.Dictionary()
+				data := page.Data()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint8 {
+						return uint8(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint8 {
+					return uint8(dictValues[int(idx)])
 				})
 			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to UINT8 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Int32()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint8 {
-				return uint8(dictValues[int(idx)])
-			})
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, uint8(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseUint(strVal, 10, 8)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as uint8: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, uint8(intVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_int8:
-		if st.Kind() != parquet.Int32 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			dict := page.Dictionary()
-			data := page.Data()
-			if dict == nil {
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
-					return int8(v)
+		if st.Kind() == parquet.Int32 {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				dict := page.Dictionary()
+				data := page.Data()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
+						return int8(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int8 {
+					return int8(dictValues[int(idx)])
 				})
 			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to INT8 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Int32()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int8 {
-				return int8(dictValues[int(idx)])
-			})
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, int8(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseInt(strVal, 10, 8)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as int8: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, int8(intVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_uint16:
-		if st.Kind() != parquet.Int32 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint16 {
-					return uint16(v)
+		if st.Kind() == parquet.Int32 {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint16 {
+						return uint16(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint16 {
+					return uint16(dictValues[int(idx)])
 				})
 			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to UINT16 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Int32()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint16 {
-				return uint16(dictValues[int(idx)])
-			})
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, uint16(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseUint(strVal, 10, 16)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as uint16: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, uint16(intVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_int16:
-		if st.Kind() != parquet.Int32 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
-					return int16(v)
+		if st.Kind() == parquet.Int32 {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
+						return int16(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int16 {
+					return int16(dictValues[int(idx)])
 				})
 			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to INT16 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Int32()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int16 {
-				return int16(dictValues[int(idx)])
-			})
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, int16(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseInt(strVal, 10, 16)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as int16: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, int16(intVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_int32:
-		if st.Kind() != parquet.Int32 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVec(mp, page, proc, vec, data.Int32())
-			}
+		if st.Kind() == parquet.Int32 {
+			// Direct mapping: INT32 → INT32
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVec(mp, page, proc, vec, data.Int32())
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Int32()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
-				return dictValues[int(idx)]
-			})
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
+					return dictValues[int(idx)]
+				})
+			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to INT32 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, int32(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseInt(strVal, 10, 32)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as int32: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, int32(intVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_int64:
-		if st.Kind() != parquet.Int64 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVec(mp, page, proc, vec, data.Int64())
-			}
+		if st.Kind() == parquet.Int64 {
+			// Direct mapping: INT64 → INT64
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVec(mp, page, proc, vec, data.Int64())
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Int64()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
-				return dictValues[int(idx)]
-			})
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int64()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
+					return dictValues[int(idx)]
+				})
+			}
+		} else if st.Kind() == parquet.Int32 {
+			// Widening conversion: INT32 → INT64 (always safe)
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int64 {
+						return int64(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
+					return int64(dictValues[int(idx)])
+				})
+			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to INT64 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, int64(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseInt(strVal, 10, 64)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as int64: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, intVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_uint32:
-		if st.Kind() != parquet.Int32 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVec(mp, page, proc, vec, data.Uint32())
-			}
+		if st.Kind() == parquet.Int32 {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVec(mp, page, proc, vec, data.Uint32())
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Uint32()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint32 {
-				return dictValues[int(idx)]
-			})
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint32 {
+					return dictValues[int(idx)]
+				})
+			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to UINT32 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, uint32(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseUint(strVal, 10, 32)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as uint32: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, uint32(intVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_uint64:
-		if st.Kind() != parquet.Int64 {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVec(mp, page, proc, vec, data.Uint64())
-			}
+		if st.Kind() == parquet.Int64 {
+			// Direct mapping: INT64 → UINT64
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVec(mp, page, proc, vec, data.Uint64())
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Uint64()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
-				return dictValues[int(idx)]
-			})
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint64()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
+					return dictValues[int(idx)]
+				})
+			}
+		} else if st.Kind() == parquet.Int32 {
+			// Widening conversion: INT32 → UINT64 (always safe for unsigned target)
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Uint32(), func(v uint32) uint64 {
+						return uint64(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
+					return uint64(dictValues[int(idx)])
+				})
+			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to UINT64 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, uint64(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					intVal, parseErr := strconv.ParseUint(strVal, 10, 64)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as uint64: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, intVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_float32:
-		if st.Kind() != parquet.Float {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVec(mp, page, proc, vec, data.Float())
-			}
+		if st.Kind() == parquet.Float {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVec(mp, page, proc, vec, data.Float())
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Float()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float32 {
-				return dictValues[int(idx)]
-			})
+				dictData := dict.Page().Data()
+				dictValues := dictData.Float()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float32 {
+					return dictValues[int(idx)]
+				})
+			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to FLOAT32 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, float32(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					floatVal, parseErr := strconv.ParseFloat(strVal, 32)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as float32: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, float32(floatVal), false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_float64:
-		if st.Kind() != parquet.Double {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				return copyPageToVec(mp, page, proc, vec, data.Double())
-			}
+		if st.Kind() == parquet.Double {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVec(mp, page, proc, vec, data.Double())
+				}
 
-			dictData := dict.Page().Data()
-			dictValues := dictData.Double()
-			indices := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
-				return dictValues[int(idx)]
-			})
+				dictData := dict.Page().Data()
+				dictValues := dictData.Double()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+					return dictValues[int(idx)]
+				})
+			}
+		} else if st.Kind() == parquet.Float {
+			// Widening conversion: FLOAT32 → FLOAT64 (always safe)
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					return copyPageToVecMap(mp, page, proc, vec, data.Float(), func(v float32) float64 {
+						return float64(v)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				dictValues := dictData.Float()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+					return float64(dictValues[int(idx)])
+				})
+			}
+		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to FLOAT64 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, float64(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					floatVal, parseErr := strconv.ParseFloat(strVal, 64)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as float64: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, floatVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	case types.T_date:
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		dateT := lt.Date
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
-		if dateT == nil {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				bs, _ := data.Data()
-				ls := types.DecodeSlice[int32](bs)
-				return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Date {
-					return types.DaysFromUnixEpochToDate(t)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DATE conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Date(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					dateVal, parseErr := types.ParseDateCast(strVal)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as DATE: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, dateVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		} else {
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			dateT := lt.Date
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
+			if dateT == nil {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					bs, _ := data.Data()
+					ls := types.DecodeSlice[int32](bs)
+					return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Date {
+						return types.DaysFromUnixEpochToDate(t)
+					})
+				}
+
+				dictData := dict.Page().Data()
+				bs, _ := dictData.Data()
+				dictDates := types.DecodeSlice[int32](bs)
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Date {
+					return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
 				})
 			}
-
-			dictData := dict.Page().Data()
-			bs, _ := dictData.Data()
-			dictDates := types.DecodeSlice[int32](bs)
-			indexes := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Date {
-				return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
-			})
 		}
 	case types.T_timestamp:
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
-		tsT := lt.Timestamp
-		if tsT == nil || !tsT.IsAdjustedToUTC {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			switch {
-			case tsT.Unit.Nanos != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Timestamp, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.UnixNanoToTimestamp(v)
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
-						return converted[int(idx)]
-					})
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to TIMESTAMP conversion
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixNanoToTimestamp(v)
-				})
-			case tsT.Unit.Micros != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Timestamp, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.UnixMicroToTimestamp(v)
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
-						return converted[int(idx)]
-					})
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixMicroToTimestamp(v)
-				})
-			case tsT.Unit.Millis != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Timestamp, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.UnixMicroToTimestamp(v * 1000)
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
-						return converted[int(idx)]
-					})
+
+				// Get timezone from process
+				loc := proc.Base.SessionInfo.TimeZone
+				if loc == nil {
+					loc = time.UTC
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixMicroToTimestamp(v * 1000)
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					timestampVal, parseErr := types.ParseTimestamp(loc, strVal, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as TIMESTAMP: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, timestampVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		} else {
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
+			tsT := lt.Timestamp
+			if tsT == nil || !tsT.IsAdjustedToUTC {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				switch {
+				case tsT.Unit.Nanos != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Timestamp, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.UnixNanoToTimestamp(v)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+						return types.UnixNanoToTimestamp(v)
+					})
+				case tsT.Unit.Micros != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Timestamp, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.UnixMicroToTimestamp(v)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+						return types.UnixMicroToTimestamp(v)
+					})
+				case tsT.Unit.Millis != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Timestamp, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.UnixMicroToTimestamp(v * 1000)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+						return types.UnixMicroToTimestamp(v * 1000)
+					})
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				}
 			}
 		}
 	case types.T_datetime:
@@ -538,65 +1247,122 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_time:
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		timeT := lt.Time
-		if timeT == nil {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			switch {
-			case timeT.Unit.Nanos != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Time, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Time(v / 1000)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to TIME conversion
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
+				if err != nil {
+					return err
+				}
+
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
 					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
-						return converted[int(idx)]
-					})
-				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
-					return types.Time(v / 1000)
-				})
-			case timeT.Unit.Micros != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					bs, _ := dictData.Data()
-					dictTimes := types.DecodeSlice[types.Time](bs)
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
-						return dictTimes[int(idx)]
-					})
-				}
-				bs, _ := data.Data()
-				return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
-			case timeT.Unit.Millis != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int32()
-					converted := make([]types.Time, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Time(v) * 1000
+					if isNull {
+						err := vector.AppendFixed(vec, types.Time(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
 					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
-						return converted[int(idx)]
-					})
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					timeVal, parseErr := types.ParseTime(strVal, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as TIME: %v", strVal, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, timeVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
-					return types.Time(v) * 1000
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				return nil
+			}
+		} else {
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			timeT := lt.Time
+			if timeT == nil {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				switch {
+				case timeT.Unit.Nanos != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Time, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.Time(v / 1000)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
+						return types.Time(v / 1000)
+					})
+				case timeT.Unit.Micros != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						bs, _ := dictData.Data()
+						dictTimes := types.DecodeSlice[types.Time](bs)
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
+							return dictTimes[int(idx)]
+						})
+					}
+					bs, _ := data.Data()
+					return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
+				case timeT.Unit.Millis != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int32()
+						converted := make([]types.Time, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.Time(v) * 1000
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
+						return types.Time(v) * 1000
+					})
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				}
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
@@ -665,48 +1431,168 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_decimal64:
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			kind := st.Kind()
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				values, err := decodeDecimal64Values(proc.Ctx, kind, data)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DECIMAL64 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
 				if err != nil {
 					return err
 				}
-				return copyPageToVec(mp, page, proc, vec, values)
-			}
 
-			dictValues, err := decodeDecimal64Values(proc.Ctx, kind, dict.Page().Data())
-			if err != nil {
-				return err
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				// Get precision and scale from target type
+				precision := int32(dt.Width)
+				scale := int32(dt.Scale)
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Decimal64(0), true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					decVal, parseErr := parseStringToDecimal64(strVal, precision, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as DECIMAL(%d,%d): %v", strVal, precision, scale, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, decVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
 			}
-			indexes := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
-				return dictValues[int(idx)]
-			})
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					values, err := decodeDecimal64Values(proc.Ctx, kind, data)
+					if err != nil {
+						return err
+					}
+					return copyPageToVec(mp, page, proc, vec, values)
+				}
+
+				dictValues, err := decodeDecimal64Values(proc.Ctx, kind, dict.Page().Data())
+				if err != nil {
+					return err
+				}
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
+					return dictValues[int(idx)]
+				})
+			}
 		}
 	case types.T_decimal128:
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			kind := st.Kind()
-			data := page.Data()
-			dict := page.Dictionary()
-			if dict == nil {
-				values, err := decodeDecimal128Values(proc.Ctx, kind, data)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DECIMAL128 conversion
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				err := vec.PreExtend(int(page.NumRows()), proc.Mp())
 				if err != nil {
 					return err
 				}
-				return copyPageToVec(mp, page, proc, vec, values)
-			}
 
-			dictValues, err := decodeDecimal128Values(proc.Ctx, kind, dict.Page().Data())
-			if err != nil {
-				return err
+				var loader strLoader
+				var indices []int32
+				dict := page.Dictionary()
+				if dict == nil {
+					loader.init(page.Data())
+				} else {
+					loader.init(dict.Page().Data())
+					data := page.Data()
+					indices = data.Int32()
+				}
+
+				// Get precision and scale from target type
+				precision := int32(dt.Width)
+				scale := int32(dt.Scale)
+
+				for i := 0; i < int(page.NumRows()); i++ {
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err := vector.AppendFixed(vec, types.Decimal128{}, true, proc.Mp())
+						if err != nil {
+							return err
+						}
+						continue
+					}
+
+					var data []byte
+					if dict == nil {
+						data = loader.loadNext()
+					} else {
+						idx := indices[loader.next]
+						loader.next++
+						data = loader.loadAt(idx)
+					}
+
+					strVal := strings.TrimSpace(util.UnsafeBytesToString(data))
+					decVal, parseErr := parseStringToDecimal128(strVal, precision, scale)
+					if parseErr != nil {
+						return moerr.NewInternalErrorf(proc.Ctx, "failed to parse '%s' as DECIMAL(%d,%d): %v", strVal, precision, scale, parseErr)
+					}
+
+					err = vector.AppendFixed(vec, decVal, false, proc.Mp())
+					if err != nil {
+						return err
+					}
+				}
+				return nil
 			}
-			indexes := data.Int32()
-			return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
-				return dictValues[int(idx)]
-			})
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					values, err := decodeDecimal128Values(proc.Ctx, kind, data)
+					if err != nil {
+						return err
+					}
+					return copyPageToVec(mp, page, proc, vec, values)
+				}
+
+				dictValues, err := decodeDecimal128Values(proc.Ctx, kind, dict.Page().Data())
+				if err != nil {
+					return err
+				}
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
+					return dictValues[int(idx)]
+				})
+			}
 		}
 	case types.T_decimal256:
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1217,4 +2103,70 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, err
 	}
 	return int(vec.Entries[0].Size), nil
+}
+
+// parseStringToDecimal64 converts a string to DECIMAL64 with given precision and scale.
+// It supports:
+// - Normal decimal numbers: "123.45"
+// - Scientific notation: "1.23e10", "1E5", "1.23E10" (both lowercase e and uppercase E)
+// - Negative numbers: "-123.45"
+// - Positive sign: "+123.45"
+// - Leading zeros: "0123.45"
+// The string should already be trimmed of whitespace.
+func parseStringToDecimal64(s string, precision, scale int32) (types.Decimal64, error) {
+	if s == "" {
+		return 0, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+
+	// Normalize the string to be more user-friendly:
+	// 1. Convert uppercase E to lowercase e (for scientific notation)
+	// 2. Remove leading positive sign (ParseDecimal64 doesn't support it)
+	s = normalizeDecimalString(s)
+
+	// Use existing ParseDecimal64 which handles:
+	// - Scientific notation (lowercase e only)
+	// - Normal decimals
+	// - Precision and scale validation
+	result, err := types.ParseDecimal64(s, precision, scale)
+	if err != nil {
+		return 0, err
+	}
+
+	return result, nil
+}
+
+// normalizeDecimalString normalizes a decimal string to match ParseDecimal expectations.
+// This allows us to support more user-friendly formats (like uppercase E and positive sign)
+// while using the existing ParseDecimal functions.
+func normalizeDecimalString(s string) string {
+	// Convert uppercase E to lowercase e (for scientific notation like "1E5" → "1e5")
+	// This makes us compatible with PostgreSQL, MySQL, SQL Server, Oracle
+	s = strings.ReplaceAll(s, "E", "e")
+
+	// Remove leading positive sign ("+123.45" → "123.45")
+	// ParseDecimal doesn't support it, but all major databases do
+	if len(s) > 0 && s[0] == '+' {
+		s = s[1:]
+	}
+
+	return s
+}
+
+// parseStringToDecimal128 converts a string to DECIMAL128 with given precision and scale.
+// It supports the same formats as parseStringToDecimal64.
+func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128, error) {
+	if s == "" {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+
+	// Normalize the string (same as DECIMAL64)
+	s = normalizeDecimalString(s)
+
+	// Use existing ParseDecimal128
+	result, err := types.ParseDecimal128(s, precision, scale)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+
+	return result, nil
 }
