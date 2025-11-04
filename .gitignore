@@ -16,6 +16,8 @@ y.go
 tags
 coverage.txt
 out.txt
+logs/
+sdk_demo/
 vendor/
 gen_config
 main
@@ -53,6 +55,6 @@ test/distributed/resources/json/export_*.csv
 # docker compose bvt generate files
 docker-compose-log/
 
-# python 
+# python
 **/__pycache__/
 *.pyc

@@ -276,7 +276,35 @@ Ready to dive deeper? Explore our comprehensive collection of hands-on tutorials
 
 MatrixOne supports multiple installation methods. Choose the one that best fits your needs:
 
-### 🎯 Using mo_ctl Tool (Recommended)
+### 🐳 Docker Compose - Multi-CN Local Deployment (Recommended for Development)
+
+Quick setup for a complete distributed cluster with multiple CN nodes, shared local storage, and built-in load balancing proxy.
+
+**Quick Start:**
+
+```bash
+cd etc/docker-multi-cn-local-disk
+
+# Build from source (recommended, uses Go proxy acceleration)
+docker compose build
+IMAGE_NAME=matrixorigin/matrixone:local docker compose up -d
+
+# Or use official Docker Hub image
+docker compose up -d
+
+# Connect to the cluster
+mysql -h 127.0.0.1 -P 6009 -u root -p111
+```
+
+**What you get:**
+- 🔄 **2 CN nodes** with Proxy load balancing
+- 💾 **Shared local storage** (DISK backend)
+- 📊 **Complete distributed architecture** (LogService + TN + CNs + Proxy)
+- 🚀 **Go proxy acceleration** for fast builds
+
+📖 **[Complete Docker Multi-CN Deployment Guide →](etc/docker-multi-cn-local-disk/README.md)**
+
+### 🎯 Using mo_ctl Tool (Recommended for Production)
 
 One-command deployment and lifecycle management with the official [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) tool. Handles installation, upgrades, backups, and health monitoring automatically.
 
@@ -290,7 +318,7 @@ Build MatrixOne from source for development, customization, or contributing. Req
 
 ### 🐳 Other Methods
 
-Docker, Kubernetes, binary packages, and more deployment options.
+Docker standalone, Kubernetes, binary packages, and more deployment options.
 
 📖 **[All Installation Options →](INSTALLATION.md)**
 
