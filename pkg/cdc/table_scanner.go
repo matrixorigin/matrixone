@@ -173,10 +173,7 @@ type TableDetector struct {
 
 	scanTableFn func() error
 
-	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
-	handling        bool
 	lastMp          map[uint32]TblMap
-	mu              sync.Mutex
 	cdcStateManager *CDCStateManager
 
 	// fastScan enables fast scanning for tests (1ms ticker instead of 15s)
@@ -206,6 +203,80 @@ func (s *TableDetector) SetScanTableFn(fn func() error) {
 // ScanTable exposes the scanTable method (for testing)
 func (s *TableDetector) ScanTable() error {
 	return s.scanTable()
+}
+
+// getLastMp returns a copy of lastMp (with lock)
+func (s *TableDetector) getLastMp() map[uint32]TblMap {
+	s.Lock()
+	defer s.Unlock()
+	return s.getLastMpLocked()
+}
+
+// getLastMpLocked returns lastMp without locking (caller must hold lock)
+func (s *TableDetector) getLastMpLocked() map[uint32]TblMap {
+	return s.lastMp
+}
+
+// setLastMpWithCopy sets lastMp with a deep copy of Mp (with lock)
+func (s *TableDetector) getLastMpWithCopy() map[uint32]TblMap {
+	s.Lock()
+	defer s.Unlock()
+	return s.getLastMpWithCopyLocked()
+}
+
+// setLastMpWithCopyLocked sets lastMp with a deep copy of Mp without locking (caller must hold lock)
+func (s *TableDetector) getLastMpWithCopyLocked() map[uint32]TblMap {
+	// Deep copy Mp
+	mpCopy := make(map[uint32]TblMap, len(s.Mp))
+	for accountId, tblMap := range s.Mp {
+		tblMapCopy := make(TblMap, len(tblMap))
+		for key, info := range tblMap {
+			tblMapCopy[key] = info
+		}
+		mpCopy[accountId] = tblMapCopy
+	}
+	s.lastMp = mpCopy
+	return mpCopy
+}
+
+// setLastMp sets lastMp directly (with lock)
+func (s *TableDetector) setLastMp(mp map[uint32]TblMap) {
+	s.Lock()
+	defer s.Unlock()
+	s.setLastMpLocked(mp)
+}
+
+// setLastMpLocked sets lastMp directly without locking (caller must hold lock)
+func (s *TableDetector) setLastMpLocked(mp map[uint32]TblMap) {
+	s.lastMp = mp
+}
+
+// clearLastMp clears lastMp (with lock)
+func (s *TableDetector) clearLastMp() {
+	s.Lock()
+	defer s.Unlock()
+	s.clearLastMpLocked()
+}
+
+// clearLastMpLocked clears lastMp without locking (caller must hold lock)
+func (s *TableDetector) clearLastMpLocked() {
+	s.lastMp = nil
+}
+
+// getCallbacksCopy returns a copy of all callbacks (with lock)
+func (s *TableDetector) getCallbacksCopy() []TableCallback {
+	s.Lock()
+	defer s.Unlock()
+	return s.getCallbacksCopyLocked()
+}
+
+// getCallbacksCopyLocked returns a copy of all callbacks without locking (caller must hold lock)
+func (s *TableDetector) getCallbacksCopyLocked() []TableCallback {
+	callbacks := make([]TableCallback, 0, len(s.Callbacks))
+	for _, cb := range s.Callbacks {
+		callbacks = append(callbacks, cb)
+	}
+	return callbacks
 }
 
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
@@ -325,21 +396,10 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.mu.Lock()
-
-			if s.handling {
-				s.mu.Unlock()
-				continue
-			}
-
-			s.mu.Unlock()
-
 			s.scanAndProcess(ctx)
 		case <-retryTicker.C:
-			s.mu.Lock()
-			handling, lastMp := s.handling, s.lastMp
-			s.mu.Unlock()
-			if handling || lastMp == nil {
+			lastMp := s.getLastMp()
+			if lastMp == nil {
 				continue
 			}
 
@@ -356,39 +416,26 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 		return
 	}
 
-	s.mu.Lock()
-	s.lastMp = s.Mp
-	mp := s.lastMp
-	s.mu.Unlock()
+	// Deep copy Mp to lastMp
+	mp := s.getLastMpWithCopy()
 
 	go s.processCallback(ctx, mp)
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
-	s.mu.Lock()
-	s.handling = true
-	callbacks := make([]TableCallback, 0, len(s.Callbacks))
-	for _, cb := range s.Callbacks {
-		callbacks = append(callbacks, cb)
-	}
-	s.mu.Unlock()
+	callbacks := s.getCallbacksCopy()
 
 	var err error
 	for _, cb := range callbacks {
 		err = cb(tables)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if err != nil {
 		logutil.Warn("CDC-TableDetector-Callback-Failed", zap.Error(err))
 	} else {
 		logutil.Info("CDC-TableDetector-Callback-Success")
-		s.lastMp = nil
+		s.clearLastMp()
 	}
-
-	s.handling = false
 }
 
 func (s *TableDetector) Close() {
@@ -476,7 +523,15 @@ func (s *TableDetector) scanTable() error {
 
 			key := GenDbTblKey(dbName, tblName)
 
-			oldInfo, exists := s.Mp[accountId][key]
+			// Lock to read from s.Mp
+			s.Lock()
+			var oldInfo *DbTableInfo
+			var exists bool
+			if tblMap, ok := s.Mp[accountId]; ok {
+				oldInfo, exists = tblMap[key]
+			}
+			s.Unlock()
+
 			newInfo := &DbTableInfo{}
 			newInfo.SetSourceDbId(dbId)
 			newInfo.SetSourceDbName(dbName)
