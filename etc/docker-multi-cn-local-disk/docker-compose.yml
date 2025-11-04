@@ -29,6 +29,7 @@ services:
     build: *common-build
     container_name: mo-log
     hostname: mo-log
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"  # Run as current user to avoid permission issues
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/log.toml"]
     ports:
@@ -54,6 +55,7 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-tn
     hostname: mo-tn
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"  # Run as current user to avoid permission issues
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/tn.toml"]
     volumes:
@@ -73,6 +75,7 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-cn1
     hostname: mo-cn1
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"  # Run as current user to avoid permission issues
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml"]
     ports:
@@ -94,6 +97,7 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-cn2
     hostname: mo-cn2
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"  # Run as current user to avoid permission issues
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml"]
     ports:
@@ -115,6 +119,7 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-proxy
     hostname: mo-proxy
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"  # Run as current user to avoid permission issues
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/proxy.toml"]
     ports:
