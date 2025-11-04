@@ -94,29 +94,29 @@ var NewSinker = func(
 	ctx := context.Background()
 	padding := strings.Repeat(" ", sqlBufReserved)
 	// create db
-	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)), false)
+	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.GetSinkDbName())), false)
 	if err != nil {
 		return nil, err
 	}
 	// use db
-	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
+	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.GetSinkDbName())), false)
 	if err != nil {
 		return nil, err
 	}
 	// possibly need to drop table first
-	if dbTblInfo.IdChanged {
-		err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)), false)
+	if dbTblInfo.GetIdChanged() {
+		err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.GetSinkTblName())), false)
 		if err != nil {
 			return nil, err
 		}
-		dbTblInfo.IdChanged = false
+		dbTblInfo.SetIdChanged(false)
 	}
 	// create table
 	var createSql string
 	if tableDef != nil {
 		newTableDef := *tableDef
-		newTableDef.DbName = dbTblInfo.SinkDbName
-		newTableDef.Name = dbTblInfo.SinkTblName
+		newTableDef.DbName = dbTblInfo.GetSinkDbName()
+		newTableDef.Name = dbTblInfo.GetSinkTblName()
 		newTableDef.Fkeys = nil
 		newTableDef.Partition = nil
 		if newTableDef.TableType == catalog.SystemClusterRel {
@@ -321,7 +321,7 @@ var NewMysqlSinker = func(
 	s.rowBuf = make([]byte, 0, 1024)
 
 	// prefix and suffix
-	s.insertPrefix = []byte(fmt.Sprintf("REPLACE INTO `%s`.`%s` VALUES ", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName))
+	s.insertPrefix = []byte(fmt.Sprintf("REPLACE INTO `%s`.`%s` VALUES ", s.dbTblInfo.GetSinkDbName(), s.dbTblInfo.GetSinkTblName()))
 	s.insertSuffix = []byte(";")
 	s.insertRowPrefix = []byte("(")
 	s.insertColSeparator = []byte(",")
@@ -333,7 +333,7 @@ var NewMysqlSinker = func(
 		// e.g. delete from t1 where pk1=a1 and pk2=a2 or pk1=b1 and pk2=b2 or pk1=c1 and pk2=c2 ...;
 		//                                   ^
 		//                            deleteColSeparator
-		s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE ", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName))
+		s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE ", s.dbTblInfo.GetSinkDbName(), s.dbTblInfo.GetSinkTblName()))
 		s.deleteSuffix = []byte(";")
 		s.deleteRowPrefix = []byte("")
 		s.deleteColSeparator = []byte(" and ")
@@ -345,7 +345,7 @@ var NewMysqlSinker = func(
 		// e.g. delete from t1 where (pk1, pk2) in ((a1,a2),(b1,b2),(c1,c2) ...);
 		//                                             ^
 		//                                      deleteColSeparator
-		s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN (", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName, genPrimaryKeyStr(tableDef)))
+		s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s IN (", s.dbTblInfo.GetSinkDbName(), s.dbTblInfo.GetSinkTblName(), genPrimaryKeyStr(tableDef)))
 		s.deleteSuffix = []byte(");")
 		s.deleteRowPrefix = []byte("(")
 		s.deleteColSeparator = []byte(",")
@@ -439,8 +439,8 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) {
 	key := WatermarkKey{
 		AccountId: s.accountId,
 		TaskId:    s.taskId,
-		DBName:    s.dbTblInfo.SourceDbName,
-		TableName: s.dbTblInfo.SourceTblName,
+		DBName:    s.dbTblInfo.GetSourceDbName(),
+		TableName: s.dbTblInfo.GetSourceTblName(),
 	}
 	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
 	if err != nil {

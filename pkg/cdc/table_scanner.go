@@ -93,7 +93,7 @@ func NewCDCStateManager() *CDCStateManager {
 func (s *CDCStateManager) AddActiveRunner(tblInfo *DbTableInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
+	key := GenDbTblKey(tblInfo.GetSourceDbName(), tblInfo.GetSourceTblName())
 	s.activeRunners[key] = &TableIterationState{
 		CreateAt: time.Now(),
 		EndAt:    time.Now(),
@@ -105,14 +105,14 @@ func (s *CDCStateManager) AddActiveRunner(tblInfo *DbTableInfo) {
 func (s *CDCStateManager) RemoveActiveRunner(tblInfo *DbTableInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
+	key := GenDbTblKey(tblInfo.GetSourceDbName(), tblInfo.GetSourceTblName())
 	delete(s.activeRunners, key)
 }
 
 func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs types.TS, start bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
+	key := GenDbTblKey(tblInfo.GetSourceDbName(), tblInfo.GetSourceTblName())
 	runner := s.activeRunners[key]
 	if runner != nil {
 		if start {
@@ -477,23 +477,17 @@ func (s *TableDetector) scanTable() error {
 			key := GenDbTblKey(dbName, tblName)
 
 			oldInfo, exists := s.Mp[accountId][key]
-			newInfo := &DbTableInfo{
-				SourceDbId:      dbId,
-				SourceDbName:    dbName,
-				SourceTblId:     tblId,
-				SourceTblName:   tblName,
-				SourceCreateSql: createSql,
-			}
+			newInfo := &DbTableInfo{}
+			newInfo.SetSourceDbId(dbId)
+			newInfo.SetSourceDbName(dbName)
+			newInfo.SetSourceTblId(tblId)
+			newInfo.SetSourceTblName(tblName)
+			newInfo.SetSourceCreateSql(createSql)
 			if !exists {
 				mp[accountId][key] = newInfo
 			} else {
 				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
-				oldInfo.SourceDbId = dbId
-				oldInfo.SourceDbName = dbName
-				oldInfo.SourceTblId = tblId
-				oldInfo.SourceTblName = tblName
-				oldInfo.SourceCreateSql = createSql
-				oldInfo.IdChanged = oldInfo.IdChanged || idChanged
+				oldInfo.UpdateFields(dbId, dbName, tblId, tblName, createSql, idChanged)
 				mp[accountId][key] = oldInfo
 			}
 		}

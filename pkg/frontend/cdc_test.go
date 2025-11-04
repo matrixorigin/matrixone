@@ -2811,10 +2811,12 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 		runningReaders: &sync.Map{},
 	}
 
+	tb2Info := &cdc.DbTableInfo{}
+	tb2Info.SetIdChanged(true)
 	mp := map[uint32]cdc.TblMap{
 		0: {
 			"db1.tb1": &cdc.DbTableInfo{},
-			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
+			"db1.tb2": tb2Info,
 		},
 	}
 
@@ -2828,7 +2830,7 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 	objectio.SimpleInject(objectio.FJ_CDCAddExecConsumeTruncate)
 	err = cdcTask.handleNewTables(mp)
 	require.NoError(t, err)
-	require.Equal(t, false, mp[0]["db1.tb2"].IdChanged)
+	require.Equal(t, false, mp[0]["db1.tb2"].GetIdChanged())
 	fault.Disable()
 }
 
@@ -2940,8 +2942,10 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
+	oldReaderInfo := &cdc.DbTableInfo{}
+	oldReaderInfo.SetSourceTblId(100)
 	oldReader := &mockTableReader{
-		info: &cdc.DbTableInfo{SourceTblId: 100},
+		info: oldReaderInfo,
 		wg:   wg,
 	}
 
@@ -2968,7 +2972,8 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 		wg.Done()
 	}()
 
-	newTable := &cdc.DbTableInfo{SourceTblId: 200}
+	newTable := &cdc.DbTableInfo{}
+	newTable.SetSourceTblId(200)
 	mp := map[uint32]cdc.TblMap{
 		0: {"db1.important_table": newTable},
 	}
@@ -3064,15 +3069,14 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 		},
 	}
 
-	info := &cdc.DbTableInfo{
-		SourceDbId:      0,
-		SourceDbName:    "",
-		SourceTblId:     0,
-		SourceTblName:   "",
-		SourceCreateSql: "",
-		SinkDbName:      "",
-		SinkTblName:     "",
-	}
+	info := &cdc.DbTableInfo{}
+	info.SetSourceDbId(0)
+	info.SetSourceDbName("")
+	info.SetSourceTblId(0)
+	info.SetSourceTblName("")
+	info.SetSourceCreateSql("")
+	info.SetSinkDbName("")
+	info.SetSinkTblName("")
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

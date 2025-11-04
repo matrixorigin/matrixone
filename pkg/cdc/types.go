@@ -229,53 +229,196 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	SourceDbId      uint64
-	SourceDbName    string
-	SourceTblId     uint64
-	SourceTblName   string
-	SourceCreateSql string
+	mu              sync.RWMutex
+	sourceDbId      uint64
+	sourceDbName    string
+	sourceTblId     uint64
+	sourceTblName   string
+	sourceCreateSql string
 
-	SinkDbName  string
-	SinkTblName string
+	sinkDbName  string
+	sinkTblName string
 
-	IdChanged    bool
-	RetryStartTS int64
-	RetryTimes   int
+	idChanged    bool
+	retryStartTS int64
+	retryTimes   int
 }
 
-func (info DbTableInfo) String() string {
+// Getter methods
+func (info *DbTableInfo) GetSourceDbId() uint64 {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sourceDbId
+}
+
+func (info *DbTableInfo) GetSourceDbName() string {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sourceDbName
+}
+
+func (info *DbTableInfo) GetSourceTblId() uint64 {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sourceTblId
+}
+
+func (info *DbTableInfo) GetSourceTblName() string {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sourceTblName
+}
+
+func (info *DbTableInfo) GetSourceCreateSql() string {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sourceCreateSql
+}
+
+func (info *DbTableInfo) GetSinkDbName() string {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sinkDbName
+}
+
+func (info *DbTableInfo) GetSinkTblName() string {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.sinkTblName
+}
+
+func (info *DbTableInfo) GetIdChanged() bool {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.idChanged
+}
+
+func (info *DbTableInfo) GetRetryStartTS() int64 {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.retryStartTS
+}
+
+func (info *DbTableInfo) GetRetryTimes() int {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	return info.retryTimes
+}
+
+// Setter methods
+func (info *DbTableInfo) SetSourceDbId(id uint64) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sourceDbId = id
+}
+
+func (info *DbTableInfo) SetSourceDbName(name string) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sourceDbName = name
+}
+
+func (info *DbTableInfo) SetSourceTblId(id uint64) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sourceTblId = id
+}
+
+func (info *DbTableInfo) SetSourceTblName(name string) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sourceTblName = name
+}
+
+func (info *DbTableInfo) SetSourceCreateSql(sql string) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sourceCreateSql = sql
+}
+
+func (info *DbTableInfo) SetSinkDbName(name string) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sinkDbName = name
+}
+
+func (info *DbTableInfo) SetSinkTblName(name string) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sinkTblName = name
+}
+
+func (info *DbTableInfo) SetIdChanged(changed bool) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.idChanged = changed
+}
+
+func (info *DbTableInfo) SetRetryStartTS(ts int64) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.retryStartTS = ts
+}
+
+func (info *DbTableInfo) SetRetryTimes(times int) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.retryTimes = times
+}
+
+// Batch update method for multiple fields
+func (info *DbTableInfo) UpdateFields(dbId uint64, dbName string, tblId uint64, tblName string, createSql string, idChanged bool) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	info.sourceDbId = dbId
+	info.sourceDbName = dbName
+	info.sourceTblId = tblId
+	info.sourceTblName = tblName
+	info.sourceCreateSql = createSql
+	info.idChanged = info.idChanged || idChanged
+}
+
+func (info *DbTableInfo) String() string {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
 	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v, %v",
-		info.SourceDbName,
-		info.SourceDbId,
-		info.SourceTblName,
-		info.SourceTblId,
-		info.SinkDbName,
-		info.SinkTblName,
-		info.IdChanged,
+		info.sourceDbName,
+		info.sourceDbId,
+		info.sourceTblName,
+		info.sourceTblId,
+		info.sinkDbName,
+		info.sinkTblName,
+		info.idChanged,
 	)
 }
 
-func (info DbTableInfo) Clone() *DbTableInfo {
+func (info *DbTableInfo) Clone() *DbTableInfo {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
 	return &DbTableInfo{
-		SourceDbId:      info.SourceDbId,
-		SourceDbName:    info.SourceDbName,
-		SourceTblId:     info.SourceTblId,
-		SourceTblName:   info.SourceTblName,
-		SourceCreateSql: info.SourceCreateSql,
-		SinkDbName:      info.SinkDbName,
-		SinkTblName:     info.SinkTblName,
-		IdChanged:       info.IdChanged,
+		sourceDbId:      info.sourceDbId,
+		sourceDbName:    info.sourceDbName,
+		sourceTblId:     info.sourceTblId,
+		sourceTblName:   info.sourceTblName,
+		sourceCreateSql: info.sourceCreateSql,
+		sinkDbName:      info.sinkDbName,
+		sinkTblName:     info.sinkTblName,
+		idChanged:       info.idChanged,
 	}
 }
 
-func (info DbTableInfo) OnlyDiffinTblId(t *DbTableInfo) bool {
-	if info.SourceDbId != t.SourceDbId ||
-		info.SourceDbName != t.SourceDbName ||
-		info.SourceTblName != t.SourceTblName ||
-		info.SourceCreateSql != t.SourceCreateSql {
+func (info *DbTableInfo) OnlyDiffinTblId(t *DbTableInfo) bool {
+	info.mu.RLock()
+	defer info.mu.RUnlock()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if info.sourceDbId != t.sourceDbId ||
+		info.sourceDbName != t.sourceDbName ||
+		info.sourceTblName != t.sourceTblName ||
+		info.sourceCreateSql != t.sourceCreateSql {
 		return false
 	}
-	return info.SourceTblId != t.SourceTblId
+	return info.sourceTblId != t.sourceTblId
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].

@@ -280,9 +280,11 @@ func Test_tableReader_Run(t *testing.T) {
 		{
 			name: "t1",
 			fields: fields{
-				info: &DbTableInfo{
-					SourceTblName: "t1",
-				},
+				info: func() *DbTableInfo {
+					info := &DbTableInfo{}
+					info.SetSourceTblName("t1")
+					return info
+				}(),
 				tick:                  time.NewTicker(time.Millisecond * 300),
 				packerPool:            pool,
 				wMarkUpdater:          u,
@@ -419,10 +421,12 @@ func Test_tableReader_Run_DuplicateReader(t *testing.T) {
 		{
 			name: "t1",
 			fields: fields{
-				info: &DbTableInfo{
-					SourceDbName:  "db1",
-					SourceTblName: "t1",
-				},
+				info: func() *DbTableInfo {
+					info := &DbTableInfo{}
+					info.SetSourceDbName("db1")
+					info.SetSourceTblName("t1")
+					return info
+				}(),
 				tick:                  time.NewTicker(time.Millisecond * 300),
 				packerPool:            pool,
 				wMarkUpdater:          u,
@@ -560,10 +564,12 @@ func Test_tableReader_Run_FailAndClose(t *testing.T) {
 		{
 			name: "t1",
 			fields: fields{
-				info: &DbTableInfo{
-					SourceDbName:  "db1",
-					SourceTblName: "t1",
-				},
+				info: func() *DbTableInfo {
+					info := &DbTableInfo{}
+					info.SetSourceDbName("db1")
+					info.SetSourceTblName("t1")
+					return info
+				}(),
 				tick:                  time.NewTicker(time.Millisecond * 300),
 				packerPool:            pool,
 				wMarkUpdater:          u,
@@ -645,16 +651,16 @@ func Test_tableReader_readTable(t *testing.T) {
 	u, _ := InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
+	readerInfo := &DbTableInfo{}
+	readerInfo.SetSourceDbName("db1")
+	readerInfo.SetSourceTblName("t1")
 	reader := &tableReader{
 		packerPool:     pool,
 		runningReaders: &sync.Map{},
 		sinker:         NewConsoleSinker(nil, nil),
 		wMarkUpdater:   u,
 		tick:           time.NewTicker(DefaultFrequency),
-		info: &DbTableInfo{
-			SourceDbName:  "db1",
-			SourceTblName: "t1",
-		},
+		info:           readerInfo,
 	}
 	ctx := context.Background()
 	ar := NewCdcActiveRoutine()
@@ -715,11 +721,11 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 		TableName: "t1",
 	}
 
+	readerInfo2 := &DbTableInfo{}
+	readerInfo2.SetSourceDbName(key.DBName)
+	readerInfo2.SetSourceTblName(key.TableName)
 	reader := &tableReader{
-		info: &DbTableInfo{
-			SourceDbName:  key.DBName,
-			SourceTblName: key.TableName,
-		},
+		info:                  readerInfo2,
 		accountId:             key.AccountId,
 		taskId:                key.TaskId,
 		packerPool:            pool,

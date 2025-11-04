@@ -157,7 +157,7 @@ func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine,
 ) {
-	key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
+	key := GenDbTblKey(reader.info.GetSourceDbName(), reader.info.GetSourceTblName())
 	if _, loaded := reader.runningReaders.LoadOrStore(key, reader); loaded {
 		logutil.Warn(
 			"CDC-TableReader-DuplicateRunning",
@@ -186,16 +186,16 @@ func (reader *tableReader) Run(
 		wKey := WatermarkKey{
 			AccountId: reader.accountId,
 			TaskId:    reader.taskId,
-			DBName:    reader.info.SourceDbName,
-			TableName: reader.info.SourceTblName,
+			DBName:    reader.info.GetSourceDbName(),
+			TableName: reader.info.GetSourceTblName(),
 		}
 		defer reader.wMarkUpdater.RemoveCachedWM(ctx, &wKey)
 
 		if err != nil {
 			errMsg := err.Error()
 			if retryable {
-				startTS := reader.info.RetryStartTS
-				retryTimes := reader.info.RetryTimes
+				startTS := reader.info.GetRetryStartTS()
+				retryTimes := reader.info.GetRetryTimes()
 				if startTS == 0 {
 					startTS = time.Now().UnixNano()
 				}
@@ -283,8 +283,8 @@ func (reader *tableReader) getLastSyncTime(ctx context.Context) (time.Time, erro
 	wKey := WatermarkKey{
 		AccountId: reader.accountId,
 		TaskId:    reader.taskId,
-		DBName:    reader.info.SourceDbName,
-		TableName: reader.info.SourceTblName,
+		DBName:    reader.info.GetSourceDbName(),
+		TableName: reader.info.GetSourceTblName(),
 	}
 
 	ts, err := reader.wMarkUpdater.GetFromCache(ctx, &wKey)
@@ -362,8 +362,8 @@ func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (re
 		key := WatermarkKey{
 			AccountId: reader.accountId,
 			TaskId:    reader.taskId,
-			DBName:    reader.info.SourceDbName,
-			TableName: reader.info.SourceTblName,
+			DBName:    reader.info.GetSourceDbName(),
+			TableName: reader.info.GetSourceTblName(),
 		}
 		reader.wMarkUpdater.UpdateWatermarkOnly(
 			ctx,
@@ -410,7 +410,7 @@ func (reader *tableReader) readTableWithTxn(
 	var changes engine.ChangesHandle
 
 	//step1 : get relation
-	if _, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.SourceTblId); err != nil {
+	if _, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.GetSourceTblId()); err != nil {
 		// truncate table
 		retryable = true
 		retryWithNewReader = true
@@ -420,8 +420,8 @@ func (reader *tableReader) readTableWithTxn(
 	key := WatermarkKey{
 		AccountId: reader.accountId,
 		TaskId:    reader.taskId,
-		DBName:    reader.info.SourceDbName,
-		TableName: reader.info.SourceTblName,
+		DBName:    reader.info.GetSourceDbName(),
+		TableName: reader.info.GetSourceTblName(),
 	}
 	//step2 : define time range
 	//	from = last wmark

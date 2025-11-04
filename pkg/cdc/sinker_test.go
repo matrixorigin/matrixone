@@ -109,9 +109,11 @@ func TestNewSinker(t *testing.T) {
 				sinkUri: UriInfo{
 					SinkTyp: CDCSinkType_MySQL,
 				},
-				dbTblInfo: &DbTableInfo{
-					SourceCreateSql: "create table t1 (a int, b int, c int)",
-				},
+				dbTblInfo: func() *DbTableInfo {
+					info := &DbTableInfo{}
+					info.SetSourceCreateSql("create table t1 (a int, b int, c int)")
+					return info
+				}(),
 				watermarkUpdater: nil,
 				tableDef:         mockTableDef(),
 				retryTimes:       0,
@@ -126,10 +128,12 @@ func TestNewSinker(t *testing.T) {
 				sinkUri: UriInfo{
 					SinkTyp: CDCSinkType_MySQL,
 				},
-				dbTblInfo: &DbTableInfo{
-					SourceCreateSql: "create table t1 (a int, b int, c int)",
-					IdChanged:       true,
-				},
+				dbTblInfo: func() *DbTableInfo {
+					info := &DbTableInfo{}
+					info.SetSourceCreateSql("create table t1 (a int, b int, c int)")
+					info.SetIdChanged(true)
+					return info
+				}(),
 				watermarkUpdater: nil,
 				tableDef:         mockTableDef(),
 				retryTimes:       0,
@@ -144,10 +148,12 @@ func TestNewSinker(t *testing.T) {
 				sinkUri: UriInfo{
 					SinkTyp: CDCSinkType_MySQL,
 				},
-				dbTblInfo: &DbTableInfo{
-					SourceCreateSql: "create table t1 (a int, b int, c int)",
-					IdChanged:       true,
-				},
+				dbTblInfo: func() *DbTableInfo {
+					info := &DbTableInfo{}
+					info.SetSourceCreateSql("create table t1 (a int, b int, c int)")
+					info.SetIdChanged(true)
+					return info
+				}(),
 				watermarkUpdater: nil,
 				tableDef:         mockClusterTableDef(),
 				retryTimes:       0,
@@ -426,10 +432,9 @@ func TestNewMysqlSinker(t *testing.T) {
 		conn:          db,
 	}
 
-	dbTblInfo := &DbTableInfo{
-		SinkDbName:  "dbName",
-		SinkTblName: "tblName",
-	}
+	dbTblInfo := &DbTableInfo{}
+	dbTblInfo.SetSinkDbName("dbName")
+	dbTblInfo.SetSinkTblName("tblName")
 
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
@@ -618,10 +623,9 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		conn:          db,
 	}
 
-	dbTblInfo := &DbTableInfo{
-		SinkDbName:  "dbName",
-		SinkTblName: "tblName",
-	}
+	dbTblInfo := &DbTableInfo{}
+	dbTblInfo.SetSinkDbName("dbName")
+	dbTblInfo.SetSinkTblName("tblName")
 
 	u, _ := InitCDCWatermarkUpdaterForTest(t)
 	u.Start()

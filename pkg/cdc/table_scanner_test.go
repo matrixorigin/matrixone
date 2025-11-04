@@ -165,16 +165,16 @@ func TestScanAndProcess(t *testing.T) {
 	}
 	defer td.Close()
 
+	tblInfo1 := &DbTableInfo{}
+	tblInfo1.SetSourceDbId(1)
+	tblInfo1.SetSourceDbName("db1")
+	tblInfo1.SetSourceTblId(1001)
+	tblInfo1.SetSourceTblName("tbl1")
+	tblInfo1.SetSourceCreateSql("create table tbl1 (a int)")
+	tblInfo1.SetIdChanged(false)
 	tables := map[uint32]TblMap{
 		1: {
-			"db1.tbl1": &DbTableInfo{
-				SourceDbId:      1,
-				SourceDbName:    "db1",
-				SourceTblId:     1001,
-				SourceTblName:   "tbl1",
-				SourceCreateSql: "create table tbl1 (a int)",
-				IdChanged:       false,
-			},
+			"db1.tbl1": tblInfo1,
 		},
 	}
 	scanCount := 0
@@ -223,16 +223,16 @@ func TestProcessCallBack(t *testing.T) {
 	}
 	defer td.Close()
 
+	tblInfo2 := &DbTableInfo{}
+	tblInfo2.SetSourceDbId(1)
+	tblInfo2.SetSourceDbName("db1")
+	tblInfo2.SetSourceTblId(1001)
+	tblInfo2.SetSourceTblName("tbl1")
+	tblInfo2.SetSourceCreateSql("create table tbl1 (a int)")
+	tblInfo2.SetIdChanged(false)
 	tables := map[uint32]TblMap{
 		1: {
-			"db1.tbl1": &DbTableInfo{
-				SourceDbId:      1,
-				SourceDbName:    "db1",
-				SourceTblId:     1001,
-				SourceTblName:   "tbl1",
-				SourceCreateSql: "create table tbl1 (a int)",
-				IdChanged:       false,
-			},
+			"db1.tbl1": tblInfo2,
 		},
 	}
 	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return moerr.NewInternalErrorNoCtx("ERR") })
@@ -322,8 +322,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 
 	tblInfo, ok := accountMap["db1.tbl1"]
 	assert.True(t, ok)
-	assert.Equal(t, uint64(1001), tblInfo.SourceTblId)
-	assert.False(t, tblInfo.IdChanged)
+	assert.Equal(t, uint64(1001), tblInfo.GetSourceTblId())
+	assert.False(t, tblInfo.GetIdChanged())
 
 	err = td.scanTable()
 	assert.NoError(t, err)
@@ -331,20 +331,19 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 
 	accountMap = td.Mp[1]
 	tblInfo = accountMap["db1.tbl1"]
-	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
-	assert.True(t, tblInfo.IdChanged)
+	assert.Equal(t, uint64(1002), tblInfo.GetSourceTblId())
+	assert.True(t, tblInfo.GetIdChanged())
 }
 
 func TestTableScanner_PrintActiveRunners(t *testing.T) {
 	cdcStateManager := NewCDCStateManager()
-	tableInfo := &DbTableInfo{
-		SourceDbId:      1,
-		SourceDbName:    "db1",
-		SourceTblId:     1001,
-		SourceTblName:   "tbl1",
-		SourceCreateSql: "create table tbl1 (a int)",
-		IdChanged:       false,
-	}
+	tableInfo := &DbTableInfo{}
+	tableInfo.SetSourceDbId(1)
+	tableInfo.SetSourceDbName("db1")
+	tableInfo.SetSourceTblId(1001)
+	tableInfo.SetSourceTblName("tbl1")
+	tableInfo.SetSourceCreateSql("create table tbl1 (a int)")
+	tableInfo.SetIdChanged(false)
 	cdcStateManager.AddActiveRunner(tableInfo)
 	cdcStateManager.PrintActiveRunners(0)
 	cdcStateManager.UpdateActiveRunner(tableInfo, types.BuildTS(1, 1), types.BuildTS(2, 2), true)

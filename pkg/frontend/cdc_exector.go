@@ -482,7 +482,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
 					logutil.Infof("cdc task wait old reader to stop %s %d->%d",
-						key, readerInfo.SourceTblId, info.SourceTblId)
+						key, readerInfo.GetSourceTblId(), info.GetSourceTblId())
 					waitChan := make(chan struct{})
 					go func() {
 						defer close(waitChan)
@@ -526,7 +526,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
 			return err
 		} else {
-			info.IdChanged = newTableInfo.IdChanged
+			info.SetIdChanged(newTableInfo.GetIdChanged())
 			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
 		}
 	}
@@ -542,7 +542,7 @@ var GetTableErrMsg = func(
 	hasError bool, startTS int64, retryTimes int, err error,
 ) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	sql := cdc.CDCSQLBuilder.GetTableErrMsgSQL(uint64(accountId), taskId, tbl.SourceDbName, tbl.SourceTblName)
+	sql := cdc.CDCSQLBuilder.GetTableErrMsgSQL(uint64(accountId), taskId, tbl.GetSourceDbName(), tbl.GetSourceTblName())
 	res := ieExecutor.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return false, 0, 0, res.Error()
@@ -570,14 +570,16 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 	for _, pt := range exec.tables.Pts {
 		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
 			// complete sink info
-			info.SinkDbName = pt.Sink.Database
-			if info.SinkDbName == cdc.CDCPitrGranularity_All {
-				info.SinkDbName = db
+			sinkDbName := pt.Sink.Database
+			if sinkDbName == cdc.CDCPitrGranularity_All {
+				sinkDbName = db
 			}
-			info.SinkTblName = pt.Sink.Table
-			if info.SinkTblName == cdc.CDCPitrGranularity_All {
-				info.SinkTblName = table
+			info.SetSinkDbName(sinkDbName)
+			sinkTblName := pt.Sink.Table
+			if sinkTblName == cdc.CDCPitrGranularity_All {
+				sinkTblName = table
 			}
+			info.SetSinkTblName(sinkTblName)
 			return true
 		}
 	}
@@ -592,7 +594,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 ) (err error) {
 	// for ut
 	if objectio.CDCAddExecConsumeTruncateInjected() {
-		info.IdChanged = false
+		info.SetIdChanged(false)
 		return nil
 	}
 
@@ -609,8 +611,8 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	watermarkKey := cdc.WatermarkKey{
 		AccountId: uint64(exec.spec.Accounts[0].GetId()),
 		TaskId:    exec.spec.TaskId,
-		DBName:    info.SourceDbName,
-		TableName: info.SourceTblName,
+		DBName:    info.GetSourceDbName(),
+		TableName: info.GetSourceTblName(),
 	}
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,
@@ -629,7 +631,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		return
 	}
 
-	tableDef, err := cdc.GetTableDef(ctx, txnOp, exec.cnEngine, info.SourceTblId)
+	tableDef, err := cdc.GetTableDef(ctx, txnOp, exec.cnEngine, info.GetSourceTblId())
 	if err != nil {
 		return
 	}
