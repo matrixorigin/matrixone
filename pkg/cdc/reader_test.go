@@ -458,7 +458,7 @@ func Test_tableReader_Run_DuplicateReader(t *testing.T) {
 				delCompositedPkColIdx: tt.fields.delCompositedPkColIdx,
 				runningReaders:        &sync.Map{},
 			}
-			key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
+			key := GenDbTblKey(reader.info.GetSourceDbName(), reader.info.GetSourceTblName())
 			reader.runningReaders.LoadOrStore(key, reader)
 			reader.Run(tt.args.ctx, tt.args.ar)
 		})
@@ -955,8 +955,8 @@ func TestStaleRead(t *testing.T) {
 	runnerReaders := &sync.Map{}
 	reader := &tableReader{
 		info: &DbTableInfo{
-			SourceDbName:  "db1",
-			SourceTblName: "t1",
+			sourceDbName:  "db1",
+			sourceTblName: "t1",
 		},
 		runningReaders: runnerReaders,
 		accountId:      1,
@@ -981,7 +981,7 @@ func TestStaleRead(t *testing.T) {
 			},
 		),
 	}
-	key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
+	key := GenDbTblKey(reader.info.GetSourceDbName(), reader.info.GetSourceTblName())
 
 	ar := NewCdcActiveRoutine()
 	ctx, cancel := context.WithCancel(context.Background())
