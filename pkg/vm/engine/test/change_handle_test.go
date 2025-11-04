@@ -82,10 +82,10 @@ func TestGetErrorMsg(t *testing.T) {
 	taskID := uuid.New().String()
 
 	ie := &mockCDCIE{de: disttaeEngine}
-	hasError, _, _, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
-		SourceDbName:  "test_db",
-		SourceTblName: "test_table",
-	})
+	dbTblInfo := &cdc.DbTableInfo{}
+	dbTblInfo.SetSourceDbName("test_db")
+	dbTblInfo.SetSourceTblName("test_table")
+	hasError, _, _, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, dbTblInfo)
 	require.False(t, hasError)
 	require.NoError(t, err)
 	insert_sql := cdc.CDCSQLBuilder.InsertWatermarkSQL(uint64(accountId), taskID, "test_db", "test_table", "1000")
@@ -93,10 +93,10 @@ func TestGetErrorMsg(t *testing.T) {
 	require.NoError(t, err)
 
 	ie = &mockCDCIE{de: disttaeEngine}
-	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
-		SourceDbName:  "test_db",
-		SourceTblName: "test_table",
-	})
+	dbTblInfo = &cdc.DbTableInfo{}
+	dbTblInfo.SetSourceDbName("test_db")
+	dbTblInfo.SetSourceTblName("test_table")
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, dbTblInfo)
 	require.False(t, hasError)
 	require.NoError(t, err)
 
@@ -104,29 +104,29 @@ func TestGetErrorMsg(t *testing.T) {
 	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
 	require.NoError(t, err)
 
-	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
-		SourceDbName:  "test_db",
-		SourceTblName: "test_table",
-	})
+	dbTblInfo = &cdc.DbTableInfo{}
+	dbTblInfo.SetSourceDbName("test_db")
+	dbTblInfo.SetSourceTblName("test_table")
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, dbTblInfo)
 	require.True(t, hasError)
 	require.NoError(t, err)
 
 	ie.setError(moerr.NewInternalErrorNoCtx("debug"))
 
-	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
-		SourceDbName:  "test_db",
-		SourceTblName: "test_table",
-	})
+	dbTblInfo = &cdc.DbTableInfo{}
+	dbTblInfo.SetSourceDbName("test_db")
+	dbTblInfo.SetSourceTblName("test_table")
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, dbTblInfo)
 	require.False(t, hasError)
 	require.Error(t, err)
 
 	ie.setError(nil)
 	ie.setStringError(moerr.NewInternalErrorNoCtx("debug"))
 
-	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
-		SourceDbName:  "test_db",
-		SourceTblName: "test_table",
-	})
+	dbTblInfo = &cdc.DbTableInfo{}
+	dbTblInfo.SetSourceDbName("test_db")
+	dbTblInfo.SetSourceTblName("test_table")
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, dbTblInfo)
 	require.False(t, hasError)
 	require.Error(t, err)
 
@@ -136,10 +136,10 @@ func TestGetErrorMsg(t *testing.T) {
 	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
 	require.NoError(t, err)
 
-	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
-		SourceDbName:  "test_db",
-		SourceTblName: "test_table",
-	})
+	dbTblInfo = &cdc.DbTableInfo{}
+	dbTblInfo.SetSourceDbName("test_db")
+	dbTblInfo.SetSourceTblName("test_table")
+	hasError, _, _, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, dbTblInfo)
 	require.False(t, hasError)
 	require.NoError(t, err)
 }

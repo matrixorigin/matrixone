@@ -177,7 +177,7 @@ func TestNewSinker(t *testing.T) {
 
 				// create db + use + create table
 				expectCount := 3
-				if tt.args.dbTblInfo != nil && tt.args.dbTblInfo.IdChanged {
+				if tt.args.dbTblInfo != nil && tt.args.dbTblInfo.GetIdChanged() {
 					// create db + use + drop + create table
 					expectCount = 4
 				}
@@ -764,10 +764,9 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	assert.NoError(t, err)
 	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
 
-	dbTblInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-	}
+	dbTblInfo := &DbTableInfo{}
+	dbTblInfo.SetSourceDbName("db1")
+	dbTblInfo.SetSourceTblName("t1")
 
 	watermarkUpdater, _ := InitCDCWatermarkUpdaterForTest(t)
 	watermarkUpdater.Start()
@@ -969,13 +968,13 @@ func Test_mysqlsink(t *testing.T) {
 		DBName:    "db1",
 		TableName: "t1",
 	}, &ts)
+	dbTblInfo := &DbTableInfo{}
+	dbTblInfo.SetSourceTblId(0)
+	dbTblInfo.SetSourceTblName("t1")
+	dbTblInfo.SetSourceDbName("db1")
 	sink := &mysqlSinker{
 		watermarkUpdater: wmark,
-		dbTblInfo: &DbTableInfo{
-			SourceTblId:   0,
-			SourceTblName: "t1",
-			SourceDbName:  "db1",
-		},
+		dbTblInfo:        dbTblInfo,
 	}
 	ts = types.BuildTS(100, 100)
 	sink.watermarkUpdater.UpdateWatermarkOnly(context.Background(), &WatermarkKey{

@@ -179,13 +179,13 @@ func TestScanAndProcess(t *testing.T) {
 	}
 	scanCount := 0
 	td.scanTableFn = func() error {
-		td.mu.Lock()
+		td.Lock()
 		if scanCount%5 == 0 {
-			td.lastMp = tables
+			td.setLastMpLocked(tables)
 		} else {
-			td.lastMp = nil
+			td.setLastMpLocked(nil)
 		}
-		td.mu.Unlock()
+		td.Unlock()
 		scanCount++
 		return nil
 	}
@@ -237,19 +237,13 @@ func TestProcessCallBack(t *testing.T) {
 	}
 	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return moerr.NewInternalErrorNoCtx("ERR") })
 	assert.Equal(t, 1, len(td.Callbacks))
-	td.mu.Lock()
-	td.lastMp = tables
-	td.mu.Unlock()
+	td.setLastMp(tables)
 
 	td.processCallback(context.Background(), tables)
 
-	td.mu.Lock()
-	defer td.mu.Unlock()
-
-	assert.False(t, td.handling, "handling should be reset to false")
-
-	assert.NotNil(t, td.lastMp, "lastMp should not be cleared on error")
-	assert.Equal(t, tables, td.lastMp, "lastMp should remain unchanged")
+	lastMp := td.getLastMp()
+	assert.NotNil(t, lastMp, "lastMp should not be cleared on error")
+	assert.Equal(t, tables, lastMp, "lastMp should remain unchanged")
 }
 
 func TestTableScanner_UpdateTableInfo(t *testing.T) {

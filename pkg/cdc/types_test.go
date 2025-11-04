@@ -233,15 +233,14 @@ func TestDbTableInfo_String(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := DbTableInfo{
-				SourceDbName:  tt.fields.SourceDbName,
-				SourceTblName: tt.fields.SourceTblName,
-				SourceDbId:    tt.fields.SourceDbId,
-				SourceTblId:   tt.fields.SourceTblId,
-				SinkDbName:    tt.fields.SinkDbName,
-				SinkTblName:   tt.fields.SinkTblName,
-				IdChanged:     tt.fields.IdChanged,
-			}
+			info := DbTableInfo{}
+			info.SetSourceDbName(tt.fields.SourceDbName)
+			info.SetSourceTblName(tt.fields.SourceTblName)
+			info.SetSourceDbId(tt.fields.SourceDbId)
+			info.SetSourceTblId(tt.fields.SourceTblId)
+			info.SetSinkDbName(tt.fields.SinkDbName)
+			info.SetSinkTblName(tt.fields.SinkTblName)
+			info.SetIdChanged(tt.fields.IdChanged)
 			assert.Equalf(t, tt.want, info.String(), "String()")
 		})
 	}
@@ -272,28 +271,29 @@ func TestDbTableInfo_Clone(t *testing.T) {
 				SinkDbName:      "sink_db",
 				SinkTblName:     "sink_tbl",
 			},
-			want: &DbTableInfo{
-				SourceDbId:      1,
-				SourceDbName:    "source_db",
-				SourceTblId:     1,
-				SourceTblName:   "source_tbl",
-				SourceCreateSql: "create table source_db.source_tbl (id int)",
-				SinkDbName:      "sink_db",
-				SinkTblName:     "sink_tbl",
-			},
+			want: func() *DbTableInfo {
+				info := &DbTableInfo{}
+				info.SetSourceDbId(1)
+				info.SetSourceDbName("source_db")
+				info.SetSourceTblId(1)
+				info.SetSourceTblName("source_tbl")
+				info.SetSourceCreateSql("create table source_db.source_tbl (id int)")
+				info.SetSinkDbName("sink_db")
+				info.SetSinkTblName("sink_tbl")
+				return info
+			}(),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := DbTableInfo{
-				SourceDbId:      tt.fields.SourceDbId,
-				SourceDbName:    tt.fields.SourceDbName,
-				SourceTblId:     tt.fields.SourceTblId,
-				SourceTblName:   tt.fields.SourceTblName,
-				SourceCreateSql: tt.fields.SourceCreateSql,
-				SinkDbName:      tt.fields.SinkDbName,
-				SinkTblName:     tt.fields.SinkTblName,
-			}
+			info := DbTableInfo{}
+			info.SetSourceDbId(tt.fields.SourceDbId)
+			info.SetSourceDbName(tt.fields.SourceDbName)
+			info.SetSourceTblId(tt.fields.SourceTblId)
+			info.SetSourceTblName(tt.fields.SourceTblName)
+			info.SetSourceCreateSql(tt.fields.SourceCreateSql)
+			info.SetSinkDbName(tt.fields.SinkDbName)
+			info.SetSinkTblName(tt.fields.SinkTblName)
 			assert.Equalf(t, tt.want, info.Clone(), "Clone()")
 		})
 	}
@@ -341,24 +341,22 @@ func TestDbTableInfo_OnlyDiffinTblId(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			base := DbTableInfo{
-				SourceDbName:  tt.fields.SourceDbName,
-				SourceTblName: tt.fields.SourceTblName,
-				SourceDbId:    1,
-				SourceTblId:   1,
-				SinkDbName:    tt.fields.SinkDbName,
-				SinkTblName:   tt.fields.SinkTblName,
-				IdChanged:     tt.fields.IdChanged,
-			}
-			info := DbTableInfo{
-				SourceDbName:  tt.fields.SourceDbName,
-				SourceTblName: tt.fields.SourceTblName,
-				SourceDbId:    tt.fields.SourceDbId,
-				SourceTblId:   tt.fields.SourceTblId,
-				SinkDbName:    tt.fields.SinkDbName,
-				SinkTblName:   tt.fields.SinkTblName,
-				IdChanged:     tt.fields.IdChanged,
-			}
+			base := DbTableInfo{}
+			base.SetSourceDbName(tt.fields.SourceDbName)
+			base.SetSourceTblName(tt.fields.SourceTblName)
+			base.SetSourceDbId(1)
+			base.SetSourceTblId(1)
+			base.SetSinkDbName(tt.fields.SinkDbName)
+			base.SetSinkTblName(tt.fields.SinkTblName)
+			base.SetIdChanged(tt.fields.IdChanged)
+			info := DbTableInfo{}
+			info.SetSourceDbName(tt.fields.SourceDbName)
+			info.SetSourceTblName(tt.fields.SourceTblName)
+			info.SetSourceDbId(tt.fields.SourceDbId)
+			info.SetSourceTblId(tt.fields.SourceTblId)
+			info.SetSinkDbName(tt.fields.SinkDbName)
+			info.SetSinkTblName(tt.fields.SinkTblName)
+			info.SetIdChanged(tt.fields.IdChanged)
 			assert.Equalf(t, tt.want, base.OnlyDiffinTblId(&info), "OnlyDiffinTblId()")
 		})
 	}
