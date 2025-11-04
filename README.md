@@ -276,33 +276,19 @@ Ready to dive deeper? Explore our comprehensive collection of hands-on tutorials
 
 MatrixOne supports multiple installation methods. Choose the one that best fits your needs:
 
-### 🐳 Docker Compose - Multi-CN Local Deployment (Recommended for Development)
+### 🐳 Local Multi-CN Development
 
-Quick setup for a complete distributed cluster with multiple CN nodes, shared local storage, and built-in load balancing proxy.
-
-**Quick Start:**
+Run a complete distributed cluster locally with multiple CN nodes and load balancing.
 
 ```bash
-cd etc/docker-multi-cn-local-disk
+# From project root
+make dev-build && make dev-up
 
-# Build from source (recommended, uses Go proxy acceleration)
-docker compose build
-IMAGE_NAME=matrixorigin/matrixone:local docker compose up -d
-
-# Or use official Docker Hub image
-docker compose up -d
-
-# Connect to the cluster
+# Connect
 mysql -h 127.0.0.1 -P 6009 -u root -p111
 ```
 
-**What you get:**
-- 🔄 **2 CN nodes** with Proxy load balancing
-- 💾 **Shared local storage** (DISK backend)
-- 📊 **Complete distributed architecture** (LogService + TN + CNs + Proxy)
-- 🚀 **Go proxy acceleration** for fast builds
-
-📖 **[Complete Docker Multi-CN Deployment Guide →](etc/docker-multi-cn-local-disk/README.md)**
+📖 **[Full Guide & Commands →](etc/docker-multi-cn-local-disk/)**
 
 ### 🎯 Using mo_ctl Tool (Recommended for Production)
 

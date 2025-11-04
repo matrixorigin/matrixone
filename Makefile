@@ -246,6 +246,148 @@ compose-clean:
 	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile_2/*.csv
 
 ###############################################################################
+# Local Multi-CN Development Environment (docker-multi-cn-local-disk)
+###############################################################################
+
+DEV_DIR := etc/docker-multi-cn-local-disk
+DEV_VERSION ?= local
+DEV_MOUNT ?=
+
+.PHONY: dev-help
+dev-help:
+	@echo "Local Multi-CN Development Environment Commands:"
+	@echo "  make dev-build          - Build MatrixOne docker image (local tag)"
+	@echo "  make dev-up             - Start multi-CN cluster with local image"
+	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
+	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-down           - Stop multi-CN cluster"
+	@echo "  make dev-restart        - Restart multi-CN cluster"
+	@echo "  make dev-ps             - Show service status"
+	@echo "  make dev-logs           - Show all logs (tail -f)"
+	@echo "  make dev-logs-cn1       - Show CN1 logs"
+	@echo "  make dev-logs-cn2       - Show CN2 logs"
+	@echo "  make dev-logs-proxy     - Show proxy logs"
+	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make dev-build && make dev-up              # Build and start"
+	@echo "  make dev-up-test                           # Start with test files"
+	@echo "  make DEV_VERSION=latest dev-up             # Use official latest"
+	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
+	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
+
+.PHONY: dev-build
+dev-build:
+	@echo "Building MatrixOne docker image..."
+	@cd $(DEV_DIR) && ./start.sh build
+
+.PHONY: dev-up
+dev-up:
+	@echo "Starting MatrixOne Multi-CN cluster (version: $(DEV_VERSION))..."
+ifeq ($(DEV_MOUNT),)
+	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) up -d
+else
+	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) -m "$(DEV_MOUNT)" up -d
+endif
+	@echo ""
+	@echo "Services started! Connect with:"
+	@echo "  mysql -h 127.0.0.1 -P 6009 -u root -p111  # Via proxy (recommended)"
+	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
+	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
+
+.PHONY: dev-up-latest
+dev-up-latest:
+	@$(MAKE) DEV_VERSION=latest dev-up
+
+.PHONY: dev-up-nightly
+dev-up-nightly:
+	@$(MAKE) DEV_VERSION=nightly dev-up
+
+.PHONY: dev-up-test
+dev-up-test:
+	@echo "Starting with test directory mounted..."
+	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) -m "../../test:/test:ro" up -d
+	@echo ""
+	@echo "Test directory mounted at /test in containers"
+	@echo "Run SQL files with: mysql> source /test/distributed/cases/your_test.sql;"
+
+.PHONY: dev-down
+dev-down:
+	@echo "Stopping MatrixOne Multi-CN cluster..."
+	@cd $(DEV_DIR) && ./start.sh down
+
+.PHONY: dev-restart
+dev-restart:
+	@echo "Restarting MatrixOne Multi-CN cluster..."
+	@cd $(DEV_DIR) && ./start.sh restart
+
+.PHONY: dev-ps
+dev-ps:
+	@cd $(DEV_DIR) && ./start.sh ps
+
+.PHONY: dev-logs
+dev-logs:
+	@cd $(DEV_DIR) && ./start.sh logs -f
+
+.PHONY: dev-logs-cn1
+dev-logs-cn1:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-cn1
+
+.PHONY: dev-logs-cn2
+dev-logs-cn2:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-cn2
+
+.PHONY: dev-logs-proxy
+dev-logs-proxy:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-proxy
+
+.PHONY: dev-logs-tn
+dev-logs-tn:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-tn
+
+.PHONY: dev-logs-log
+dev-logs-log:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-log
+
+.PHONY: dev-clean
+dev-clean:
+	@echo "WARNING: This will delete all data in mo-data/ and logs/!"
+	@read -p "Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		echo "Stopping services..."; \
+		cd $(DEV_DIR) && ./start.sh down; \
+		echo "Removing data..."; \
+		rm -rf mo-data logs; \
+		echo "Clean completed!"; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+.PHONY: dev-shell-cn1
+dev-shell-cn1:
+	@docker exec -it mo-cn1 sh
+
+.PHONY: dev-shell-cn2
+dev-shell-cn2:
+	@docker exec -it mo-cn2 sh
+
+.PHONY: dev-mysql
+dev-mysql:
+	@echo "Connecting to MatrixOne via proxy..."
+	@mysql -h 127.0.0.1 -P 6009 -u root -p111
+
+.PHONY: dev-mysql-cn1
+dev-mysql-cn1:
+	@echo "Connecting to MatrixOne CN1..."
+	@mysql -h 127.0.0.1 -P 16001 -u root -p111
+
+.PHONY: dev-mysql-cn2
+dev-mysql-cn2:
+	@echo "Connecting to MatrixOne CN2..."
+	@mysql -h 127.0.0.1 -P 16002 -u root -p111
+
+###############################################################################
 # clean
 ###############################################################################
 

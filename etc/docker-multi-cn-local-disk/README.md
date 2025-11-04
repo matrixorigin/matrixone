@@ -26,7 +26,65 @@
 
 The `docker-compose.yml` supports both local build (recommended) and Docker Hub image.
 
-### Recommended: Use start.sh (Enhanced Wrapper Script)
+### Method 1: Use Makefile Commands (Recommended - Simplest)
+
+Run from the **project root directory**:
+
+```bash
+# Show all available dev commands
+make dev-help
+
+# Build and start (most common workflow)
+make dev-build
+make dev-up
+
+# Or in one line
+make dev-build && make dev-up
+
+# Start with test directory mounted
+make dev-up-test
+
+# Custom mount (any directory)
+make DEV_MOUNT="../../test:/test:ro" dev-up
+make DEV_MOUNT="/path/to/data:/data:ro" dev-up
+
+# Use official latest version
+make dev-up-latest
+
+# Use nightly build
+make dev-up-nightly
+
+# Combine options (version + mount)
+make DEV_VERSION=latest DEV_MOUNT="../../test:/test:ro" dev-up
+
+# View status
+make dev-ps
+
+# View logs
+make dev-logs            # All services
+make dev-logs-cn1        # CN1 only
+make dev-logs-proxy      # Proxy only
+
+# Connect to database
+make dev-mysql           # Via proxy (recommended)
+make dev-mysql-cn1       # Direct to CN1
+
+# Stop
+make dev-down
+
+# Clean restart (removes all data)
+make dev-clean
+```
+
+**Advantages:**
+- ✅ Simple commands from project root
+- ✅ No need to cd into directory
+- ✅ Consistent with other make targets
+- ✅ Clear naming: `dev-*` for local multi-CN development environment
+- ✅ Built-in help: `make dev-help`
+- ✅ Supports custom mounts via `DEV_MOUNT` variable
+
+### Method 2: Use start.sh (Enhanced Wrapper Script)
 
 The easiest and most powerful way to manage MatrixOne:
 
@@ -351,7 +409,44 @@ All containers share local disk storage:
 
 ## Common Commands
 
-**Using start.sh (Recommended):**
+**Using Makefile (Recommended - from project root):**
+
+```bash
+# Build
+make dev-build
+
+# Start/Stop
+make dev-up                  # Start with local build (default)
+make dev-up-latest           # Start with official latest
+make dev-up-nightly          # Start with nightly
+make dev-up-test             # Start with test dir mounted
+make dev-down                # Stop
+make dev-restart             # Restart
+
+# View status and logs
+make dev-ps                  # Status
+make dev-logs                # All logs
+make dev-logs-cn1            # CN1 logs only
+make dev-logs-cn2            # CN2 logs only
+
+# Connect to database
+make dev-mysql               # Connect via proxy
+make dev-mysql-cn1           # Connect to CN1
+make dev-mysql-cn2           # Connect to CN2
+
+# Shell access
+make dev-shell-cn1           # Enter CN1 container
+make dev-shell-cn2           # Enter CN2 container
+
+# Clean up
+make dev-clean               # Stop and remove all data
+
+# Advanced: custom version/mount
+make DEV_VERSION=3.0 dev-up
+make DEV_MOUNT="../../test:/test:ro" dev-up
+```
+
+**Using start.sh (from etc/docker-multi-cn-local-disk/):**
 
 ```bash
 # Show help and all options
