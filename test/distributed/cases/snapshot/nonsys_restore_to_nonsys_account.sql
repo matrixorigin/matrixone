@@ -275,7 +275,7 @@ drop snapshot snap01;
 drop snapshot if exists sp05;
 create snapshot sp05 for account acc01;
 create database db01;
-restore account acc01 FROM snapshot sp05;
+restore account acc01{snapshot="sp05"};
 show databases;
 drop snapshot sp05;
 

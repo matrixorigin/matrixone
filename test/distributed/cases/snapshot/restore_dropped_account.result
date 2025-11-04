@@ -419,7 +419,7 @@ create snapshot spsp06 for cluster;
 drop account acc04;
 drop account acc05;
 drop account acc06;
-restore cluster from snapshot spsp06;
+restore cluster{snapshot="spsp06"};
 use test04;
 select * from t1;
 id    ti    si    bi    fl    dl    de    ch    vch    dd    dt

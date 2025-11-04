@@ -354,7 +354,7 @@ drop account acc04;
 drop account acc05;
 drop account acc06;
 
-restore cluster from snapshot spsp06;
+restore cluster{snapshot="spsp06"};
 
 -- @session:id=7&user=acc04:test_account&password=111
 use test04;

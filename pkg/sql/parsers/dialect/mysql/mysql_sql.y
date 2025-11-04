@@ -1312,13 +1312,12 @@ snapshot_restore_stmt:
 
         $$ = result
     }
-|   RESTORE CLUSTER FROM SNAPSHOT ident
+|   RESTORE CLUSTER restore_snapshot_name
     {
         $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELCLUSTER,
-            SnapShotName: tree.Identifier($5.Compare()),
+            Level:        tree.RESTORELEVELCLUSTER,
+            SnapShotName: tree.Identifier($3),
         }
-
     }
 |   RESTORE ACCOUNT ident restore_snapshot_name restore_to_account_name_opt
     {
@@ -1373,14 +1372,6 @@ restore_snapshot_name:
 |   '{' SNAPSHOT '=' STRING '}'
     {
         $$ = strings.ToLower($4)
-    }
-|   FROM SNAPSHOT ident
-    {
-        $$ = $3.Compare()
-    }
-|   FROM SNAPSHOT STRING
-    {
-        $$ = strings.ToLower($3)
     }
 
 restore_to_account_name_opt:
