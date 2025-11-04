@@ -124,13 +124,6 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	err := sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
-			insertsql := `REPLACE INTO mo_catalog.mo_index_update values (0, 1, "db", "table", "idx", "ivfflat_reindex", 
-			'{"cfg":{"kmeans_train_percent":10, "kmeans_max_iteration":4, "ivf_threads_build":23}, "action": "xxx"}', 
-			'{}', NOW(), NOW())`
-			_, err := sqlexec.RunSql(sqlproc, insertsql)
-			if err != nil {
-				return err
-			}
 
 			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata from mo_catalog.mo_index_update"
 			res, err := sqlexec.RunSql(sqlproc, sql)
@@ -201,9 +194,35 @@ func getResolveVariableFuncFromMetadata(metadata []byte) func(string, bool, bool
 			return nil, moerr.NewInternalErrorNoCtx("value is null")
 		}
 
-		// assume all value are int64
-		value := out.GetInt64()
-		return value, nil
+		typepath, err := bytejson.ParseJsonPath("$.t")
+		if err != nil {
+			return nil, err
+		}
+
+		typebj := out.QuerySimple([]*bytejson.Path{&typepath})
+		if typebj.IsNull() {
+			return nil, moerr.NewInternalErrorNoCtx("type is null")
+		}
+
+		valpath, err := bytejson.ParseJsonPath("$.v")
+		if err != nil {
+			return nil, err
+		}
+
+		valbj := out.QuerySimple([]*bytejson.Path{&valpath})
+		if valbj.IsNull() {
+			return nil, moerr.NewInternalErrorNoCtx("value is null")
+		}
+
+		switch string(typebj.GetString()) {
+		case "I64":
+			return valbj.GetInt64(), nil
+		case "F64":
+			return valbj.GetFloat64(), nil
+		case "S":
+			return string(valbj.GetString()), nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("invalid configuration type")
 	}
 }
 
