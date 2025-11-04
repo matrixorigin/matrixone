@@ -26,6 +26,39 @@
 
 The `docker-compose.yml` supports both local build (recommended) and Docker Hub image.
 
+### Configuration (Optional)
+
+Customize common settings without editing TOML files:
+
+```bash
+# 1. Create config file from example
+make dev-config-example
+# or: cp etc/docker-multi-cn-local-disk/config.env.example etc/docker-multi-cn-local-disk/config.env
+
+# 2. Edit configuration (uncomment and modify lines)
+vim etc/docker-multi-cn-local-disk/config.env
+
+# Example settings:
+# LOG_LEVEL=debug          # Change log level
+# LOG_FORMAT=json          # Use JSON logging
+# MEMORY_CACHE=2GB         # Increase memory cache
+# DISK_CACHE=20GB          # Increase disk cache
+
+# 3. Start (will auto-generate configs)
+make dev-up
+
+# Or manually regenerate configs
+make dev-config
+```
+
+**Common Configuration Options:**
+- `LOG_LEVEL` - debug, info, warn, error, fatal (default: info)
+- `LOG_FORMAT` - console, json (default: console)
+- `MEMORY_CACHE` - e.g., 512MB, 2GB, 4GB (default: 512MB)
+- `DISK_CACHE` - e.g., 8GB, 20GB, 50GB (default: 8GB)
+- `DISABLE_TRACE` - true, false (default: true)
+- `DISABLE_METRIC` - true, false (default: true)
+
 ### Method 1: Use Makefile Commands (Recommended - Simplest)
 
 Run from the **project root directory**:
@@ -406,6 +439,64 @@ All containers share local disk storage:
 - When using `./start.sh`: Files are automatically created with your user's permissions ✅
 - When using `docker compose` directly: Set `DOCKER_UID` and `DOCKER_GID` environment variables
 - Default fallback: `501:20` (macOS first user) - may need adjustment for Linux users
+
+## Advanced Configuration Examples
+
+### Example 1: Debug Logging with JSON Format
+
+```bash
+# Create config
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+LOG_LEVEL=debug
+LOG_FORMAT=json
+EOF
+
+# Apply and restart
+make dev-config
+make dev-restart
+```
+
+### Example 2: High Performance Setup
+
+```bash
+# Create config with larger caches
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+MEMORY_CACHE=4GB
+DISK_CACHE=50GB
+LOG_LEVEL=warn
+EOF
+
+# Apply
+make dev-down
+make dev-up
+```
+
+### Example 3: Enable Monitoring
+
+```bash
+# Create config
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+DISABLE_TRACE=false
+DISABLE_METRIC=false
+LOG_LEVEL=info
+LOG_FORMAT=json
+EOF
+
+# Apply
+make dev-config
+make dev-restart
+```
+
+### Quick Config Changes
+
+```bash
+# One-liner: change log level to debug
+echo "LOG_LEVEL=debug" > etc/docker-multi-cn-local-disk/config.env
+make dev-config && make dev-restart
+
+# View current configs
+cat etc/docker-multi-cn-local-disk/cn1.toml | grep -A3 "\[log\]"
+```
 
 ## Common Commands
 

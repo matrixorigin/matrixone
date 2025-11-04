@@ -143,6 +143,62 @@ make DEV_MOUNT="/path/to/data:/data:ro" dev-up
 make DEV_VERSION=latest dev-up-test
 ```
 
+## ⚙️ Configuration Management
+
+### Quick Setup
+
+```bash
+# Create config from example
+make dev-config-example
+
+# Edit settings
+vim etc/docker-multi-cn-local-disk/config.env
+
+# Apply changes
+make dev-config
+make dev-restart
+```
+
+### Common Configurations
+
+**Debug Logging:**
+```bash
+echo "LOG_LEVEL=debug" > etc/docker-multi-cn-local-disk/config.env
+echo "LOG_FORMAT=json" >> etc/docker-multi-cn-local-disk/config.env
+make dev-config && make dev-restart
+```
+
+**High Performance:**
+```bash
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+MEMORY_CACHE=4GB
+DISK_CACHE=50GB
+LOG_LEVEL=warn
+EOF
+make dev-down && make dev-up
+```
+
+**Enable Monitoring:**
+```bash
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+DISABLE_TRACE=false
+DISABLE_METRIC=false
+EOF
+make dev-config && make dev-restart
+```
+
+### Available Options
+
+| Variable | Default | Description | Examples |
+|----------|---------|-------------|----------|
+| `LOG_LEVEL` | info | Log verbosity | debug, info, warn, error, fatal |
+| `LOG_FORMAT` | console | Log output format | console, json |
+| `LOG_MAX_SIZE` | 512 | Log file size (MB) | 512, 1024, 2048 |
+| `MEMORY_CACHE` | 512MB | FileService memory cache | 512MB, 2GB, 4GB |
+| `DISK_CACHE` | 8GB | FileService disk cache | 8GB, 20GB, 50GB |
+| `DISABLE_TRACE` | true | Disable tracing | true, false |
+| `DISABLE_METRIC` | false | Disable metrics | true, false |
+
 ## 🐛 Troubleshooting
 
 ### Check Status

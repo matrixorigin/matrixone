@@ -12,6 +12,7 @@ y.go
 **/cover.out
 .vscode
 .env
+config.env
 *.iml
 tags
 coverage.txt

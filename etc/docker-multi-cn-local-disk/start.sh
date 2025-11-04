@@ -120,6 +120,13 @@ else
     COMPOSE_FILES="-f docker-compose.yml"
 fi
 
+# Generate configuration files from templates if config.env exists
+if [ -f "config.env" ]; then
+    echo "Generating configuration from config.env..."
+    ./generate-config.sh
+    echo ""
+fi
+
 # Pre-create directories with correct permissions (before docker creates them as root)
 if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " up " ]]; then
     echo "Pre-creating directories with correct permissions..."

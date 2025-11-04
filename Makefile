@@ -75,6 +75,52 @@ endif
 all: build
 
 ###############################################################################
+# help
+###############################################################################
+
+.PHONY: help
+help:
+	@echo "MatrixOne Makefile Commands"
+	@echo "============================"
+	@echo ""
+	@echo "Build Commands:"
+	@echo "  make build              - Build mo-service binary"
+	@echo "  make debug              - Build with race detector and debug symbols"
+	@echo "  make musl               - Build static binary with musl"
+	@echo "  make mo-tool            - Build mo-tool utility"
+	@echo "  make clean              - Clean build artifacts"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make ut                 - Run unit tests"
+	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
+	@echo "  make compose            - Run docker compose BVT tests"
+	@echo ""
+	@echo "Development Environment (Local Multi-CN Cluster):"
+	@echo "  make dev-help           - Show all dev-* commands"
+	@echo "  make dev-build          - Build docker image"
+	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
+	@echo "  make dev-up-latest      - Start with official latest image"
+	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-down           - Stop cluster"
+	@echo "  make dev-restart        - Restart cluster"
+	@echo "  make dev-logs           - View all logs"
+	@echo "  make dev-mysql          - Connect to database via proxy"
+	@echo "  make dev-config-example - Create config.env template"
+	@echo "  make dev-clean          - Stop and remove all data"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make fmt                - Format Go code"
+	@echo "  make static-check       - Run static analysis"
+	@echo ""
+	@echo "Other:"
+	@echo "  make vendor-build       - Build vendor directory"
+	@echo "  make pb                 - Generate protobuf files"
+	@echo ""
+	@echo "For more details:"
+	@echo "  make dev-help           - Development environment commands"
+	@echo "  See README.md and BUILD.md for full documentation"
+
+###############################################################################
 # build vendor directory
 ###############################################################################
 
@@ -268,6 +314,8 @@ dev-help:
 	@echo "  make dev-logs-cn2       - Show CN2 logs"
 	@echo "  make dev-logs-proxy     - Show proxy logs"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
+	@echo "  make dev-config         - Generate config from config.env"
+	@echo "  make dev-config-example - Create config.env.example file"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
@@ -275,6 +323,11 @@ dev-help:
 	@echo "  make DEV_VERSION=latest dev-up             # Use official latest"
 	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
 	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
+	@echo "  2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
+	@echo "  3. Generate: make dev-config (or auto-generated on dev-up)"
 
 .PHONY: dev-build
 dev-build:
@@ -386,6 +439,31 @@ dev-mysql-cn1:
 dev-mysql-cn2:
 	@echo "Connecting to MatrixOne CN2..."
 	@mysql -h 127.0.0.1 -P 16002 -u root -p111
+
+.PHONY: dev-config
+dev-config:
+	@echo "Generating configuration files..."
+	@cd $(DEV_DIR) && ./generate-config.sh
+
+.PHONY: dev-config-example
+dev-config-example:
+	@echo "Creating example config.env file..."
+	@if [ -f "$(DEV_DIR)/config.env" ]; then \
+		echo "Warning: config.env already exists. Not overwriting."; \
+		echo "To recreate, run: rm $(DEV_DIR)/config.env && make dev-config-example"; \
+	else \
+		cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env; \
+		echo "✓ Created $(DEV_DIR)/config.env"; \
+		echo ""; \
+		echo "Edit the file to customize configuration:"; \
+		echo "  vim $(DEV_DIR)/config.env"; \
+		echo ""; \
+		echo "Then regenerate configs:"; \
+		echo "  make dev-config"; \
+		echo ""; \
+		echo "Or just restart (auto-generates):"; \
+		echo "  make dev-down && make dev-up"; \
+	fi
 
 ###############################################################################
 # clean
