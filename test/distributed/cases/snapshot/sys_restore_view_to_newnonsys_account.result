@@ -72,7 +72,7 @@ col1    col2
 2    -1
 select * from v03;
 SQL parser error: table "v03" does not exist
-restore account acc01 from snapshot sp100 to account acc02;
+restore account acc01{snapshot="sp100"} to account acc02;
 use test;
 show create view v01;
 View    Create View    character_set_client    collation_connection
@@ -161,7 +161,7 @@ select * from v04;
 SQL parser error: table "v04" does not exist
 select * from v05;
 SQL parser error: table "v04" does not exist
-restore account acc01 from snapshot sp02  to account acc02;
+restore account acc01{snapshot="sp02"} to account acc02;
 use test;
 select * from v04;
 avg(sal)
@@ -230,7 +230,7 @@ use test;
 drop table Employees;
 select * from EmployeeDepartmentView;
 SQL parser error: table "employees" does not exist
-restore account acc01 from snapshot sp05 to account acc02;
+restore account acc01{snapshot="sp05"} to account acc02;
 use test;
 select * from EmployeeDepartmentView;
 firstname    lastname    departmentname
@@ -242,7 +242,7 @@ David    Finley    Finance
 drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 SQL parser error: table "employeedepartmentview" does not exist
-restore account acc01 from snapshot sp05 to account acc02;
+restore account acc01{snapshot="sp05"} to account acc02;
 use test;
 select * from EmployeeDepartmentView;
 firstname    lastname    departmentname
@@ -307,7 +307,7 @@ drop view employee_view;
 drop view department_view;
 select * from employee_with_department_view;
 SQL parser error: table "employee_view" does not exist
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 use test;
 select * from employee_view;
 employee_id    first_name    last_name    department_id
@@ -327,7 +327,7 @@ drop table employees;
 truncate departments;
 select * from employee_view;
 SQL parser error: table "employees" does not exist
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 use test;
 select * from employee_view;
 employee_id    first_name    last_name    department_id
@@ -393,7 +393,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
 drop snapshot if exists sp06;
 create snapshot sp06 for account acc01;
-restore account acc01 from snapshot sp05 to account acc02;
+restore account acc01{snapshot="sp05"} to account acc02;
 use test;
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
@@ -404,7 +404,7 @@ drop table partition01;
 
 select * from view01;
 SQL parser error: table "partition01" does not exist
-restore account acc01 from snapshot sp06 to account acc02;
+restore account acc01{snapshot="sp06"} to account acc02;
 use test;
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
@@ -455,7 +455,7 @@ create snapshot sp06 for account acc01;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
 Unknown database test01
-restore account acc01 from snapshot sp06 to account acc02;
+restore account acc01{snapshot="sp06"} to account acc02;
 select * from test01.EmployeeSalaryRanking;
 employeeid    employeename    salary    salaryrank
 3    Charlie    90000.00    1
@@ -530,7 +530,7 @@ drop table Enrollments;
 drop table students;
 select * from StudentCoursesView;
 SQL parser error: table "students" does not exist
-restore account acc01 from snapshot sp07 to account acc02;
+restore account acc01{snapshot="sp07"} to account acc02;
 use test02;
 select * from Students;
 studentid    name    grade
@@ -549,7 +549,7 @@ Alice    Chemistry    Ms. Lee    2024-01-20
 Alice    Mathematics    Mr. Smith    2024-01-10
 Bob    Physics    Dr. Johnson    2024-01-15
 Charlie    Mathematics    Mr. Smith    2024-02-01
-restore account acc01 from snapshot sp07 to account acc02;
+restore account acc01{snapshot="sp07"} to account acc02;
 use test02;
 select * from Enrollments;
 studentid    courseid    enrollmentdate
@@ -607,7 +607,7 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 use test02;
 drop database test02;
-restore account acc01 from snapshot sp10 to account acc02;
+restore account acc01{snapshot="sp10"} to account acc02;
 use test02;
 show create view employees_view;
 View    Create View    character_set_client    collation_connection
@@ -706,7 +706,7 @@ select * from test03.department_view;
 Unknown database test03
 select * from test05.employee_with_department_view;
 Unknown database test05
-restore account acc01 from snapshot sp100 to account acc02;
+restore account acc01{snapshot="sp100"} to account acc02;
 select * from test04.employee_view;
 employee_id    first_name    last_name    department_id
 1    John    Doe    1

@@ -8,7 +8,7 @@ create snapshot sp01 for cluster;
 insert into clu01 values(2,3,0);
 drop table clu01;
 
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 
 select * from clu01;
 drop table clu01;
@@ -27,7 +27,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
 insert into clu01 values(2,3);
 
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 
 select * from clu01;
 select count(*) from clu01;
@@ -64,7 +64,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 select count(*) from rs01 {snapshot = 'sp01'};
 select count(*) from rs01 {snapshot = 'sp01'};
 select count(*) from rs01 {snapshot = 'sp01'};
@@ -131,7 +131,7 @@ delete from rs03 where col1 = 1;
 select count(*) from rs03;
 select count(*) from rs03{snapshot = 'sp02'};
 
-restore account sys from snapshot sp02;
+restore account sys{snapshot="sp02"};
 
 show databases;
 select count(*) from rs02;
@@ -217,7 +217,7 @@ select * from test03.aff01{snapshot = 'sp04'};
 select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
 
-restore account sys from snapshot sp04;
+restore account sys{snapshot="sp04"};
 use test03;
 show create table aff01;
 show create table pri01;
@@ -288,7 +288,7 @@ show databases;
 select * from test01.t1;
 select count(*) from test03.t3;
 
-restore account sys from snapshot snap01;
+restore account sys{snapshot="snap01"};
 
 show databases;
 select count(*) from test01.t1;
@@ -341,12 +341,12 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 -- @ignore:1
 show snapshots;
-restore account sys from snapshot sp08;
+restore account sys{snapshot="sp08"};
 select * from table02;
 select * from db01.table01;
 select count(*) from table02;
 
-restore account sys from snapshot sp07;
+restore account sys{snapshot="sp07"};
 
 select * from table01;
 select * from table02;
@@ -383,14 +383,14 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 -- @ignore:1
 show snapshots;
-restore account sys from snapshot sp09;
+restore account sys{snapshot="sp09"};
 select * from table02;
 select * from db02.table01;
 select count(*) from table02;
 select count(*) from table01;
 show create table table01;
 
-restore account sys from snapshot sp10;
+restore account sys{snapshot="sp10"};
 select * from db02.table01;
 select count(*) from table01;
 show create table db02.table01;
@@ -474,7 +474,7 @@ select count(*) from tm1;
 select count(*) from ti2;
 select count(*) from tm2;
 
-restore account sys from snapshot sp11;
+restore account sys{snapshot="sp11"};
 show databases;
 select * from db03.ti1;
 select * from db03.tm1;
@@ -485,7 +485,7 @@ show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
 
-restore account sys from snapshot sp14;
+restore account sys{snapshot="sp14"};
 show databases;
 select * from db03.ti1;
 select * from db03.tm1;

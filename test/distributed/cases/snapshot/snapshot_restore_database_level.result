@@ -280,7 +280,7 @@ drop table students;
 drop table users;
 restore database snapshot_read{snapshot="sp_01"};
 internal error: can't restore database from other account's snapshot
-restore account test_account from snapshot sp_01;
+restore account test_account{snapshot="sp_01"};
 select count(*) from snapshot_read.students;
 count(*)
 50
@@ -290,7 +290,7 @@ count(*)
 drop database snapshot_read;
 restore database snapshot_read{snapshot="sp_01"};
 internal error: can't restore database from other account's snapshot
-restore account test_account from snapshot sp_01;
+restore account test_account{snapshot="sp_01"};
 select count(*) from snapshot_read.students;
 count(*)
 50
@@ -348,7 +348,7 @@ select count(*) from snapshot_read.students;
 Unknown database snapshot_read
 select count(*) from snapshot_read.users;
 Unknown database snapshot_read
-restore account test_account from snapshot sp_01 to account acc02;
+restore account test_account{snapshot="sp_01"} to account acc02;
 select count(*) from snapshot_read.students;
 count(*)
 50

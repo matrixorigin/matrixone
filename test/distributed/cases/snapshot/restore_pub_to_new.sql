@@ -71,7 +71,7 @@ show create table index01;
 select * from index02;
 -- @session
 
-restore account acc01 from snapshot pub_sp;
+restore account acc01{snapshot="pub_sp"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,6
@@ -87,7 +87,7 @@ show publications;
 show databases like 'db%';
 -- @session
 
-restore account acc01 from snapshot pub_sp to account acc03;
+restore account acc01{snapshot="pub_sp"} to account acc03;
 
 -- @session:id=5&user=acc03:test_account&password=111
 -- @ignore:5,6

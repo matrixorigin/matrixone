@@ -41,7 +41,7 @@ show create table acc_test04.index03;
 
 --sys
 restore table acc_test04.index03{snapshot="sp04"};
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 
 
 -- @session:id=3&user=acc01:test_account&password=111
@@ -186,7 +186,7 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 
 -- @session:id=7&user=acc02:test_account&password=111
 show databases;

@@ -142,7 +142,7 @@ drop database if exists test_snapshot_restore;
 
 restore database snapshot_read{snapshot="cluster_sp"};
 restore database test_snapshot_restore{snapshot="cluster_sp"};
-restore account acc01 from snapshot cluster_sp;
+restore account acc01{snapshot="cluster_sp"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 select count(*) from snapshot_read.test_snapshot_read;
@@ -432,7 +432,7 @@ drop database if exists Company;
 restore database Company{snapshot="cluster_sp"};
 restore database Projects{snapshot="cluster_sp"};
 restore database Payroll{snapshot="cluster_sp"};
-restore account acc01 from snapshot cluster_sp;
+restore account acc01{snapshot="cluster_sp"};
 
 -- @session:id=2&user=acc01:test_account&password=111
 select * from Company.Departments;
@@ -736,7 +736,7 @@ drop database if exists Company;
 restore database Company{snapshot="account_sp"};
 restore database Projects{snapshot="account_sp"};
 restore database Payroll{snapshot="account_sp"};
-restore account acc01 from snapshot account_sp;
+restore account acc01{snapshot="account_sp"};
 
 -- @session:id=3&user=acc01:test_account&password=111
 select * from Company.Departments;
@@ -1002,7 +1002,7 @@ drop database if exists EducationSystem;
 restore database School{snapshot="cluster_sp"};
 restore database University{snapshot="cluster_sp"};
 restore database EducationSystem{snapshot="cluster_sp"};
-restore account acc01 from snapshot cluster_sp;
+restore account acc01{snapshot="cluster_sp"};
 
 -- @session:id=4&user=acc01:test_account&password=111
 select * from School.Students;

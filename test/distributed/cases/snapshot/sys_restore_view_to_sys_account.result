@@ -90,7 +90,7 @@ col1    col2    col3
 4    10    null
 1    -321    null
 2    -1    null
-restore account sys from snapshot sp100;
+restore account sys{snapshot="sp100"};
 show create view v01;
 View    Create View    character_set_client    collation_connection
 v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
@@ -198,7 +198,7 @@ avg(sal)
 800.00000000
 1366.66666667
 2758.33333333
-restore account sys from snapshot sp02;
+restore account sys{snapshot="sp02"};
 select * from v04;
 avg(sal)
 800.00000000
@@ -278,7 +278,7 @@ Jane    Smith    Engineering
 Alice    Johnson    Marketing
 Mark    Patterson    Sales
 David    Finley    Finance
-restore account sys from snapshot sp05;
+restore account sys{snapshot="sp05"};
 select * from EmployeeDepartmentView;
 firstname    lastname    departmentname
 John    Doe    Human Resources
@@ -303,7 +303,7 @@ Jane    Smith    Engineering
 Alice    Johnson    Marketing
 Mark    Patterson    Sales
 David    Finley    Finance
-restore account sys from snapshot sp05;
+restore account sys{snapshot="sp05"};
 select * from EmployeeDepartmentView;
 firstname    lastname    departmentname
 John    Doe    Human Resources
@@ -389,7 +389,7 @@ employee_id    first_name    last_name    department_name
 1    John    Doe    HR
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
-restore account sys from snapshot sp04;
+restore account sys{snapshot="sp04"};
 select * from employee_view;
 employee_id    first_name    last_name    department_id
 1    John    Doe    1
@@ -413,7 +413,7 @@ employee_id    first_name    last_name    department_id
 1    John    Doe    1
 2    Jane    Smith    2
 3    Bob    Johnson    1
-restore account sys from snapshot sp04;
+restore account sys{snapshot="sp04"};
 select * from employee_view;
 employee_id    first_name    last_name    department_id
 1    John    Doe    1
@@ -477,7 +477,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
-restore account sys from snapshot sp05;
+restore account sys{snapshot="sp05"};
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
@@ -502,7 +502,7 @@ select * from view01{snapshot = 'sp05'};
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
@@ -573,7 +573,7 @@ employeeid    employeename    salary    salaryrank
 5    Eva    75000.00    3
 1    Alice    70000.00    4
 4    David    65000.00    5
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 employeeid    employeename    salary    salaryrank
 3    Charlie    90000.00    1
@@ -738,7 +738,7 @@ group by department;
 drop snapshot if exists sp10;
 create snapshot sp10 for account;
 drop database test02;
-restore account sys from snapshot sp10;
+restore account sys{snapshot="sp10"};
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
@@ -849,7 +849,7 @@ employee_id    first_name    last_name    department_name
 1    John    Doe    HR
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
-restore account sys from snapshot sp100;
+restore account sys{snapshot="sp100"};
 select * from test04.employee_view;
 employee_id    first_name    last_name    department_id
 1    John    Doe    1

@@ -58,7 +58,7 @@ select @@lower_case_table_names;
 @@lower_case_table_names
 0
 drop database test02;
-restore account a1 from snapshot sp02_restore_lower;
+restore account a1{snapshot="sp02_restore_lower"};
 use test02;
 show tables;
 Tables_in_test02
@@ -142,7 +142,7 @@ select @@lower_case_table_names;
 @@lower_case_table_names
 0
 drop database test02;
-restore account a1 from snapshot sp02_restore_lower;
+restore account a1{snapshot="sp02_restore_lower"};
 use test02;
 show tables;
 Tables_in_test02

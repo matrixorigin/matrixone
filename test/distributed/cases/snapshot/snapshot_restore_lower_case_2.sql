@@ -60,7 +60,7 @@ create snapshot sp02_restore_lower for account a1;
 select @@lower_case_table_names;
 drop database test02;
 
-restore account a1 from snapshot sp02_restore_lower;
+restore account a1{snapshot="sp02_restore_lower"};
 
 use test02;
 show tables;
@@ -142,7 +142,7 @@ select @@lower_case_table_names;
 drop database test02;
 -- @session
 
-restore account a1 from snapshot sp02_restore_lower;
+restore account a1{snapshot="sp02_restore_lower"};
 
 -- @session:id=4&user=a1:admin1&password=test123
 use test02;

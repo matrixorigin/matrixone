@@ -135,7 +135,7 @@ restore database snapshot_read{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
 restore database test_snapshot_restore{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 from snapshot cluster_sp;
+restore account acc01{snapshot="cluster_sp"};
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
@@ -491,7 +491,7 @@ restore database Projects{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
 restore database Payroll{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 from snapshot cluster_sp;
+restore account acc01{snapshot="cluster_sp"};
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -944,7 +944,7 @@ restore database Projects{snapshot="account_sp"};
 internal error: can't restore database from other account's snapshot
 restore database Payroll{snapshot="account_sp"};
 internal error: can't restore database from other account's snapshot
-restore account acc01 from snapshot account_sp;
+restore account acc01{snapshot="account_sp"};
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -1322,7 +1322,7 @@ restore database University{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
 restore database EducationSystem{snapshot="cluster_sp"};
 internal error: can't restore db from cluster level snapshot
-restore account acc01 from snapshot cluster_sp;
+restore account acc01{snapshot="cluster_sp"};
 select * from School.Students;
 studentid    name    grade
 1    Alice Smith    3.50

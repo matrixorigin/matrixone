@@ -351,7 +351,7 @@ use test07;
 insert into c1 values (2,9);
 
 restore table test06.f1{snapshot="sp06"};
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 
 use test06;
 show tables;

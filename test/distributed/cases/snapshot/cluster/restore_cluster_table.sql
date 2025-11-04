@@ -494,7 +494,7 @@ use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
 insert into t2 values (1,6),(2,6),(3,6);
-restore account sys from snapshot cluster_level_snapshot;
+restore account sys{snapshot="cluster_level_snapshot"};
 
 use mo_catalog;
 show tables like 't1';
@@ -547,7 +547,7 @@ use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
 insert into t2 values (1,6),(2,6),(3,6);
-restore account sys from snapshot account_level_snapshot;
+restore account sys{snapshot="account_level_snapshot"};
 
 use mo_catalog;
 show tables like 't1';

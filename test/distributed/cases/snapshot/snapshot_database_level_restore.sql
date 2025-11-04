@@ -26,7 +26,7 @@ select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 
 restore database snapshot_read{snapshot="sp_01"};
-restore account sys from snapshot sp_01;
+restore account sys{snapshot="sp_01"};
 restore database mo_catalog{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
@@ -188,7 +188,7 @@ select count(*) from snapshot_read.users;
 restore table snapshot_read.test_snapshot_read{snapshot="sp_01"};
 restore table snapshot_read.users{snapshot="sp_01"};
 restore database mo_catalog{snapshot="sp_01"};
-restore account sys from snapshot sp_01;
+restore account sys{snapshot="sp_01"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;

@@ -32,7 +32,7 @@ select count(*) from snapshot_read.users;
 count(*)
 10
 restore database snapshot_read{snapshot="sp_01"};
-restore account sys from snapshot sp_01;
+restore account sys{snapshot="sp_01"};
 internal error: can't restore account from db or table level snapshot
 restore database mo_catalog{snapshot="sp_01"};
 internal error: can't restore db: mo_catalog
@@ -216,7 +216,7 @@ restore table snapshot_read.users{snapshot="sp_01"};
 internal error: tableName(users) does not match snapshot.tableName(test_snapshot_read)
 restore database mo_catalog{snapshot="sp_01"};
 internal error: can't restore db: mo_catalog
-restore account sys from snapshot sp_01;
+restore account sys{snapshot="sp_01"};
 internal error: can't restore account from db or table level snapshot
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)

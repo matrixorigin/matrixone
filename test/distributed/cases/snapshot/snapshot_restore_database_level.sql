@@ -274,7 +274,7 @@ drop table users;
 -- @session
 
 restore database snapshot_read{snapshot="sp_01"};
-restore account test_account from snapshot sp_01;
+restore account test_account{snapshot="sp_01"};
 
 -- @session:id=3&user=test_account:test_user&password=111
 select count(*) from snapshot_read.students;
@@ -287,7 +287,7 @@ drop database snapshot_read;
 -- @session
 
 restore database snapshot_read{snapshot="sp_01"};
-restore account test_account from snapshot sp_01;
+restore account test_account{snapshot="sp_01"};
 
 -- @session:id=3&user=test_account:test_user&password=111
 select count(*) from snapshot_read.students;
@@ -352,7 +352,7 @@ select count(*) from snapshot_read.students;
 select count(*) from snapshot_read.users;
 -- @session
 
-restore account test_account from snapshot sp_01 to account acc02;
+restore account test_account{snapshot="sp_01"} to account acc02;
 
 -- @session:id=5&user=acc02:admin&password=111
 select count(*) from snapshot_read.students;

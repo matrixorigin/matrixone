@@ -1320,22 +1320,19 @@ snapshot_restore_stmt:
         }
 
     }
-|   RESTORE ACCOUNT ident FROM SNAPSHOT ident
+|   RESTORE ACCOUNT ident restore_snapshot_name restore_to_account_name_opt
     {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELACCOUNT,
-            AccountName:tree.Identifier($3.Compare()),
-            SnapShotName:tree.Identifier($6.Compare()),
+        result := &tree.RestoreSnapShot{
+            Level:        tree.RESTORELEVELACCOUNT,
+            AccountName:  tree.Identifier($3.Compare()),
+            SnapShotName: tree.Identifier($4),
         }
-    }
-|   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
-    {
-        $$ = &tree.RestoreSnapShot{ 
-            Level: tree.RESTORELEVELACCOUNT,
-            AccountName:tree.Identifier($3.Compare()),
-            SnapShotName:tree.Identifier($6.Compare()),
-            ToAccountName: tree.Identifier($9.Compare()),
+
+        if len($5) > 0 {
+            result.ToAccountName = tree.Identifier($5)
         }
+
+        $$ = result
     }
 
 restore_db_scope:

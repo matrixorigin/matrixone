@@ -73,7 +73,7 @@ count(*)
 drop database sub01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub01    sys    test01    *        2025-07-18 22:51:04    sub01    2025-07-18 22:51:04    0
@@ -156,7 +156,7 @@ drop database sub02;
 drop PUBLICATION pub02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;
@@ -209,7 +209,7 @@ insert into table01 values('database',23789324);
 insert into table01 values('fhuwehwfw',3829032);
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
-restore account acc01 from snapshot sp03 to account acc02;
+restore account acc01{snapshot="sp03"} to account acc02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;
@@ -321,7 +321,7 @@ CREATE database sub06 FROM acc01 PUBLICATION pub06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub06    acc01    test06    *    acc01 pub to acc02    2025-07-18 22:51:05    sub06    2025-07-18 22:51:05    0
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 show PUBLICATIONs;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
@@ -401,7 +401,7 @@ alter PUBLICATION pub06 account acc02 database test07;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub06    sys    null    null    null    null    sub06    2025-07-18 22:51:05    1
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub06    sys    null    null    null    null    sub06    2025-07-18 22:51:05    2
@@ -437,7 +437,7 @@ drop database if exists sub01;
 create database sub01 from sys PUBLICATION pub10;
 drop database if exists sub02;
 create database sub02 from sys PUBLICATION pub11;
-restore account sys from snapshot sp10;
+restore account sys{snapshot="sp10"};
 show PUBLICATIONs;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;

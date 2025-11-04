@@ -299,7 +299,7 @@ count(*)
 0
 restore table snapshot_read.users{snapshot="sp_01"};
 internal error: can't restore table from other account's snapshot
-restore account test_account from snapshot sp_01;
+restore account test_account{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 count(*)
 11
@@ -365,7 +365,7 @@ select count(*) from snapshot_read.users;
 count(*)
 0
 create account test_account_2 admin_name = 'test_user' identified by '111';
-restore account test_account from snapshot sp_01 to account test_account_2;
+restore account test_account{snapshot="sp_01"} to account test_account_2;
 select count(*) from snapshot_read.users;
 count(*)
 11

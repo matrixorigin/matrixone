@@ -143,7 +143,7 @@ drop database if exists test_snapshot_restore;
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
-restore account acc01 from snapshot cluster_sp to account acc02;
+restore account acc01{snapshot="cluster_sp"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 select count(*) from snapshot_read.test_snapshot_read;
@@ -435,7 +435,7 @@ drop database if exists Company;
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
-restore account acc01 from snapshot cluster_sp to account acc02;
+restore account acc01{snapshot="cluster_sp"} to account acc02;
 
 -- @session:id=4&user=acc02:test_account&password=111
 select * from Company.Departments;
@@ -702,7 +702,7 @@ drop database if exists EducationSystem;
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
-restore account acc01 from snapshot cluster_sp to account acc02;
+restore account acc01{snapshot="cluster_sp"} to account acc02;
 
 -- @session:id=6&user=acc02:test_account&password=111
 select * from School.Students;
