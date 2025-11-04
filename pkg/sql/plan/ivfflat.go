@@ -23,10 +23,10 @@ import (
 
 // coldef shall copy index type
 var (
-	ivf_create_func_name = "ivf_create"
-	ivf_search_func_name = "ivf_search"
+	kIVFCreateFuncName = "ivf_create"
+	kIVFSearchFuncName = "ivf_search"
 
-	ivfBuildIndexColDefs = []*plan.ColDef{
+	kIVFBuildIndexColDefs = []*plan.ColDef{
 		{
 			Name: "status",
 			Typ: plan.Type{
@@ -37,7 +37,7 @@ var (
 		},
 	}
 
-	ivfSearchColDefs = []*plan.ColDef{
+	kIVFSearchColDefs = []*plan.ColDef{
 		{
 			Name: "pkid",
 			Typ: plan.Type{
@@ -62,7 +62,7 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
 	}
 
-	colDefs := _getColDefs(ivfBuildIndexColDefs)
+	colDefs := DeepCopyColDefList(kIVFBuildIndexColDefs)
 	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {
 		return 0, err
@@ -83,7 +83,7 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:     ivf_create_func_name,
+				Name:     kIVFCreateFuncName,
 				Param:    []byte(params),
 				IsSingle: true, // centroid computation require single thread mode so set IsSingle to true
 			},
@@ -102,7 +102,7 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
-	colDefs := _getColDefs(ivfSearchColDefs)
+	colDefs := DeepCopyColDefList(kIVFSearchColDefs)
 
 	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {
@@ -118,7 +118,7 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  ivf_search_func_name,
+				Name:  kIVFSearchFuncName,
 				Param: []byte(params),
 			},
 			Cols: colDefs,
