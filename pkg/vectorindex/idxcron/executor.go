@@ -233,7 +233,6 @@ func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient c
 	}
 
 	resolveVariableFunc := getResolveVariableFuncFromMetadata(task.Metadata)
-	//action, err := getActionFromMetadata(task.Metadata)
 
 	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
