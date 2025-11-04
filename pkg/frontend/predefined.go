@@ -289,7 +289,7 @@ var (
 				table_name VARCHAR NOT NULL,
 				index_name VARCHAR NOT NULL,
 				action VARCHAR NOT NULL,
-				cfg JSON NOT NULL,
+				metadata JSON NOT NULL,
 				status JSON NOT NULL,
                                 create_at TIMESTAMP NOT NULL,
                                 last_update_at TIMESTAMP NULL, 

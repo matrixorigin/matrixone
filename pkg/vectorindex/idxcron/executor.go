@@ -8,10 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -30,7 +32,7 @@ import (
 | table_name     | VARCHAR(65535)      | NO   | PRI  | NULL    |       |         |
 | index_name     | VARCHAR(65535)      | NO   | PRI  | NULL    |       |         |
 | action         | VARCHAR(65535)      | NO   | PRI  | NULL    |       |         |
-| cfg            | JSON(0)             | NO   |      | NULL    |       |         |
+| metadata       | JSON(0)             | NO   |      | NULL    |       |         |
 | status         | JSON(0)             | NO   |      | NULL    |       |         |
 | create_at      | TIMESTAMP(0)        | NO   |      | NULL    |       |         |
 | last_update_at | TIMESTAMP(0)        | YES  |      | NULL    |       |         |
@@ -44,13 +46,16 @@ const (
 var running atomic.Bool
 
 type IndexUpdateTaskInfo struct {
-	DbName    string
-	TableName string
-	IndexName string
-	Action    string
-	AccountId uint32
-	TableId   int64
-	Config    []byte
+	DbName       string
+	TableName    string
+	IndexName    string
+	Action       string
+	AccountId    uint32
+	TableId      uint64
+	Metadata     []byte
+	Status       []byte
+	CreatedAt    types.Timestamp
+	LastUpdateAt types.Timestamp
 }
 
 type IndexUpdateTaskExecutor struct {
@@ -118,13 +123,15 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	err := sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
-			insertsql := `REPLACE INTO mo_catalog.mo_index_update values (0, 1, "db", "table", "idx", "ivfflat_reindex", '{"kmeans_train_percent":10, "kmeans_max_iteration":4, "ivf_threads_build":23}', '{}', NOW(), NOW())`
+			insertsql := `REPLACE INTO mo_catalog.mo_index_update values (0, 1, "db", "table", "idx", "ivfflat_reindex", 
+			'{"cfg":{"kmeans_train_percent":10, "kmeans_max_iteration":4, "ivf_threads_build":23}, "action": "xxx"}', 
+			'{}', NOW(), NOW())`
 			_, err := sqlexec.RunSql(sqlproc, insertsql)
 			if err != nil {
 				return err
 			}
 
-			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, cfg from mo_catalog.mo_index_update"
+			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata from mo_catalog.mo_index_update"
 			res, err := sqlexec.RunSql(sqlproc, sql)
 			if err != nil {
 				return err
@@ -138,7 +145,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 				actionvec := bat.Vecs[3]
 				accountvec := bat.Vecs[4]
 				tblidvec := bat.Vecs[5]
-				cfgvec := bat.Vecs[6]
+				metavec := bat.Vecs[6]
 
 				for i := 0; i < bat.RowCount(); i++ {
 					dbname := dbvec.GetStringAt(i)
@@ -146,10 +153,10 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 					idxname := idxvec.GetStringAt(i)
 					action := actionvec.GetStringAt(i)
 					accountId := vector.GetFixedAtWithTypeCheck[uint32](accountvec, i)
-					tableId := vector.GetFixedAtWithTypeCheck[int64](tblidvec, i)
-					config := []byte(nil)
-					if !cfgvec.IsNull(uint64(i)) {
-						config = cfgvec.GetRawBytesAt(i)
+					tableId := vector.GetFixedAtWithTypeCheck[uint64](tblidvec, i)
+					metadata := []byte(nil)
+					if !metavec.IsNull(uint64(i)) {
+						metadata = metavec.GetRawBytesAt(i)
 					}
 
 					tasks = append(tasks, IndexUpdateTaskInfo{DbName: dbname,
@@ -158,7 +165,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 						Action:    action,
 						AccountId: accountId,
 						TableId:   tableId,
-						Config:    config})
+						Metadata:  metadata})
 				}
 			}
 
@@ -170,20 +177,20 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	return tasks, err
 }
 
-func convertByteJson2ResolveVariableFunc(config []byte) func(string, bool, bool) (any, error) {
+func getResolveVariableFuncFromMetadata(metadata []byte) func(string, bool, bool) (any, error) {
 
 	return func(varName string, isSystemVar, isGlobalVar bool) (any, error) {
 
-		if config == nil {
+		if metadata == nil {
 			return nil, nil
 		}
 
 		var bj bytejson.ByteJson
-		if err := bj.Unmarshal(config); err != nil {
+		if err := bj.Unmarshal(metadata); err != nil {
 			return nil, err
 		}
 
-		path, err := bytejson.ParseJsonPath("$." + varName)
+		path, err := bytejson.ParseJsonPath("$.cfg." + varName)
 		if err != nil {
 			return nil, err
 		}
@@ -199,32 +206,94 @@ func convertByteJson2ResolveVariableFunc(config []byte) func(string, bool, bool)
 	}
 }
 
+func getActionFromMetadata(metadata []byte) (string, error) {
+	var bj bytejson.ByteJson
+	if err := bj.Unmarshal(metadata); err != nil {
+		return "", err
+	}
+
+	path, err := bytejson.ParseJsonPath("$.action")
+	if err != nil {
+		return "", err
+	}
+
+	out := bj.QuerySimple([]*bytejson.Path{&path})
+	if out.IsNull() {
+		return "", moerr.NewInternalErrorNoCtx("value is null")
+	}
+
+	return string(out.GetString()), nil
+
+}
+
 func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (err error) {
-	resolveVariableFunc := convertByteJson2ResolveVariableFunc(task.Config)
-	val, err := resolveVariableFunc("kmeans_train_percent", false, false)
-	if err != nil {
-		return err
+
+	if len(task.IndexName) == 0 {
+		return moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("kmeans_train_percent %d\n", val.(int64)))
+	resolveVariableFunc := getResolveVariableFuncFromMetadata(task.Metadata)
+	//action, err := getActionFromMetadata(task.Metadata)
 
-	val, err = resolveVariableFunc("kmeans_max_iteration", false, false)
-	if err != nil {
-		return err
-	}
-	os.Stderr.WriteString(fmt.Sprintf("kmeans_max_iteration %d\n", val.(int64)))
+	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
+		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
+		func(sqlproc *sqlexec.SqlProcess, data any) (err2 error) {
 
-	val, err = resolveVariableFunc("ivf_threads_build", false, false)
-	if err != nil {
-		return err
-	}
-	os.Stderr.WriteString(fmt.Sprintf("ivf_threads_build %d\n", val.(int64)))
+			sqlCtx := sqlproc.SqlCtx
+			txnOp := sqlCtx.Txn()
 
-	return nil
+			// get indexdef
+			db, err2 := txnEngine.Database(sqlproc.GetContext(), task.DbName, txnOp)
+			if err2 != nil {
+				return
+			}
+
+			rel, err2 := db.Relation(sqlproc.GetContext(), task.TableName, nil)
+			if err2 != nil {
+				return
+			}
+
+			tableDef := rel.CopyTableDef(sqlproc.GetContext())
+			if rel.GetTableID(sqlproc.GetContext()) != task.TableId {
+				return moerr.NewInternalErrorNoCtx("table id mimstach")
+			}
+
+			// get number of list from indexDef
+			lists := int64(0)
+			for _, idx := range tableDef.Indexes {
+				if idx.IndexName == task.IndexName {
+					listsAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.IndexAlgoParamLists)
+					if err2 != nil {
+						return err2
+					}
+					lists, err2 = listsAst.Int64()
+					if err2 != nil {
+						return err2
+					}
+					break
+				}
+			}
+
+			if lists == 0 {
+				return moerr.NewInternalErrorNoCtx("IVFFLAT index parameter LISTS not found")
+			}
+
+			// run alter table alter reindex
+			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT LISTS=%d", task.DbName, task.TableName, task.IndexName, lists)
+			res, err2 := sqlexec.RunSql(sqlproc, sql)
+			if err2 != nil {
+				return
+			}
+			defer res.Close()
+
+			return
+		})
+
+	return
 }
 
 func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (err error) {
-	return nil
+	return moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
 }
 
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
