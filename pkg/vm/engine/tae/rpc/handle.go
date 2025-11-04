@@ -19,9 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"regexp"
-	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -30,7 +28,6 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -66,9 +63,6 @@ const (
 
 type Handle struct {
 	db *db.DB
-	// only used for UT
-	txnCtxs *common.Map[string, *txnContext]
-	//GCJob   *tasks.CancelableJob
 
 	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
 
@@ -76,14 +70,6 @@ type Handle struct {
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
-
-type txnContext struct {
-	//createAt is used to GC the abandoned txn.
-	createAt time.Time
-	deadline time.Time
-	meta     txn.TxnMeta
-	reqs     []any
-}
 
 //#region Open
 
@@ -126,8 +112,6 @@ func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, o
 		client: client,
 	}
 
-	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
-
 	return h
 }
 
@@ -159,90 +143,30 @@ func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 	h.interceptMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
 }
 
-func (h *Handle) CacheTxnRequest(
-	ctx context.Context,
-	meta txn.TxnMeta,
-	req any) (err error) {
-	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
-	if !ok {
-		now := time.Now()
-		txnCtx = &txnContext{
-			createAt: now,
-			deadline: now.Add(MAX_TXN_COMMIT_LATENCY),
-			meta:     meta,
-		}
-		h.txnCtxs.Store(util.UnsafeBytesToString(meta.GetID()), txnCtx)
-	}
-	v := reflect.ValueOf(req)
-	if v.Kind() == reflect.Slice {
-		for i := 0; i < v.Len(); i++ {
-			txnCtx.reqs = append(txnCtx.reqs, v.Index(i).Interface())
-		}
-	} else {
-		txnCtx.reqs = append(txnCtx.reqs, req)
-	}
-	return nil
-}
-
 type txnCommitRequestsIter struct {
 	cursor         int
 	curNorReq      *api.PrecommitWriteCmd
 	commitRequests *txn.TxnCommitRequest
-
-	// cache requests only used in ut
-	cached []any
 }
 
 func (h *Handle) newTxnCommitRequestsIter(
 	cr *txn.TxnCommitRequest,
 	meta txn.TxnMeta,
 ) *txnCommitRequestsIter {
-
-	// in the normal commit processes, the new logic won't cache the write requests anymore.
-	// however, there exist massive ut code that verified the preCommit-commit 2PC logic,
-	// which cached the write requests in the preCommit call.
-	// to keep that, there also leave the commiting code of the cached requests un-changed, but only for ut.
 	if cr == nil {
-		// for now, only test will into this logic
-		key := util.UnsafeBytesToString(meta.GetID())
-		txnCtx, ok := h.txnCtxs.Load(key)
-		if !ok {
-			// no requests
-			return nil
-		}
-
-		defer h.txnCtxs.Delete(key)
-
-		return &txnCommitRequestsIter{
-			cursor:         0,
-			cached:         txnCtx.reqs,
-			commitRequests: nil,
-		}
-
-	} else {
-		return &txnCommitRequestsIter{
-			cursor:         0,
-			cached:         nil,
-			commitRequests: cr,
-		}
+		return nil
+	}
+	return &txnCommitRequestsIter{
+		cursor:         0,
+		commitRequests: cr,
 	}
 }
 
 func (cri *txnCommitRequestsIter) Next() bool {
-	if cri.commitRequests == nil {
-		return cri.cursor < len(cri.cached)
-	}
 	return cri.cursor < len(cri.commitRequests.Payload)
 }
 
 func (cri *txnCommitRequestsIter) Entry() (entry any, err error) {
-
-	if cri.commitRequests == nil {
-		entry = cri.cached[cri.cursor]
-		cri.cursor++
-		return
-	}
-
 	cnReq := cri.commitRequests.Payload[cri.cursor].CNRequest
 
 	if cri.curNorReq == nil {
@@ -459,43 +383,15 @@ func (h *Handle) apiEntryToWriteEntry(
 }
 
 // HandlePreCommitWrite impls TxnStorage:Write
-// only ut call this
+// Deprecated: This method is no longer used in production. The new commit flow uses
+// HandleCommit with TxnCommitRequest directly. This is kept only for interface compatibility.
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.PrecommitWriteCmd,
 	_ *api.TNStringResponse /*no response*/) (err error) {
-	var e any
-	es := req.EntryList
-	for len(es) > 0 {
-		e, es, err = pkgcatalog.ParseEntryList(es)
-		if err != nil {
-			reqsStr := "emtpy"
-			if txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID())); ok {
-				reqsStr = pkgcatalog.ShowReqs(txnCtx.reqs)
-			}
-			logutil.Errorf("ParseEntryList failed. error:%v, cached reqs:%v", err, reqsStr)
-			return err
-		}
-		switch cmds := e.(type) {
-		case *pkgcatalog.CreateDatabaseReq, *pkgcatalog.CreateTableReq,
-			*pkgcatalog.DropDatabaseReq, *pkgcatalog.DropTableReq,
-			[]*api.AlterTableReq:
-			if err = h.CacheTxnRequest(ctx, meta, cmds); err != nil {
-				return err
-			}
-		case *api.Entry:
-			//Handle DML
-			wr := h.apiEntryToWriteEntry(ctx, meta, e.(*api.Entry), false)
-			if err = h.CacheTxnRequest(ctx, meta, wr); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewNYIf(ctx, "pre commit write type: %T", cmds)
-		}
-	}
-	//evaluate all the txn requests.
-	return h.TryPrefetchTxn(ctx, &meta)
+	// Do nothing - this method is deprecated
+	return nil
 }
 
 // HandlePreCommitWrite impls TxnStorage:Commit
@@ -635,14 +531,7 @@ func (h *Handle) HandleGetLogTail(
 func (h *Handle) HandleRollback(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
-	_, ok := h.txnCtxs.LoadAndDelete(util.UnsafeBytesToString(meta.GetID()))
-
-	//Rollback after pre-commit write.
-	if ok {
-		return
-	}
 	txn, err := h.db.GetTxnByID(meta.GetID())
-
 	if err != nil {
 		return err
 	}

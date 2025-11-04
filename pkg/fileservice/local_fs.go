@@ -1207,15 +1207,16 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 		return true, nil
 	}
 	if entry.Mode().Type()&fs.ModeSymlink > 0 {
-		stat, err := os.Stat(filepath.Join(path, name))
+		// Follow the symlink to check if the target is a directory
+		targetPath := filepath.Join(path, name)
+		stat, err := os.Stat(targetPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				// invalid sym link
-				return false, nil
-			}
-			return false, err
+			// Treat broken or problematic symlinks as non-directories
+			// This includes non-existent targets and permission errors
+			return false, nil
 		}
-		return entryIsDir(path, name, stat)
+		// os.Stat follows symlinks, so stat.IsDir() tells us if the final target is a directory
+		return stat.IsDir(), nil
 	}
 	return false, nil
 }
