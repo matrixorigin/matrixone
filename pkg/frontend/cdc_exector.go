@@ -257,7 +257,6 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	// register to table scanner
 	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
 
-	exec.isRunning = true
 	// start success, clear err msg
 	clearErrMsgErr := UpdateErrMsg(ctx, exec, "")
 
@@ -268,12 +267,16 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		zap.NamedError("clear-err-msg-err", clearErrMsgErr),
 	)
 
-	// hold
+	// hold - must set isRunning and holdCh atomically under lock
+	exec.Lock()
+	exec.isRunning = true
 	exec.holdCh = make(chan int, 1)
+	holdCh := exec.holdCh
+	exec.Unlock()
 	select {
 	case <-ctx.Done():
 		break
-	case <-exec.holdCh:
+	case <-holdCh:
 		break
 	}
 	return
@@ -317,12 +320,20 @@ func (exec *CDCTaskExecutor) Restart() error {
 		)
 	}()
 
-	if exec.isRunning {
+	exec.Lock()
+	isRunning := exec.isRunning
+	var holdCh chan int
+	if isRunning {
+		holdCh = exec.holdCh
+		exec.isRunning = false
+	}
+	exec.Unlock()
+
+	if isRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
-		exec.isRunning = false
 		// let Start() go
-		exec.holdCh <- 1
+		holdCh <- 1
 	}
 
 	go func() {
@@ -347,12 +358,20 @@ func (exec *CDCTaskExecutor) Pause() error {
 		)
 	}()
 
-	if exec.isRunning {
+	exec.Lock()
+	isRunning := exec.isRunning
+	var holdCh chan int
+	if isRunning {
+		holdCh = exec.holdCh
+		exec.isRunning = false
+	}
+	exec.Unlock()
+
+	if isRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.ClosePause()
-		exec.isRunning = false
 		// let Start() go
-		exec.holdCh <- 1
+		holdCh <- 1
 	}
 	return nil
 }
@@ -372,12 +391,20 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		)
 	}()
 
-	if exec.isRunning {
+	exec.Lock()
+	isRunning := exec.isRunning
+	var holdCh chan int
+	if isRunning {
+		holdCh = exec.holdCh
+		exec.isRunning = false
+	}
+	exec.Unlock()
+
+	if isRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
-		exec.isRunning = false
 		// let Start() go
-		exec.holdCh <- 1
+		holdCh <- 1
 	}
 	return nil
 }
