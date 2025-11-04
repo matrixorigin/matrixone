@@ -835,12 +835,12 @@ func StubCDCSinkAndWatermarkUpdater(
 			retryTimes int,
 			err error,
 		) {
-		watermarkKey := cdc.WatermarkKey{
-			AccountId: uint64(accountId),
-			TaskId:    taskId,
-			DBName:    tbl.GetSourceDbName(),
-			TableName: tbl.GetSourceTblName(),
-		}
+			watermarkKey := cdc.WatermarkKey{
+				AccountId: uint64(accountId),
+				TaskId:    taskId,
+				DBName:    tbl.GetSourceDbName(),
+				TableName: tbl.GetSourceTblName(),
+			}
 			errMsg, ok := mockWatermarkUpdater.GetErrMsg(watermarkKey)
 			if !ok {
 				return false, 0, 0, nil
