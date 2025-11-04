@@ -34,10 +34,10 @@ import (
 
 // Mock QueryClient for testing
 type mockQueryClient struct {
-	cnResponses map[string]*querypb.Response // CN address -> Response
-	sendError   map[string]error              // CN address -> Error
-	newReqCalls int
-	sendCalls   int
+	cnResponses  map[string]*querypb.Response // CN address -> Response
+	sendError    map[string]error             // CN address -> Error
+	newReqCalls  int
+	sendCalls    int
 	releaseCalls int
 }
 
@@ -154,7 +154,7 @@ func newTestTimestamp(physical int64, logical uint32) timestamp.Timestamp {
 // Test syncCommitTimestamp with normal flow
 func TestCDCDao_syncCommitTimestamp_Success(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Create mock objects
 	mockQC := newMockQueryClient()
 	mockMC := &mockMOCluster{
@@ -170,7 +170,7 @@ func TestCDCDao_syncCommitTimestamp_Success(t *testing.T) {
 	ts1 := newTestTimestamp(100, 1)
 	ts2 := newTestTimestamp(100, 2) // This should be the max
 	ts3 := newTestTimestamp(99, 100)
-	
+
 	mockQC.cnResponses["cn1:6001"] = &querypb.Response{
 		GetCommit: &querypb.GetCommitResponse{
 			CurrentCommitTS: ts1,
@@ -226,7 +226,7 @@ func TestCDCDao_syncCommitTimestamp_Success(t *testing.T) {
 // Test syncCommitTimestamp with partial CN failures
 func TestCDCDao_syncCommitTimestamp_PartialFailure(t *testing.T) {
 	ctx := context.Background()
-	
+
 	mockQC := newMockQueryClient()
 	mockMC := &mockMOCluster{
 		cnServices: []metadata.CNService{
@@ -240,7 +240,7 @@ func TestCDCDao_syncCommitTimestamp_PartialFailure(t *testing.T) {
 	// Set up responses: cn1 fails, cn2 and cn3 succeed
 	ts2 := newTestTimestamp(100, 2) // This should be the max
 	ts3 := newTestTimestamp(100, 1)
-	
+
 	mockQC.sendError["cn1:6001"] = moerr.NewInternalError(ctx, "connection failed")
 	mockQC.cnResponses["cn2:6001"] = &querypb.Response{
 		GetCommit: &querypb.GetCommitResponse{
@@ -287,7 +287,7 @@ func TestCDCDao_syncCommitTimestamp_PartialFailure(t *testing.T) {
 // Test syncCommitTimestamp with all CN failures
 func TestCDCDao_syncCommitTimestamp_AllCNsFailed(t *testing.T) {
 	ctx := context.Background()
-	
+
 	mockQC := newMockQueryClient()
 	mockMC := &mockMOCluster{
 		cnServices: []metadata.CNService{
@@ -334,7 +334,7 @@ func TestCDCDao_syncCommitTimestamp_AllCNsFailed(t *testing.T) {
 // Test syncCommitTimestamp with no CNs found
 func TestCDCDao_syncCommitTimestamp_NoCNs(t *testing.T) {
 	ctx := context.Background()
-	
+
 	mockQC := newMockQueryClient()
 	mockMC := &mockMOCluster{
 		cnServices: []metadata.CNService{}, // Empty
@@ -400,7 +400,7 @@ func TestCDCDao_syncCommitTimestamp_NilQueryClient(t *testing.T) {
 // Test syncCommitTimestamp with nil TxnClient
 func TestCDCDao_syncCommitTimestamp_NilTxnClient(t *testing.T) {
 	ctx := context.Background()
-	
+
 	mockQC := newMockQueryClient()
 	mockMC := &mockMOCluster{
 		cnServices: []metadata.CNService{
@@ -469,4 +469,3 @@ func TestCDCDao_syncCommitTimestamp_NilProcess(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "session or process is nil")
 }
-
