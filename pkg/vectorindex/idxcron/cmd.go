@@ -2,6 +2,7 @@ package idxcron
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -10,17 +11,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+// always replace with the new data
 func RegisterUpdate(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
-	accountId uint32,
 	tableId uint64,
 	dbname string,
 	tablename string,
 	indexname string,
 	action string,
 	metadata string,
-) (ok bool, err error) {
+) (err error) {
+
+	var tenantId uint32
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
 
 	duration := 5 * time.Minute
 	newctx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -29,7 +35,17 @@ func RegisterUpdate(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	sql := "SELECT"
+	status := `{"response":"ok", "state":"init", "msg":"register"}`
+	sql := fmt.Sprintf("REPLACE INTO mo_catalog.mo_index_update VALUES (%d, %d, '%s', '%s', '%s', '%s', '%s', '%s', now(), now())",
+		tenantId,
+		tableId,
+		dbname,
+		tablename,
+		indexname,
+		action,
+		metadata,
+		status)
+
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return
@@ -39,15 +55,19 @@ func RegisterUpdate(ctx context.Context,
 	return
 }
 
+// if action == "*", remove all actions
 func UnregisterUpdate(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
 	tableId uint64,
-	dbname string,
-	tablename string,
 	indexname string,
 	action string,
 ) (err error) {
+
+	var tenantId uint32
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
 
 	duration := 5 * time.Minute
 	newctx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -56,7 +76,15 @@ func UnregisterUpdate(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	sql := "SELECT"
+	var sql string
+	if action == Action_Wildcard {
+		sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d AND index_name = '%s'",
+			tenantId, tableId, indexname)
+	} else {
+		sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d AND index_name = '%s' AND action = '%s'",
+			tenantId, tableId, indexname, action)
+	}
+
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return
@@ -69,7 +97,13 @@ func UnregisterUpdate(ctx context.Context,
 func UnregisterUpdateByDbName(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
+	accountId uint32,
 	dbName string) (err error) {
+
+	var tenantId uint32
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
 
 	duration := 5 * time.Minute
 	newctx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -78,7 +112,7 @@ func UnregisterUpdateByDbName(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	sql := "SELECT"
+	sql := fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, dbName)
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return
@@ -94,6 +128,11 @@ func RenameSrcTable(ctx context.Context,
 	dbId, tableId uint64,
 	oldTableName, newTablename string) (err error) {
 
+	var tenantId uint32
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
+
 	duration := 5 * time.Minute
 	newctx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	newctx, cancel := context.WithTimeout(newctx, duration)
@@ -101,7 +140,8 @@ func RenameSrcTable(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	sql := "SELECT"
+	sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET table_name = '%s' WHERE account_id = %d AND table_id = %d AND table_name = '%s'",
+		newTablename, tenantId, tableId, oldTableName)
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return

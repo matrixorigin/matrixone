@@ -41,6 +41,7 @@ import (
 const (
 	Action_Ivfflat_Reindex      = "ivfflat_reindex"
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
+	Action_Wildcard             = "*"
 )
 
 var running atomic.Bool
