@@ -318,13 +318,18 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
 		}
 
-		if err2 != nil {
-			// save error status to db
+		sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
+			catalog.System_Account, 5*time.Minute, nil, nil,
+			func(sqlproc *sqlexec.SqlProcess, data any) (err3 error) {
+				if err2 != nil {
+					// save error status to db
 
-		} else {
-			// save success status to db
+				} else {
+					// save success status to db
 
-		}
+				}
+				return
+			})
 	}
 
 	return nil
