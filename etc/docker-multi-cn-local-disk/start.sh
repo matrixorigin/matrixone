@@ -1,0 +1,138 @@
+#!/bin/bash
+# MatrixOne Docker Compose Startup Script
+# Automatically sets user permissions and provides convenient options
+
+set -e
+
+# Get current directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Default values
+IMAGE_VERSION="local"
+EXTRA_MOUNTS=""
+SHOW_HELP=false
+
+# Parse custom arguments
+DOCKER_COMPOSE_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -v|--version)
+            IMAGE_VERSION="$2"
+            shift 2
+            ;;
+        -m|--mount)
+            EXTRA_MOUNTS="$2"
+            shift 2
+            ;;
+        -h|--help)
+            SHOW_HELP=true
+            shift
+            ;;
+        *)
+            DOCKER_COMPOSE_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Show help
+if [ "$SHOW_HELP" = true ]; then
+    cat << 'EOF'
+MatrixOne Docker Compose Startup Script
+
+Usage: ./start.sh [OPTIONS] [DOCKER_COMPOSE_COMMANDS]
+
+Options:
+  -v, --version VERSION    Specify image version (default: local)
+                          Examples: local, latest, nightly, 1.0.0, 3.0
+  -m, --mount PATH        Add extra mount directory (e.g., ../../test:/test:ro)
+  -h, --help             Show this help message
+
+Examples:
+  # Start with local build (default)
+  ./start.sh up -d
+
+  # Use official latest version
+  ./start.sh -v latest up -d
+
+  # Use specific version
+  ./start.sh -v 3.0 up -d
+  ./start.sh -v nightly up -d
+
+  # Mount test directory for SQL files
+  ./start.sh -m "../../test:/test:ro" up -d
+
+  # Combine options
+  ./start.sh -v latest -m "../../test:/test:ro" up -d
+
+  # Build local image
+  ./start.sh build
+
+  # Other docker compose commands
+  ./start.sh ps
+  ./start.sh logs -f
+  ./start.sh down
+  ./start.sh restart
+
+Environment Variables:
+  DOCKER_UID              Automatically set to $(id -u)
+  DOCKER_GID              Automatically set to $(id -g)
+  IMAGE_NAME              Set based on --version option
+
+EOF
+    exit 0
+fi
+
+# Auto-detect current user's UID and GID
+export DOCKER_UID=$(id -u)
+export DOCKER_GID=$(id -g)
+
+# Set image name based on version
+if [ "$IMAGE_VERSION" = "local" ]; then
+    export IMAGE_NAME="matrixorigin/matrixone:local"
+elif [ "$IMAGE_VERSION" = "latest" ]; then
+    export IMAGE_NAME="matrixorigin/matrixone:latest"
+elif [ "$IMAGE_VERSION" = "nightly" ]; then
+    export IMAGE_NAME="matrixorigin/matrixone:nightly"
+else
+    export IMAGE_NAME="matrixorigin/matrixone:$IMAGE_VERSION"
+fi
+
+# Handle extra mounts by creating a temporary docker-compose override
+if [ -n "$EXTRA_MOUNTS" ]; then
+    TEMP_OVERRIDE="/tmp/docker-compose.override.$$.yml"
+    cat > "$TEMP_OVERRIDE" << EOF
+services:
+  mo-cn1:
+    volumes:
+      - $EXTRA_MOUNTS
+  mo-cn2:
+    volumes:
+      - $EXTRA_MOUNTS
+  mo-proxy:
+    volumes:
+      - $EXTRA_MOUNTS
+EOF
+    trap "rm -f $TEMP_OVERRIDE" EXIT
+    COMPOSE_FILES="-f docker-compose.yml -f $TEMP_OVERRIDE"
+else
+    COMPOSE_FILES="-f docker-compose.yml"
+fi
+
+# Show configuration
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "MatrixOne Docker Compose Configuration"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "User Permissions: UID=$DOCKER_UID GID=$DOCKER_GID"
+echo "Image:           $IMAGE_NAME"
+if [ -n "$EXTRA_MOUNTS" ]; then
+    echo "Extra Mounts:    $EXTRA_MOUNTS"
+fi
+echo "Command:         docker compose ${DOCKER_COMPOSE_ARGS[*]}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Pass arguments to docker compose
+docker compose $COMPOSE_FILES "${DOCKER_COMPOSE_ARGS[@]}"
+

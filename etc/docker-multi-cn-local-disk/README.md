@@ -7,10 +7,81 @@
 - ✅ **With Proxy**: Load balancing proxy included
 - ✅ **Docker Compose**: Containerized deployment, easy to manage
 - ✅ **Bridge Network**: Bridge network with service isolation
+- ✅ **Enhanced Script**: `start.sh` with auto permissions, versioning, and dynamic mounts
+- ✅ **No Root Files**: All generated files use your user's permissions
+
+## start.sh Quick Reference
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `-v, --version` | Specify image version | `./start.sh -v latest up -d` |
+| | Default: `local` (built image) | `./start.sh -v nightly up -d` |
+| | Options: `local`, `latest`, `nightly`, `3.0` | `./start.sh -v 1.2.3 up -d` |
+| `-m, --mount` | Mount extra directory | `./start.sh -m "../../test:/test:ro" up -d` |
+| | Useful for SQL test files | Multiple mounts: separate calls |
+| `-h, --help` | Show help message | `./start.sh -h` |
+| (no options) | Use local image + auto UID/GID | `./start.sh up -d` |
 
 ## Quick Start
 
 The `docker-compose.yml` supports both local build (recommended) and Docker Hub image.
+
+### Recommended: Use start.sh (Enhanced Wrapper Script)
+
+The easiest and most powerful way to manage MatrixOne:
+
+```bash
+cd etc/docker-multi-cn-local-disk
+
+# Show help
+./start.sh -h
+
+# Default: Build and start with local image
+./start.sh build
+./start.sh up -d
+
+# Use official latest version
+./start.sh -v latest up -d
+
+# Use specific version
+./start.sh -v 3.0 up -d
+./start.sh -v nightly up -d
+
+# Mount test directory for source command
+./start.sh -m "../../test:/test:ro" up -d
+
+# Combine options
+./start.sh -v latest -m "../../test:/test:ro" up -d
+
+# Other commands
+./start.sh down
+./start.sh logs -f
+./start.sh ps
+./start.sh restart
+```
+
+**Why use start.sh?**
+- ✅ **Auto Permissions**: Automatically detects your UID/GID (no root-owned files!)
+- ✅ **Default Local Image**: Uses local build by default, no version confusion
+- ✅ **Easy Versioning**: Switch versions with `-v latest|nightly|3.0`
+- ✅ **Dynamic Mounts**: Add test directory with `-m` option
+- ✅ **Clear Output**: Shows configuration before executing
+- ✅ **No Manual Config**: Just works out of the box
+
+**Quick Examples:**
+
+```bash
+# Most common: local build + test directory mounted
+./start.sh build
+./start.sh -m "../../test:/test:ro" up -d
+
+# Connect and run tests
+mysql -h 127.0.0.1 -P 6009 -u root -p111
+mysql> source /test/distributed/cases/your_test.sql;
+
+# Try official latest without building
+./start.sh -v latest up -d
+```
 
 ### Option 1: Build from Source (Default - Recommended)
 
@@ -92,6 +163,37 @@ mysql -h 127.0.0.1 -P 16001 -u root -p111
 **Direct to CN2:**
 ```bash
 mysql -h 127.0.0.1 -P 16002 -u root -p111
+```
+
+### Running SQL Scripts
+
+**Method 1: Mount with start.sh (Easiest)**
+
+Use the `-m` option to mount test directory:
+
+```bash
+# Start with test directory mounted
+./start.sh -m "../../test:/test:ro" up -d
+
+# Connect and run
+mysql -h 127.0.0.1 -P 6009 -u root -p111
+mysql> source /test/distributed/cases/your_test.sql;
+```
+
+**Method 2: Pipe SQL file directly**
+```bash
+mysql -h 127.0.0.1 -P 6009 -u root -p111 < test/distributed/cases/your_test.sql
+```
+
+**Method 3: Use mysql with -e option**
+```bash
+mysql -h 127.0.0.1 -P 6009 -u root -p111 -e "$(cat test/distributed/cases/your_test.sql)"
+```
+
+**Method 4: Copy file to container**
+```bash
+docker cp test/distributed/cases/your_test.sql mo-cn1:/tmp/test.sql
+mysql -h 127.0.0.1 -P 16001 -u root -p111 -e "source /tmp/test.sql"
 ```
 
 ## Architecture
@@ -242,37 +344,64 @@ All containers share local disk storage:
 - **Shared Storage**: `mo-data/shared/` (DISK backend)
 - **Log Directory**: `../../logs/`
 
+**File Permissions:**
+- When using `./start.sh`: Files are automatically created with your user's permissions ✅
+- When using `docker compose` directly: Set `DOCKER_UID` and `DOCKER_GID` environment variables
+- Default fallback: `501:20` (macOS first user) - may need adjustment for Linux users
+
 ## Common Commands
 
+**Using start.sh (Recommended):**
+
 ```bash
+# Show help and all options
+./start.sh -h
+
 # View status
-docker compose ps
+./start.sh ps
 
 # View logs
-docker compose logs -f
+./start.sh logs -f
 tail -f ../../logs/*.log
 
 # Restart services
-docker compose restart
+./start.sh restart
 
 # Stop services
-docker compose down
+./start.sh down
 
 # Clean restart (removes data)
-docker compose down
-sudo rm -rf ../../mo-data ../../logs
-docker compose up -d
+./start.sh down
+rm -rf ../../mo-data ../../logs  # No sudo needed!
+./start.sh up -d
 
-# Use official latest image
-docker compose up -d
-
-# Build and use local build
-docker compose build
-IMAGE_NAME=matrixorigin/matrixone:local docker compose up -d
+# Build and use local image (default)
+./start.sh build
+./start.sh up -d
 
 # Switch to different versions
-IMAGE_NAME=matrixorigin/matrixone:nightly docker compose up -d
-IMAGE_NAME=matrixorigin/matrixone:v1.0.0 docker compose up -d
+./start.sh -v latest up -d      # Official latest
+./start.sh -v nightly up -d     # Nightly build
+./start.sh -v 3.0 up -d         # Specific version
+
+# With test directory mounted
+./start.sh -m "../../test:/test:ro" up -d
+
+# Advanced: combine everything
+./start.sh -v latest -m "../../test:/test:ro" up -d
+```
+
+**Using docker compose directly (need to set DOCKER_UID/DOCKER_GID):**
+
+```bash
+# Set permissions first
+export DOCKER_UID=$(id -u) DOCKER_GID=$(id -g)
+
+# Then run commands
+docker compose ps
+docker compose logs -f
+docker compose restart
+docker compose down
 ```
 
 ## Scale CN Nodes
@@ -292,6 +421,31 @@ IMAGE_NAME=matrixorigin/matrixone:v1.0.0 docker compose up -d
 | **Docker Multi-CN** | `etc/docker-multi-cn-local-disk/` | **Containerized+Multi-CN+Local Storage** ✨ |
 
 ## Troubleshooting
+
+### Fix Existing Root-Owned Files
+
+If you already ran containers and have root-owned files, here's how to fix:
+
+```bash
+cd etc/docker-multi-cn-local-disk
+
+# Stop containers
+./start.sh down
+
+# Fix permissions (need sudo because files are currently root-owned)
+sudo chown -R $(id -u):$(id -g) ../../mo-data ../../logs
+
+# Restart with correct permissions
+./start.sh up -d
+```
+
+**Or clean restart (removes all data):**
+
+```bash
+./start.sh down
+sudo rm -rf ../../mo-data ../../logs
+./start.sh up -d  # Will create with your user permissions
+```
 
 ### Image Not Found
 
