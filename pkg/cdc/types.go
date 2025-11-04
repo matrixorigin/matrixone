@@ -379,6 +379,9 @@ func (info *DbTableInfo) UpdateFields(dbId uint64, dbName string, tblId uint64, 
 }
 
 func (info *DbTableInfo) String() string {
+	if info == nil {
+		return "<nil>"
+	}
 	info.mu.RLock()
 	defer info.mu.RUnlock()
 	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v, %v",
