@@ -320,7 +320,7 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
 		sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
 			catalog.System_Account, 5*time.Minute, nil, nil,
-			func(sqlproc *sqlexec.SqlProcess, data any) (err3 error) {
+			func(sqlproc *sqlexec.SqlProcess, data any) error {
 				if err2 != nil {
 					// save error status to db
 
@@ -328,7 +328,7 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 					// save success status to db
 
 				}
-				return
+				return nil
 			})
 	}
 
