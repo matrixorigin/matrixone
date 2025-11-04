@@ -109,10 +109,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  hnsw_search_func_name,
+				Name:  kHNSWSearchFuncName,
 				Param: []byte(params),
 			},
-			Cols: DeepCopyColDefList(hnswSearchColDefs),
+			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
 		TblFuncExprList: []*plan.Expr{

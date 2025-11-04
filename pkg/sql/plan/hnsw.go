@@ -23,10 +23,10 @@ import (
 
 // coldef shall copy index type
 var (
-	hnsw_create_func_name = "hnsw_create"
-	hnsw_search_func_name = "hnsw_search"
+	kHNSWCreateFuncName = "hnsw_create"
+	kHNSWSearchFuncName = "hnsw_search"
 
-	hnswBuildIndexColDefs = []*plan.ColDef{
+	kHNSWBuildIndexColDefs = []*plan.ColDef{
 		{
 			Name: "status",
 			Typ: plan.Type{
@@ -37,7 +37,7 @@ var (
 		},
 	}
 
-	hnswSearchColDefs = []*plan.ColDef{
+	kHNSWSearchColDefs = []*plan.ColDef{
 		{
 			Name: "pkid",
 			Typ: plan.Type{
@@ -63,7 +63,7 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
 
-	colDefs := DeepCopyColDefList(hnswBuildIndexColDefs)
+	colDefs := DeepCopyColDefList(kHNSWBuildIndexColDefs)
 	params, err := builder.getHnswParams(tbl.Func)
 	if err != nil {
 		return 0, err
@@ -86,7 +86,7 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:     hnsw_create_func_name,
+				Name:     kHNSWCreateFuncName,
 				Param:    []byte(params),
 				IsSingle: true, // model building require single thread mode so set IsSingle to true
 			},
@@ -105,7 +105,7 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
-	colDefs := DeepCopyColDefList(hnswSearchColDefs)
+	colDefs := DeepCopyColDefList(kHNSWSearchColDefs)
 
 	params, err := builder.getHnswParams(tbl.Func)
 	if err != nil {
@@ -121,7 +121,7 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  hnsw_search_func_name,
+				Name:  kHNSWSearchFuncName,
 				Param: []byte(params),
 			},
 			Cols: colDefs,

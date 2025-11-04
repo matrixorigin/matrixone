@@ -130,10 +130,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  ivf_search_func_name,
+				Name:  kIVFSearchFuncName,
 				Param: []byte(params),
 			},
-			Cols: DeepCopyColDefList(ivfSearchColDefs),
+			Cols: DeepCopyColDefList(kIVFSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
 		TblFuncExprList: []*plan.Expr{
