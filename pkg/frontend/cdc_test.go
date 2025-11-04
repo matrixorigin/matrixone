@@ -3114,7 +3114,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			string,
 			*cdc.DbTableInfo,
 			cdc.Sinker,
-			*cdc.CDCWatermarkUpdater,
+			cdc.WatermarkUpdater,
 			*plan.TableDef,
 			bool,
 			*sync.Map,

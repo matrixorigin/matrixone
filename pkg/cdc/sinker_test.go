@@ -100,7 +100,7 @@ func TestNewSinker(t *testing.T) {
 			},
 			want: &consoleSinker{
 				dbTblInfo:        &DbTableInfo{},
-				watermarkUpdater: nil,
+				watermarkUpdater: (*CDCWatermarkUpdater)(nil),
 			},
 			wantErr: assert.NoError,
 		},
@@ -246,7 +246,7 @@ func TestNewConsoleSinker(t *testing.T) {
 			},
 			want: &consoleSinker{
 				dbTblInfo:        &DbTableInfo{},
-				watermarkUpdater: nil,
+				watermarkUpdater: (*CDCWatermarkUpdater)(nil),
 			},
 		},
 	}
