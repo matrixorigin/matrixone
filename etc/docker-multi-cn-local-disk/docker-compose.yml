@@ -123,7 +123,7 @@ services:
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/proxy.toml"]
     ports:
-      - "6001:6001"    # Proxy SQL port
+      - "6001:6009"    # Proxy SQL port (host:container)
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs

@@ -346,12 +346,16 @@ EOF
 PROXY_LOG_LEVEL=$(get_config "PROXY" "PROXY_" "$DEFAULT_LOG_LEVEL" "LOG_LEVEL")
 PROXY_LOG_FORMAT=$(get_config "PROXY" "PROXY_" "$DEFAULT_LOG_FORMAT" "LOG_FORMAT")
 PROXY_LOG_MAX_SIZE=$(get_config "PROXY" "PROXY_" "$DEFAULT_LOG_MAX_SIZE" "LOG_MAX_SIZE")
+PROXY_MEMORY_CACHE=$(get_config "PROXY" "PROXY_" "$DEFAULT_MEMORY_CACHE" "MEMORY_CACHE")
+PROXY_DISK_CACHE=$(get_config "PROXY" "PROXY_" "$DEFAULT_DISK_CACHE" "DISK_CACHE")
+PROXY_CACHE_DIR=$(get_config "PROXY" "PROXY_" "$DEFAULT_CACHE_DIR" "CACHE_DIR")
 PROXY_DISABLE_TRACE=$(get_config "PROXY" "PROXY_" "$DEFAULT_DISABLE_TRACE" "DISABLE_TRACE")
 PROXY_DISABLE_METRIC=$(get_config "PROXY" "PROXY_" "$DEFAULT_DISABLE_METRIC" "DISABLE_METRIC")
 
 # Generate proxy config  
 cat > proxy.toml << EOF
 service-type = "PROXY"
+data-dir = "./mo-data"
 
 [log]
 level = "$PROXY_LOG_LEVEL"
@@ -364,15 +368,37 @@ service-addresses = [
   "mo-log:32001",
 ]
 
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK"
+
+[[fileservice]]
+name = "SHARED"
+backend = "DISK"
+data-dir = "mo-data/shared"
+
+[fileservice.cache]
+memory-capacity = "$PROXY_MEMORY_CACHE"
+disk-capacity = "$PROXY_DISK_CACHE"
+disk-path = "$PROXY_CACHE_DIR"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+
 [observability]
 disableTrace = $PROXY_DISABLE_TRACE
 disableMetric = $PROXY_DISABLE_METRIC
 
 [proxy]
-listen-address = "0.0.0.0:6001"
+uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+listen-address = "0.0.0.0:6009"
 rebalance-interval = 30
 rebalance-disabled = false
 rebalance-tolerance = 0.3
+
+[proxy.cluster]
+refresh-interval = "5s"
 EOF
 
 echo "✓ Configuration files generated successfully"
