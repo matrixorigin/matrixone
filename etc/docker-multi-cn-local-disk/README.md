@@ -43,13 +43,20 @@ vim etc/docker-multi-cn-local-disk/config.env
 # LOG_FORMAT=json          # Use JSON logging
 # MEMORY_CACHE=2GB         # Increase memory cache
 # DISK_CACHE=20GB          # Increase disk cache
+# CN1_MEMORY_CACHE=4GB     # Override for CN1 only
 
-# 3. Start (will auto-generate configs)
+# 3. Start (will auto-generate TOML configs)
 make dev-up
 
 # Or manually regenerate configs
 make dev-config
 ```
+
+**How it works:**
+- `*.toml` files are automatically generated from `config.env` (or defaults if no config.env exists)
+- These generated files are ignored by git to avoid commit conflicts
+- On first `make dev-up`, default configurations are generated automatically
+- When `config.env` exists, configurations are regenerated on every startup
 
 **Common Configuration Options:**
 - `LOG_LEVEL` - debug, info, warn, error, fatal (default: info)
@@ -86,7 +93,11 @@ make dev-up
 
 # Or in one line
 make dev-build && make dev-up
+```
 
+**Note:** On first startup, default TOML configuration files will be automatically generated. These files are not tracked by git to prevent accidental commits of your local configurations.
+
+```bash
 # Start with test directory mounted
 make dev-up-test
 

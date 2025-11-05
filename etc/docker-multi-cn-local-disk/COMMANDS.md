@@ -9,6 +9,8 @@
 make dev-build && make dev-up
 ```
 
+> **Note:** Configuration files (`*.toml`) are automatically generated on first startup. They are not tracked by git to avoid commit conflicts. To customize configurations, use `config.env` (see Configuration Management section).
+
 ## 📋 All Available Commands
 
 ### Basic Operations

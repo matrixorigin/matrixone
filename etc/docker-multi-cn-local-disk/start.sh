@@ -120,9 +120,23 @@ else
     COMPOSE_FILES="-f docker-compose.yml"
 fi
 
-# Generate configuration files from templates if config.env exists
-if [ -f "config.env" ]; then
-    echo "Generating configuration from config.env..."
+# Check if configuration files exist, generate if missing
+REQUIRED_CONFIGS=("cn1.toml" "cn2.toml" "log.toml" "tn.toml" "proxy.toml")
+MISSING_CONFIGS=false
+for config in "${REQUIRED_CONFIGS[@]}"; do
+    if [ ! -f "$config" ]; then
+        MISSING_CONFIGS=true
+        break
+    fi
+done
+
+# Generate configuration files if missing or if config.env exists
+if [ "$MISSING_CONFIGS" = true ]; then
+    echo "Configuration files not found. Generating with defaults..."
+    ./generate-config.sh
+    echo ""
+elif [ -f "config.env" ]; then
+    echo "Regenerating configuration from config.env..."
     ./generate-config.sh
     echo ""
 fi
