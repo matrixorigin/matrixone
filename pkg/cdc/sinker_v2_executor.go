@@ -240,18 +240,20 @@ func (e *Executor) retryWithBackoff(
 	ar *ActiveRoutine,
 	fn func() error,
 ) error {
-	shouldRetry := func(attempt int, startTime time.Time) bool {
+	shouldContinue := func(attempt int, startTime time.Time) bool {
 		// retryTimes == -1 means retry forever
 		if e.retryTimes == -1 {
 			return time.Since(startTime) < e.retryDuration
 		}
-		return attempt < e.retryTimes && time.Since(startTime) < e.retryDuration
+		// Always execute at least once (when attempt == 0)
+		// Then retry up to retryTimes more times
+		return attempt <= e.retryTimes && time.Since(startTime) < e.retryDuration
 	}
 
 	backoff := time.Second
 	startTime := time.Now()
 
-	for attempt := 0; shouldRetry(attempt, startTime); attempt++ {
+	for attempt := 0; shouldContinue(attempt, startTime); attempt++ {
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
