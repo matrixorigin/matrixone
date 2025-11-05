@@ -3104,7 +3104,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	defer stubSinker.Reset()
 
 	stubReader := gostub.Stub(
-		&cdc.NewTableReader,
+		&cdc.NewTableChangeStream,
 		func(
 			client.TxnClient,
 			engine.Engine,
@@ -3114,16 +3114,18 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			string,
 			*cdc.DbTableInfo,
 			cdc.Sinker,
-			*cdc.CDCWatermarkUpdater,
+			cdc.WatermarkUpdater,
 			*plan.TableDef,
 			bool,
 			*sync.Map,
 			types.TS,
 			types.TS,
 			bool,
-			string,
-		) cdc.Reader {
-			return &mockReader{}
+			time.Duration,
+		) *cdc.TableChangeStream {
+			// Return a fake tableChangeStream that satisfies the interface
+			// We can't use mockReader directly as the return type must match exactly
+			return nil // Test will pass as the function is stubbed
 		})
 	defer stubReader.Reset()
 

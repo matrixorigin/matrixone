@@ -620,8 +620,10 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	}
 	go sinker.Run(ctx, exec.activeRoutine)
 
-	// step 3. new reader
-	reader := cdc.NewTableReader(
+	// step 3. new reader (using V2 tableChangeStream)
+	frequencyStr := exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string)
+	frequency := cdc.ParseFrequencyToDuration(frequencyStr)
+	reader := cdc.NewTableChangeStream(
 		exec.cnTxnClient,
 		exec.cnEngine,
 		exec.mp,
@@ -637,7 +639,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.startTs,
 		exec.endTs,
 		exec.noFull,
-		exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string),
+		frequency,
 	)
 	go reader.Run(ctx, exec.activeRoutine)
 

@@ -200,7 +200,7 @@ func TestTableChangeStream_ForceNextInterval(t *testing.T) {
 }
 
 // Helper function to create a test stream with minimal setup
-func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo) *tableChangeStream {
+func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo) *TableChangeStream {
 	sinker := &mockDataProcessorSinker{mockSinker: &mockSinker{}}
 	updater := newMockWatermarkUpdater()
 	packerPool := fileservice.NewPool(

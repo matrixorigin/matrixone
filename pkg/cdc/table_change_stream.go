@@ -31,14 +31,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// tableChangeStream captures and streams table changes for CDC
+var _ Reader = new(TableChangeStream)
+var _ TableReader = new(TableChangeStream)
+
+// TableChangeStream captures and streams table changes for CDC
 // This is a complete CDC data pipeline that:
 // - Monitors table changes continuously
 // - Manages transactions with dual-layer safety
 // - Processes and transforms change data
 // - Handles retries and error recovery
 // - Maintains watermarks and state
-type tableChangeStream struct {
+type TableChangeStream struct {
 	// Core V2 components
 	txnManager    *TransactionManager
 	dataProcessor *DataProcessor
@@ -85,7 +88,7 @@ type tableChangeStream struct {
 }
 
 // NewTableChangeStream creates a new table change stream
-func NewTableChangeStream(
+var NewTableChangeStream = func(
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
 	mp *mpool.MPool,
@@ -101,7 +104,7 @@ func NewTableChangeStream(
 	startTs, endTs types.TS,
 	noFull bool,
 	frequency time.Duration,
-) *tableChangeStream {
+) *TableChangeStream {
 	// Parse frequency
 	if frequency <= 0 {
 		frequency = DefaultFrequency
@@ -156,7 +159,7 @@ func NewTableChangeStream(
 		tableInfo.SourceTblName,
 	)
 
-	return &tableChangeStream{
+	return &TableChangeStream{
 		txnManager:            txnManager,
 		dataProcessor:         dataProcessor,
 		cnTxnClient:           cnTxnClient,
@@ -186,7 +189,7 @@ func NewTableChangeStream(
 }
 
 // Run starts the change stream
-func (s *tableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
+func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	// 1. Check for duplicate readers
 	if _, loaded := s.runningReaders.LoadOrStore(s.runningReaderKey, s); loaded {
 		logutil.Warn(
@@ -257,7 +260,7 @@ func (s *tableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 }
 
 // cleanup performs cleanup when the stream stops
-func (s *tableChangeStream) cleanup(ctx context.Context) {
+func (s *TableChangeStream) cleanup(ctx context.Context) {
 	defer s.wg.Done()
 
 	// Remove from running readers
@@ -305,7 +308,7 @@ func (s *tableChangeStream) cleanup(ctx context.Context) {
 }
 
 // calculateInitialDelay calculates initial delay based on last sync time
-func (s *tableChangeStream) calculateInitialDelay(ctx context.Context) error {
+func (s *TableChangeStream) calculateInitialDelay(ctx context.Context) error {
 	lastSync, err := s.getLastSyncTime(ctx)
 	if err != nil {
 		logutil.Warn(
@@ -332,7 +335,7 @@ func (s *tableChangeStream) calculateInitialDelay(ctx context.Context) error {
 }
 
 // getLastSyncTime gets the last sync time from watermark
-func (s *tableChangeStream) getLastSyncTime(ctx context.Context) (time.Time, error) {
+func (s *TableChangeStream) getLastSyncTime(ctx context.Context) (time.Time, error) {
 	ts, err := s.watermarkUpdater.GetFromCache(ctx, s.watermarkKey)
 	if err == nil && !ts.ToTimestamp().IsEmpty() {
 		return ts.ToTimestamp().ToStdTime(), nil
@@ -348,7 +351,7 @@ func (s *tableChangeStream) getLastSyncTime(ctx context.Context) (time.Time, err
 }
 
 // forceNextInterval forces the next tick interval
-func (s *tableChangeStream) forceNextInterval(wait time.Duration) {
+func (s *TableChangeStream) forceNextInterval(wait time.Duration) {
 	logutil.Info(
 		"CDC-TableChangeStream-ForceNextInterval",
 		zap.String("table", s.tableInfo.String()),
@@ -359,7 +362,7 @@ func (s *tableChangeStream) forceNextInterval(wait time.Duration) {
 }
 
 // processOneRound processes one round of change streaming
-func (s *tableChangeStream) processOneRound(ctx context.Context, ar *ActiveRoutine) error {
+func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRoutine) error {
 	// Create transaction operator
 	txnOp, err := GetTxnOp(ctx, s.cnEngine, s.cnTxnClient, "tableChangeStream")
 	if err != nil {
@@ -391,7 +394,7 @@ func (s *tableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 }
 
 // processWithTxn processes changes within a transaction
-func (s *tableChangeStream) processWithTxn(
+func (s *TableChangeStream) processWithTxn(
 	ctx context.Context,
 	txnOp client.TxnOperator,
 	packer *types.Packer,
@@ -507,7 +510,7 @@ func (s *tableChangeStream) processWithTxn(
 }
 
 // handleStaleRead handles StaleRead error by resetting watermark
-func (s *tableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
+func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
 	// If startTs is set and noFull is false, StaleRead is fatal
 	if !s.noFull && !s.startTs.IsEmpty() {
 		s.retryable = false
@@ -553,16 +556,16 @@ func (s *tableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 }
 
 // Close closes the change stream
-func (s *tableChangeStream) Close() {
+func (s *TableChangeStream) Close() {
 	s.sinker.Close()
 }
 
 // Info returns the table information
-func (s *tableChangeStream) Info() *DbTableInfo {
+func (s *TableChangeStream) Info() *DbTableInfo {
 	return s.tableInfo
 }
 
 // GetWg returns the wait group
-func (s *tableChangeStream) GetWg() *sync.WaitGroup {
+func (s *TableChangeStream) GetWg() *sync.WaitGroup {
 	return &s.wg
 }

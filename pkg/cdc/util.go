@@ -887,6 +887,11 @@ func compositedUriInfo(uri string, uriPrefix string) (bool, UriInfo) {
 	}
 }
 
+// ParseFrequencyToDuration parses a frequency string (e.g., "1h", "30m") to time.Duration
+func ParseFrequencyToDuration(freq string) time.Duration {
+	return parseFrequencyToDuration(freq)
+}
+
 func parseFrequencyToDuration(freq string) time.Duration {
 	if strings.HasSuffix(freq, "h") {
 		hours, _ := strconv.Atoi(strings.TrimSuffix(freq, "h"))
