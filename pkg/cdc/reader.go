@@ -395,6 +395,17 @@ func (reader *tableReader) readTableWithTxn(
 ) (retryable bool, retryWithNewReader bool, err error) {
 	defer func() {
 		if err != nil {
+			strategy, isUnknown := classifySQLError(err)
+			if !isUnknown {
+				switch strategy {
+				case RetrySameTx, RetryNewTx:
+					retryable = true
+					retryWithNewReader = false
+				case NoRetry:
+					retryable = false
+					retryWithNewReader = false
+				}
+			}
 			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
 				retryable = true
 				retryWithNewReader = true

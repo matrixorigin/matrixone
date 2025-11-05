@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,6 +48,18 @@ const (
 	createTableIfNotExists = "create table if not exists"
 )
 
+// RetryStrategy defines how to handle an error
+type RetryStrategy int
+
+const (
+	// RetrySameTx retry with the same transaction
+	RetrySameTx RetryStrategy = iota
+	// RetryNewTx retry with a new transaction
+	RetryNewTx
+	// NoRetry directly return error, no retry
+	NoRetry
+)
+
 var SqlBufReserved = sqlBufReserved
 
 var (
@@ -55,6 +68,74 @@ var (
 	rollback = []byte("rollback")
 	dummy    = []byte("")
 )
+
+// classifySQLError analyzes the error and determines the retry strategy
+// Returns:
+//   - strategy: the retry strategy (RetrySameTx, RetryNewTx, NoRetry)
+//   - isUnknown: whether this is an unknown error type
+//
+// For unknown errors, the caller should retry with the same transaction.
+//
+// Note: This function is designed for SQL execution using mysql.ReuseQueryBuf,
+// where complete SQL statements are passed as argument values.
+func classifySQLError(err error) (strategy RetryStrategy, isUnknown bool) {
+	if err == nil {
+		return RetrySameTx, false
+	}
+
+	// 1. Check for connection/transaction state errors - need new transaction
+	// These can happen with any SQL type (REPLACE, DELETE, CREATE, USE, etc.)
+	if errors.Is(err, sql.ErrConnDone) || errors.Is(err, sql.ErrTxDone) {
+		return RetryNewTx, false
+	}
+
+	// 2. Check for driver bad connection error - need new transaction
+	// Can happen when connection is broken during query execution
+	if errors.Is(err, driver.ErrBadConn) {
+		return RetryNewTx, false
+	}
+
+	// 3. Check for context errors - no retry
+	// Can happen when context timeout/cancellation occurs
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return NoRetry, false
+	}
+
+	// 4. Check for SQL syntax errors - no retry
+	// Can happen with any SQL type if there's a syntax issue
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "syntax error") ||
+		strings.Contains(errMsg, "Syntax error") ||
+		strings.Contains(errMsg, "You have an error in your SQL syntax") {
+		return NoRetry, false
+	}
+
+	// 5. Check for permission/access denied errors - no retry
+	// Can happen with CREATE DATABASE, CREATE TABLE, USE database, etc.
+	if strings.Contains(errMsg, "Access denied") ||
+		strings.Contains(errMsg, "permission denied") {
+		return NoRetry, false
+	}
+
+	// 6. Check for constraint violations - no retry
+	// Can happen with REPLACE INTO, DELETE
+	if strings.Contains(errMsg, "Duplicate entry") ||
+		strings.Contains(errMsg, "foreign key constraint") ||
+		strings.Contains(errMsg, "cannot delete or update a parent row") {
+		return NoRetry, false
+	}
+
+	// 7. Check for database/table not exists errors - no retry
+	// Can happen with USE database, DELETE, REPLACE INTO
+	if strings.Contains(errMsg, "database doesn't exist") ||
+		strings.Contains(errMsg, "Unknown database") ||
+		strings.Contains(errMsg, "Table") && strings.Contains(errMsg, "doesn't exist") {
+		return NoRetry, false
+	}
+
+	// 8. Unknown error - let caller handle with same transaction retry
+	return RetrySameTx, true
+}
 
 var NewSinker = func(
 	sinkUri UriInfo,
@@ -948,8 +1029,16 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 			_, err = s.conn.Exec(fakeSql, reuseQueryArg)
 		}
 
-		if err != nil && errors.Is(err, sql.ErrConnDone) {
-			return true, err
+		strategy, isUnknown := classifySQLError(err)
+		if err != nil && !isUnknown {
+			switch strategy {
+			case RetrySameTx:
+				return false, err
+			case RetryNewTx:
+				return true, err
+			case NoRetry:
+				return true, err
+			}
 		}
 
 		if err != nil {
