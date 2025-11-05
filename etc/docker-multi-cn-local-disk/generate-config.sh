@@ -369,7 +369,7 @@ disableTrace = $PROXY_DISABLE_TRACE
 disableMetric = $PROXY_DISABLE_METRIC
 
 [proxy]
-listen-address = "0.0.0.0:6009"
+listen-address = "0.0.0.0:6001"
 rebalance-interval = 30
 rebalance-disabled = false
 rebalance-tolerance = 0.3

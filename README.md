@@ -278,17 +278,21 @@ MatrixOne supports multiple installation methods. Choose the one that best fits 
 
 ### 🐳 Local Multi-CN Development
 
-Run a complete distributed cluster locally with multiple CN nodes and load balancing.
+Run a complete distributed cluster locally with multiple CN nodes, load balancing, and easy configuration management.
 
 ```bash
-# From project root
+# Quick start
 make dev-build && make dev-up
 
-# Connect
-mysql -h 127.0.0.1 -P 6009 -u root -p111
+# Connect via proxy (load balanced)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# Configure specific service (interactive editor)
+make dev-edit-cn1          # Edit CN1 config
+make dev-restart-cn1       # Restart only CN1 (fast!)
 ```
 
-📖 **[Full Guide & Commands →](etc/docker-multi-cn-local-disk/)**
+📖 **[Full Guide & All Commands →](etc/docker-multi-cn-local-disk/)**
 
 ### 🎯 Using mo_ctl Tool (Recommended for Production)
 

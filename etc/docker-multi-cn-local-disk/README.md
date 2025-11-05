@@ -28,7 +28,31 @@ The `docker-compose.yml` supports both local build (recommended) and Docker Hub 
 
 ### Configuration (Optional)
 
-Customize common settings without editing TOML files:
+Customize common settings without editing TOML files directly.
+
+**Method 1: Interactive Editor (Recommended - Easiest)**
+
+```bash
+# Edit specific service configuration
+make dev-edit-cn1        # Edit CN1 only
+make dev-edit-cn2        # Edit CN2 only
+make dev-edit-proxy      # Edit Proxy only
+make dev-edit-tn         # Edit TN only
+make dev-edit-common     # Edit common settings (all services)
+
+# Inside the editor:
+# - Lines with # are DISABLED (showing default values)
+# - Remove # to ENABLE and modify the value
+# - Save and close to apply
+
+# After saving, TOML files are automatically generated!
+# Just restart the service:
+make dev-restart-cn1   # Only restart CN1
+make dev-restart-cn2   # Only restart CN2
+# ... or restart all: make dev-restart
+```
+
+**Method 2: Manual Editing**
 
 ```bash
 # 1. Create config file from example
@@ -39,11 +63,9 @@ make dev-config-example
 vim etc/docker-multi-cn-local-disk/config.env
 
 # Example settings:
-# LOG_LEVEL=debug          # Change log level
+# LOG_LEVEL=debug          # Change log level for all
 # LOG_FORMAT=json          # Use JSON logging
-# MEMORY_CACHE=2GB         # Increase memory cache
-# DISK_CACHE=20GB          # Increase disk cache
-# CN1_MEMORY_CACHE=4GB     # Override for CN1 only
+# CN1_MEMORY_CACHE=2GB     # Override for CN1 only
 
 # 3. Start (will auto-generate TOML configs)
 make dev-up
@@ -191,7 +213,7 @@ cd etc/docker-multi-cn-local-disk
 ./start.sh -m "../../test:/test:ro" up -d
 
 # Connect and run tests
-mysql -h 127.0.0.1 -P 6009 -u root -p111
+mysql -h 127.0.0.1 -P 6001 -u root -p111
 mysql> source /test/distributed/cases/your_test.sql;
 
 # Try official latest without building
@@ -267,7 +289,7 @@ sudo systemctl restart docker
 
 **Via Proxy (Recommended):**
 ```bash
-mysql -h 127.0.0.1 -P 6009 -u root -p111
+mysql -h 127.0.0.1 -P 6001 -u root -p111
 ```
 
 **Direct to CN1:**
@@ -291,18 +313,18 @@ Use the `-m` option to mount test directory:
 ./start.sh -m "../../test:/test:ro" up -d
 
 # Connect and run
-mysql -h 127.0.0.1 -P 6009 -u root -p111
+mysql -h 127.0.0.1 -P 6001 -u root -p111
 mysql> source /test/distributed/cases/your_test.sql;
 ```
 
 **Method 2: Pipe SQL file directly**
 ```bash
-mysql -h 127.0.0.1 -P 6009 -u root -p111 < test/distributed/cases/your_test.sql
+mysql -h 127.0.0.1 -P 6001 -u root -p111 < test/distributed/cases/your_test.sql
 ```
 
 **Method 3: Use mysql with -e option**
 ```bash
-mysql -h 127.0.0.1 -P 6009 -u root -p111 -e "$(cat test/distributed/cases/your_test.sql)"
+mysql -h 127.0.0.1 -P 6001 -u root -p111 -e "$(cat test/distributed/cases/your_test.sql)"
 ```
 
 **Method 4: Copy file to container**
@@ -320,7 +342,7 @@ mysql -h 127.0.0.1 -P 16001 -u root -p111 -e "source /tmp/test.sql"
 │                                         │
 │  ┌────────┐  ┌────────┐  ┌──────────┐  │
 │  │ mo-log │  │ mo-tn  │  │ mo-proxy │  │
-│  │ :32001 │  │        │  │  :6009   │  │
+│  │ :32001 │  │        │  │  :6001   │  │
 │  └───┬────┘  └───┬────┘  └────┬─────┘  │
 │      │           │             │        │
 │  ┌───┴───────────┴─────────────┴────┐   │
@@ -344,7 +366,7 @@ mysql -h 127.0.0.1 -P 16001 -u root -p111 -e "source /tmp/test.sql"
 | TN | mo-tn | - | Transaction Node |
 | CN1 | mo-cn1 | 16001 | Compute Node 1 |
 | CN2 | mo-cn2 | 16002 | Compute Node 2 |
-| Proxy | mo-proxy | 6009 | Load balancer proxy |
+| Proxy | mo-proxy | 6001 | Load balancer proxy |
 
 ## Image Selection
 

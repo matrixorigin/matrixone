@@ -96,16 +96,17 @@ help:
 	@echo "  make compose            - Run docker compose BVT tests"
 	@echo ""
 	@echo "Development Environment (Local Multi-CN Cluster):"
-	@echo "  make dev-help           - Show all dev-* commands"
+	@echo "  make dev-help           - Show all dev-* commands (full list)"
 	@echo "  make dev-build          - Build docker image"
 	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
 	@echo "  make dev-up-latest      - Start with official latest image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
 	@echo "  make dev-down           - Stop cluster"
-	@echo "  make dev-restart        - Restart cluster"
+	@echo "  make dev-restart        - Restart all services"
+	@echo "  make dev-restart-cn1    - Restart CN1 only (also: cn2, proxy, tn, log)"
+	@echo "  make dev-edit-cn1       - Edit CN1 config interactively (also: cn2, proxy, tn, log, common)"
 	@echo "  make dev-logs           - View all logs"
 	@echo "  make dev-mysql          - Connect to database via proxy"
-	@echo "  make dev-config-example - Create config.env template"
 	@echo "  make dev-clean          - Stop and remove all data"
 	@echo ""
 	@echo "Code Quality:"
@@ -307,7 +308,12 @@ dev-help:
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
 	@echo "  make dev-down           - Stop multi-CN cluster"
-	@echo "  make dev-restart        - Restart multi-CN cluster"
+	@echo "  make dev-restart        - Restart multi-CN cluster (all services)"
+	@echo "  make dev-restart-cn1    - Restart CN1 only"
+	@echo "  make dev-restart-cn2    - Restart CN2 only"
+	@echo "  make dev-restart-proxy  - Restart Proxy only"
+	@echo "  make dev-restart-log    - Restart Log service only"
+	@echo "  make dev-restart-tn     - Restart TN only"
 	@echo "  make dev-ps             - Show service status"
 	@echo "  make dev-logs           - Show all logs (tail -f)"
 	@echo "  make dev-logs-cn1       - Show CN1 logs"
@@ -316,6 +322,12 @@ dev-help:
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
 	@echo "  make dev-config         - Generate config from config.env"
 	@echo "  make dev-config-example - Create config.env.example file"
+	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
+	@echo "  make dev-edit-cn2       - Edit CN2 configuration interactively"
+	@echo "  make dev-edit-proxy     - Edit Proxy configuration interactively"
+	@echo "  make dev-edit-log       - Edit Log service configuration interactively"
+	@echo "  make dev-edit-tn        - Edit TN configuration interactively"
+	@echo "  make dev-edit-common    - Edit common configuration (all services)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
@@ -324,10 +336,14 @@ dev-help:
 	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
 	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
 	@echo ""
-	@echo "Configuration:"
-	@echo "  1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
-	@echo "  2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
-	@echo "  3. Generate: make dev-config (or auto-generated on dev-up)"
+	@echo "Configuration (Choose one method):"
+	@echo "  Method 1 (Interactive - Recommended):"
+	@echo "    make dev-edit-cn1                        # Edit CN1 config in editor"
+	@echo "    (Remove # to enable settings, save to apply)"
+	@echo "  Method 2 (Manual):"
+	@echo "    1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
+	@echo "    2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
+	@echo "    3. Generate: make dev-config (or auto-generated on dev-up)"
 
 .PHONY: dev-build
 dev-build:
@@ -344,7 +360,7 @@ else
 endif
 	@echo ""
 	@echo "Services started! Connect with:"
-	@echo "  mysql -h 127.0.0.1 -P 6009 -u root -p111  # Via proxy (recommended)"
+	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
 	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
 	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
 
@@ -373,6 +389,32 @@ dev-down:
 dev-restart:
 	@echo "Restarting MatrixOne Multi-CN cluster..."
 	@cd $(DEV_DIR) && ./start.sh restart
+
+# Restart individual services
+.PHONY: dev-restart-cn1
+dev-restart-cn1:
+	@echo "Restarting CN1..."
+	@cd $(DEV_DIR) && docker compose restart mo-cn1
+
+.PHONY: dev-restart-cn2
+dev-restart-cn2:
+	@echo "Restarting CN2..."
+	@cd $(DEV_DIR) && docker compose restart mo-cn2
+
+.PHONY: dev-restart-proxy
+dev-restart-proxy:
+	@echo "Restarting Proxy..."
+	@cd $(DEV_DIR) && docker compose restart mo-proxy
+
+.PHONY: dev-restart-log
+dev-restart-log:
+	@echo "Restarting Log service..."
+	@cd $(DEV_DIR) && docker compose restart mo-log
+
+.PHONY: dev-restart-tn
+dev-restart-tn:
+	@echo "Restarting TN..."
+	@cd $(DEV_DIR) && docker compose restart mo-tn
 
 .PHONY: dev-ps
 dev-ps:
@@ -428,7 +470,7 @@ dev-shell-cn2:
 .PHONY: dev-mysql
 dev-mysql:
 	@echo "Connecting to MatrixOne via proxy..."
-	@mysql -h 127.0.0.1 -P 6009 -u root -p111
+	@mysql -h 127.0.0.1 -P 6001 -u root -p111
 
 .PHONY: dev-mysql-cn1
 dev-mysql-cn1:
@@ -464,6 +506,31 @@ dev-config-example:
 		echo "Or just restart (auto-generates):"; \
 		echo "  make dev-down && make dev-up"; \
 	fi
+
+# Interactive configuration editors for specific services
+.PHONY: dev-edit-cn1
+dev-edit-cn1:
+	@cd $(DEV_DIR) && ./edit-config.sh cn1
+
+.PHONY: dev-edit-cn2
+dev-edit-cn2:
+	@cd $(DEV_DIR) && ./edit-config.sh cn2
+
+.PHONY: dev-edit-proxy
+dev-edit-proxy:
+	@cd $(DEV_DIR) && ./edit-config.sh proxy
+
+.PHONY: dev-edit-log
+dev-edit-log:
+	@cd $(DEV_DIR) && ./edit-config.sh log
+
+.PHONY: dev-edit-tn
+dev-edit-tn:
+	@cd $(DEV_DIR) && ./edit-config.sh tn
+
+.PHONY: dev-edit-common
+dev-edit-common:
+	@cd $(DEV_DIR) && ./edit-config.sh common
 
 ###############################################################################
 # clean

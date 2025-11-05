@@ -64,7 +64,7 @@ make dev-build && make dev-up
 
 Or manually:
 ```bash
-mysql -h 127.0.0.1 -P 6009 -u root -p111   # Proxy
+mysql -h 127.0.0.1 -P 6001 -u root -p111   # Proxy
 mysql -h 127.0.0.1 -P 16001 -u root -p111  # CN1
 mysql -h 127.0.0.1 -P 16002 -u root -p111  # CN2
 ```
@@ -116,6 +116,25 @@ mysql> source /test/distributed/cases/your_test.sql;
 make dev-logs-cn1
 ```
 
+### Configuration Workflow
+
+```bash
+# 1. Edit CN1 configuration
+make dev-edit-cn1
+# (Remove # from lines you want to enable, save and quit)
+# → TOML files are automatically generated!
+
+# 2. Restart only CN1 (FAST - 5-10 seconds!)
+make dev-restart-cn1
+
+# 3. Check CN1 logs
+make dev-logs-cn1
+
+# 4. If working well, edit other CNs
+make dev-edit-cn2
+make dev-restart-cn2
+```
+
 ### Quick Testing with Official Image
 
 ```bash
@@ -147,7 +166,54 @@ make DEV_VERSION=latest dev-up-test
 
 ## ⚙️ Configuration Management
 
-### Quick Setup
+### Method 1: Interactive Editor (Recommended - Easiest)
+
+```bash
+# Edit specific service
+make dev-edit-cn1        # Edit CN1 configuration
+make dev-edit-cn2        # Edit CN2 configuration
+make dev-edit-proxy      # Edit Proxy configuration
+make dev-edit-tn         # Edit TN configuration
+make dev-edit-log        # Edit Log service configuration
+make dev-edit-common     # Edit common settings (all services)
+
+# Inside the editor:
+# - Lines with # are DISABLED (showing default values)
+# - Remove # to ENABLE and modify the value
+# - Save and close to apply changes
+
+# TOML files are automatically generated after saving!
+# Just restart the service (FAST - only 5-10 seconds!)
+make dev-restart-cn1    # Only restart CN1
+make dev-restart-cn2    # Only restart CN2
+make dev-restart-proxy  # Only restart Proxy
+make dev-restart-tn     # Only restart TN
+make dev-restart-log    # Only restart Log
+
+# Or restart all services
+make dev-restart
+```
+
+**What you'll see in the editor:**
+```bash
+# Configuration Editor for CN1
+# ============================================================
+# Instructions:
+#   - Lines starting with # are DISABLED (default values shown)
+#   - Remove # to ENABLE and customize the value
+#   - Save and close to apply changes
+# ============================================================
+
+# FileService memory cache size (e.g., 512MB, 2GB, 4GB)
+# Default: 512MB
+#CN1_MEMORY_CACHE=512MB    # ← Remove # and change to: CN1_MEMORY_CACHE=2GB
+
+# Log verbosity (debug, info, warn, error, fatal)
+# Default: info
+#CN1_LOG_LEVEL=info        # ← Remove # and change to: CN1_LOG_LEVEL=debug
+```
+
+### Method 2: Manual Editing
 
 ```bash
 # Create config from example
