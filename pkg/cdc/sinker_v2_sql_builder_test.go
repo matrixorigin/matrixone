@@ -414,6 +414,295 @@ func TestCDCStatementBuilder_EstimateRowSize(t *testing.T) {
 
 // Additional test cases based on old sinker tests
 
+func TestCDCStatementBuilder_BuildDeleteSQL_SinglePK(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	tableDef := &plan.TableDef{
+		Name: "users",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
+	}
+
+	builder, err := NewCDCStatementBuilder("test_db", "users", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+
+	t.Run("DeleteSingleRow", func(t *testing.T) {
+		// Create AtomicBatch
+		atmBatch := NewAtomicBatch(mp)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		// Create batch with PK and TS columns
+		// For single PK, the layout is: [pk_col, ts_col]
+		bat := batch.New([]string{"id", "ts"})
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+
+		vector.AppendFixed(bat.Vecs[0], int32(5), false, mp)
+		vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
+		bat.SetRowCount(1)
+
+		// Append to atomic batch (tsColIdx=1, pkColIdx=0)
+		atmBatch.Append(packer, bat, 1, 0)
+
+		ctx := context.Background()
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+
+		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
+
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+
+		sql := string(sqls[0][v2SQLBufReserved:])
+		t.Logf("Generated DELETE SQL: %s", sql)
+
+		// Verify SQL structure for single PK
+		assert.Contains(t, sql, "/* [100-0, 200-0) */")
+		assert.Contains(t, sql, "DELETE FROM `test_db`.`users`")
+		assert.Contains(t, sql, "WHERE id IN")
+		assert.Contains(t, sql, "(5)")
+		assert.True(t, strings.HasSuffix(sql, ");"))
+	})
+
+	t.Run("DeleteMultipleRows", func(t *testing.T) {
+		atmBatch := NewAtomicBatch(mp)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		// Create batch with 3 rows
+		bat := batch.New([]string{"id", "ts"})
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+
+		for i := 0; i < 3; i++ {
+			vector.AppendFixed(bat.Vecs[0], int32(10+i), false, mp)
+			vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
+		}
+		bat.SetRowCount(3)
+
+		atmBatch.Append(packer, bat, 1, 0)
+
+		ctx := context.Background()
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+
+		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
+
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+
+		sql := string(sqls[0][v2SQLBufReserved:])
+		t.Logf("Generated DELETE SQL: %s", sql)
+
+		// Verify all PK values are included
+		assert.Contains(t, sql, "WHERE id IN")
+		// The order might vary due to btree, so just check they're all present
+		assert.Contains(t, sql, "(10)")
+		assert.Contains(t, sql, "(11)")
+		assert.Contains(t, sql, "(12)")
+	})
+
+	t.Run("EmptyAtomicBatch", func(t *testing.T) {
+		atmBatch := NewAtomicBatch(mp)
+
+		ctx := context.Background()
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+
+		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
+
+		require.NoError(t, err)
+		assert.Nil(t, sqls)
+	})
+}
+
+func TestCDCStatementBuilder_BuildDeleteSQL_CompositePK_MySQL(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	tableDef := &plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{
+			{Name: "order_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "customer_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_float64)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"order_id", "customer_id"}},
+		Name2ColIndex: map[string]int32{"order_id": 0, "customer_id": 1, "amount": 2},
+	}
+
+	// MySQL mode (isMO = false)
+	builder, err := NewCDCStatementBuilder("test_db", "orders", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+	assert.False(t, builder.isSinglePK)
+
+	t.Run("CompositePK_MySQL_Format", func(t *testing.T) {
+		atmBatch := NewAtomicBatch(mp)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		// For composite PK, need to create a batch with composite PK column
+		// The composite PK is stored as a packed value in a single column
+		// Layout: [composited_pk, ts]
+		bat := batch.New([]string{"cpk", "ts"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType()) // Packed composite PK
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+
+		// For the actual test, we'll append and let it encode
+		// Then verify the SQL format is correct
+		vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
+
+		// Pack (order_id=1, customer_id=100) as tuple manually
+		packer.EncodeInt32(1)
+		packer.EncodeInt32(100)
+		pkBytes := packer.GetBuf()
+
+		vector.AppendBytes(bat.Vecs[0], pkBytes, false, mp)
+		bat.SetRowCount(1)
+
+		atmBatch.Append(packer, bat, 1, 0)
+
+		ctx := context.Background()
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+
+		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
+
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+
+		sql := string(sqls[0][v2SQLBufReserved:])
+		t.Logf("Generated DELETE SQL (MySQL format): %s", sql)
+
+		// MySQL format: WHERE (order_id,customer_id) IN ((val1,val2))
+		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
+		assert.Contains(t, sql, "WHERE (order_id,customer_id) IN")
+		assert.Contains(t, sql, "(1,100)")
+		assert.True(t, strings.HasSuffix(sql, ");"))
+	})
+}
+
+func TestCDCStatementBuilder_BuildDeleteSQL_CompositePK_MO(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	tableDef := &plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{
+			{Name: "order_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "customer_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_float64)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"order_id", "customer_id"}},
+		Name2ColIndex: map[string]int32{"order_id": 0, "customer_id": 1, "amount": 2},
+	}
+
+	// MO mode (isMO = true)
+	builder, err := NewCDCStatementBuilder("test_db", "orders", tableDef, 1024*1024, true)
+	require.NoError(t, err)
+	assert.False(t, builder.isSinglePK)
+
+	t.Run("CompositePK_MO_Format_SingleRow", func(t *testing.T) {
+		atmBatch := NewAtomicBatch(mp)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		bat := batch.New([]string{"cpk", "ts"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+
+		vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
+
+		// Pack (order_id=1, customer_id=100) as tuple
+		packer.EncodeInt32(1)
+		packer.EncodeInt32(100)
+		pkBytes := packer.GetBuf()
+
+		vector.AppendBytes(bat.Vecs[0], pkBytes, false, mp)
+		bat.SetRowCount(1)
+
+		atmBatch.Append(packer, bat, 1, 0)
+
+		ctx := context.Background()
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+
+		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
+
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+
+		sql := string(sqls[0][v2SQLBufReserved:])
+		t.Logf("Generated DELETE SQL (MO format): %s", sql)
+
+		// MO format: WHERE order_id=1 AND customer_id=100
+		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
+		assert.Contains(t, sql, "WHERE order_id=1 and customer_id=100")
+		assert.True(t, strings.HasSuffix(sql, ";"))
+	})
+
+	t.Run("CompositePK_MO_Format_MultipleRows", func(t *testing.T) {
+		atmBatch := NewAtomicBatch(mp)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		bat := batch.New([]string{"cpk", "ts"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+
+		// Add multiple rows
+		tuples := [][]any{
+			{int32(1), int32(100)},
+			{int32(2), int32(200)},
+			{int32(3), int32(300)},
+		}
+
+		for _, tuple := range tuples {
+			vector.AppendFixed(bat.Vecs[1], types.BuildTS(150, 0), false, mp)
+
+			// Encode tuple manually
+			packer.Reset()
+			packer.EncodeInt32(tuple[0].(int32))
+			packer.EncodeInt32(tuple[1].(int32))
+			pkBytes := packer.GetBuf()
+
+			vector.AppendBytes(bat.Vecs[0], pkBytes, false, mp)
+		}
+		bat.SetRowCount(3)
+
+		atmBatch.Append(packer, bat, 1, 0)
+
+		ctx := context.Background()
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+
+		sqls, err := builder.BuildDeleteSQL(ctx, atmBatch, fromTs, toTs)
+
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+
+		sql := string(sqls[0][v2SQLBufReserved:])
+		t.Logf("Generated DELETE SQL (MO format): %s", sql)
+
+		// MO format: WHERE order_id=1 AND customer_id=100 OR order_id=2 AND customer_id=200 OR ...
+		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
+		assert.Contains(t, sql, "order_id=1 and customer_id=100")
+		assert.Contains(t, sql, "order_id=2 and customer_id=200")
+		assert.Contains(t, sql, "order_id=3 and customer_id=300")
+		assert.Contains(t, sql, " or ")
+		assert.True(t, strings.HasSuffix(sql, ";"))
+	})
+}
+
 func TestCDCStatementBuilder_VariousDataTypes(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
