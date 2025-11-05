@@ -1,6 +1,8 @@
 package sqlexec
 
 import (
+	"fmt"
+
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -62,7 +64,7 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 
 	out := bj.QuerySimple([]*bytejson.Path{&path})
 	if out.IsNull() {
-		return nil, moerr.NewInternalErrorNoCtx("value is null")
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("key %s not found", varName))
 	}
 
 	typebj := out.QuerySimple([]*bytejson.Path{&m.typepath})
