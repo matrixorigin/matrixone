@@ -627,10 +627,10 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s')",
 			key.AccountId,
-			key.TaskId,
-			key.DBName,
-			key.TableName,
-			wm.ToString(),
+			escapeSQLString(key.TaskId),
+			escapeSQLString(key.DBName),
+			escapeSQLString(key.TableName),
+			escapeSQLString(wm.ToString()),
 		)
 		i++
 	}
@@ -649,10 +649,10 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s')",
 			job.Key.AccountId,
-			job.Key.TaskId,
-			job.Key.DBName,
-			job.Key.TableName,
-			job.ErrMsg, // only update the err_msg
+			escapeSQLString(job.Key.TaskId),
+			escapeSQLString(job.Key.DBName),
+			escapeSQLString(job.Key.TableName),
+			escapeSQLString(job.ErrMsg), // only update the err_msg
 		)
 	}
 	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values)
@@ -697,10 +697,10 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s', '%s')",
 			job.Key.AccountId,
-			job.Key.TaskId,
-			job.Key.DBName,
-			job.Key.TableName,
-			job.Watermark.ToString(),
+			escapeSQLString(job.Key.TaskId),
+			escapeSQLString(job.Key.DBName),
+			escapeSQLString(job.Key.TableName),
+			escapeSQLString(job.Watermark.ToString()),
 			"",
 		)
 	}
@@ -723,9 +723,9 @@ func (u *CDCWatermarkUpdater) constructReadWMSQL(
 		filterStr += fmt.Sprintf(
 			"(account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s')",
 			key.AccountId,
-			key.TaskId,
-			key.DBName,
-			key.TableName,
+			escapeSQLString(key.TaskId),
+			escapeSQLString(key.DBName),
+			escapeSQLString(key.TableName),
 		)
 		idx++
 	}

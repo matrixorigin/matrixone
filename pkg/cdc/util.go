@@ -46,6 +46,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+// escapeSQLString escapes special characters in SQL string literals to prevent SQL injection.
+//
+// It follows the SQL standard escaping rules:
+//  1. Single quotes (') are escaped as double single quotes (”)
+//  2. Backslashes (\) are escaped as double backslashes (\\)
+//
+// This function is critical for security: it prevents SQL injection attacks by ensuring
+// that user-provided strings (TaskId, DBName, TableName, ErrMsg) cannot break out of
+// string literals and execute arbitrary SQL commands.
+//
+// Example:
+//
+//	Input:  "task'; DROP TABLE users; --"
+//	Output: "task''; DROP TABLE users; --"
+//	Result: The SQL will treat this as a literal string value, not as SQL commands
+func escapeSQLString(s string) string {
+	// Replace backslash first (before replacing quotes) to avoid double-escaping
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	// Replace single quotes with double single quotes (SQL standard escaping)
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
+
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
 // bat columns layout:
 // 1. data: user defined cols | cpk (if needed) | commit-ts
