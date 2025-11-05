@@ -447,8 +447,8 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	for key, info := range allAccountTbls[accountId] {
 		// already running
 		if val, ok := exec.runningReaders.Load(key); ok {
-			if reader, ok := val.(cdc.TableReader); ok {
-				readerInfo := reader.Info()
+			if reader, ok := val.(cdc.ChangeReader); ok {
+				readerInfo := reader.GetTableInfo()
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
 					logutil.Infof("cdc task wait old reader to stop %s %d->%d",
@@ -456,7 +456,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 					waitChan := make(chan struct{})
 					go func() {
 						defer close(waitChan)
-						reader.GetWg().Wait()
+						reader.Wait()
 					}()
 					<-waitChan
 				} else {

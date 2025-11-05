@@ -134,16 +134,23 @@ func NewTaskId() TaskId {
 // 	return uuid.Parse(s)
 // }
 
-type Reader interface {
+// ChangeReader represents a CDC change data capture reader
+// It monitors table changes and streams them to a downstream sinker
+type ChangeReader interface {
+	// Run starts the change reader in blocking mode
+	// It should be called in a goroutine
 	Run(ctx context.Context, ar *ActiveRoutine)
-	Close()
-}
 
-type TableReader interface {
-	Run(ctx context.Context, ar *ActiveRoutine)
+	// Close closes the reader and releases resources
 	Close()
-	Info() *DbTableInfo
-	GetWg() *sync.WaitGroup
+
+	// Wait blocks until the reader goroutine completes
+	// This is used for graceful shutdown and testing
+	Wait()
+
+	// GetTableInfo returns the source table information
+	// This is used to identify the reader and check for table ID changes
+	GetTableInfo() *DbTableInfo
 }
 
 // Sinker manages and drains the sql parts

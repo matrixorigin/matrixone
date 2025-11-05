@@ -31,8 +31,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ Reader = new(TableChangeStream)
-var _ TableReader = new(TableChangeStream)
+var _ ChangeReader = new(TableChangeStream)
 
 // TableChangeStream captures and streams table changes for CDC
 // This is a complete CDC data pipeline that:
@@ -561,11 +560,17 @@ func (s *TableChangeStream) Close() {
 }
 
 // Info returns the table information
-func (s *TableChangeStream) Info() *DbTableInfo {
+// Wait blocks until the reader goroutine completes
+func (s *TableChangeStream) Wait() {
+	s.wg.Wait()
+}
+
+// GetTableInfo returns the source table information
+func (s *TableChangeStream) GetTableInfo() *DbTableInfo {
 	return s.tableInfo
 }
 
-// GetWg returns the wait group
-func (s *TableChangeStream) GetWg() *sync.WaitGroup {
-	return &s.wg
+// Deprecated: Use GetTableInfo() instead
+func (s *TableChangeStream) Info() *DbTableInfo {
+	return s.GetTableInfo()
 }

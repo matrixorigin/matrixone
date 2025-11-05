@@ -2995,7 +2995,7 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
-	oldReader := &mockTableReader{
+	oldReader := &mockChangeReader{
 		info: &cdc.DbTableInfo{SourceTblId: 100},
 		wg:   wg,
 	}
@@ -3077,21 +3077,23 @@ func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
 func (m mockReader) Close() {}
 
-type mockTableReader struct {
+type mockChangeReader struct {
 	info *cdc.DbTableInfo
 	wg   *sync.WaitGroup
 }
 
-func (m mockTableReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
+func (m mockChangeReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
-func (m mockTableReader) Close() {}
+func (m mockChangeReader) Close() {}
 
-func (m mockTableReader) Info() *cdc.DbTableInfo {
-	return m.info
+func (m mockChangeReader) Wait() {
+	if m.wg != nil {
+		m.wg.Wait()
+	}
 }
 
-func (m mockTableReader) GetWg() *sync.WaitGroup {
-	return m.wg
+func (m mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
+	return m.info
 }
 
 type mockSinker struct{}
@@ -3238,11 +3240,11 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	// This ensures the goroutine finishes before test cleanup
 	key := cdc.GenDbTblKey(info.SourceDbName, info.SourceTblName)
 	if val, ok := cdcTask.runningReaders.Load(key); ok {
-		if reader, ok := val.(cdc.TableReader); ok {
+		if reader, ok := val.(cdc.ChangeReader); ok {
 			// Cancel the context to stop the reader
 			cancel()
 			// Wait for the reader goroutine to finish
-			reader.GetWg().Wait()
+			reader.Wait()
 		}
 	}
 }

@@ -173,18 +173,6 @@ func TestTableChangeStream_Info(t *testing.T) {
 	assert.Equal(t, tableInfo, stream.Info())
 }
 
-func TestTableChangeStream_GetWg(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	assert.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	stream := createTestStream(mp, &DbTableInfo{})
-
-	wg := stream.GetWg()
-	assert.NotNil(t, wg)
-	assert.Equal(t, &stream.wg, wg)
-}
-
 func TestTableChangeStream_ForceNextInterval(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
@@ -354,7 +342,7 @@ func TestTableChangeStream_Run_Integration(t *testing.T) {
 	go stream.Run(ctx, NewCdcActiveRoutine())
 
 	// Wait for completion
-	stream.GetWg().Wait()
+	stream.Wait()
 
 	// Verify runningReaders is cleaned up
 	count := 0
@@ -756,7 +744,7 @@ func TestTableChangeStream_EndToEnd(t *testing.T) {
 	// Run and wait
 	ar := NewCdcActiveRoutine()
 	go stream.Run(ctx, ar)
-	stream.GetWg().Wait()
+	stream.Wait()
 
 	// Verify stream completed (no panic, graceful exit)
 	// Note: In this test, context timeout causes graceful exit before watermark update
@@ -833,7 +821,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	// Wait for stream to stop
 	done := make(chan struct{})
 	go func() {
-		stream.GetWg().Wait()
+		stream.Wait()
 		close(done)
 	}()
 
@@ -914,7 +902,7 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 	// Wait for stream to stop
 	done := make(chan struct{})
 	go func() {
-		stream.GetWg().Wait()
+		stream.Wait()
 		close(done)
 	}()
 
