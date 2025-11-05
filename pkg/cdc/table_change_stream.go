@@ -524,7 +524,7 @@ func (s *tableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 
 	// Determine reset watermark
 	watermark := s.startTs
-	if s.noFull {
+	if s.noFull && txnOp != nil {
 		watermark = types.TimestampToTS(txnOp.SnapshotTS())
 	}
 

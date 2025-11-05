@@ -287,8 +287,8 @@ func Test_tableReader_Run(t *testing.T) {
 				packerPool:            pool,
 				wMarkUpdater:          u,
 				mp:                    mp,
-				insTsColIdx:           0,
-				insCompositedPkColIdx: 3,
+				insTsColIdx:           3, // ts is now at index 3 (after a,b,cpk)
+				insCompositedPkColIdx: 2, // cpk is at index 2
 				sinker:                NewConsoleSinker(nil, nil),
 			},
 			args: args{
@@ -427,8 +427,8 @@ func Test_tableReader_Run_DuplicateReader(t *testing.T) {
 				packerPool:            pool,
 				wMarkUpdater:          u,
 				mp:                    mp,
-				insTsColIdx:           0,
-				insCompositedPkColIdx: 3,
+				insTsColIdx:           3, // ts is now at index 3 (after a,b,cpk)
+				insCompositedPkColIdx: 2, // cpk is at index 2
 				sinker:                NewConsoleSinker(nil, nil),
 			},
 			args: args{
@@ -568,8 +568,8 @@ func Test_tableReader_Run_FailAndClose(t *testing.T) {
 				packerPool:            pool,
 				wMarkUpdater:          u,
 				mp:                    mp,
-				insTsColIdx:           0,
-				insCompositedPkColIdx: 3,
+				insTsColIdx:           3, // ts is now at index 3 (after a,b,cpk)
+				insCompositedPkColIdx: 2, // cpk is at index 2
 				sinker:                NewConsoleSinker(nil, nil),
 			},
 			args: args{
@@ -725,8 +725,8 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 		packerPool:            pool,
 		wMarkUpdater:          u,
 		mp:                    mp,
-		insTsColIdx:           0,
-		insCompositedPkColIdx: 3,
+		insTsColIdx:           3, // ts is now at index 3 (after a,b,cpk)
+		insCompositedPkColIdx: 2, // cpk is at index 2
 		sinker:                NewConsoleSinker(nil, nil),
 		runningReaders:        &sync.Map{},
 		endTs:                 types.BuildTS(50, 0),
@@ -818,39 +818,39 @@ func (changes *testChangesHandle) makeData() {
 	}()
 	//no checkpoint
 	//insert:
-	//ts,a,b,cpk
+	// Correct order: user cols | cpk | commit-ts → a,b,cpk,ts
 	//delete:
-	//ts cpk
+	//cpk, ts
 	for i := 0; i < batchCnt+1; i++ {
 		bat := allocTestBatch(
 			[]string{
-				"ts",
-				"a",
-				"b",
-				"cpk",
+				"a",   // User column
+				"b",   // User column
+				"cpk", // Composite PK
+				"ts",  // Commit timestamp (MUST be last)
 			},
 			[]types.Type{
-				types.T_TS.ToType(),
 				types.T_int32.ToType(),
 				types.T_int32.ToType(),
 				types.T_varchar.ToType(),
+				types.T_TS.ToType(),
 			},
 			0,
 			changes.mp,
 		)
 		bat.SetRowCount(rowCnt)
 		for j := 0; j < rowCnt; j++ {
-			//ts
-			_ = vector.AppendFixed(bat.Vecs[0], changes.toTs, false, changes.mp)
 			//a
-			_ = vector.AppendFixed(bat.Vecs[1], int32(j), false, changes.mp)
+			_ = vector.AppendFixed(bat.Vecs[0], int32(j), false, changes.mp)
 			//b
-			_ = vector.AppendFixed(bat.Vecs[2], int32(j), false, changes.mp)
+			_ = vector.AppendFixed(bat.Vecs[1], int32(j), false, changes.mp)
 			//cpk
 			changes.packer.Reset()
 			changes.packer.EncodeInt32(int32(j))
 			changes.packer.EncodeInt32(int32(j))
-			_ = vector.AppendBytes(bat.Vecs[3], changes.packer.Bytes(), false, changes.mp)
+			_ = vector.AppendBytes(bat.Vecs[2], changes.packer.Bytes(), false, changes.mp)
+			//ts
+			_ = vector.AppendFixed(bat.Vecs[3], changes.toTs, false, changes.mp)
 		}
 
 		changes.data = append(changes.data, bat)
