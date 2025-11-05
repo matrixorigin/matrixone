@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -336,7 +334,6 @@ func TestApplyTableData(t *testing.T) {
 	mh.Handle = &Handle{
 		db: tae.DB,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 
 	colCount := 2
 	schema := catalog.MockSchema(colCount, -1)
@@ -393,7 +390,6 @@ func TestApplyTableDataError(t *testing.T) {
 	mh.Handle = &Handle{
 		db: tae.DB,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 
 	colCount := 2
 	schema := catalog.MockSchema(colCount, -1)
