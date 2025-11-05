@@ -52,7 +52,7 @@ type IndexUpdateTaskInfo struct {
 	Action       string
 	AccountId    uint32
 	TableId      uint64
-	Metadata     *Metadata
+	Metadata     *sqlexec.Metadata
 	Status       []byte
 	CreatedAt    types.Timestamp
 	LastUpdateAt types.Timestamp
@@ -147,10 +147,10 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 					action := actionvec.GetStringAt(i)
 					accountId := vector.GetFixedAtWithTypeCheck[uint32](accountvec, i)
 					tableId := vector.GetFixedAtWithTypeCheck[uint64](tblidvec, i)
-					metadata := (*Metadata)(nil)
+					metadata := (*sqlexec.Metadata)(nil)
 					if !metavec.IsNull(uint64(i)) {
 						bytes := metavec.GetRawBytesAt(i)
-						metadata, err = NewMetadata(bytes)
+						metadata, err = sqlexec.NewMetadata(bytes)
 						if err != nil {
 							return err
 						}
