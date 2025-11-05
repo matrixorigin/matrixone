@@ -1,0 +1,146 @@
+# MatrixOne Distributed Cluster with Docker Compose
+# Supports both official Docker Hub image and local build
+#
+# Usage:
+# 1. Use official image (default, will pull from Docker Hub if not exist locally):
+#    docker compose up -d
+#
+# 2. Build from source (for developers, creates 'local' tag):
+#    docker compose build
+#    IMAGE_NAME=matrixorigin/matrixone:local docker compose up -d
+
+# Build configuration (only used when building locally)
+# Local builds use tag 'local' to avoid overwriting the official 'latest' tag
+x-build: &common-build
+  context: ../../
+  dockerfile: optools/images/Dockerfile
+  tags:
+    - ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    - matrixorigin/matrixone:local
+  args:
+    # Go proxy for faster dependency downloads
+    # Override with: docker compose build --build-arg GOPROXY="https://goproxy.io,direct"
+    GOPROXY: ${GOPROXY:-https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct}
+
+services:
+  # LogService - must start first as it contains HAKeeper
+  mo-log:
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    build: *common-build
+    container_name: mo-log
+    hostname: mo-log
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: ["/mo-service"]
+    command: ["-cfg", "/etc/docker-multi-cn-local-disk/log.toml"]
+    ports:
+      - "32001:32001"  # HAKeeper port
+      - "7001:7001"    # Status port
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep mo-service || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # TN - Transaction Node
+  mo-tn:
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    container_name: mo-tn
+    hostname: mo-tn
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: ["/mo-service"]
+    command: ["-cfg", "/etc/docker-multi-cn-local-disk/tn.toml"]
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    depends_on:
+      mo-log:
+        condition: service_healthy
+
+  # CN1 - Compute Node 1
+  mo-cn1:
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    container_name: mo-cn1
+    hostname: mo-cn1
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: ["/mo-service"]
+    command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml"]
+    ports:
+      - "16001:16001"  # SQL port
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    depends_on:
+      mo-log:
+        condition: service_healthy
+
+  # CN2 - Compute Node 2
+  mo-cn2:
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    container_name: mo-cn2
+    hostname: mo-cn2
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: ["/mo-service"]
+    command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml"]
+    ports:
+      - "16002:16002"  # SQL port
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    depends_on:
+      mo-log:
+        condition: service_healthy
+
+  # Proxy - Load Balancer
+  mo-proxy:
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    container_name: mo-proxy
+    hostname: mo-proxy
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: ["/mo-service"]
+    command: ["-cfg", "/etc/docker-multi-cn-local-disk/proxy.toml"]
+    ports:
+      - "6001:6009"    # Proxy SQL port (host:container)
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    depends_on:
+      mo-log:
+        condition: service_healthy
+
+networks:
+  matrixone-net:
+    driver: bridge
+
+volumes:
+  mo-data:
+  logs:
+
