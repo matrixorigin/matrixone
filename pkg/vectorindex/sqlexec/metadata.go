@@ -6,6 +6,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
+// Metadata is used to replace ResolveVariableFunc for background job.
+// 1. In the frontend, copy all the configurations required with MetadataWriter
+// 2. Generate the JSON with MetadataWriter.Marshal() and save it into the database with JSON type
+// 3. Use []byte from JSON column to construct ByteJson in Metadata
+// 4. set ResolveVaribaleFunc() with Metadata.ResolveVariableFunc() when execute SQL
+
 const (
 	Type_I64    = "I"
 	Type_F64    = "F"
