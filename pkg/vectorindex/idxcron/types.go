@@ -12,19 +12,26 @@ const (
 )
 
 type Metadata struct {
-	Data []byte
+	Json bytejson.ByteJson
+}
+
+func NewMetadata(data []byte) (*Metadata, error) {
+
+	var bj bytejson.ByteJson
+	if err := bj.Unmarshal(data); err != nil {
+		return nil, err
+	}
+
+	return &Metadata{Json: bj}, nil
 }
 
 func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar bool) (any, error) {
 
-	if m.Data == nil {
+	if m.Json.IsNull() {
 		return nil, nil
 	}
 
-	var bj bytejson.ByteJson
-	if err := bj.Unmarshal(m.Data); err != nil {
-		return nil, err
-	}
+	bj := m.Json
 
 	path, err := bytejson.ParseJsonPath("$.cfg." + varName)
 	if err != nil {

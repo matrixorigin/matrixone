@@ -22,7 +22,9 @@ func TestResolveVariableFunc(t *testing.T) {
 	bytes, err := bj.Marshal()
 	require.Nil(t, err)
 
-	m := &Metadata{Data: bytes}
+	m, err := NewMetadata(bytes)
+	require.Nil(t, err)
+
 	f := m.ResolveVariableFunc
 
 	v1, err := f("kmeans_train_percent", false, false)
@@ -65,7 +67,9 @@ func TestMetadataWriter(t *testing.T) {
 	bytes, err := bj.Marshal()
 	require.Nil(t, err)
 
-	m := &Metadata{Data: bytes}
+	m, err := NewMetadata(bytes)
+	require.Nil(t, err)
+
 	f := m.ResolveVariableFunc
 
 	v1, err := f("kmeans_train_percent", false, false)

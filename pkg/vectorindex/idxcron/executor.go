@@ -12,7 +12,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -53,7 +52,7 @@ type IndexUpdateTaskInfo struct {
 	Action       string
 	AccountId    uint32
 	TableId      uint64
-	Metadata     []byte
+	Metadata     *Metadata
 	Status       []byte
 	CreatedAt    types.Timestamp
 	LastUpdateAt types.Timestamp
@@ -148,9 +147,13 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 					action := actionvec.GetStringAt(i)
 					accountId := vector.GetFixedAtWithTypeCheck[uint32](accountvec, i)
 					tableId := vector.GetFixedAtWithTypeCheck[uint64](tblidvec, i)
-					metadata := []byte(nil)
+					metadata := (*Metadata)(nil)
 					if !metavec.IsNull(uint64(i)) {
-						metadata = metavec.GetRawBytesAt(i)
+						bytes := metavec.GetRawBytesAt(i)
+						metadata, err = NewMetadata(bytes)
+						if err != nil {
+							return err
+						}
 					}
 
 					tasks = append(tasks, IndexUpdateTaskInfo{DbName: dbname,
@@ -171,38 +174,13 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	return tasks, err
 }
 
-func getResolveVariableFuncFromMetadata(metadata []byte) func(string, bool, bool) (any, error) {
-	m := &Metadata{Data: metadata}
-	return m.ResolveVariableFunc
-}
-
-func getActionFromMetadata(metadata []byte) (string, error) {
-	var bj bytejson.ByteJson
-	if err := bj.Unmarshal(metadata); err != nil {
-		return "", err
-	}
-
-	path, err := bytejson.ParseJsonPath("$.action")
-	if err != nil {
-		return "", err
-	}
-
-	out := bj.QuerySimple([]*bytejson.Path{&path})
-	if out.IsNull() {
-		return "", moerr.NewInternalErrorNoCtx("value is null")
-	}
-
-	return string(out.GetString()), nil
-
-}
-
 func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (err error) {
 
 	if len(task.IndexName) == 0 {
 		return moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
 	}
 
-	resolveVariableFunc := getResolveVariableFuncFromMetadata(task.Metadata)
+	resolveVariableFunc := task.Metadata.ResolveVariableFunc
 
 	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
