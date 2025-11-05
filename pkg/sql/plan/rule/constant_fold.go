@@ -43,19 +43,19 @@ func (r *ConstantFold) GetBatch() *batch.Batch {
 }
 
 // Match always true
-func (r *ConstantFold) Match(n *plan.Node) bool {
+func (r *ConstantFold) Match(node *plan.Node) bool {
 	return true
 }
 
-func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process) {
-	if n.Limit != nil {
-		n.Limit = r.constantFold(n.Limit, proc)
+func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Process) {
+	if node.Limit != nil {
+		node.Limit = r.constantFold(node.Limit, proc)
 	}
-	if n.BlockLimit != nil {
-		n.BlockLimit = r.constantFold(n.BlockLimit, proc)
+	if node.BlockLimit != nil {
+		node.BlockLimit = r.constantFold(node.BlockLimit, proc)
 	}
-	if n.Offset != nil {
-		n.Offset = r.constantFold(n.Offset, proc)
+	if node.Offset != nil {
+		node.Offset = r.constantFold(node.Offset, proc)
 	}
 	// if n.Interval != nil {
 	// 	n.Interval = r.constantFold(n.Interval, proc)
@@ -64,43 +64,43 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	// 	n.Sliding = r.constantFold(n.Sliding, proc)
 	// }
 
-	for i := range n.OnList {
-		n.OnList[i] = r.constantFold(n.OnList[i], proc)
+	for i := range node.OnList {
+		node.OnList[i] = r.constantFold(node.OnList[i], proc)
 	}
 
-	for i := range n.FilterList {
-		n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
+	for i := range node.FilterList {
+		node.FilterList[i] = r.constantFold(node.FilterList[i], proc)
 	}
 
-	for i := range n.BlockFilterList {
-		n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+	for i := range node.BlockFilterList {
+		node.BlockFilterList[i] = r.constantFold(node.BlockFilterList[i], proc)
 	}
 
-	for i := range n.ProjectList {
-		n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
+	for i := range node.ProjectList {
+		node.ProjectList[i] = r.constantFold(node.ProjectList[i], proc)
 	}
 
-	for i := range n.GroupBy {
-		n.GroupBy[i] = r.constantFold(n.GroupBy[i], proc)
+	for i := range node.GroupBy {
+		node.GroupBy[i] = r.constantFold(node.GroupBy[i], proc)
 	}
 
 	// for i := range n.GroupingSet {
 	// 	n.GroupingSet[i] = r.constantFold(n.GroupingSet[i], proc)
 	// }
 
-	for i := range n.AggList {
-		n.AggList[i] = r.constantFold(n.AggList[i], proc)
+	for i := range node.AggList {
+		node.AggList[i] = r.constantFold(node.AggList[i], proc)
 	}
 
-	for i := range n.WinSpecList {
-		n.WinSpecList[i] = r.constantFold(n.WinSpecList[i], proc)
+	for i := range node.WinSpecList {
+		node.WinSpecList[i] = r.constantFold(node.WinSpecList[i], proc)
 	}
 
-	for _, orderBy := range n.OrderBy {
+	for _, orderBy := range node.OrderBy {
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
 	}
 
-	for _, orderBy := range n.BlockOrderBy {
+	for _, orderBy := range node.BlockOrderBy {
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
 	}
 
@@ -112,8 +112,8 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	// 	n.FillVal[i] = r.constantFold(n.FillVal[i], proc)
 	// }
 
-	for i := range n.OnUpdateExprs {
-		n.OnUpdateExprs[i] = r.constantFold(n.OnUpdateExprs[i], proc)
+	for i := range node.OnUpdateExprs {
+		node.OnUpdateExprs[i] = r.constantFold(node.OnUpdateExprs[i], proc)
 	}
 }
 
