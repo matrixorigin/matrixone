@@ -12,6 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package cdc implements watermark management for Change Data Capture with eventual consistency.
+//
+// # Watermark Consistency Design
+//
+// The watermark system follows a "lag-acceptable, advance-forbidden" consistency model:
+//   - Watermarks MAY lag behind actual data progress (causes duplicate processing, which is acceptable)
+//   - Watermarks MUST NEVER advance ahead of persisted data (would cause data loss, which is forbidden)
+//
+// This design choice enables:
+//  1. Async batching for better performance (updates buffered and persisted in batches every 3s)
+//  2. Simplified error handling (UpdateWatermarkOnly never fails, always returns nil)
+//  3. Crash resilience (watermark lag on crash is acceptable, prevents data loss)
+//
+// # Three-Tier Cache Architecture
+//
+// Watermarks flow through three cache levels before reaching the database:
+//
+//	cacheUncommitted -> cacheCommitting -> cacheCommitted <-> Database
+//
+//	- cacheUncommitted: Immediate write buffer, updated synchronously on UpdateWatermarkOnly()
+//	- cacheCommitting: Transition state during async batch persistence to database
+//	- cacheCommitted: Synchronized with database, represents durable watermark state
+//
+// Reads prioritize newer caches (uncommitted > committing > committed) to get latest watermark.
+//
+// # Failure Scenarios and Guarantees
+//
+// 1. System Crash Before CronJob Persists:
+//   - Watermarks in cacheUncommitted are lost
+//   - Next run reads old watermark from database
+//   - Result: Duplicate data processing (acceptable, handled by idempotency)
+//
+// 2. CronJob SQL Execution Fails:
+//   - Watermarks in cacheCommitting are cleared (lost)
+//   - Next run reads from cacheCommitted (old value) or database
+//   - Result: Duplicate data processing (acceptable)
+//
+// 3. Race Between Update and Read:
+//   - Reads may get stale watermark if CronJob hasn't persisted yet
+//   - Result: Duplicate processing (acceptable, never causes data loss)
+//
+// The key guarantee: Watermarks never advance beyond successfully persisted data,
+// ensuring no data loss even in failure scenarios.
 package cdc
 
 import (
@@ -196,6 +239,28 @@ func NewRemoveCachedWMJob(
 	return job
 }
 
+// CDCWatermarkUpdater manages watermarks for CDC tasks with eventual consistency.
+//
+// Consistency Model:
+// - Watermarks are allowed to LAG behind actual data progress (acceptable: causes duplicate processing)
+// - Watermarks MUST NEVER ADVANCE ahead of persisted data (forbidden: would cause data loss)
+// - Updates are buffered in memory and persisted asynchronously via batch operations
+//
+// Three-Tier Cache Architecture:
+// 1. cacheUncommitted: In-memory write buffer, updated immediately on UpdateWatermarkOnly()
+// 2. cacheCommitting: Transition state during database persistence
+// 3. cacheCommitted: Synchronized with database, represents durable watermarks
+//
+// Update Flow:
+//
+//	UpdateWatermarkOnly() -> cacheUncommitted (instant, always succeeds)
+//	                      -> cacheCommitting (moved by CronJob every 3s)
+//	                      -> cacheCommitted + DB (after batch UPDATE succeeds)
+//
+// Crash Recovery:
+// - If system crashes before CronJob persists, watermarks in cacheUncommitted are lost
+// - Next run will read old watermark from DB and re-process data (duplicate processing is acceptable)
+// - This ensures watermarks never advance beyond persisted data
 type CDCWatermarkUpdater struct {
 	sync.RWMutex
 
@@ -207,10 +272,12 @@ type CDCWatermarkUpdater struct {
 
 	// sql executor
 	ie ie.InternalExecutor
-	// watermarkMap saves the watermark of each table
-	cacheUncommitted map[WatermarkKey]types.TS
-	cacheCommitting  map[WatermarkKey]types.TS
-	cacheCommitted   map[WatermarkKey]types.TS
+
+	// Three-tier cache for watermark consistency
+	// Read priority: cacheUncommitted -> cacheCommitting -> cacheCommitted
+	cacheUncommitted map[WatermarkKey]types.TS // Write buffer, not yet persisted
+	cacheCommitting  map[WatermarkKey]types.TS // Being persisted to database
+	cacheCommitted   map[WatermarkKey]types.TS // Synchronized with database
 
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
@@ -458,6 +525,22 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	return
 }
 
+// execBatchUpdateWM persists buffered watermarks to database in a single batch operation.
+//
+// Process Flow:
+// 1. Move watermarks: cacheUncommitted -> cacheCommitting
+// 2. Clear cacheUncommitted (make room for new updates)
+// 3. Execute batch UPDATE SQL to persist cacheCommitting to database
+// 4. On success: Move cacheCommitting -> cacheCommitted
+// 5. On failure: Clear cacheCommitting (watermarks lost, acceptable by design)
+//
+// Failure Handling:
+// - If SQL execution fails, watermarks in cacheCommitting are lost
+// - This is acceptable under the consistency model (watermark lag is OK)
+// - Next read will get watermark from cacheCommitted (old value) or database
+// - The lost watermarks will cause re-processing of data (idempotent by design)
+//
+// TODO: Consider restoring failed watermarks to cacheUncommitted for retry
 func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	if len(u.committingBuffer) == 0 {
 		return "", nil
@@ -675,6 +758,17 @@ func (u *CDCWatermarkUpdater) getFromCache(
 	return
 }
 
+// GetFromCache retrieves the latest watermark from the three-tier cache.
+//
+// Lookup Priority (from newest to oldest):
+// 1. cacheUncommitted - most recent updates, not yet persisted
+// 2. cacheCommitting  - updates being persisted to database
+// 3. cacheCommitted   - synchronized with database
+//
+// Returns ErrNoWatermarkFound if the key doesn't exist in any cache tier.
+// This can happen when:
+// - A new CDC task is starting for the first time
+// - CronJob failed and caches were cleared (watermarks lost, acceptable by design)
 func (u *CDCWatermarkUpdater) GetFromCache(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -701,6 +795,23 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	return
 }
 
+// UpdateWatermarkOnly buffers a watermark update in memory without immediate persistence.
+//
+// Consistency Guarantee:
+// - This method is called ONLY AFTER data has been successfully committed to the database
+// - It buffers the watermark in cacheUncommitted for later batch persistence
+// - Always returns nil (never fails) to maintain the consistency model
+//
+// Persistence Timing:
+// - Watermark is persisted asynchronously by CronJob (default: every 3 seconds)
+// - If system crashes before CronJob runs, the watermark update is lost
+// - This is acceptable: next run will re-read from old watermark (duplicate processing is idempotent)
+//
+// Why Always Return Nil:
+// - By design, watermark lag is acceptable but advance is forbidden
+// - Caller ensures data is committed BEFORE calling this method
+// - Even if this buffer operation "fails" (system crash), watermark stays behind (safe)
+// - Returning errors would complicate caller logic without improving consistency
 func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -743,7 +854,22 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	return
 }
 
-// Note: suppose there is no concurrent write to the same key
+// GetOrAddCommitted retrieves the persisted watermark from database, or adds it if not exists.
+//
+// Used for CDC task initialization to determine the starting watermark:
+// - If watermark exists in database: Return the persisted value (resume from last position)
+// - If watermark doesn't exist: Add the provided watermark to database (new task starting)
+//
+// Fast Path:
+// - Checks cacheCommitted first to avoid database query if watermark is already in memory
+// - Returns immediately if cached watermark >= requested watermark
+//
+// Slow Path (Cache Miss):
+// - Enqueues a job to read watermark from database
+// - If found: Updates cacheCommitted and returns persisted value
+// - If not found: Inserts new watermark record and returns it
+//
+// Concurrency: Assumes no concurrent writes to the same key (single reader per table)
 func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -798,6 +924,24 @@ func (u *CDCWatermarkUpdater) scheduleJob(job *UpdaterJob) (err error) {
 	return
 }
 
+// cronRun is the periodic job that moves watermarks from cacheUncommitted to database.
+//
+// Execution Interval: Every 3 seconds (configurable via cronJobInterval)
+//
+// Process:
+// 1. Check if previous commit is still in progress (cacheCommitting not empty)
+//   - If yes: Skip this run to avoid concurrent commits
+//
+// 2. Move all watermarks: cacheUncommitted -> cacheCommitting
+// 3. Call ForceFlush to persist cacheCommitting to database
+//
+// Concurrency Control:
+// - Only one CronJob execution at a time (skips if cacheCommitting is not empty)
+// - This prevents concurrent database updates for the same watermarks
+//
+// Error Handling:
+// - Errors are logged but suppressed (only log every N times to avoid spam)
+// - Failed watermarks are lost (acceptable: causes watermark lag, not advance)
 func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 	u.Lock()
 	// if there is any watermark in committing, skip the current run
