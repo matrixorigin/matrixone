@@ -103,19 +103,26 @@ func (g *Deleter) DeleteMany(
 		if end > cnt {
 			end = cnt
 		}
-		now := time.Now()
-		deleteCtx, cancel := context.WithTimeout(ctx, g.deleteTimeout)
-		defer cancel()
-		err = g.fs.Delete(deleteCtx, toDeletePaths[i:end]...)
-		logutil.Info(
-			"GC-ExecDelete-Group",
-			zap.String("task", taskName),
-			zap.Strings("paths", toDeletePaths[i:end]),
-			zap.Duration("duration", time.Since(now)),
-			zap.Int("left", cnt-end),
-			zap.Int("cnt", end-i),
-			zap.Error(err),
-		)
+
+		// Use anonymous function to ensure cancel is called even on panic
+		err = func() error {
+			now := time.Now()
+			deleteCtx, cancel := context.WithTimeout(ctx, g.deleteTimeout)
+			defer cancel() // ensure cancel is called even on panic
+
+			deleteErr := g.fs.Delete(deleteCtx, toDeletePaths[i:end]...)
+			logutil.Info(
+				"GC-ExecDelete-Group",
+				zap.String("task", taskName),
+				zap.Strings("paths", toDeletePaths[i:end]),
+				zap.Duration("duration", time.Since(now)),
+				zap.Int("left", cnt-end),
+				zap.Int("cnt", end-i),
+				zap.Error(deleteErr),
+			)
+			return deleteErr
+		}()
+
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return
 		}

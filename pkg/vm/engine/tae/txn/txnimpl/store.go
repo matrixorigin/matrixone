@@ -590,12 +590,11 @@ func (store *txnStore) AddEvent(typ int) {
 	}
 }
 func (store *txnStore) DoneEvent(typ int) {
-	//store.wg.Add(-cnt)
 	switch typ {
 	case txnif.TailCollecting:
-		store.wait.tailCollect.Add(-1)
+		store.wait.tailCollect.Done()
 	case txnif.WalPreparing:
-		store.wait.cmdMarshal.Add(-1)
+		store.wait.cmdMarshal.Done()
 	}
 }
 

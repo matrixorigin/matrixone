@@ -3,10 +3,10 @@ strconv.ParseInt: parsing "a": invalid syntax
 select load_file(cast('file://$resources/file_test/normal.txt?offset=b&size=3' as datalink));
 strconv.ParseInt: parsing "b": invalid syntax
 select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
-load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt as datalink))
+load_file(cast(file:///Users/ariznawl/code/matrixone/test/distributed/resources/file_test/normal.txt as datalink))
 Hello world!
 select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=3' as datalink));
-load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
+load_file(cast(file:///Users/ariznawl/code/matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
 Hel
 create table t1(a int, b datalink);
 insert into t1 values(1, "wrong datalink url");
@@ -40,10 +40,10 @@ select load_file(cast('stage://outfilestage/datalink/1.txt' as datalink));
 load_file(cast(stage://outfilestage/datalink/1.txt as datalink))
 this is a test.
 select save_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink), 'this is a test.');
-save_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink), this is a test.)
+save_file(cast(file:///Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink), this is a test.)
 15
 select load_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink));
-load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink))
+load_file(cast(file:///Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink))
 this is a test.
 create table t2(a int, b datalink, c varchar);
 insert into t2 values(1, cast('stage://outfilestage/datalink/varchar1.txt' as datalink), 'this is a varchar test 1'),
@@ -92,6 +92,48 @@ select cast(cast(cast('file://xxx' as char) as datalink) as bigint);
 invalid argument operator cast, bad value [DATALINK BIGINT]
 select cast(cast(cast('file://xxx' as char) as datalink) as int);
 invalid argument operator cast, bad value [DATALINK INT]
+select cast(cast('file://xxx' as decimal(10,2)) as datalink);
+invalid argument operator cast, bad value [DECIMAL64 DATALINK]
+select cast(cast('file://xxx' as double) as datalink);
+invalid argument operator cast, bad value [DOUBLE DATALINK]
+select cast(cast('file://xxx' as date) as datalink);
+invalid argument operator cast, bad value [DATE DATALINK]
+select cast(cast('file://xxx' as datetime) as datalink);
+invalid argument operator cast, bad value [DATETIME DATALINK]
+select cast(cast('file://xxx' as timestamp) as datalink);
+invalid argument operator cast, bad value [TIMESTAMP DATALINK]
+select cast(cast('file://xxx' as time) as datalink);
+invalid argument operator cast, bad value [TIME DATALINK]
+select cast(cast('file://xxx' as year) as datalink);
+data type: 'year' is not yet implemented
+select cast(cast('file://xxx' as tinyint) as datalink);
+invalid argument operator cast, bad value [TINYINT DATALINK]
+select cast(cast('file://xxx' as smallint) as datalink);
+invalid argument operator cast, bad value [SMALLINT DATALINK]
+select cast(cast('file://xxx' as mediumint) as datalink);
+invalid argument operator cast, bad value [INT DATALINK]
+select cast(cast('file://xxx' as bigint unsigned) as datalink);
+invalid argument operator cast, bad value [BIGINT UNSIGNED DATALINK]
+select cast(cast('file://xxx' as float(10,2)) as datalink);
+invalid argument operator cast, bad value [FLOAT DATALINK]
+select cast(cast('file://xxx' as enum('a','b')) as datalink);
+invalid argument operator cast, bad value [VARCHAR ENUM]
+select cast(cast('{"k":1}' as json) as datalink);
+invalid argument operator cast, bad value [JSON DATALINK]
+select cast(cast('[1,2,3]' as json) as datalink);
+invalid argument operator cast, bad value [JSON DATALINK]
+select cast(cast('file://xxx' as fulltext) as datalink);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 41 near " fulltext) as datalink);";
+select cast(cast(cast('file://xxx' as varchar) as datalink) as decimal(12,3));
+invalid argument operator cast, bad value [DATALINK DECIMAL64]
+select cast(cast(cast('file://xxx' as varchar) as datalink) as float);
+invalid argument operator cast, bad value [DATALINK FLOAT]
+select cast(cast(cast('file://xxx' as varchar) as datalink) as date);
+invalid argument operator cast, bad value [DATALINK DATE]
+select cast(cast(cast('file://xxx' as varchar) as datalink) as datetime);
+invalid argument operator cast, bad value [DATALINK DATETIME]
+select cast(cast(cast('file://xxx' as varchar) as datalink) as timestamp);
+invalid argument operator cast, bad value [DATALINK TIMESTAMP]
 select cast(cast('file://xxx' as binary) as datalink);
 cast(cast(file://xxx as binary) as datalink)
 file://xxx
@@ -113,5 +155,36 @@ file://xxx
 select cast(cast(cast('file://xxx' as char) as datalink) as char);
 cast(cast(cast(file://xxx as varchar) as datalink) as varchar)
 file://xxx
+select cast('' as datalink);
+unsupported url scheme  is not yet implemented
+select cast('   ' as datalink);
+unsupported url scheme  is not yet implemented
+select cast(cast('file://xxx' as varchar(100)) as datalink);
+cast(cast(file://xxx as varchar(100)) as datalink)
+file://xxx
+select cast(cast('file://xxx' as char(20)) as datalink);
+cast(cast(file://xxx as char(20)) as datalink)
+file://xxx
+select cast(cast('file://xxx' as text) as datalink);
+cast(cast(file://xxx as text) as datalink)
+file://xxx
+select cast(cast(x'66696C653A2F2F787878' as binary) as datalink); -- 'file://xxx' 的hex
+cast(cast(0x66696C653A2F2F787878 as binary) as datalink)
+file://xxx
+select cast(null as datalink);
+cast(null as datalink)
+null
+select cast(cast(null as varchar) as datalink);
+cast(cast(null as varchar) as datalink)
+null
+select cast(cast(cast(null as varchar) as datalink) as varchar);
+cast(cast(cast(null as varchar) as datalink) as varchar)
+null
+select cast(cast('file://短路径' as char(32)) as datalink);
+cast(cast(file://短路径 as char(32)) as datalink)
+file://短路径
+select cast('file:///etc/hosts#L10' as datalink);
+cast(file:///etc/hosts#L10 as datalink)
+file:///etc/hosts#L10
 drop stage filestage;
 drop stage outfilestage;

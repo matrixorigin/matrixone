@@ -288,6 +288,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 		submitPreScope := ants.Submit(
 			func() {
+				defer wg.Done()
+
 				switch scope.Magic {
 				case Normal:
 					preScopeResultReceiveChan <- scope.Run(c)
@@ -300,14 +302,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 					preScopeResultReceiveChan <- err
 				}
-				wg.Done()
 			})
 
 		// build routine failed.
 		if submitPreScope != nil {
+			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			preScopeResultReceiveChan <- submitPreScope
-			wg.Done()
 		}
 	}
 

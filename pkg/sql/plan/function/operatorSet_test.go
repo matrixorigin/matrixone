@@ -387,3 +387,47 @@ func Test_Operator_Xor(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+// Test for issue #19998: IF with mixed string and numeric types
+// This tests that IF(condition, 'string', number) returns varchar type
+func Test_IffCheck_MixedTypes(t *testing.T) {
+	// Test case 1: IF(condition, string, int) should return varchar
+	{
+		inputs := []types.Type{
+			types.T_bool.ToType(),
+			types.T_varchar.ToType(),
+			types.T_int32.ToType(),
+		}
+		result := iffCheck(nil, inputs)
+		require.True(t, result.status != failedFunctionParametersWrong, "iffCheck should accept mixed string/int types")
+		require.True(t, len(result.finalType) > 0, "should have final types")
+		// The return type should be varchar or char (string types first in retOperatorIffSupports after fix)
+		require.True(t, result.finalType[1].Oid.IsMySQLString(), "return type should be string type for mixed types, got: %v", result.finalType[1].Oid)
+		require.True(t, result.finalType[2].Oid.IsMySQLString(), "return type should be string type for mixed types, got: %v", result.finalType[2].Oid)
+	}
+
+	// Test case 2: IF(condition, int, string) should also return varchar
+	{
+		inputs := []types.Type{
+			types.T_bool.ToType(),
+			types.T_int32.ToType(),
+			types.T_varchar.ToType(),
+		}
+		result := iffCheck(nil, inputs)
+		require.True(t, result.status != failedFunctionParametersWrong, "iffCheck should accept mixed int/string types")
+		require.True(t, len(result.finalType) > 0, "should have final types")
+		require.True(t, result.finalType[1].Oid.IsMySQLString(), "return type should be string type for mixed types, got: %v", result.finalType[1].Oid)
+		require.True(t, result.finalType[2].Oid.IsMySQLString(), "return type should be string type for mixed types, got: %v", result.finalType[2].Oid)
+	}
+
+	// Test case 3: IF(condition, int, int) should return int
+	{
+		inputs := []types.Type{
+			types.T_bool.ToType(),
+			types.T_int32.ToType(),
+			types.T_int32.ToType(),
+		}
+		result := iffCheck(nil, inputs)
+		require.True(t, result.status != failedFunctionParametersWrong, "iffCheck should accept same int types")
+	}
+}
