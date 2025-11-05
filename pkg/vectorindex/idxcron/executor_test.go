@@ -1,6 +1,7 @@
 package idxcron
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -42,4 +43,42 @@ func TestResolveVariableFunc(t *testing.T) {
 	v5, err := f("action", false, false)
 	require.Nil(t, err)
 	require.Equal(t, v5, any("action string"))
+}
+
+func TestMetadataWriter(t *testing.T) {
+
+	writer := NewMetadataWriter()
+	writer.AddInt("kmeans_train_percent", 10)
+	writer.AddInt("kmeans_max_iteration", 20)
+	writer.AddString("string_param", "hello")
+	writer.AddFloat("float_param", 44.56)
+
+	js := writer.Marshal()
+	fmt.Println(js)
+
+	bj, err := bytejson.ParseFromString(js)
+	require.Nil(t, err)
+
+	bytes, err := bj.Marshal()
+	require.Nil(t, err)
+
+	m := &Metadata{Data: bytes}
+	f := m.ResolveVariableFunc
+
+	v1, err := f("kmeans_train_percent", false, false)
+	require.Nil(t, err)
+	require.Equal(t, v1, any(int64(10)))
+
+	v2, err := f("kmeans_max_iteration", false, false)
+	require.Nil(t, err)
+	require.Equal(t, v2, any(int64(20)))
+
+	v4, err := f("float_param", false, false)
+	require.Nil(t, err)
+	require.Equal(t, v4, any(float64(44.56)))
+
+	v5, err := f("string_param", false, false)
+	require.Nil(t, err)
+	require.Equal(t, v5, any("hello"))
+
 }
