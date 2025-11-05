@@ -409,6 +409,10 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		if err != nil {
 			return err
 		}
+		// Update InputBatchRowCount to reflect the actual row count after shrinking
+		// This is critical because IgnoreRows removed duplicate rows, so the actual
+		// row count in batches is now less than the original InputBatchRowCount
+		hb.InputBatchRowCount = hb.Batches.RowCount()
 	}
 
 	// if groupcount == inputrowcount, it means building hashmap on unique rows
