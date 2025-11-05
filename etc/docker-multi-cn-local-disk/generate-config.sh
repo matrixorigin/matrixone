@@ -393,9 +393,6 @@ disableMetric = $PROXY_DISABLE_METRIC
 [proxy]
 uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6009"
-rebalance-interval = 30
-rebalance-disabled = false
-rebalance-tolerance = 0.3
 
 [proxy.cluster]
 refresh-interval = "5s"
