@@ -49,6 +49,29 @@ func NewMetadata(data []byte) (*Metadata, error) {
 	return &Metadata{bj: bj, typepath: typepath, valpath: valpath}, nil
 }
 
+func NewMetadataFromJson(js string) (*Metadata, error) {
+	if len(js) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("metadata is null")
+	}
+
+	bj, err := bytejson.ParseFromString(js)
+	if err != nil {
+		return nil, err
+	}
+
+	typepath, err := bytejson.ParseJsonPath("$.t")
+	if err != nil {
+		return nil, err
+	}
+
+	valpath, err := bytejson.ParseJsonPath("$.v")
+	if err != nil {
+		return nil, err
+	}
+
+	return &Metadata{bj: bj, typepath: typepath, valpath: valpath}, nil
+}
+
 func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar bool) (any, error) {
 
 	if m.bj.IsNull() {

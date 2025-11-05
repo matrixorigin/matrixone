@@ -15,13 +15,8 @@ func TestResolveVariableFunc(t *testing.T) {
 	"action":{"t":"S", "v":"action string"},
 	"float":{"t":"F", "v":23.3}
 	}, "action": "xxx"}`
-	bj, err := bytejson.ParseFromString(jstr)
-	require.Nil(t, err)
 
-	bytes, err := bj.Marshal()
-	require.Nil(t, err)
-
-	m, err := NewMetadata(bytes)
+	m, err := NewMetadataFromJson(jstr)
 	require.Nil(t, err)
 
 	f := m.ResolveVariableFunc
