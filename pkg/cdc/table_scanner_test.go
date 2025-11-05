@@ -72,6 +72,8 @@ func TestTableScanner1(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
+		CallbackWaitGroups:   make(map[string]*sync.WaitGroup),
+		CallbackCancels:      make(map[string]chan struct{}),
 		exec:                 mockSqlExecutor,
 	}
 	defer td.Close()
@@ -161,6 +163,8 @@ func TestScanAndProcess(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
+		CallbackWaitGroups:   make(map[string]*sync.WaitGroup),
+		CallbackCancels:      make(map[string]chan struct{}),
 		exec:                 nil,
 	}
 	defer td.Close()
@@ -218,6 +222,8 @@ func TestProcessCallBack(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
+		CallbackWaitGroups:   make(map[string]*sync.WaitGroup),
+		CallbackCancels:      make(map[string]chan struct{}),
 		exec:                 nil,
 		lastMp:               make(map[uint32]TblMap),
 	}
@@ -300,6 +306,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
+		CallbackWaitGroups:   make(map[string]*sync.WaitGroup),
+		CallbackCancels:      make(map[string]chan struct{}),
 		exec:                 mockSqlExecutor,
 	}
 	defer td.Close()
