@@ -270,22 +270,6 @@ func (s *TableDetector) clearLastMpLocked() {
 	s.lastMp = nil
 }
 
-// getCallbacksCopy returns a copy of all callbacks (with lock)
-func (s *TableDetector) getCallbacksCopy() []TableCallback {
-	s.Lock()
-	defer s.Unlock()
-	return s.getCallbacksCopyLocked()
-}
-
-// getCallbacksCopyLocked returns a copy of all callbacks without locking (caller must hold lock)
-func (s *TableDetector) getCallbacksCopyLocked() []TableCallback {
-	callbacks := make([]TableCallback, 0, len(s.Callbacks))
-	for _, cb := range s.Callbacks {
-		callbacks = append(callbacks, cb)
-	}
-	return callbacks
-}
-
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
 	s.Lock()
 	defer s.Unlock()
