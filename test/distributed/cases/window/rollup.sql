@@ -419,7 +419,6 @@ group by
 order by total_sales desc;
 
 -- alias
--- @bvt:issue#19998
 select
     if(grouping(year), 'All years', year) as year,
     if(grouping(quarter), 'Quarter', quarter) as quarter,
@@ -432,7 +431,6 @@ group by
     quarter,
     region with rollup
 order by total_sales desc;
--- @bvt:issue
 drop table sales;
 
 
