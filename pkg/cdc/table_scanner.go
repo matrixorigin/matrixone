@@ -61,6 +61,8 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			CallBackTableName:    make(map[string][]string),
 			SubscribedTableNames: make(map[string][]string),
 			cdcStateManager:      NewCDCStateManager(),
+			CallbackWaitGroups:   make(map[string]*sync.WaitGroup),
+			CallbackCancels:      make(map[string]chan struct{}),
 		}
 		detector.scanTableFn = detector.scanTable
 	})
@@ -178,6 +180,11 @@ type TableDetector struct {
 
 	// fastScan enables fast scanning for tests (1ms ticker instead of 15s)
 	fastScan bool
+
+	// CallbackWaitGroups tracks goroutines executing each task's callbacks
+	CallbackWaitGroups map[string]*sync.WaitGroup
+	// CallbackCancels provides fast cancellation for pending callbacks
+	CallbackCancels map[string]chan struct{}
 }
 
 // SetFastScan enables or disables fast scan mode (for testing)
@@ -307,6 +314,11 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 		go s.scanTableLoop(ctx)
 	}
 	s.Callbacks[id] = cb
+
+	// Create WaitGroup and cancel channel for this task
+	s.CallbackWaitGroups[id] = &sync.WaitGroup{}
+	s.CallbackCancels[id] = make(chan struct{})
+
 	logutil.Info(
 		"CDC-TableDetector-Register",
 		zap.String("task-id", id),
@@ -316,7 +328,10 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 
 func (s *TableDetector) UnRegister(id string) {
 	s.Lock()
-	defer s.Unlock()
+
+	// Get WaitGroup and cancel channel before removing from maps
+	wg := s.CallbackWaitGroups[id]
+	cancel := s.CallbackCancels[id]
 
 	if accountID, ok := s.CallBackAccountId[id]; ok {
 		if tasks, ok := s.SubscribedAccountIds[accountID]; ok {
@@ -359,9 +374,24 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	delete(s.Callbacks, id)
+	delete(s.CallbackWaitGroups, id)
+	delete(s.CallbackCancels, id)
+
 	if len(s.Callbacks) == 0 {
 		s.cancel()
 		s.cancel = nil
+	}
+
+	s.Unlock()
+
+	// Send cancel signal to pending callbacks (outside of lock)
+	if cancel != nil {
+		close(cancel)
+	}
+
+	// Wait for all goroutines executing this task's callback to finish
+	if wg != nil {
+		wg.Wait()
 	}
 
 	logutil.Info(
@@ -423,16 +453,62 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
-	callbacks := s.getCallbacksCopy()
+	// Step 1: Atomically get callbacks and increment WaitGroup counters
+	s.Lock()
+	type callbackInfo struct {
+		id     string
+		cb     TableCallback
+		wg     *sync.WaitGroup
+		cancel chan struct{}
+	}
+	callbackInfos := make([]callbackInfo, 0, len(s.Callbacks))
 
-	var err error
-	for _, cb := range callbacks {
-		err = cb(tables)
+	for id, cb := range s.Callbacks {
+		wg := s.CallbackWaitGroups[id]
+		cancel := s.CallbackCancels[id]
+		if wg != nil {
+			wg.Add(1) // Increment counter while holding lock
+			callbackInfos = append(callbackInfos, callbackInfo{
+				id:     id,
+				cb:     cb,
+				wg:     wg,
+				cancel: cancel,
+			})
+		}
+	}
+	s.Unlock()
+
+	// Step 2: Execute callbacks (without holding lock)
+	var lastErr error
+	executedCount := 0
+	for _, info := range callbackInfos {
+		// Check if this callback has been cancelled
+		select {
+		case <-info.cancel:
+			info.wg.Done()
+			logutil.Info(
+				"CDC-Scanner-Callback-Skipped",
+				zap.String("task-id", info.id),
+			)
+			continue // Skip cancelled callback
+		default:
+		}
+
+		// Execute callback
+		err := info.cb(tables)
+		info.wg.Done() // Decrement counter after execution
+
+		if err != nil {
+			lastErr = err
+			logutil.Warn("CDC-Scanner-Callback-Failed", zap.Error(err))
+		} else {
+			executedCount++
+		}
 	}
 
-	if err != nil {
-		logutil.Warn("CDC-Scanner-Callback-Failed", zap.Error(err))
-	} else {
+	if lastErr != nil {
+		logutil.Warn("CDC-Scanner-Callback-Failed", zap.Error(lastErr))
+	} else if executedCount > 0 {
 		logutil.Info("CDC-Scanner-Callback-Success")
 		s.clearLastMp()
 	}

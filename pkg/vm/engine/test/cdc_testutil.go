@@ -777,6 +777,8 @@ func StubCDCSinkAndWatermarkUpdater(
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
+		CallbackWaitGroups:   make(map[string]*sync.WaitGroup),
+		CallbackCancels:      make(map[string]chan struct{}),
 	}
 	testTableDetector.SetExec(sqlExecutor)
 	testTableDetector.SetCDCStateManager(cdc.NewCDCStateManager())
