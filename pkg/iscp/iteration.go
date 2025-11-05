@@ -17,6 +17,7 @@ package iscp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -44,6 +45,11 @@ type DataRetrieverConsumer interface {
 	Close()
 }
 
+func (iterCtx *IterationContext) String() string {
+	return fmt.Sprintf("%d-%d-%v, %v->%v, lsn=%v, ids=%v",
+		iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.fromTS.ToString(), iterCtx.toTS.ToString(), iterCtx.lsn, iterCtx.jobIDs)
+}
+
 func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
@@ -56,6 +62,7 @@ func ExecuteIteration(
 	defer packer.Close()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithoutTimeout := ctx
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
 
@@ -78,7 +85,7 @@ func ExecuteIteration(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, err := GetJobSpecs(
+	jobSpecs, prevStatus, err := GetJobSpecs(
 		ctx,
 		cnUUID,
 		cnTxnClient,
@@ -95,18 +102,85 @@ func ExecuteIteration(
 	if err != nil {
 		return
 	}
+	preLSN := make([]uint64, len(iterCtx.jobNames))
+	for i := range iterCtx.jobNames {
+		preLSN[i] = iterCtx.lsn[i] - 1
+	}
+
+	var needInit bool
+	for i := range prevStatus {
+		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
+			if len(iterCtx.jobNames) != 1 {
+				errMsg := "init sql is not supported for multiple jobs"
+				FlushPermanentErrorMessage(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					types.MaxTs(),
+					errMsg,
+					preLSN,
+				)
+			}
+			needInit = true
+			break
+		}
+	}
+	if needInit {
+		ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+		err = ProcessInitSQL(ctxWithAccount, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL)
+		if err != nil {
+			return
+		}
+		statuses[0] = prevStatus[0]
+		statuses[0].Stage = JobStage_Running
+		err = retry(
+			ctx,
+			func() error {
+				return FlushJobStatusOnIterationState(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					iterCtx.fromTS,
+					ISCPJobState_Completed,
+					preLSN,
+				)
+			},
+			SubmitRetryTimes,
+			DefaultRetryInterval,
+			SubmitRetryDuration,
+		)
+		if err != nil {
+			return
+		}
+		return nil
+	}
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
 	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
-	db, err := cnEngine.Database(ctx, dbName, txnOp)
+	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
 	if err != nil {
 		return
 	}
-	rel, err := db.Relation(ctx, tableName, nil)
+	rel, err := db.Relation(ctxWithAccount, tableName, nil)
 	if err != nil {
 		return
 	}
-	tableDef := rel.CopyTableDef(ctx)
-	if rel.GetTableID(ctx) != iterCtx.tableID {
+	tableDef := rel.CopyTableDef(ctxWithAccount)
+	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
 		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
 
@@ -117,21 +191,24 @@ func ExecuteIteration(
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
 	for i := range iterCtx.jobNames {
 		statuses[i] = &JobStatus{
-			From: iterCtx.fromTS,
-			To:   iterCtx.toTS,
+			From:  iterCtx.fromTS,
+			To:    iterCtx.toTS,
+			Stage: prevStatus[i].Stage,
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
 	if err != nil {
 		return
 	}
 	if changes != nil {
 		defer changes.Close()
 	}
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
+	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iteration:") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
@@ -151,7 +228,7 @@ func ExecuteIteration(
 			DBName:    dbName,
 			TableName: tableName,
 		}
-		consumers[i], err = NewConsumer(cnUUID, rel.CopyTableDef(ctx), jobID, &jobSpecs[i].ConsumerInfo)
+		consumers[i], err = NewConsumer(cnUUID, cnEngine, cnTxnClient, rel.CopyTableDef(ctx), jobID, &jobSpecs[i].ConsumerInfo)
 		if err != nil {
 			return
 		}
@@ -182,7 +259,7 @@ func ExecuteIteration(
 			continue
 		}
 		dataRetrievers[i] = NewDataRetriever(
-			ctx,
+			ctxWithoutTimeout,
 			iterCtx.accountID,
 			iterCtx.tableID,
 			iterCtx.jobNames[i],
@@ -207,15 +284,20 @@ func ExecuteIteration(
 		statuses,
 		iterCtx.fromTS,
 		ISCPJobState_Running,
+		preLSN,
 	)
 	if err != nil {
 		return
 	}
 
-	ctxWithCancel, cancel := context.WithCancel(ctx)
+	ctxWithCancel, cancel := context.WithCancel(ctxWithoutTimeout)
 	changeHandelWg := sync.WaitGroup{}
 	changeHandelWg.Add(1)
 	go func() {
+		var dataLength int
+		defer func() {
+			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
+		}()
 		defer cancel()
 		defer changeHandelWg.Done()
 		for {
@@ -226,6 +308,10 @@ func ExecuteIteration(
 			}
 			var data *ISCPData
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+			if insertData != nil {
+				dataLength += insertData.RowCount()
+			}
+			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
@@ -254,22 +340,27 @@ func ExecuteIteration(
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
 						if typ != ISCPDataType_Snapshot {
-							panic("logic error")
+							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be snapshot", typ))
+							data = NewISCPData(true, nil, nil, err)
+						} else {
+							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+							data = NewISCPData(false, insertAtmBatch, nil, nil)
 						}
-						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						data = NewISCPData(false, insertAtmBatch, nil, nil)
 					case engine.ChangesHandle_Tail_wip:
-						panic("logic error")
+						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
+						data = NewISCPData(true, nil, nil, err)
 					case engine.ChangesHandle_Tail_done:
 						if typ != ISCPDataType_Tail {
-							panic("logic error")
+							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be tail", typ))
+							data = NewISCPData(true, nil, nil, err)
+						} else {
+							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+							deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
+							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+							deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+							data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
 						}
-						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-						data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
 
 					}
 				}
@@ -327,29 +418,34 @@ func ExecuteIteration(
 			if status.ErrorCode == 0 {
 				watermark = status.To
 			}
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				err = FlushJobStatusOnIterationState(
-					ctx,
-					cnUUID,
-					cnEngine,
-					cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					[]string{iterCtx.jobNames[i]},
-					[]uint64{iterCtx.jobIDs[i]},
-					[]uint64{iterCtx.lsn[i]},
-					[]*JobStatus{status},
-					watermark,
-					state,
+			err = retry(
+				ctx,
+				func() error {
+					return FlushJobStatusOnIterationState(
+						ctx,
+						cnUUID,
+						cnEngine,
+						cnTxnClient,
+						iterCtx.accountID,
+						iterCtx.tableID,
+						[]string{iterCtx.jobNames[i]},
+						[]uint64{iterCtx.jobIDs[i]},
+						[]uint64{iterCtx.lsn[i]},
+						[]*JobStatus{status},
+						watermark,
+						state,
+						iterCtx.lsn,
+					)
+				},
+				SubmitRetryTimes,
+				DefaultRetryInterval,
+				SubmitRetryDuration,
+			)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task iteration flush job status failed",
+					zap.Error(err),
 				)
-				if err == nil {
-					break
-				}
 			}
 		}
 	}
@@ -370,6 +466,7 @@ var FlushJobStatusOnIterationState = func(
 	jobStatuses []*JobStatus,
 	watermark types.TS,
 	state int8,
+	prevLSN []uint64,
 ) (err error) {
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -409,6 +506,7 @@ var FlushJobStatusOnIterationState = func(
 			jobStatuses[i],
 			watermark,
 			state,
+			prevLSN[i],
 		)
 		if err != nil {
 			return
@@ -428,6 +526,7 @@ func FlushStatus(
 	jobStatus *JobStatus,
 	watermark types.TS,
 	state int8,
+	prevLSN uint64,
 ) (err error) {
 	statusJson, err := MarshalJobStatus(jobStatus)
 	if err != nil {
@@ -441,6 +540,7 @@ func FlushStatus(
 		watermark,
 		statusJson,
 		state,
+		prevLSN,
 	)
 	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -463,9 +563,9 @@ var GetJobSpecs = func(
 	watermark types.TS,
 	jobStatuses []*JobStatus,
 	jobIDs []uint64,
-) (jobSpec []*JobSpec, err error) {
+) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_spec FROM mo_catalog.mo_iscp_log WHERE")
+	buf.WriteString("SELECT job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -478,8 +578,13 @@ var GetJobSpecs = func(
 	if err != nil {
 		return
 	}
+	prevLSNs := make([]uint64, len(jobName))
+	for i := range jobName {
+		prevLSNs[i] = lsns[i] - 1
+	}
 	defer execResult.Close()
 	jobSpec = make([]*JobSpec, len(jobName))
+	prevStatus = make([]*JobStatus, len(jobName))
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows != len(jobName) {
 			errMsg := fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName))
@@ -494,12 +599,17 @@ var GetJobSpecs = func(
 				jobIDs,
 				lsns,
 				jobStatuses,
-				watermark,
+				types.MaxTs(),
 				errMsg,
+				prevLSNs,
 			)
 		}
 		for i := 0; i < rows; i++ {
-			jobSpec[i], err = UnmarshalJobSpec(cols[0].GetBytesAt(i))
+			jobSpec[i], err = UnmarshalJobSpec([]byte(cols[0].GetStringAt(i)))
+			if err != nil {
+				return false
+			}
+			prevStatus[i], err = UnmarshalJobStatus([]byte(cols[1].GetStringAt(i)))
 			if err != nil {
 				return false
 			}
@@ -522,6 +632,7 @@ func FlushPermanentErrorMessage(
 	jobStatuses []*JobStatus,
 	watermark types.TS,
 	errMsg string,
+	prevLSN []uint64,
 ) (err error) {
 	logutil.Error(
 		"ISCP-Task Flush Permanent Error Message",
@@ -546,6 +657,7 @@ func FlushPermanentErrorMessage(
 		jobStatuses,
 		watermark,
 		ISCPJobState_Error,
+		prevLSN,
 	)
 }
 
@@ -580,4 +692,38 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 		fromTS:    fromTS,
 		toTS:      toTS,
 	}
+}
+
+func ProcessInitSQL(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	sql string,
+) (err error) {
+	decoded, err := base64.StdEncoding.DecodeString(sql)
+	if err != nil {
+		return
+	}
+	sql = string(decoded)
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"iscp process init sql",
+		0)
+	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(ctx)
+	}
+	err = cnEngine.New(ctx, txnOp)
+	if err != nil {
+		return
+	}
+	result, err := ExecWithResult(ctx, sql, cnUUID, txnOp)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	return
 }

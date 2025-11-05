@@ -23,20 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
 // give blob
 func mock_runSql(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 ) (executor.Result, error) {
 	return executor.Result{}, nil
 }
 
 func mock_runSql_parser_error(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 ) (executor.Result, error) {
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
@@ -51,6 +51,7 @@ func TestIvfSearchRace(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 
@@ -59,7 +60,7 @@ func TestIvfSearchRace(t *testing.T) {
 
 	idx := &IvfflatSearchIndex[float32]{}
 
-	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
 	require.Nil(t, err)
 
 }
@@ -73,6 +74,7 @@ func TestIvfSearchParserError(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 
@@ -81,6 +83,6 @@ func TestIvfSearchParserError(t *testing.T) {
 
 	idx := &IvfflatSearchIndex[float32]{}
 
-	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
 	require.NotNil(t, err)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
 
@@ -36,6 +37,7 @@ const MaxIndexCapacity = 100000
 func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 32
 	nthread := 8
@@ -55,7 +57,7 @@ func TestBuildMulti(t *testing.T) {
 		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild[float32](proc, uid, 1, idxcfg, tblcfg)
+	build, err := NewHnswBuild[float32](sqlproc, uid, 1, idxcfg, tblcfg)
 
 	require.Nil(t, err)
 	defer build.Destroy()
@@ -202,6 +204,7 @@ func TestBuildSingleThreadF64(t *testing.T) {
 func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 32
 	nthread := 2
@@ -228,7 +231,7 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild[T](proc, uid, 1, idxcfg, tblcfg)
+	build, err := NewHnswBuild[T](sqlproc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
