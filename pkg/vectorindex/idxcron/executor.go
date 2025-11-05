@@ -39,8 +39,8 @@ import (
 +----------------+---------------------+------+------+---------+-------+---------+
 */
 const (
-	Type_I64    = "I64"
-	Type_F64    = "F64"
+	Type_I64    = "I"
+	Type_F64    = "F"
 	Type_String = "S"
 
 	Action_Ivfflat_Reindex      = "ivfflat_reindex"
@@ -219,11 +219,11 @@ func getResolveVariableFuncFromMetadata(metadata []byte) func(string, bool, bool
 		}
 
 		switch string(typebj.GetString()) {
-		case "I64":
+		case Type_I64:
 			return valbj.GetInt64(), nil
-		case "F64":
+		case Type_F64:
 			return valbj.GetFloat64(), nil
-		case "S":
+		case Type_String:
 			return string(valbj.GetString()), nil
 		}
 		return nil, moerr.NewInternalErrorNoCtx("invalid configuration type")

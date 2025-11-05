@@ -8,11 +8,11 @@ import (
 )
 
 func TestResolveVariableFunc(t *testing.T) {
-	jstr := `{"cfg":{"kmeans_train_percent":{"t":"I64", "v":10}, 
-	"kmeans_max_iteration":{"t":"I64", "v":4}, 
-	"ivf_threads_build":{"t":"I64", "v":23},
+	jstr := `{"cfg":{"kmeans_train_percent":{"t":"I", "v":10}, 
+	"kmeans_max_iteration":{"t":"I", "v":4}, 
+	"ivf_threads_build":{"t":"I", "v":23},
 	"action":{"t":"S", "v":"action string"},
-	"float":{"t":"F64", "v":23.3}
+	"float":{"t":"F", "v":23.3}
 	}, "action": "xxx"}`
 	bj, err := bytejson.ParseFromString(jstr)
 	require.Nil(t, err)
