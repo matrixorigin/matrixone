@@ -16,6 +16,9 @@ type Metadata struct {
 }
 
 func NewMetadata(data []byte) (*Metadata, error) {
+	if data == nil {
+		return nil, moerr.NewInternalErrorNoCtx("metadata is null")
+	}
 
 	var bj bytejson.ByteJson
 	if err := bj.Unmarshal(data); err != nil {
