@@ -59,6 +59,19 @@ make dev-config
 - `DISABLE_TRACE` - true, false (default: true)
 - `DISABLE_METRIC` - true, false (default: true)
 
+**Service-Specific Configuration:**
+Use service prefixes to override settings for specific services:
+- `CN1_*` - CN1 only (e.g., `CN1_MEMORY_CACHE=2GB`)
+- `CN2_*` - CN2 only (e.g., `CN2_MEMORY_CACHE=2GB`)
+- `PROXY_*` - Proxy only (e.g., `PROXY_LOG_LEVEL=debug`)
+- `LOG_*` - Log service only (e.g., `LOG_LOG_LEVEL=debug`)
+- `TN_*` - Transaction Node only (e.g., `TN_MEMORY_CACHE=4GB`)
+
+**Configuration Priority:**
+1. Service-specific (highest priority)
+2. Common configuration
+3. Default values
+
 ### Method 1: Use Makefile Commands (Recommended - Simplest)
 
 Run from the **project root directory**:
@@ -442,13 +455,13 @@ All containers share local disk storage:
 
 ## Advanced Configuration Examples
 
-### Example 1: Debug Logging with JSON Format
+### Example 1: Increase Memory Cache for CNs Only
 
 ```bash
-# Create config
+# Only increase cache for CN1 and CN2, keep others default
 cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
-LOG_LEVEL=debug
-LOG_FORMAT=json
+CN1_MEMORY_CACHE=2GB
+CN2_MEMORY_CACHE=2GB
 EOF
 
 # Apply and restart
@@ -456,10 +469,54 @@ make dev-config
 make dev-restart
 ```
 
-### Example 2: High Performance Setup
+### Example 2: Debug Logging for Proxy Only
 
 ```bash
-# Create config with larger caches
+# Enable debug logging only for proxy, others stay at info
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+PROXY_LOG_LEVEL=debug
+PROXY_LOG_FORMAT=json
+EOF
+
+# Apply
+make dev-config
+make dev-restart
+```
+
+### Example 3: Different Cache Sizes Per Service
+
+```bash
+# Different cache sizes for each service
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+CN1_MEMORY_CACHE=4GB
+CN2_MEMORY_CACHE=2GB
+TN_MEMORY_CACHE=1GB
+EOF
+
+# Apply
+make dev-down
+make dev-up
+```
+
+### Example 4: Mixed - Common + Service-Specific
+
+```bash
+# Common log level for all, but debug for proxy
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+LOG_LEVEL=info              # Default for all services
+PROXY_LOG_LEVEL=debug        # Override for proxy only
+CN1_MEMORY_CACHE=2GB         # Override for CN1 only
+EOF
+
+# Apply
+make dev-config
+make dev-restart
+```
+
+### Example 5: High Performance Setup (All Services)
+
+```bash
+# Increase cache for all services
 cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
 MEMORY_CACHE=4GB
 DISK_CACHE=50GB
@@ -471,31 +528,15 @@ make dev-down
 make dev-up
 ```
 
-### Example 3: Enable Monitoring
-
-```bash
-# Create config
-cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
-DISABLE_TRACE=false
-DISABLE_METRIC=false
-LOG_LEVEL=info
-LOG_FORMAT=json
-EOF
-
-# Apply
-make dev-config
-make dev-restart
-```
-
 ### Quick Config Changes
 
 ```bash
-# One-liner: change log level to debug
-echo "LOG_LEVEL=debug" > etc/docker-multi-cn-local-disk/config.env
+# One-liner: increase CN1 memory cache only
+echo "CN1_MEMORY_CACHE=2GB" > etc/docker-multi-cn-local-disk/config.env
 make dev-config && make dev-restart
 
 # View current configs
-cat etc/docker-multi-cn-local-disk/cn1.toml | grep -A3 "\[log\]"
+cat etc/docker-multi-cn-local-disk/cn1.toml | grep -A3 "\[fileservice.cache\]"
 ```
 
 ## Common Commands

@@ -161,14 +161,32 @@ make dev-restart
 
 ### Common Configurations
 
-**Debug Logging:**
+**Debug Logging (All Services):**
 ```bash
 echo "LOG_LEVEL=debug" > etc/docker-multi-cn-local-disk/config.env
 echo "LOG_FORMAT=json" >> etc/docker-multi-cn-local-disk/config.env
 make dev-config && make dev-restart
 ```
 
-**High Performance:**
+**Increase Memory Cache for CNs Only:**
+```bash
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+CN1_MEMORY_CACHE=2GB
+CN2_MEMORY_CACHE=2GB
+EOF
+make dev-config && make dev-restart
+```
+
+**Debug Logging for Proxy Only:**
+```bash
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+PROXY_LOG_LEVEL=debug
+PROXY_LOG_FORMAT=json
+EOF
+make dev-config && make dev-restart
+```
+
+**High Performance (All Services):**
 ```bash
 cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
 MEMORY_CACHE=4GB
@@ -178,7 +196,7 @@ EOF
 make dev-down && make dev-up
 ```
 
-**Enable Monitoring:**
+**Enable Monitoring (All Services):**
 ```bash
 cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
 DISABLE_TRACE=false
@@ -189,6 +207,8 @@ make dev-config && make dev-restart
 
 ### Available Options
 
+**Common Options (apply to all services):**
+
 | Variable | Default | Description | Examples |
 |----------|---------|-------------|----------|
 | `LOG_LEVEL` | info | Log verbosity | debug, info, warn, error, fatal |
@@ -197,7 +217,30 @@ make dev-config && make dev-restart
 | `MEMORY_CACHE` | 512MB | FileService memory cache | 512MB, 2GB, 4GB |
 | `DISK_CACHE` | 8GB | FileService disk cache | 8GB, 20GB, 50GB |
 | `DISABLE_TRACE` | true | Disable tracing | true, false |
-| `DISABLE_METRIC` | false | Disable metrics | true, false |
+| `DISABLE_METRIC` | true | Disable metrics | true, false |
+
+**Service-Specific Options (override for specific service):**
+
+Use service prefix to override for specific services:
+- `CN1_*` - CN1 only (e.g., `CN1_MEMORY_CACHE=2GB`)
+- `CN2_*` - CN2 only (e.g., `CN2_MEMORY_CACHE=2GB`)
+- `PROXY_*` - Proxy only (e.g., `PROXY_LOG_LEVEL=debug`)
+- `LOG_*` - Log service only (e.g., `LOG_LOG_LEVEL=debug`)
+- `TN_*` - Transaction Node only (e.g., `TN_MEMORY_CACHE=4GB`)
+
+**Examples:**
+```bash
+# Only CN1 gets larger cache
+CN1_MEMORY_CACHE=2GB
+
+# Only proxy gets debug logging
+PROXY_LOG_LEVEL=debug
+
+# Different cache for each service
+CN1_MEMORY_CACHE=4GB
+CN2_MEMORY_CACHE=2GB
+TN_MEMORY_CACHE=1GB
+```
 
 ## 🐛 Troubleshooting
 
