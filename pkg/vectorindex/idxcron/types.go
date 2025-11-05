@@ -1,9 +1,6 @@
 package idxcron
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
@@ -70,42 +67,27 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 	return nil, moerr.NewInternalErrorNoCtx("invalid configuration type")
 }
 
+type ConfigValue struct {
+	T string `json:"t"`
+	V any    `json:"v"`
+}
+
 type MetadataWriter struct {
-	data map[string]any
+	Cfg map[string]ConfigValue `json:"cfg"`
 }
 
 func NewMetadataWriter() *MetadataWriter {
-	return &MetadataWriter{data: make(map[string]any)}
+	return &MetadataWriter{Cfg: make(map[string]ConfigValue)}
 }
 
 func (w *MetadataWriter) AddInt(key string, value int64) {
-	w.data[key] = value
+	w.Cfg[key] = ConfigValue{T: Type_I64, V: value}
 }
 
 func (w *MetadataWriter) AddString(key string, value string) {
-	w.data[key] = value
+	w.Cfg[key] = ConfigValue{T: Type_String, V: value}
 }
 
 func (w *MetadataWriter) AddFloat(key string, value float64) {
-	w.data[key] = value
-}
-
-func (w *MetadataWriter) Marshal() string {
-	values := make([]string, 0, len(w.data))
-	for key, value := range w.data {
-		var s string
-		switch value.(type) {
-		case int64:
-			s = fmt.Sprintf(`"%s":{"t":"%s","v":%d}`, key, Type_I64, value)
-		case string:
-			s = fmt.Sprintf(`"%s":{"t":"%s","v":"%s"}`, key, Type_String, value)
-		case float64:
-			s = fmt.Sprintf(`"%s":{"t":"%s","v":%f}`, key, Type_F64, value)
-		}
-		values = append(values, s)
-	}
-
-	cfg := strings.Join(values, ",")
-	js := fmt.Sprintf(`{"cfg":{%s}}`, cfg)
-	return js
+	w.Cfg[key] = ConfigValue{T: Type_F64, V: value}
 }
