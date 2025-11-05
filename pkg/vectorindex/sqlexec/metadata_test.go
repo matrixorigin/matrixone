@@ -1,4 +1,4 @@
-package idxcron
+package sqlexec
 
 import (
 	"fmt"
