@@ -35,6 +35,21 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// Reader lifecycle constants
+const (
+	DefaultFrequency     = 200 * time.Millisecond
+	RetryableErrorPrefix = "retryable error:"
+)
+
+// WatermarkUpdater manages CDC watermarks
+type WatermarkUpdater interface {
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string) (err error)
+	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
+	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
+	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
+}
+
 const (
 	CDCSourceUriPrefix = "mysql://"
 	CDCSinkUriPrefix   = "mysql://"
