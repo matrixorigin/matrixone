@@ -12,10 +12,13 @@ y.go
 **/cover.out
 .vscode
 .env
+config.env
 *.iml
 tags
 coverage.txt
 out.txt
+logs/
+sdk_demo/
 vendor/
 gen_config
 main
@@ -53,6 +56,10 @@ test/distributed/resources/json/export_*.csv
 # docker compose bvt generate files
 docker-compose-log/
 
-# python 
+# docker-multi-cn-local-disk generated configuration files
+etc/docker-multi-cn-local-disk/*.toml
+!etc/docker-multi-cn-local-disk/launch.toml
+
+# python
 **/__pycache__/
 *.pyc
