@@ -1,6 +1,7 @@
 package idxcron
 
 import (
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
@@ -100,4 +101,8 @@ func (w *MetadataWriter) AddString(key string, value string) {
 
 func (w *MetadataWriter) AddFloat(key string, value float64) {
 	w.Cfg[key] = ConfigValue{T: Type_F64, V: value}
+}
+
+func (w *MetadataWriter) Marshal() ([]byte, error) {
+	return sonic.Marshal(w)
 }

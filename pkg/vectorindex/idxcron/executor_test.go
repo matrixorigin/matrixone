@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +55,7 @@ func TestMetadataWriter(t *testing.T) {
 	writer.AddString("string_param", "hello")
 	writer.AddFloat("float_param", 44.56)
 
-	js, err := sonic.Marshal(writer)
+	js, err := writer.Marshal()
 	require.Nil(t, err)
 
 	fmt.Println(string(js))
