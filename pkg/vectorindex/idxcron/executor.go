@@ -180,7 +180,10 @@ func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient c
 		return moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
 	}
 
-	resolveVariableFunc := task.Metadata.ResolveVariableFunc
+	resolveVariableFunc := (func(string, bool, bool) (any, error))(nil)
+	if task.Metadata != nil {
+		resolveVariableFunc = task.Metadata.ResolveVariableFunc
+	}
 
 	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
