@@ -20,7 +20,8 @@ func TestResolveVariableFunc(t *testing.T) {
 	bytes, err := bj.Marshal()
 	require.Nil(t, err)
 
-	f := getResolveVariableFuncFromMetadata(bytes)
+	m := &Metadata{Data: bytes}
+	f := m.ResolveVariableFunc
 
 	v1, err := f("kmeans_train_percent", false, false)
 	require.Nil(t, err)

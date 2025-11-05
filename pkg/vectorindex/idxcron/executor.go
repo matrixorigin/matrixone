@@ -39,10 +39,6 @@ import (
 +----------------+---------------------+------+------+---------+-------+---------+
 */
 const (
-	Type_I64    = "I"
-	Type_F64    = "F"
-	Type_String = "S"
-
 	Action_Ivfflat_Reindex      = "ivfflat_reindex"
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
 	Action_Wildcard             = "*"
@@ -176,58 +172,8 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 }
 
 func getResolveVariableFuncFromMetadata(metadata []byte) func(string, bool, bool) (any, error) {
-
-	return func(varName string, isSystemVar, isGlobalVar bool) (any, error) {
-
-		if metadata == nil {
-			return nil, nil
-		}
-
-		var bj bytejson.ByteJson
-		if err := bj.Unmarshal(metadata); err != nil {
-			return nil, err
-		}
-
-		path, err := bytejson.ParseJsonPath("$.cfg." + varName)
-		if err != nil {
-			return nil, err
-		}
-
-		out := bj.QuerySimple([]*bytejson.Path{&path})
-		if out.IsNull() {
-			return nil, moerr.NewInternalErrorNoCtx("value is null")
-		}
-
-		typepath, err := bytejson.ParseJsonPath("$.t")
-		if err != nil {
-			return nil, err
-		}
-
-		typebj := out.QuerySimple([]*bytejson.Path{&typepath})
-		if typebj.IsNull() {
-			return nil, moerr.NewInternalErrorNoCtx("type is null")
-		}
-
-		valpath, err := bytejson.ParseJsonPath("$.v")
-		if err != nil {
-			return nil, err
-		}
-
-		valbj := out.QuerySimple([]*bytejson.Path{&valpath})
-		if valbj.IsNull() {
-			return nil, moerr.NewInternalErrorNoCtx("value is null")
-		}
-
-		switch string(typebj.GetString()) {
-		case Type_I64:
-			return valbj.GetInt64(), nil
-		case Type_F64:
-			return valbj.GetFloat64(), nil
-		case Type_String:
-			return string(valbj.GetString()), nil
-		}
-		return nil, moerr.NewInternalErrorNoCtx("invalid configuration type")
-	}
+	m := &Metadata{Data: metadata}
+	return m.ResolveVariableFunc
 }
 
 func getActionFromMetadata(metadata []byte) (string, error) {
