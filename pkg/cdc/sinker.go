@@ -1046,9 +1046,6 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 
 			// Log SQL snippet (first 500 chars)
 			sqlSnippet := string(sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
-			if len(sqlSnippet) > 500 {
-				sqlSnippet = sqlSnippet[:500] + "..."
-			}
 			logutil.Error("CDC-Sinker-SendSQL-Failed",
 				zap.String("sql", sqlSnippet),
 				zap.Error(err))
