@@ -141,12 +141,30 @@ elif [ -f "config.env" ]; then
     echo ""
 fi
 
+# Function to get file owner UID (cross-platform)
+get_owner_uid() {
+    local file="$1"
+    # Try Linux stat first
+    if stat -c '%u' "$file" 2>/dev/null; then
+        return 0
+    fi
+    # Try macOS/BSD stat
+    if stat -f '%u' "$file" 2>/dev/null; then
+        return 0
+    fi
+    # Fallback: assume not root
+    echo "1000"
+}
+
 # Pre-create directories with correct permissions (before docker creates them as root)
 if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " up " ]]; then
     echo "Pre-creating directories with correct permissions..."
     mkdir -p ../../mo-data ../../logs
     # Ensure they have the correct ownership (in case they exist but owned by root)
-    if [ "$(stat -c '%u' ../../mo-data 2>/dev/null || echo 0)" -eq 0 ] || [ "$(stat -c '%u' ../../logs 2>/dev/null || echo 0)" -eq 0 ]; then
+    mo_data_uid=$(get_owner_uid "../../mo-data")
+    logs_uid=$(get_owner_uid "../../logs")
+    
+    if [ "$mo_data_uid" -eq 0 ] || [ "$logs_uid" -eq 0 ]; then
         echo "Warning: Directories are owned by root. Attempting to fix..."
         echo "You may need to run: sudo chown -R $DOCKER_UID:$DOCKER_GID ../../mo-data ../../logs"
         if [ -w ../../mo-data ] && [ -w ../../logs ]; then
