@@ -13,7 +13,9 @@ const (
 )
 
 type Metadata struct {
-	Json bytejson.ByteJson
+	bj       bytejson.ByteJson
+	typepath bytejson.Path
+	valpath  bytejson.Path
 }
 
 func NewMetadata(data []byte) (*Metadata, error) {
@@ -26,16 +28,26 @@ func NewMetadata(data []byte) (*Metadata, error) {
 		return nil, err
 	}
 
-	return &Metadata{Json: bj}, nil
+	typepath, err := bytejson.ParseJsonPath("$.t")
+	if err != nil {
+		return nil, err
+	}
+
+	valpath, err := bytejson.ParseJsonPath("$.v")
+	if err != nil {
+		return nil, err
+	}
+
+	return &Metadata{bj: bj, typepath: typepath, valpath: valpath}, nil
 }
 
 func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar bool) (any, error) {
 
-	if m.Json.IsNull() {
+	if m.bj.IsNull() {
 		return nil, nil
 	}
 
-	bj := m.Json
+	bj := m.bj
 
 	path, err := bytejson.ParseJsonPath("$.cfg." + varName)
 	if err != nil {
@@ -47,22 +59,12 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 		return nil, moerr.NewInternalErrorNoCtx("value is null")
 	}
 
-	typepath, err := bytejson.ParseJsonPath("$.t")
-	if err != nil {
-		return nil, err
-	}
-
-	typebj := out.QuerySimple([]*bytejson.Path{&typepath})
+	typebj := out.QuerySimple([]*bytejson.Path{&m.typepath})
 	if typebj.IsNull() {
 		return nil, moerr.NewInternalErrorNoCtx("type is null")
 	}
 
-	valpath, err := bytejson.ParseJsonPath("$.v")
-	if err != nil {
-		return nil, err
-	}
-
-	valbj := out.QuerySimple([]*bytejson.Path{&valpath})
+	valbj := out.QuerySimple([]*bytejson.Path{&m.valpath})
 	if valbj.IsNull() {
 		return nil, moerr.NewInternalErrorNoCtx("value is null")
 	}
