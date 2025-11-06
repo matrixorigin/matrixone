@@ -986,10 +986,6 @@ func (c *checkpointCleaner) GetPITRsLocked(ctx context.Context) (*logtail.PitrIn
 	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs, c.mp)
 }
 
-func (c *checkpointCleaner) GetCDCsLocked(ctx context.Context) (map[uint64]types.TS, error) {
-	return c.mutation.snapshotMeta.GetCDC(ctx, c.sid, c.fs, c.mp)
-}
-
 func (c *checkpointCleaner) CDCTables() (map[uint64]types.TS, error) {
 	return c.mutation.snapshotMeta.GetCDC(c.ctx, c.sid, c.fs, c.mp)
 }
