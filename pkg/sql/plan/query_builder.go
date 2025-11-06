@@ -3124,6 +3124,16 @@ func (builder *QueryBuilder) bindSelectClause(
 			RefreshTsIdxInBat:  -1, //unsupport now
 		}
 
+		// If table is partitioned, attach partition column index for correct pruning
+		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
+			if colName := getPartitionColNameFromExpr(tableDef.Partition.PartitionDefs[0].Def); colName != "" {
+				if pos, ok := tableDef.Name2ColIndex[colName]; ok {
+					lockTarget.HasPartitionCol = true
+					lockTarget.PartitionColIdxInBat = pos
+				}
+			}
+		}
+
 		lockNode = &Node{
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{nodeID},
@@ -5258,4 +5268,23 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 	}
 
 	return true
+}
+
+// getPartitionColNameFromExpr tries to extract the first column name from a partition expression
+// like "hash(col)". It recursively searches function arguments until it finds a column reference.
+func getPartitionColNameFromExpr(expr *plan.Expr) string {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			switch col := e.F.Args[i].Expr.(type) {
+			case *plan.Expr_Col:
+				return col.Col.Name
+			case *plan.Expr_F:
+				if name := getPartitionColNameFromExpr(e.F.Args[i]); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
 }

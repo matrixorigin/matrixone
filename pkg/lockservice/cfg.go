@@ -72,6 +72,9 @@ type Config struct {
 	// EnableRemoteLocalProxy enable remote local proxy. The proxy used to reduce remote shared
 	// lock and unlock request.
 	EnableRemoteLocalProxy bool `toml:"enable-remote-local-proxy"`
+
+	// for testing
+	BeforeLock func(txnID []byte, tableID uint64, rows [][]byte) `toml:"-"`
 }
 
 // Validate validate

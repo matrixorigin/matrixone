@@ -364,14 +364,15 @@ func (exec *txnExecutor) Exec(
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 
 		opt := plan.NewBaseOptimizer(compileContext)
-		optimized, err := opt.Optimize(stmt, prepared)
-		if err == nil {
+		optimized, e := opt.Optimize(stmt, prepared)
+		if e == nil {
 			pn = &plan.Plan{
 				Plan: &plan.Plan_Query{
 					Query: optimized,
 				},
 			}
 		}
+		err = e
 	default:
 		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
 	}
