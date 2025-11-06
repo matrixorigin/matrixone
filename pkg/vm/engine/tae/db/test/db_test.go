@@ -12717,8 +12717,8 @@ func TestCdcMeta(t *testing.T) {
 	// Add multiple CDC records for db1 with different watermarks
 	// Testing the "take minimum timestamp" logic at database level
 	appendCdcRecord(0, "task1", "db1", testSchema1.Name, db1_ts1.ToString(), "") // Earliest watermark for db1
-	appendCdcRecord(0, "task2", "db1", testSchema1.Name, db1_ts2.ToString(), "")    // Later watermark for db1
-	appendCdcRecord(0, "task3", "db1", "other_table1", db1_ts3.ToString(), "")    // Latest watermark for db1 (different table)
+	appendCdcRecord(0, "task2", "db1", testSchema1.Name, db1_ts2.ToString(), "") // Later watermark for db1
+	appendCdcRecord(0, "task3", "db1", "other_table1", db1_ts3.ToString(), "")   // Latest watermark for db1 (different table)
 
 	// Add CDC records for db2
 	appendCdcRecord(0, "task4", "db2", testSchema2.Name, db2_ts1.ToString(), "") // Earliest watermark for db2
@@ -12727,7 +12727,7 @@ func TestCdcMeta(t *testing.T) {
 	// Add CDC records for db3
 	appendCdcRecord(0, "task6", "db3", testSchema3.Name, db3_ts1.ToString(), "") // Earliest watermark for db3
 	appendCdcRecord(0, "task7", "db3", "other_table3", db3_ts2.ToString(), "")   // Later watermark for db3
-	appendCdcRecord(0, "task8", "db3", "another_table3", db3_ts3.ToString(), "")  // Latest watermark for db3
+	appendCdcRecord(0, "task8", "db3", "another_table3", db3_ts3.ToString(), "") // Latest watermark for db3
 
 	// Insert test data into the test tables
 	testBat1 := catalog.MockBatch(testSchema1, int(testSchema1.Extra.BlockMaxRows*5-1))
