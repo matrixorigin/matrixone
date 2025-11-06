@@ -12617,16 +12617,25 @@ func TestCdcMeta(t *testing.T) {
 	cdcSchema.Extra.BlockMaxRows = 2
 	cdcSchema.Extra.ObjectMaxBlocks = 2
 
-	// Create test table schema
-	testSchema := catalog.MockSchemaAll(13, 2)
-	testSchema.Extra.BlockMaxRows = 10
-	testSchema.Extra.ObjectMaxBlocks = 2
+	// Create test table schemas for multiple databases
+	testSchema1 := catalog.MockSchemaAll(13, 2)
+	testSchema1.Extra.BlockMaxRows = 10
+	testSchema1.Extra.ObjectMaxBlocks = 2
+
+	testSchema2 := catalog.MockSchemaAll(14, 3)
+	testSchema2.Extra.BlockMaxRows = 10
+	testSchema2.Extra.ObjectMaxBlocks = 2
+
+	testSchema3 := catalog.MockSchemaAll(15, 4)
+	testSchema3.Extra.BlockMaxRows = 10
+	testSchema3.Extra.ObjectMaxBlocks = 2
 
 	var cdcRel handle.Relation
-	var database, testDatabase handle.Database
+	var database handle.Database
+	var testDatabase1, testDatabase2, testDatabase3 handle.Database
 	var err error
 
-	// Setup database and relations
+	// Setup databases and relations
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err = txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
@@ -12636,10 +12645,20 @@ func TestCdcMeta(t *testing.T) {
 		cdcRel, err = testutil.CreateRelation2(ctx, txn, database, cdcSchema)
 		assert.Nil(t, err)
 
-		// Create test database and table
-		testDatabase, err = testutil.CreateDatabase2(ctx, txn, "db")
+		// Create multiple test databases and tables
+		testDatabase1, err = testutil.CreateDatabase2(ctx, txn, "db1")
 		assert.Nil(t, err)
-		_, err = testutil.CreateRelation2(ctx, txn, testDatabase, testSchema)
+		_, err = testutil.CreateRelation2(ctx, txn, testDatabase1, testSchema1)
+		assert.Nil(t, err)
+
+		testDatabase2, err = testutil.CreateDatabase2(ctx, txn, "db2")
+		assert.Nil(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, testDatabase2, testSchema2)
+		assert.Nil(t, err)
+
+		testDatabase3, err = testutil.CreateDatabase2(ctx, txn, "db3")
+		assert.Nil(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, testDatabase3, testSchema3)
 		assert.Nil(t, err)
 
 		assert.Nil(t, txn.Commit(context.Background()))
@@ -12674,42 +12693,73 @@ func TestCdcMeta(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
-	// Get test database ID
-	testDBID := testDatabase.GetID()
+	// Get test database IDs
+	testDBID1 := testDatabase1.GetID()
+	testDBID2 := testDatabase2.GetID()
+	testDBID3 := testDatabase3.GetID()
 
 	now := time.Now()
-	// Create test timestamps using types.TS
-	ts1 := types.BuildTS(now.Add(-time.Duration(2)*time.Minute).UnixNano(), 0)       // Earlier watermark
-	ts2 := types.BuildTS(now.Add(-time.Duration(20)*time.Millisecond).UnixNano(), 0) // Later watermark
-	ts3 := types.BuildTS(now.Add(-time.Duration(10)*time.Millisecond).UnixNano(), 0) // Earliest watermark (should be selected)
-	ts4 := types.BuildTS(now.Add(-time.Duration(1)*time.Second).UnixNano(), 0)       // Other table
-	ts5 := types.BuildTS(now.Add(-time.Duration(50)*time.Millisecond).UnixNano(), 0) // Different account
+	// Create test timestamps using types.TS for different databases
+	// Database 1 watermarks
+	db1_ts1 := types.BuildTS(now.Add(-time.Duration(3)*time.Minute).UnixNano(), 0) // Earliest for db1
+	db1_ts2 := types.BuildTS(now.Add(-time.Duration(2)*time.Minute).UnixNano(), 0) // Later for db1
+	db1_ts3 := types.BuildTS(now.Add(-time.Duration(1)*time.Minute).UnixNano(), 0) // Latest for db1
 
-	// Add multiple CDC records with different watermarks for the same db/table
-	// Testing the "take minimum timestamp" logic
-	appendCdcRecord(0, "task1", "db", testSchema.Name, ts1.ToString(), "") // Earlier watermark
-	appendCdcRecord(0, "task2", "db", testSchema.Name, ts2.ToString(), "") // Later watermark
-	appendCdcRecord(0, "task3", "db", testSchema.Name, ts3.ToString(), "") // Earliest watermark (should be selected)
+	// Database 2 watermarks
+	db2_ts1 := types.BuildTS(now.Add(-time.Duration(5)*time.Minute).UnixNano(), 0) // Earliest for db2
+	db2_ts2 := types.BuildTS(now.Add(-time.Duration(4)*time.Minute).UnixNano(), 0) // Later for db2
 
-	// Add records for different tables in the same database
-	appendCdcRecord(0, "task4", "db", "other_table", ts4.ToString(), "")
+	// Database 3 watermarks
+	db3_ts1 := types.BuildTS(now.Add(-time.Duration(7)*time.Minute).UnixNano(), 0) // Earliest for db3
+	db3_ts2 := types.BuildTS(now.Add(-time.Duration(6)*time.Minute).UnixNano(), 0) // Later for db3
+	db3_ts3 := types.BuildTS(now.Add(-time.Duration(5)*time.Minute).UnixNano(), 0) // Latest for db3
 
-	// Add records for different account
-	appendCdcRecord(1, "task5", "db", testSchema.Name, ts5.ToString(), "")
+	// Add multiple CDC records for db1 with different watermarks
+	// Testing the "take minimum timestamp" logic at database level
+	appendCdcRecord(0, "task1", "db1", testSchema1.Name, db1_ts1.ToString(), "") // Earliest watermark for db1
+	appendCdcRecord(0, "task2", "db1", testSchema1.Name, db1_ts2.ToString(), "")    // Later watermark for db1
+	appendCdcRecord(0, "task3", "db1", "other_table1", db1_ts3.ToString(), "")    // Latest watermark for db1 (different table)
 
-	// Insert test data into the test table
-	testBat := catalog.MockBatch(testSchema, int(testSchema.Extra.BlockMaxRows*5-1))
-	defer testBat.Close()
-	testBats := testBat.Split(testBat.Length())
+	// Add CDC records for db2
+	appendCdcRecord(0, "task4", "db2", testSchema2.Name, db2_ts1.ToString(), "") // Earliest watermark for db2
+	appendCdcRecord(0, "task5", "db2", "other_table2", db2_ts2.ToString(), "")   // Later watermark for db2
+
+	// Add CDC records for db3
+	appendCdcRecord(0, "task6", "db3", testSchema3.Name, db3_ts1.ToString(), "") // Earliest watermark for db3
+	appendCdcRecord(0, "task7", "db3", "other_table3", db3_ts2.ToString(), "")   // Later watermark for db3
+	appendCdcRecord(0, "task8", "db3", "another_table3", db3_ts3.ToString(), "")  // Latest watermark for db3
+
+	// Insert test data into the test tables
+	testBat1 := catalog.MockBatch(testSchema1, int(testSchema1.Extra.BlockMaxRows*5-1))
+	defer testBat1.Close()
+	testBats1 := testBat1.Split(testBat1.Length())
+
+	testBat2 := catalog.MockBatch(testSchema2, int(testSchema2.Extra.BlockMaxRows*5-1))
+	defer testBat2.Close()
+	testBats2 := testBat2.Split(testBat2.Length())
+
+	testBat3 := catalog.MockBatch(testSchema3, int(testSchema3.Extra.BlockMaxRows*5-1))
+	defer testBat3.Close()
+	testBats3 := testBat3.Split(testBat3.Length())
 
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
 	defer pool.Release()
 
 	var wg sync.WaitGroup
-	for _, dataBatch := range testBats {
+	for _, dataBatch := range testBats1 {
 		wg.Add(1)
-		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema.Name, db, &wg))
+		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema1.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	for _, dataBatch := range testBats2 {
+		wg.Add(1)
+		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	for _, dataBatch := range testBats3 {
+		wg.Add(1)
+		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema3.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
@@ -12806,18 +12856,38 @@ func TestCdcMeta(t *testing.T) {
 	// Get CDC information
 	cdcWatermarks, err := db.DiskCleaner.GetCleaner().CDCTables()
 	assert.Nil(t, err)
-	assert.True(t, len(cdcWatermarks) > 0)
+	assert.True(t, len(cdcWatermarks) >= 3, "Should have watermarks for at least 3 databases")
 
-	// Verify that the minimum watermark is correctly selected for testDBID
-	cdcTS, exists := cdcWatermarks[testDBID]
-	assert.True(t, exists, "CDC watermark should exist for test database")
-	assert.False(t, cdcTS.IsEmpty())
+	// Verify that the minimum watermark is correctly selected for each database
+	// Database 1: minimum should be db1_ts1 (earliest among all tables in db1)
+	cdcTS1, exists1 := cdcWatermarks[testDBID1]
+	assert.True(t, exists1, "CDC watermark should exist for test database 1")
+	assert.False(t, cdcTS1.IsEmpty())
+	expectedMinTS1 := db1_ts1
+	assert.True(t, cdcTS1.EQ(&expectedMinTS1),
+		"Expected CDC timestamp for db1 to be the minimum watermark, got %s, expected %s",
+		cdcTS1.ToString(), expectedMinTS1.ToString())
 
-	// The minimum watermark should be from "task3" (ts3)
-	expectedMinTS := ts1
-	assert.True(t, cdcTS.EQ(&expectedMinTS),
-		"Expected CDC timestamp to be the minimum watermark, got %s, expected %s",
-		cdcTS.ToString(), expectedMinTS.ToString())
+	// Database 2: minimum should be db2_ts1 (earliest among all tables in db2)
+	cdcTS2, exists2 := cdcWatermarks[testDBID2]
+	assert.True(t, exists2, "CDC watermark should exist for test database 2")
+	assert.False(t, cdcTS2.IsEmpty())
+	expectedMinTS2 := db2_ts1
+	assert.True(t, cdcTS2.EQ(&expectedMinTS2),
+		"Expected CDC timestamp for db2 to be the minimum watermark, got %s, expected %s",
+		cdcTS2.ToString(), expectedMinTS2.ToString())
+
+	// Database 3: minimum should be db3_ts1 (earliest among all tables in db3)
+	cdcTS3, exists3 := cdcWatermarks[testDBID3]
+	assert.True(t, exists3, "CDC watermark should exist for test database 3")
+	assert.False(t, cdcTS3.IsEmpty())
+	expectedMinTS3 := db3_ts1
+	assert.True(t, cdcTS3.EQ(&expectedMinTS3),
+		"Expected CDC timestamp for db3 to be the minimum watermark, got %s, expected %s",
+		cdcTS3.ToString(), expectedMinTS3.ToString())
+
+	t.Logf("CDC watermarks verified: db1=%s, db2=%s, db3=%s",
+		cdcTS1.ToString(), cdcTS2.ToString(), cdcTS3.ToString())
 
 	// Restart and verify persistence
 	tae.Restart(ctx)
@@ -12841,8 +12911,13 @@ func TestCdcMeta(t *testing.T) {
 	db.BGCheckpointRunner.EnableCheckpoint(cfg)
 
 	// Test adding new CDC records after restart
-	ts6 := types.BuildTS(now.Add(-time.Duration(5)*time.Millisecond).UnixNano(), 0)
-	appendCdcRecord(0, "task6", "db", testSchema.Name, ts6.ToString(), "")
+	// Add a new record for db1 with a later timestamp (should not change the minimum)
+	db1_ts4 := types.BuildTS(now.Add(-time.Duration(30)*time.Second).UnixNano(), 0) // Later than db1_ts1
+	appendCdcRecord(0, "task9", "db1", "new_table1", db1_ts4.ToString(), "")
+
+	// Add a new record for db2 with an earlier timestamp (should update the minimum)
+	db2_ts3 := types.BuildTS(now.Add(-time.Duration(6)*time.Minute).UnixNano(), 0) // Earlier than db2_ts1
+	appendCdcRecord(0, "task10", "db2", "new_table2", db2_ts3.ToString(), "")
 
 	testutils.WaitExpect(10000, func() bool {
 		return testutil.AllCheckpointsFinished(db)
@@ -12852,16 +12927,39 @@ func TestCdcMeta(t *testing.T) {
 		return
 	}
 
-	// Verify new CDC record is picked up
+	// Verify new CDC records are picked up
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 
 	cdcWatermarks2, err := db.DiskCleaner.GetCleaner().CDCTables()
 	assert.Nil(t, err)
-	cdcTS2, exists2 := cdcWatermarks2[testDBID]
-	assert.True(t, exists2)
-	// The minimum should still be ts3 (not ts6, which is later)
-	assert.True(t, cdcTS2.EQ(&expectedMinTS),
-		"Expected CDC timestamp to still be the minimum watermark after restart, got %s, expected %s",
-		cdcTS2.ToString(), expectedMinTS.ToString())
+	assert.True(t, len(cdcWatermarks2) >= 3, "Should have watermarks for at least 3 databases after restart")
+
+	// Database 1: minimum should still be db1_ts1 (not db1_ts4, which is later)
+	cdcTS1_2, exists1_2 := cdcWatermarks2[testDBID1]
+	assert.True(t, exists1_2, "CDC watermark should exist for test database 1 after restart")
+	assert.False(t, cdcTS1_2.IsEmpty())
+	assert.True(t, cdcTS1_2.EQ(&expectedMinTS1),
+		"Expected CDC timestamp for db1 to still be the minimum watermark after restart, got %s, expected %s",
+		cdcTS1_2.ToString(), expectedMinTS1.ToString())
+
+	// Database 2: minimum should be updated to db2_ts3 (earlier than db2_ts1)
+	cdcTS2_2, exists2_2 := cdcWatermarks2[testDBID2]
+	assert.True(t, exists2_2, "CDC watermark should exist for test database 2 after restart")
+	assert.False(t, cdcTS2_2.IsEmpty())
+	expectedMinTS2_2 := db2_ts3
+	assert.True(t, cdcTS2_2.EQ(&expectedMinTS2_2),
+		"Expected CDC timestamp for db2 to be updated to the new minimum watermark after restart, got %s, expected %s",
+		cdcTS2_2.ToString(), expectedMinTS2_2.ToString())
+
+	// Database 3: minimum should still be db3_ts1
+	cdcTS3_2, exists3_2 := cdcWatermarks2[testDBID3]
+	assert.True(t, exists3_2, "CDC watermark should exist for test database 3 after restart")
+	assert.False(t, cdcTS3_2.IsEmpty())
+	assert.True(t, cdcTS3_2.EQ(&expectedMinTS3),
+		"Expected CDC timestamp for db3 to still be the minimum watermark after restart, got %s, expected %s",
+		cdcTS3_2.ToString(), expectedMinTS3.ToString())
+
+	t.Logf("CDC watermarks after restart verified: db1=%s, db2=%s, db3=%s",
+		cdcTS1_2.ToString(), cdcTS2_2.ToString(), cdcTS3_2.ToString())
 }
