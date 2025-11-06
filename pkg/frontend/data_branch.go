@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -170,6 +171,12 @@ type rowsCollector struct {
 	mu   sync.Mutex
 	rows [][]any
 }
+
+const (
+	mergeDiffOutputNone = iota
+	mergeDiffOutputSQLs
+	mergeDiffOutputRows
+)
 
 func (c *rowsCollector) addRow(row []any) {
 	c.mu.Lock()
@@ -531,15 +538,11 @@ func handleBranchDiff(
 		return err
 	}
 
-	collector := &rowsCollector{}
-
-	if err = mergeDiff(
-		execCtx, ses, srcRel, dstRel, rows1, rows2, lcaType, 0, colTypes, pkColIdxes, collector,
-	); err != nil {
-		return err
-	}
-
-	return satisfyDiffOutputOpt(execCtx.reqCtx, ses, collector.rows, mrs, colTypes, stmt.OutputOpt)
+	return satisfyDiffOutputOpt(
+		execCtx.reqCtx, ses, mrs, stmt.OutputOpt,
+		rows1, rows2, srcRel, dstRel,
+		lcaType, colTypes, pkColIdxes,
+	)
 }
 
 func handleBranchMerge(
@@ -584,8 +587,10 @@ func handleBranchMerge(
 		conflictOpt = stmt.ConflictOpt.Opt
 	}
 
-	if err = mergeDiff(
-		execCtx, ses, srcRel, dstRel, rows1, rows2, lcaType, conflictOpt, colTypes, pkColIdxes, nil,
+	if _, _, err = mergeDiff(
+		execCtx.reqCtx, ses, srcRel, dstRel,
+		rows1, rows2, lcaType, conflictOpt,
+		colTypes, pkColIdxes, mergeDiffOutputNone,
 	); err != nil {
 		return err
 	}
@@ -593,8 +598,156 @@ func handleBranchMerge(
 	return
 }
 
+func satisfyDiffOutputOpt(
+	ctx context.Context,
+	ses *Session,
+	mrs *MysqlResultSet,
+	outputOpt *tree.DiffOutputOpt,
+	rows1 [][]any,
+	rows2 [][]any,
+	srcRel engine.Relation,
+	dstRel engine.Relation,
+	lcaType int,
+	colTypes []types.Type,
+	pkColIdxes []int,
+) (err error) {
+
+	var (
+		rows [][]any
+		sqls []string
+	)
+
+	merge := func(config int) error {
+		if rows, sqls, err = mergeDiff(
+			ctx, ses, srcRel, dstRel, rows1, rows2, lcaType,
+			tree.CONFLICT_ACCEPT, colTypes, pkColIdxes, config,
+		); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	fillMrsWithRows := func(limit int64) {
+		if err = merge(mergeDiffOutputRows); err != nil {
+			return
+		}
+
+		for i, row := range rows {
+			if limit >= 0 && int64(i) >= limit {
+				break
+			}
+
+			for j := 2; j < len(row); j++ {
+				switch v := row[j].(type) {
+				case types.Timestamp:
+					row[j] = v.String2(ses.timeZone, colTypes[j-2].Scale)
+				case types.Datetime:
+					row[j] = v.String2(colTypes[j-2].Scale)
+				case types.Decimal64:
+					row[j] = v.Format(colTypes[j-2].Scale)
+				case types.Decimal128:
+					row[j] = v.Format(colTypes[j-2].Scale)
+				case types.Decimal256:
+					row[j] = v.Format(colTypes[j-2].Scale)
+				}
+			}
+			mrs.AddRow(row)
+		}
+	}
+
+	if outputOpt == nil {
+		fillMrsWithRows(-1)
+		return trySaveQueryResult(ctx, ses, mrs)
+	}
+
+	if outputOpt.Limit != nil {
+		fillMrsWithRows(*outputOpt.Limit)
+		return trySaveQueryResult(ctx, ses, mrs)
+	}
+
+	if outputOpt.Count {
+		if err = merge(mergeDiffOutputRows); err != nil {
+			return
+		}
+		ses.ClearAllMysqlResultSet()
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		mrs = ses.GetMysqlResultSet()
+
+		col := new(MysqlColumn)
+		col.SetName("Count(*)")
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+		mrs.AddColumn(col)
+		mrs.AddRow([]any{int64(len(rows))})
+
+		return trySaveQueryResult(ctx, ses, mrs)
+	}
+
+	if len(outputOpt.FilePath) != 0 {
+		if err = merge(mergeDiffOutputSQLs); err != nil {
+			return
+		}
+
+		var buf bytes.Buffer
+		for i, stmt := range sqls {
+			if i > 0 {
+				buf.WriteByte('\n')
+			}
+			buf.WriteString(stmt)
+			buf.WriteString(";")
+		}
+
+		content := append([]byte(nil), buf.Bytes()...)
+
+		fsPath, err2 := fileservice.ParsePath(outputOpt.FilePath)
+		if err2 != nil {
+			err = err2
+			return
+		}
+
+		var (
+			targetFS   fileservice.FileService
+			targetPath string
+		)
+
+		if fsPath.Service == defines.SharedFileServiceName {
+			targetFS = getPu(ses.GetService()).FileService
+			targetPath = outputOpt.FilePath
+		} else {
+			var etlFS fileservice.ETLFileService
+			if etlFS, targetPath, err2 = fileservice.GetForETL(ctx, nil, outputOpt.FilePath); err2 != nil {
+				err = err2
+				return
+			}
+			targetFS = etlFS
+		}
+
+		if err2 = targetFS.Delete(ctx, targetPath); err2 != nil && !moerr.IsMoErrCode(err2, moerr.ErrFileNotFound) {
+			err = err2
+			return
+		}
+
+		vec := fileservice.IOVector{
+			FilePath: targetPath,
+			Entries: []fileservice.IOEntry{
+				{
+					Size: int64(len(content)),
+					Data: content,
+				},
+			},
+		}
+		if err2 = targetFS.Write(ctx, vec); err2 != nil {
+			err = err2
+		}
+
+		return
+	}
+
+	panic(fmt.Sprintf("unreachable: %v", outputOpt))
+}
+
 func mergeDiff(
-	execCtx *ExecCtx,
+	ctx context.Context,
 	ses *Session,
 	srcRel engine.Relation,
 	dstRel engine.Relation,
@@ -604,8 +757,8 @@ func mergeDiff(
 	conflictOpt int,
 	colTypes []types.Type,
 	pkColIdxes []int,
-	outRows *rowsCollector,
-) (err error) {
+	outputConf int,
+) (retRows [][]any, retSQLs []string, err error) {
 
 	var (
 		replaceCnt int
@@ -615,46 +768,78 @@ func mergeDiff(
 		deleteFromBuf  *bytes.Buffer
 	)
 
-	if outRows == nil {
+	initReplaceIntoBuf := func() {}
+	initDeleteFromBuf := func() {}
+	toSQLs := func(force bool, isDelete bool, cnt int, buf *bytes.Buffer) {}
+
+	if outputConf != mergeDiffOutputRows {
 		replaceIntoBuf = acquireBuffer()
 		deleteFromBuf = acquireBuffer()
+
+		initReplaceIntoBuf = func() {
+			replaceCnt = 0
+			replaceIntoBuf.Reset()
+			replaceIntoBuf.WriteString(fmt.Sprintf(
+				"replace into %s.%s values ",
+				dstRel.GetTableDef(ctx).DbName,
+				dstRel.GetTableDef(ctx).Name,
+			))
+		}
+
+		initDeleteFromBuf = func() {
+			deleteCnt = 0
+			deleteFromBuf.Reset()
+			if len(pkColIdxes) == 1 {
+				deleteFromBuf.WriteString(fmt.Sprintf(
+					"delete from %s.%s where %s in (",
+					dstRel.GetTableDef(ctx).DbName,
+					dstRel.GetTableDef(ctx).Name,
+					dstRel.GetTableDef(ctx).Cols[pkColIdxes[0]].Name,
+				))
+			} else {
+				pkNames := make([]string, len(pkColIdxes))
+				for i, pkColIdx := range pkColIdxes {
+					pkNames[i] = dstRel.GetTableDef(ctx).Cols[pkColIdx].Name
+				}
+				deleteFromBuf.WriteString(fmt.Sprintf(
+					"delete from %s.%s where (%s) in (",
+					dstRel.GetTableDef(ctx).DbName,
+					dstRel.GetTableDef(ctx).Name,
+					strings.Join(pkNames, ","),
+				))
+			}
+		}
+
+		initReplaceIntoBuf()
+		initDeleteFromBuf()
+
+		toSQLs = func(force bool, isDelete bool, cnt int, buf *bytes.Buffer) {
+			if cnt == 0 || outputConf != mergeDiffOutputSQLs {
+				return
+			}
+
+			if force || cnt >= batchCnt/2 {
+				if isDelete {
+					buf.WriteString(")")
+					retSQLs = append(retSQLs, buf.String())
+					initDeleteFromBuf()
+				} else {
+					retSQLs = append(retSQLs, buf.String())
+					initReplaceIntoBuf()
+				}
+			}
+		}
 
 		defer func() {
 			releaseBuffer(replaceIntoBuf)
 			releaseBuffer(deleteFromBuf)
 		}()
-
-		replaceIntoBuf.Reset()
-		deleteFromBuf.Reset()
-
-		replaceIntoBuf.WriteString(fmt.Sprintf(
-			"replace into %s.%s values ",
-			dstRel.GetTableDef(execCtx.reqCtx).DbName,
-			dstRel.GetTableDef(execCtx.reqCtx).Name),
-		)
-
-		if len(pkColIdxes) == 1 {
-			deleteFromBuf.WriteString(fmt.Sprintf(
-				"delete from %s.%s where %s in (",
-				dstRel.GetTableDef(execCtx.reqCtx).DbName,
-				dstRel.GetTableDef(execCtx.reqCtx).Name,
-				dstRel.GetTableDef(execCtx.reqCtx).Cols[pkColIdxes[0]].Name,
-			))
-		} else {
-			pkNames := make([]string, len(pkColIdxes))
-			for i, pkColIdx := range pkColIdxes {
-				pkNames[i] = dstRel.GetTableDef(execCtx.reqCtx).Cols[pkColIdx].Name
-			}
-			deleteFromBuf.WriteString(fmt.Sprintf(
-				"delete from %s.%s where (%s) in (",
-				dstRel.GetTableDef(execCtx.reqCtx).DbName,
-				dstRel.GetTableDef(execCtx.reqCtx).Name,
-				strings.Join(pkNames, ","),
-			))
-		}
 	}
 
 	writeReplaceInto := func(row []any) {
+		if outputConf == mergeDiffOutputRows {
+			return
+		}
 		if replaceCnt > 0 {
 			replaceIntoBuf.WriteString(",")
 		}
@@ -667,9 +852,13 @@ func mergeDiff(
 			}
 		}
 		replaceIntoBuf.WriteString(")")
+		toSQLs(false, false, replaceCnt, replaceIntoBuf)
 	}
 
 	writeDeleteFrom := func(row []any) {
+		if outputConf == mergeDiffOutputRows {
+			return
+		}
 		if deleteCnt > 0 {
 			deleteFromBuf.WriteString(",")
 		}
@@ -678,21 +867,34 @@ func mergeDiff(
 			deleteFromBuf.WriteString("(")
 		}
 		for idx, colIdx := range pkColIdxes {
-			formatValIntoString(ses, row[colIdx+2], colTypes[colIdx+2], deleteFromBuf)
+			formatValIntoString(ses, row[colIdx+2], colTypes[colIdx], deleteFromBuf)
 			if idx != len(pkColIdxes)-1 {
 				deleteFromBuf.WriteString(",")
 			}
 		}
 		if len(pkColIdxes) > 1 {
-			deleteFromBuf.WriteString("(")
+			deleteFromBuf.WriteString(")")
+		}
+		toSQLs(false, true, deleteCnt, deleteFromBuf)
+	}
+
+	writeRow := func(row []any) {
+		if outputConf == mergeDiffOutputRows {
+			retRows = append(retRows, row)
+			return
+		}
+		if row[1].(string) == diffDelete {
+			writeDeleteFrom(row)
+		} else {
+			writeReplaceInto(row)
 		}
 	}
 
 	if lcaType == lcaEmpty {
 		var prevRow []any
 		for _, row := range rows1 {
-			if outRows != nil {
-				outRows.addRow(row)
+			if outputConf == mergeDiffOutputRows {
+				retRows = append(retRows, row)
 				continue
 			}
 
@@ -705,7 +907,9 @@ func mergeDiff(
 				if compareRows(row, prevRow, pkColIdxes, colTypes, true) == 0 {
 					switch conflictOpt {
 					case tree.CONFLICT_FAIL:
-						return moerr.NewInternalErrorNoCtxf("merge diff conflict happend %v <=> %v", row, prevRow)
+						return nil, nil, moerr.NewInternalErrorNoCtxf(
+							"merge diff conflict happend %v <=> %v", row, prevRow,
+						)
 					case tree.CONFLICT_SKIP:
 					// do nothing
 					case tree.CONFLICT_ACCEPT:
@@ -721,15 +925,6 @@ func mergeDiff(
 			}
 		}
 	} else {
-		writeRow := func(row []any) {
-			if row[1].(string) == diffDelete {
-				writeDeleteFrom(row)
-			} else {
-				writeReplaceInto(row)
-			}
-		}
-
-		// lcaOther, lcaLeft,lcaRight, let rows1 be the diff between the src table and lca
 		i, j := 0, 0
 		for i < len(rows1) && j < len(rows2) {
 			if cmp := compareRows(
@@ -746,17 +941,18 @@ func mergeDiff(
 						continue
 					}
 
-					if outRows != nil {
-						outRows.addRow(rows1[i])
-						outRows.addRow(rows2[j])
+					if outputConf == mergeDiffOutputRows {
+						retRows = append(retRows, rows1[i])
+						retRows = append(retRows, rows2[j])
 						i++
 						j++
 						continue
 					}
-
 					switch conflictOpt {
 					case tree.CONFLICT_FAIL:
-						return moerr.NewInternalErrorNoCtxf("merge diff conflict happend %v <=> %v", rows1[i], rows2[j])
+						return nil, nil, moerr.NewInternalErrorNoCtxf(
+							"merge diff conflict happend %v <=> %v", rows1[i], rows2[j],
+						)
 					case tree.CONFLICT_SKIP:
 						i++
 						j++
@@ -768,13 +964,13 @@ func mergeDiff(
 				}
 			} else {
 				if cmp > 0 {
-					if outRows != nil {
-						outRows.addRow(rows2[j])
+					if outputConf == mergeDiffOutputRows {
+						retRows = append(retRows, rows2[j])
 					}
 					j++
 				} else {
-					if outRows != nil {
-						outRows.addRow(rows1[i])
+					if outputConf == mergeDiffOutputRows {
+						retRows = append(retRows, rows1[i])
 					} else {
 						writeRow(rows1[i])
 					}
@@ -784,22 +980,23 @@ func mergeDiff(
 		}
 
 		for ; i < len(rows1); i++ {
-			if outRows != nil {
-				outRows.addRow(rows1[i])
+			if outputConf == mergeDiffOutputRows {
+				retRows = append(retRows, rows1[i])
 			} else {
 				writeRow(rows1[i])
 			}
 		}
 
-		if outRows != nil {
+		if outputConf == mergeDiffOutputRows {
 			for ; j < len(rows2); j++ {
-				outRows.addRow(rows2[j])
+				retRows = append(retRows, rows2[j])
 			}
 		}
 	}
 
-	if outRows == nil {
-		err = sqlexec.RunTxn(sqlexec.NewSqlProcess(ses.proc), func(txnExecutor executor.TxnExecutor) error {
+	switch outputConf {
+	case mergeDiffOutputNone:
+		err = sqlexec.RunTxn(ses.proc, func(txnExecutor executor.TxnExecutor) error {
 			var (
 				err2 error
 				ret  executor.Result
@@ -826,9 +1023,12 @@ func mergeDiff(
 
 			return nil
 		})
+	case mergeDiffOutputSQLs:
+		toSQLs(true, false, replaceCnt, replaceIntoBuf)
+		toSQLs(true, true, deleteCnt, deleteFromBuf)
 	}
 
-	return err
+	return
 }
 
 func compareRows(
@@ -1232,68 +1432,6 @@ func hashDiff(
 	return
 }
 
-func satisfyDiffOutputOpt(
-	ctx context.Context,
-	ses *Session,
-	rows [][]any,
-	mrs *MysqlResultSet,
-	neededColTypes []types.Type,
-	outputOpt *tree.DiffOutputOpt,
-) (err error) {
-
-	fillMrsWithRows := func(limit int64) {
-		//rows := collector.snapshot()
-		for i, row := range rows {
-			if limit >= 0 && int64(i) >= limit {
-				break
-			}
-
-			for j := 2; j < len(row); j++ {
-				switch v := row[j].(type) {
-				case types.Timestamp:
-					row[j] = v.String2(ses.timeZone, neededColTypes[j-2].Scale)
-				case types.Datetime:
-					row[j] = v.String2(neededColTypes[j-2].Scale)
-				case types.Decimal64:
-					row[j] = v.Format(neededColTypes[j-2].Scale)
-				case types.Decimal128:
-					row[j] = v.Format(neededColTypes[j-2].Scale)
-				case types.Decimal256:
-					row[j] = v.Format(neededColTypes[j-2].Scale)
-				}
-			}
-			mrs.AddRow(row)
-		}
-	}
-
-	if outputOpt == nil {
-		fillMrsWithRows(-1)
-		return trySaveQueryResult(ctx, ses, mrs)
-	}
-
-	if outputOpt.Limit != nil {
-		fillMrsWithRows(*outputOpt.Limit)
-		return trySaveQueryResult(ctx, ses, mrs)
-	}
-
-	if outputOpt.Count {
-		ses.ClearAllMysqlResultSet()
-		ses.SetMysqlResultSet(&MysqlResultSet{})
-		mrs = ses.GetMysqlResultSet()
-
-		col := new(MysqlColumn)
-		col.SetName("Count(*)")
-		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-		mrs.AddColumn(col)
-		mrs.AddRow([]any{int64(len(rows))})
-
-		return trySaveQueryResult(ctx, ses, mrs)
-	}
-
-	panic(fmt.Sprintf("unreachable: %v", outputOpt))
-}
-
 func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 	if len(leftDef.Cols) != len(rightDef.Cols) {
 		return false
@@ -1485,7 +1623,7 @@ func handleDelsOnLCA(
 	// why runTxn here?
 	// we need to ensure the temporary created table should be clear if some err happened.
 	// the left sqls are read only,
-	if err = sqlexec.RunTxn(sqlexec.NewSqlProcess(ses.proc), func(txnExecutor executor.TxnExecutor) error {
+	if err = sqlexec.RunTxn(ses.proc, func(txnExecutor executor.TxnExecutor) error {
 		var (
 			sqlRet executor.Result
 		)
@@ -2161,7 +2299,7 @@ func getTablesCreationCommitTS(
 		ses.accountId, base.GetTableDef(ctx).DbName, base.GetTableName(),
 	))
 
-	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), buf.String()); err != nil {
+	if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
 		return
 	}
 
@@ -2312,7 +2450,7 @@ func constructBranchDAG(
 	}()
 
 	if sqlRet, err = sqlexec.RunSql(
-		sqlexec.NewSqlProcess(ses.proc),
+		ses.proc,
 		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
 	); err != nil {
 		return

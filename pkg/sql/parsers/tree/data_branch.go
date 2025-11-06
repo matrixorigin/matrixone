@@ -297,6 +297,7 @@ type DiffOutputOpt struct {
 	As    TableName
 	Limit *int64
 	Count bool
+	FilePath string
 }
 
 type DataBranchDiff struct {
