@@ -66,6 +66,14 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 		}
 		detector.scanTableFn = detector.scanTable
 	})
+
+	// Defensive: Ensure scanTableFn is always set (for testing scenarios)
+	// In production, this should already be set by once.Do above
+	// In tests with mocks, this prevents nil pointer dereference
+	if detector != nil && detector.scanTableFn == nil {
+		detector.scanTableFn = detector.scanTable
+	}
+
 	return detector
 }
 
@@ -262,7 +270,7 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	delete(s.Callbacks, id)
-	if len(s.Callbacks) == 0 {
+	if len(s.Callbacks) == 0 && s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
 	}
@@ -325,6 +333,12 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 }
 
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
+	// Defensive: ensure scanTableFn is set (for testing scenarios)
+	if s.scanTableFn == nil {
+		logutil.Warn("CDC-TableDetector-Scan-Skipped", zap.String("reason", "scanTableFn is nil"))
+		return
+	}
+
 	if err := s.scanTableFn(); err != nil {
 		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
 		return

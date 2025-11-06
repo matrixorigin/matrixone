@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -82,8 +83,9 @@ type TableChangeStream struct {
 	delCompositedPkColIdx int
 
 	// State
-	lastError error
-	retryable bool
+	lastError    error
+	retryable    bool
+	hasSucceeded atomic.Bool // Tracks if reader has successfully processed data at least once
 }
 
 // NewTableChangeStream creates a new table change stream
@@ -392,6 +394,23 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	return err
 }
 
+// clearErrorOnFirstSuccess clears error message on first successful data processing
+// This preserves lazy batch processing design (asynchronous, eventual consistency)
+func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
+	if !s.hasSucceeded.Load() {
+		s.hasSucceeded.Store(true)
+		// Clear error asynchronously (preserves lazy batch processing design)
+		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, "", nil); err != nil {
+			logutil.Warn(
+				"CDC-TableChangeStream-ClearErrorOnSuccessFailed",
+				zap.String("table", s.tableInfo.String()),
+				zap.Error(err),
+			)
+			// Don't fail the operation if error clearing fails
+		}
+	}
+}
+
 // processWithTxn processes changes within a transaction
 func (s *TableChangeStream) processWithTxn(
 	ctx context.Context,
@@ -421,6 +440,8 @@ func (s *TableChangeStream) processWithTxn(
 			zap.String("from-ts", fromTs.ToString()),
 			zap.String("end-ts", s.endTs.ToString()),
 		)
+		// Clear error on first success (lazy, eventual consistency)
+		s.clearErrorOnFirstSuccess(ctx)
 		return nil // Graceful end
 	}
 
@@ -503,6 +524,8 @@ func (s *TableChangeStream) processWithTxn(
 
 		// If no more data, we're done
 		if changeData.Type == ChangeTypeNoMoreData {
+			// Clear error on first success (lazy, eventual consistency)
+			s.clearErrorOnFirstSuccess(ctx)
 			return nil
 		}
 	}

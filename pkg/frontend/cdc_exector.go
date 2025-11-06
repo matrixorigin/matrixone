@@ -238,8 +238,28 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		tables = append(tables, pt.Source.Table)
 	}
 
-	// reset runningReaders
-	exec.runningReaders = &sync.Map{}
+	// Clean up old readers instead of replacing the map
+	// This ensures old readers are properly stopped and prevents goroutine leaks
+	if exec.runningReaders != nil {
+		exec.runningReaders.Range(func(key, value interface{}) bool {
+			reader := value.(cdc.ChangeReader)
+			reader.Close()
+			return true
+		})
+
+		exec.runningReaders.Range(func(key, value interface{}) bool {
+			reader := value.(cdc.ChangeReader)
+			reader.Wait()
+			return true
+		})
+
+		exec.runningReaders.Range(func(key, value interface{}) bool {
+			exec.runningReaders.Delete(key)
+			return true
+		})
+	} else {
+		exec.runningReaders = &sync.Map{}
+	}
 
 	// start watermarkUpdater
 	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
@@ -358,6 +378,9 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 // Pause cdc task
 func (exec *CDCTaskExecutor) Pause() error {
+	// Check if running before state transition
+	wasRunning := exec.stateMachine.IsRunning()
+
 	// Transition to Pausing state
 	if err := exec.stateMachine.Transition(TransitionPause); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
@@ -368,6 +391,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
+		zap.Bool("was-running", wasRunning),
 	)
 	defer func() {
 		// Transition to Paused state
@@ -382,17 +406,30 @@ func (exec *CDCTaskExecutor) Pause() error {
 		)
 	}()
 
-	if exec.stateMachine.IsRunning() {
+	if wasRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.ClosePause()
+
+		// Synchronously wait for all readers to stop before proceeding
+		// This ensures no goroutine leaks and clean pause state
+		exec.stopAllReaders()
+
 		// let Start() go
-		exec.holdCh <- 1
+		select {
+		case exec.holdCh <- 1:
+			// Signal sent successfully
+		default:
+			// Channel full or Start() already exited, ignore
+		}
 	}
 	return nil
 }
 
 // Cancel cdc task
 func (exec *CDCTaskExecutor) Cancel() error {
+	// Check if running before state transition
+	wasRunning := exec.stateMachine.IsRunning()
+
 	// Transition to Cancelling state
 	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
@@ -403,6 +440,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
+		zap.Bool("was-running", wasRunning),
 	)
 	defer func() {
 		// Transition to Cancelled state
@@ -417,13 +455,64 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		)
 	}()
 
-	if exec.stateMachine.IsRunning() {
+	if wasRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
+
+		// Synchronously wait for all readers to stop before proceeding
+		// This ensures no goroutine leaks and no interference with new tasks
+		exec.stopAllReaders()
+
 		// let Start() go
-		exec.holdCh <- 1
+		select {
+		case exec.holdCh <- 1:
+			// Signal sent successfully
+		default:
+			// Channel full or Start() already exited, ignore
+		}
 	}
 	return nil
+}
+
+// stopAllReaders stops all running readers and waits for them to exit
+// This method ensures complete cleanup before Cancel/Pause returns
+func (exec *CDCTaskExecutor) stopAllReaders() {
+	if exec.runningReaders == nil {
+		return
+	}
+
+	logutil.Info(
+		"CDC-Task-StopAllReaders-Start",
+		zap.String("task-id", exec.spec.TaskId),
+	)
+
+	// Step 1: Send stop signal to all readers
+	readerCount := 0
+	exec.runningReaders.Range(func(key, value interface{}) bool {
+		reader := value.(cdc.ChangeReader)
+		reader.Close()
+		readerCount++
+		return true
+	})
+
+	// Step 2: Wait for all readers to completely exit
+	exec.runningReaders.Range(func(key, value interface{}) bool {
+		reader := value.(cdc.ChangeReader)
+		reader.Wait()
+		return true
+	})
+
+	// Step 3: Clear the map
+	exec.runningReaders.Range(func(key, value interface{}) bool {
+		exec.runningReaders.Delete(key)
+		return true
+	})
+
+	logutil.Info(
+		"CDC-Task-StopAllReaders-Complete",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.Int("reader-count", readerCount),
+	)
 }
 
 func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
@@ -757,15 +846,10 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		return err
 	}
 
-	// clear err msg
-	if err = exec.watermarkUpdater.UpdateWatermarkErrMsg(
-		ctx,
-		&watermarkKey,
-		"",
-		nil, // Clear error, no context needed
-	); err != nil {
-		return
-	}
+	// Note: Do NOT clear err_msg here
+	// Error should only be cleared when reader successfully syncs data (lazy, eventual consistency)
+	// This allows retry count to accumulate properly (1→2→3→4)
+	// If cleared here, retry count would reset on every rebuild, making max retry limit ineffective
 
 	tableDef, err := cdc.GetTableDef(ctx, txnOp, exec.cnEngine, info.SourceTblId)
 	if err != nil {

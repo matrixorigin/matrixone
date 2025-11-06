@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sync"
 	"testing"
@@ -52,6 +53,47 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+// Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
+var _globalTableDetectorStub *gostub.Stubs
+
+// init sets up global mock for GetTableDetector once for all tests in this package
+// This stub is NEVER reset to ensure consistent behavior across all tests
+func init() {
+	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
+}
+
+// createMockTableDetectorForTest creates a properly initialized mock TableDetector for testing
+func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
+	return func(cnUUID string) *cdc.TableDetector {
+		detector := &cdc.TableDetector{
+			Mp:                   make(map[uint32]cdc.TblMap),
+			Callbacks:            make(map[string]cdc.TableCallback),
+			CallBackAccountId:    make(map[string]uint32),
+			SubscribedAccountIds: make(map[uint32][]string),
+			CallBackDbName:       make(map[string][]string),
+			SubscribedDbNames:    make(map[string][]string),
+			CallBackTableName:    make(map[string][]string),
+			SubscribedTableNames: make(map[string][]string),
+		}
+
+		// Set scanTableFn to no-op to prevent panic in scanTableLoop
+		detectorValue := reflect.ValueOf(detector).Elem()
+		scanTableFnField := detectorValue.FieldByName("scanTableFn")
+		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
+			scanTableFnField.Set(reflect.ValueOf(func() error {
+				return nil
+			}))
+		}
+
+		// Call Register to properly initialize cancel field
+		detector.Register("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
+			return nil
+		})
+
+		return detector
+	}
+}
 
 func Test_newCdcSqlFormat(t *testing.T) {
 	id, _ := uuid.Parse("019111fd-aed1-70c0-8760-9abadd8f0f4a")
@@ -1003,18 +1045,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
-		return &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            map[string]cdc.TableCallback{"id": func(mp map[uint32]cdc.TblMap) error { return nil }},
-			CallBackAccountId:    map[string]uint32{"id": 0},
-			SubscribedAccountIds: map[uint32][]string{0: {"id"}},
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
-			SubscribedTableNames: make(map[string][]string),
-		}
-	})
+	gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
 
 	tests := []struct {
 		name string
@@ -2247,23 +2278,7 @@ func TestCdcTask_Restart(t *testing.T) {
 	u.Start()
 	defer u.Stop()
 
-	// Stub GetTableDetector to avoid initialization issues
-	// Simply don't call UnRegister when isRunning is false
-	stubDetector := gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
-		// Return a mock detector that won't panic on UnRegister
-		return &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            make(map[string]cdc.TableCallback),
-			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32][]string),
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
-			SubscribedTableNames: make(map[string][]string),
-		}
-	})
-	defer stubDetector.Reset()
-
+	// Note: GetTableDetector is already stubbed globally in init()
 	cdcTask := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
@@ -2290,14 +2305,18 @@ func TestCdcTask_Restart(t *testing.T) {
 }
 
 func TestCdcTask_Pause(t *testing.T) {
+	// Note: GetTableDetector is already stubbed globally in init()
 	holdCh := make(chan int, 1)
 	go func() {
 		<-holdCh
 	}()
 
 	executor := &CDCTaskExecutor{
-		activeRoutine: cdc.NewCdcActiveRoutine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
 		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
 			TaskName: "task1",
 		},
 		stateMachine: NewExecutorStateMachine(),
@@ -2311,6 +2330,7 @@ func TestCdcTask_Pause(t *testing.T) {
 }
 
 func TestCdcTask_Cancel(t *testing.T) {
+	// Note: GetTableDetector is already stubbed globally in init()
 	ch := make(chan int, 1)
 	go func() {
 		<-ch
@@ -2322,7 +2342,10 @@ func TestCdcTask_Cancel(t *testing.T) {
 	executor := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
 		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
 			TaskName: "task1",
 		},
 		stateMachine: NewExecutorStateMachine(),
