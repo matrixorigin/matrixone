@@ -115,9 +115,6 @@ type checkpointCleaner struct {
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
 	}
-
-	// cdcTablesFunc is an optional function to provide the CDC tables for testing.
-	cdcTablesFunc func() (map[uint64]types.TS, error)
 }
 
 func WithCanGCCacheSize(
@@ -994,9 +991,6 @@ func (c *checkpointCleaner) GetCDCsLocked(ctx context.Context) (map[uint64]types
 }
 
 func (c *checkpointCleaner) CDCTables() (map[uint64]types.TS, error) {
-	if c.cdcTablesFunc != nil {
-		return c.cdcTablesFunc()
-	}
 	return c.mutation.snapshotMeta.GetCDC(c.ctx, c.sid, c.fs, c.mp)
 }
 
