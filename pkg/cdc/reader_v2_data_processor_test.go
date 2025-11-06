@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 )
@@ -127,9 +128,16 @@ func TestDataProcessor_ProcessChange_Snapshot(t *testing.T) {
 	toTs := (&fromTs).Next()
 	dp.SetTransactionRange(fromTs, toTs)
 
+	// Create a non-empty batch (empty batch is skipped after Bug #4 fix)
+	bat := batch.New([]string{"id"})
+	vec := vector.NewVec(types.T_int32.ToType())
+	_ = vector.AppendFixed(vec, int32(1), false, mp)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+
 	data := &ChangeData{
 		Type:        ChangeTypeSnapshot,
-		InsertBatch: &batch.Batch{},
+		InsertBatch: bat,
 	}
 
 	err = dp.ProcessChange(ctx, data)
@@ -166,9 +174,16 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	toTs := (&fromTs).Next()
 	dp.SetTransactionRange(fromTs, toTs)
 
+	// Create a non-empty batch (empty batch is skipped after Bug #4 fix)
+	bat := batch.New([]string{"id"})
+	vec := vector.NewVec(types.T_int32.ToType())
+	_ = vector.AppendFixed(vec, int32(1), false, mp)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+
 	data := &ChangeData{
 		Type:        ChangeTypeSnapshot,
-		InsertBatch: &batch.Batch{},
+		InsertBatch: bat,
 	}
 
 	err = dp.ProcessChange(ctx, data)

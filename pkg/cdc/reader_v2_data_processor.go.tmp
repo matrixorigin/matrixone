@@ -356,6 +356,8 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 	// Commit transaction if one is active
 	tracker := dp.txnManager.GetTracker()
 	if tracker != nil && tracker.hasBegin {
+		// Update toTs to the latest value before committing
+		// This ensures the watermark advances to the current toTs
 		tracker.UpdateToTs(dp.toTs)
 		if err := dp.txnManager.CommitTransaction(ctx); err != nil {
 			logutil.Error(
