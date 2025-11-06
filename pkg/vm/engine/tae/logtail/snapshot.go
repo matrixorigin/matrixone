@@ -67,6 +67,7 @@ const (
 	SnapshotTidIdx
 	AObjectDelIdx
 	PitrTidIdx
+	CdcTidIdx
 )
 
 const MoTablesPK = "mo_tables_pk"
@@ -101,6 +102,18 @@ const (
 	ColPitrObjId
 	ColPitrLength
 	ColPitrUnit
+)
+
+// cdc watermark schema
+const (
+	ColCdcAccountId uint16 = iota
+	ColCdcTaskId
+	ColCdcDbName
+	ColCdcTableName
+	ColCdcWatermark
+	ColCdcErrMsg
+	ColCdcCreateAt
+	ColCdcDropAt
 )
 
 var (
@@ -336,6 +349,85 @@ func (p *SnapshotInfo) ToTsList() []types.TS {
 	return result
 }
 
+// Special table information structure, used to process special tables such as PITR and CDC
+type specialTableInfo struct {
+	tid        uint64
+	objects    map[objectio.Segmentid]*objectInfo
+	tombstones map[objectio.Segmentid]*objectInfo
+}
+
+func (st *specialTableInfo) init() {
+	st.objects = make(map[objectio.Segmentid]*objectInfo)
+	st.tombstones = make(map[objectio.Segmentid]*objectInfo)
+}
+
+func (st *specialTableInfo) reset() {
+	st.objects = nil
+	st.tombstones = nil
+	st.init()
+}
+
+func (st *specialTableInfo) trim() {
+	for id, info := range st.objects {
+		if !info.deleteAt.IsEmpty() {
+			delete(st.objects, id)
+		}
+	}
+	for id, info := range st.tombstones {
+		if !info.deleteAt.IsEmpty() {
+			delete(st.tombstones, id)
+		}
+	}
+}
+
+func (st *specialTableInfo) getTombstonesStats() []objectio.ObjectStats {
+	tombstonesStats := make([]objectio.ObjectStats, 0)
+	for _, obj := range st.tombstones {
+		tombstonesStats = append(tombstonesStats, obj.stats)
+	}
+	return tombstonesStats
+}
+
+// General object processing functions
+func (st *specialTableInfo) processObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	idxes []uint16,
+	ds *BackupDeltaLocDataSource,
+	mp *mpool.MPool,
+	processor func(bat *batch.Batch, r int) error,
+) error {
+	for _, object := range st.objects {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		default:
+		}
+		location := object.stats.ObjectLocation()
+		name := object.stats.ObjectName()
+		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
+			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
+			blk := objectio.BlockInfo{
+				BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
+				MetaLoc: objectio.ObjectLocation(loc),
+			}
+
+			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
+			if err != nil {
+				return err
+			}
+			defer bat.Clean(mp)
+
+			for r := 0; r < bat.Vecs[0].Length(); r++ {
+				if err := processor(bat, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 type SnapshotMeta struct {
 	sync.RWMutex
 
@@ -346,17 +438,8 @@ type SnapshotMeta struct {
 
 	aobjDelTsMap map[types.TS]struct{} // used for filering out transferred tombstones
 
-	pitr struct {
-		tid        uint64
-		objects    map[objectio.Segmentid]*objectInfo
-		tombstones map[objectio.Segmentid]*objectInfo
-	}
-
-	// cdc stores CDC-related information
-	// cdcDBs stores the database IDs that have CDC tasks
-	cdcDBs map[uint64]struct{} // dbID -> struct{}
-	// watermarkTableID stores the table ID of mo_cdc_watermark
-	watermarkTableID uint64
+	pitr specialTableInfo
+	cdc  specialTableInfo
 
 	// tables records all the table information of mo, the key is account id,
 	// and the map is the mapping of table id and table information.
@@ -383,14 +466,13 @@ func NewSnapshotMeta() *SnapshotMeta {
 		objects:          make(map[uint64]map[objectio.Segmentid]*objectInfo),
 		tombstones:       make(map[uint64]map[objectio.Segmentid]*objectInfo),
 		aobjDelTsMap:     make(map[types.TS]struct{}),
-		cdcDBs:           make(map[uint64]struct{}),
 		tables:           make(map[uint32]map[uint64]*tableInfo),
 		tableIDIndex:     make(map[uint64]*tableInfo),
 		snapshotTableIDs: make(map[uint64]struct{}),
 		tablePKIndex:     make(map[string][]*tableInfo),
 	}
-	meta.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
-	meta.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
+	meta.pitr.init()
+	meta.cdc.init()
 	return meta
 }
 
@@ -431,6 +513,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 	collector := func(
 		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 		_ *map[objectio.Segmentid]*objectInfo,
+		_ *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -459,8 +542,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(ctx, &tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
+	collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -534,29 +617,20 @@ func (sm *SnapshotMeta) updateTableInfo(
 						zap.Uint64("tid", tid),
 						zap.Uint64("old-tid", sm.pitr.tid),
 					)
-					sm.pitr.objects = nil
-					sm.pitr.tombstones = nil
-					sm.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
-					sm.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
+					sm.pitr.reset()
 				}
 				sm.pitr.tid = tid
 			}
-			// Store watermark table ID for later use
 			if dbName == catalog2.MO_CATALOG && name == catalog2.MO_CDC_WATERMARK {
-				if sm.watermarkTableID > 0 && sm.watermarkTableID != tid {
+				if sm.cdc.tid > 0 && sm.cdc.tid != tid {
 					logutil.Warn(
 						"GC-CDC-PANIC-UPDATE-TABLE-WATERMARK",
 						zap.Uint64("tid", tid),
-						zap.Uint64("old-tid", sm.watermarkTableID),
+						zap.Uint64("old-tid", sm.cdc.tid),
 					)
+					sm.cdc.reset()
 				}
-				sm.watermarkTableID = tid
-				logutil.Info(
-					"GC-CDC-Update-Table-Info-Watermark",
-					zap.Uint64("tid", tid),
-					zap.Uint32("account", account),
-					zap.String("create-at", createAt.ToString()),
-				)
+				sm.cdc.tid = tid
 			}
 			if sm.tables[account] == nil {
 				sm.tables[account] = make(map[uint64]*tableInfo)
@@ -689,14 +763,6 @@ func (sm *SnapshotMeta) updateTableInfo(
 		tInfos[0].deleteAt = types.TS{}
 	}
 
-	// Read watermark table data if watermark table exists
-	if sm.watermarkTableID > 0 {
-		if err := sm.readWatermarkTableData(ctx, fs, data, startts, endts); err != nil {
-			logutil.Error("GC-CDC-Read-Watermark-Table-Data-Error", zap.Error(err))
-			// Don't return error, just log it
-		}
-	}
-
 	return nil
 }
 
@@ -704,10 +770,12 @@ func collectObjects(
 	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 	data *CKPReader,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
 		*map[objectio.Segmentid]*objectInfo,
 		uint64,
 		objectio.ObjectStats,
@@ -725,7 +793,7 @@ func collectObjects(
 			rowID types.Rowid,
 		) error {
 			if objectType == objType {
-				collector(objects, objects2, table, objectStats, createTS, deleteTS)
+				collector(objects, objects2, objects3, table, objectStats, createTS, deleteTS)
 			}
 			return nil
 		},
@@ -768,13 +836,14 @@ func (sm *SnapshotMeta) Update(
 		return
 	}
 
-	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
+	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 && sm.cdc.tid == 0 {
 		return
 	}
 
 	collector := func(
 		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
+		objects3 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -815,6 +884,9 @@ func (sm *SnapshotMeta) Update(
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
 		}
+		if tid == sm.cdc.tid {
+			mapFun(*objects3)
+		}
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
@@ -827,6 +899,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
+		&sm.cdc.objects,
 		data,
 		ckputil.ObjectType_Data,
 		collector,
@@ -835,6 +908,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
+		&sm.cdc.tombstones,
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
@@ -856,8 +930,13 @@ func (sm *SnapshotMeta) Update(
 			}
 		}
 	}
-	trimList(sm.objects, sm.pitr.objects)
-	trimList(sm.tombstones, sm.pitr.tombstones)
+	// Cleaning up common objects and tombstones
+	trimList(sm.objects, nil)
+	trimList(sm.tombstones, nil)
+
+	// Clean up special table objects and tombstones
+	sm.pitr.trim()
+	sm.cdc.trim()
 	return
 }
 
@@ -1204,6 +1283,89 @@ func (sm *SnapshotMeta) GetPITR(
 		}
 	}
 	return pitrInfo, nil
+}
+
+func (sm *SnapshotMeta) GetCDC(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (map[uint64]types.TS, error) {
+	idxes := []uint16{ColCdcAccountId, ColCdcDbName, ColCdcTableName, ColCdcWatermark, ColCdcDropAt}
+	tombstonesStats := sm.cdc.getTombstonesStats()
+	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
+	dbWatermarks := make(map[uint64]types.TS)
+
+	processor := func(bat *batch.Batch, r int) error {
+		accountIDList := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[0])
+		dbNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](bat.Vecs[1])
+		dbNameArea := bat.Vecs[1].GetArea()
+		tableNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](bat.Vecs[2])
+		tableNameArea := bat.Vecs[2].GetArea()
+		watermarkList := bat.Vecs[3]
+		dropAtList := bat.Vecs[4]
+
+		accountID := accountIDList[r]
+		dbName := string(dbNameVarlena[r].GetByteSlice(dbNameArea))
+		tableName := string(tableNameVarlena[r].GetByteSlice(tableNameArea))
+		watermark := watermarkList.GetStringAt(r)
+		dropAtBytes := dropAtList.GetStringAt(r)
+
+		// Skip deleted jobs
+		if len(dropAtBytes) > 0 {
+			dropAT := types.StringToTS(dropAtBytes)
+			if !dropAT.IsEmpty() {
+				return nil
+			}
+		}
+
+		var cdcTS types.TS
+		if len(watermark) > 0 {
+			cdcTS = types.StringToTS(watermark)
+		} else {
+			cdcTS = types.TS{}
+		}
+
+		// Find tableInfo by matching account_id, db_name, table_name
+		// Build PK from account_id, db_name, table_name to find tableInfo
+		pk := fmt.Sprintf("%d-%s-%s", accountID, dbName, tableName)
+
+		// Find tableInfo from tablePKIndex
+		if tInfos, ok := sm.tablePKIndex[pk]; ok && len(tInfos) > 0 {
+			tableInfo := tInfos[0]
+			dbID := tableInfo.dbID
+
+			// For the same dbID, take the smallest TS
+			existingTS := dbWatermarks[dbID]
+			if existingTS.IsEmpty() || cdcTS.LT(&existingTS) {
+				dbWatermarks[dbID] = cdcTS
+			}
+
+			logutil.Info(
+				"GC-GetCDC",
+				zap.Uint64("db-id", dbID),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName),
+				zap.String("watermark", watermark),
+				zap.String("ts", cdcTS.ToString()),
+			)
+		} else {
+			logutil.Warn("GC-CDC-TableInfo-NotFound",
+				zap.String("pk", pk),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName),
+				zap.Uint32("account-id", accountID))
+		}
+
+		return nil
+	}
+
+	err := sm.cdc.processObjects(ctx, fs, idxes, ds, mp, processor)
+	if err != nil {
+		return nil, err
+	}
+	return dbWatermarks, nil
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
@@ -2050,282 +2212,6 @@ func (sm *SnapshotMeta) UpdateCDCDBsFromWatermark(
 	// This is a placeholder that will be implemented based on how watermark data is accessed
 }
 
-// UpdateCDCDBsFromWatermarkData updates cdcDBs from watermark data
-// accountIDs, dbNames, tableNames are parallel arrays from watermark table
-// This function finds tableInfo by matching account_id, db_name, table_name
-// and adds the corresponding dbID to cdcDBs
-func (sm *SnapshotMeta) UpdateCDCDBsFromWatermarkData(
-	ctx context.Context,
-	checkpointCli interface {
-		GetCatalog() interface {
-			MakeDBIt(bool) interface {
-				Valid() bool
-				Next()
-				Get() interface {
-					GetPayload() interface {
-						GetID() uint64
-						GetName() string
-						MakeTableIt(bool) interface {
-							Valid() bool
-							Next()
-							Get() interface {
-								GetPayload() interface {
-									GetID() uint64
-									GetName() string
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	},
-	accountIDs []uint32,
-	dbNames []string,
-	tableNames []string,
-) {
-	sm.Lock()
-	defer sm.Unlock()
-
-	// Clear existing cdcDBs
-	sm.cdcDBs = make(map[uint64]struct{})
-
-	catalog := checkpointCli.GetCatalog()
-	if catalog == nil {
-		return
-	}
-
-	// Build a map of (accountID, dbName, tableName) -> dbID
-	// by iterating through catalog
-	dbNameToDBID := make(map[string]uint64)
-	dbIt := catalog.MakeDBIt(true)
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload()
-		dbNameToDBID[db.GetName()] = db.GetID()
-		dbIt.Next()
-	}
-
-	// For each watermark entry, find matching tableInfo and get dbID
-	for i := 0; i < len(accountIDs); i++ {
-		accountID := accountIDs[i]
-		dbName := dbNames[i]
-		tableName := tableNames[i]
-
-		// Get dbID from dbName
-		dbID, ok := dbNameToDBID[dbName]
-		if !ok {
-			logutil.Warn("GC-CDC-Watermark-DB-NotFound",
-				zap.String("db-name", dbName),
-				zap.Uint32("account-id", accountID))
-			continue
-		}
-
-		// Find tableInfo by matching account_id, dbID, and table_name
-		// We need to find the table in the catalog first to get tableID
-		var tableID uint64
-		found := false
-		dbIt2 := catalog.MakeDBIt(true)
-		for dbIt2.Valid() {
-			db := dbIt2.Get().GetPayload()
-			if db.GetID() != dbID || db.GetName() != dbName {
-				dbIt2.Next()
-				continue
-			}
-
-			tableIt := db.MakeTableIt(true)
-			for tableIt.Valid() {
-				table := tableIt.Get().GetPayload()
-				if table.GetName() == tableName {
-					tableID = table.GetID()
-					found = true
-					break
-				}
-				tableIt.Next()
-			}
-			break
-		}
-
-		if !found {
-			logutil.Warn("GC-CDC-Watermark-Table-NotFound",
-				zap.String("db-name", dbName),
-				zap.String("table-name", tableName),
-				zap.Uint32("account-id", accountID))
-			continue
-		}
-
-		// Find tableInfo from tableIDIndex
-		if tableInfo, ok := sm.tableIDIndex[tableID]; ok {
-			if tableInfo.accountID == accountID && tableInfo.dbID == dbID {
-				// Found matching tableInfo, add dbID to cdcDBs
-				sm.cdcDBs[dbID] = struct{}{}
-				logutil.Info("GC-CDC-Watermark-Matched",
-					zap.String("db-name", dbName),
-					zap.String("table-name", tableName),
-					zap.Uint64("db-id", dbID),
-					zap.Uint64("table-id", tableID),
-					zap.Uint32("account-id", accountID))
-			}
-		} else {
-			logutil.Warn("GC-CDC-Watermark-TableInfo-NotFound",
-				zap.String("db-name", dbName),
-				zap.String("table-name", tableName),
-				zap.Uint64("table-id", tableID),
-				zap.Uint32("account-id", accountID))
-		}
-	}
-
-	logutil.Info("GC-CDC-Update-DBs",
-		zap.Int("cdc-db-count", len(sm.cdcDBs)),
-		zap.Int("watermark-entry-count", len(accountIDs)))
-}
-
-// readWatermarkTableData reads watermark table data from checkpoint and updates cdcDBs
-func (sm *SnapshotMeta) readWatermarkTableData(
-	ctx context.Context,
-	fs fileservice.FileService,
-	data *CKPReader,
-	startts, endts types.TS,
-) error {
-	// Collect watermark table objects
-	var objects map[uint64]map[objectio.Segmentid]*objectInfo
-	objects = make(map[uint64]map[objectio.Segmentid]*objectInfo, 1)
-	objects[sm.watermarkTableID] = make(map[objectio.Segmentid]*objectInfo)
-
-	collector := func(
-		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
-		_ *map[objectio.Segmentid]*objectInfo,
-		tid uint64,
-		stats objectio.ObjectStats,
-		createTS types.TS, deleteTS types.TS,
-	) {
-		if tid != sm.watermarkTableID {
-			return
-		}
-		if !stats.GetAppendable() {
-			// watermark table only consumes appendable object
-			return
-		}
-		id := stats.ObjectName().SegmentId()
-		watermarkTable := (*objects)[tid]
-
-		obj := watermarkTable[id]
-		if obj == nil {
-			watermarkTable[id] = &objectInfo{
-				stats: stats,
-			}
-		}
-		if !createTS.IsEmpty() {
-			watermarkTable[id].createAt = createTS
-		}
-		if !deleteTS.IsEmpty() {
-			watermarkTable[id].deleteAt = deleteTS
-		}
-	}
-	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
-
-	tObjects := objects[sm.watermarkTableID]
-	orderedInfos := make([]*objectInfo, 0, len(tObjects))
-	for _, info := range tObjects {
-		orderedInfos = append(orderedInfos, info)
-	}
-	sort.Slice(orderedInfos, func(i, j int) bool {
-		return orderedInfos[i].createAt.LT(&orderedInfos[j].createAt)
-	})
-
-	// Collect account_ids, db_names, and table_names from watermark table
-	var accountIDs []uint32
-	var dbNames []string
-	var tableNames []string
-
-	for _, obj := range orderedInfos {
-		if obj.stats.BlkCnt() != 1 {
-			logutil.Warn("GC-CDC-Read-Watermark-Table-P1",
-				zap.String("object", obj.stats.ObjectName().String()),
-				zap.Uint32("blkCnt", obj.stats.BlkCnt()))
-		}
-		objectBat, _, err := ioutil.LoadOneBlock(
-			ctx,
-			fs,
-			obj.stats.ObjectLocation(),
-			objectio.SchemaData,
-		)
-		if err != nil {
-			return err
-		}
-
-		// watermark table schema: account_id, task_id, db_name, table_name, watermark, err_msg, commit_ts
-		// Column indices:
-		// 0: account_id (uint32)
-		// 1: task_id (varchar/uuid) - skip
-		// 2: db_name (varchar)
-		// 3: table_name (varchar)
-		// 4: watermark (varchar) - skip
-		// 5: err_msg (varchar) - skip
-		// len(Vecs)-1: commit_ts (types.TS)
-
-		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[0])
-		dbNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[2])
-		dbNameArea := objectBat.Vecs[2].GetArea()
-		tableNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[3])
-		tableNameArea := objectBat.Vecs[3].GetArea()
-		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
-
-		for i := 0; i < len(accounts); i++ {
-			createAt := creates[i]
-			if createAt.LT(&startts) || createAt.GT(&endts) {
-				continue
-			}
-			accountID := accounts[i]
-			dbName := string(dbNameVarlena[i].GetByteSlice(dbNameArea))
-			tableName := string(tableNameVarlena[i].GetByteSlice(tableNameArea))
-
-			// Find tableInfo by matching account_id, db_name, table_name
-			// Since tableInfo doesn't store db_name and table_name directly,
-			// we need to iterate through all tables in the account to find matching ones
-			// According to the requirement: "只要有数据就整个db都创建了cdc任务"
-			// This means: if there's any data in watermark table, the entire db is CDC-enabled
-			// So we'll add all dbIDs in this account to cdcDBs
-			if tables, ok := sm.tables[accountID]; ok {
-				for _, tableInfo := range tables {
-					// Add all dbIDs in this account to cdcDBs
-					// This matches the requirement: "只要有数据就整个db都创建了cdc任务"
-					sm.cdcDBs[tableInfo.dbID] = struct{}{}
-					logutil.Debug("GC-CDC-Watermark-Data-Matched",
-						zap.String("db-name", dbName),
-						zap.String("table-name", tableName),
-						zap.Uint64("db-id", tableInfo.dbID),
-						zap.Uint64("table-id", tableInfo.tid),
-						zap.Uint32("account-id", accountID))
-				}
-			} else {
-				logutil.Warn("GC-CDC-Watermark-Data-TableInfo-NotFound",
-					zap.String("db-name", dbName),
-					zap.String("table-name", tableName),
-					zap.Uint32("account-id", accountID))
-			}
-
-			// Also collect for potential later use
-			accountIDs = append(accountIDs, accountID)
-			dbNames = append(dbNames, dbName)
-			tableNames = append(tableNames, tableName)
-		}
-	}
-
-	logutil.Info("GC-CDC-Read-Watermark-Table-Data",
-		zap.Int("cdc-db-count", len(sm.cdcDBs)),
-		zap.Int("watermark-entry-count", len(accountIDs)))
-
-	return nil
-}
-
-// IsCDCDB returns true if the database ID has CDC tasks
-func (sm *SnapshotMeta) IsCDCDB(dbID uint64) bool {
-	sm.RLock()
-	defer sm.RUnlock()
-	_, ok := sm.cdcDBs[dbID]
-	return ok
-}
-
 // GetTableInfoByID returns tableInfo by table ID
 func (sm *SnapshotMeta) GetTableInfoByID(tableID uint64) *tableInfo {
 	sm.RLock()
@@ -2336,8 +2222,8 @@ func (sm *SnapshotMeta) GetTableInfoByID(tableID uint64) *tableInfo {
 func (sm *SnapshotMeta) String() string {
 	sm.RLock()
 	defer sm.RUnlock()
-	return fmt.Sprintf("account count: %d, table count: %d, object count: %d, cdc db count: %d",
-		len(sm.tables), len(sm.tableIDIndex), len(sm.objects), len(sm.cdcDBs))
+	return fmt.Sprintf("account count: %d, table count: %d, object count: %d",
+		len(sm.tables), len(sm.tableIDIndex), len(sm.objects))
 }
 
 func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool {

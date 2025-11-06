@@ -173,6 +173,8 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.snapshotMeta,
 		transObjects,
 		e.checkpointCli,
+		e.fs,
+		e.mp,
 	)
 	if err != nil {
 		return err
@@ -357,6 +359,8 @@ func MakeSnapshotAndPitrFineFilter(
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
 	checkpointCli checkpoint.Runner,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (
 	filter FilterFn,
 	err error,
@@ -371,6 +375,19 @@ func MakeSnapshotAndPitrFineFilter(
 		snapshots,
 		pitrs,
 	)
+
+	// Get CDC dbid and minimum watermark map
+	cdcWatermarks, err := snapshotMeta.GetCDC(
+		context.Background(),
+		"",
+		fs,
+		mp,
+	)
+	if err != nil {
+		logutil.Warn("GC-CDC-GetCDC-Error", zap.Error(err))
+		cdcWatermarks = make(map[uint64]types.TS)
+	}
+
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -393,11 +410,19 @@ func MakeSnapshotAndPitrFineFilter(
 
 			// Check if this table belongs to a CDC database
 			// If so, protect aobject and atombstone data from being deleted
+			// Similar to ISCP, we cannot delete aobject and atombstone data
 			if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
-				if snapshotMeta.IsCDCDB(tableInfo.dbID) {
-					// This table is in a CDC database, protect its objects and tombstones
-					// Similar to ISCP, we cannot delete aobject and atombstone data
-					continue
+				if watermark, ok := cdcWatermarks[tableInfo.dbID]; ok {
+					// This table is in a CDC database, check if we should protect it
+					// Protect if the object's createTS is after the watermark
+					if !watermark.IsEmpty() && createTS.GE(&watermark) {
+						// This object is after the watermark, protect it
+						continue
+					}
+					// For aobject and atombstone, always protect them if the db has CDC
+					if stats.GetAppendable() {
+						continue
+					}
 				}
 			}
 
