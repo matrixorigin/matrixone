@@ -17,7 +17,6 @@ package hnsw
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 
@@ -212,11 +211,9 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 		if s.Tblcfg.UseMMap {
 			// To load model with mmap() use LoadIndex with view = true
 			err = idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
-			os.Stderr.WriteString("Load Index with mmap\n")
 		} else {
 			// To load model with memory use LoadIndexFromBuffer
 			err = idx.LoadIndexFromBuffer(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
-			os.Stderr.WriteString("Load Index into memory\n")
 		}
 		if err != nil {
 			break
