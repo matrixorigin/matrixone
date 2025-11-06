@@ -130,8 +130,9 @@ type CDCTaskExecutor struct {
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
 
-	isRunning bool
-	holdCh    chan int
+	// stateMachine manages executor state transitions
+	stateMachine *ExecutorStateMachine
+	holdCh       chan int
 
 	// start wrapper, for ut
 	startFunc func(ctx context.Context) error
@@ -168,6 +169,8 @@ func NewCDCTaskExecutor(
 				packer.Close()
 			},
 		),
+		stateMachine: NewExecutorStateMachine(), // Initialize state machine
+		holdCh:       make(chan int, 1),         // Initialize holdCh to prevent race condition
 	}
 	task.startFunc = task.Start
 	return task
@@ -178,26 +181,44 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	taskName := exec.spec.TaskName
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
+
+	// Transition to Starting state
+	if err = exec.stateMachine.Transition(TransitionStart); err != nil {
+		return moerr.NewInternalErrorf(rootCtx, "cannot start: %v", err)
+	}
+
 	logutil.Info(
 		"CDC-Task-Start",
 		zap.String("task-id", taskId),
 		zap.String("task-name", taskName),
 		zap.String("cn-uuid", cnUUID),
 		zap.Uint32("account-id", accountId),
+		zap.String("state", exec.stateMachine.State().String()),
 	)
 
 	defer func() {
 		if err != nil {
+			// Transition to Failed state
+			if setFailErr := exec.stateMachine.SetFailed(err.Error()); setFailErr != nil {
+				logutil.Warnf("failed to set executor state to Failed: %v", setFailErr)
+			}
+
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
 			exec.activeRoutine.ClosePause()
 			exec.activeRoutine.CloseCancel()
+
+			// UnRegister from TableDetector if already registered
+			if exec.stateMachine.IsRunning() {
+				cdc.GetTableDetector(cnUUID).UnRegister(taskId)
+			}
 
 			updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error())
 			logutil.Error(
 				"CDC-Task-Start-Failed",
 				zap.String("task-id", taskId),
 				zap.String("task-name", taskName),
+				zap.String("state", exec.stateMachine.State().String()),
 				zap.Error(err),
 				zap.NamedError("update-err-msg-err", updateErrMsgErr),
 			)
@@ -227,7 +248,11 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	// register to table scanner
 	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
 
-	exec.isRunning = true
+	// Transition to Running state
+	if err = exec.stateMachine.Transition(TransitionStartSuccess); err != nil {
+		return moerr.NewInternalErrorf(ctx, "cannot transition to running: %v", err)
+	}
+
 	// start success, clear err msg
 	clearErrMsgErr := exec.updateErrMsg(ctx, "")
 
@@ -235,11 +260,11 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		"CDC-Task-Start-Success",
 		zap.String("task-id", taskId),
 		zap.String("task-name", taskName),
+		zap.String("state", exec.stateMachine.State().String()),
 		zap.NamedError("clear-err-msg-err", clearErrMsgErr),
 	)
 
-	// hold
-	exec.holdCh = make(chan int, 1)
+	// hold - wait for Pause/Cancel/Restart signal
 	select {
 	case <-ctx.Done():
 		break
@@ -251,16 +276,23 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 // Resume cdc task from last recorded watermark
 func (exec *CDCTaskExecutor) Resume() error {
+	// Transition to Starting state (via Resume transition)
+	if err := exec.stateMachine.Transition(TransitionResume); err != nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot resume: %v", err)
+	}
+
 	logutil.Info(
 		"CDC-Task-Resume-Start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
+		zap.String("state", exec.stateMachine.State().String()),
 	)
 	defer func() {
 		logutil.Info(
 			"CDC-Task-Resume-Success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
+			zap.String("state", exec.stateMachine.State().String()),
 		)
 	}()
 
@@ -274,25 +306,36 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
+	// Transition to Restarting state
+	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
+	}
+
 	logutil.Info(
 		"CDC-Task-Restart-Start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
+		zap.String("state", exec.stateMachine.State().String()),
 	)
 	defer func() {
 		logutil.Info(
 			"CDC-Task-Restart-Success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
+			zap.String("state", exec.stateMachine.State().String()),
 		)
 	}()
 
-	if exec.isRunning {
+	if exec.stateMachine.IsRunning() {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
-		exec.isRunning = false
 		// let Start() go
 		exec.holdCh <- 1
+	}
+
+	// Transition to Starting state (beginning restart)
+	if err := exec.stateMachine.Transition(TransitionRestartBegin); err != nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot begin restart: %v", err)
 	}
 
 	go func() {
@@ -304,23 +347,33 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 // Pause cdc task
 func (exec *CDCTaskExecutor) Pause() error {
+	// Transition to Pausing state
+	if err := exec.stateMachine.Transition(TransitionPause); err != nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
+	}
+
 	logutil.Info(
 		"CDC-Task-Pause-Start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
+		zap.String("state", exec.stateMachine.State().String()),
 	)
 	defer func() {
+		// Transition to Paused state
+		if err := exec.stateMachine.Transition(TransitionPauseComplete); err != nil {
+			logutil.Warnf("failed to transition to Paused state: %v", err)
+		}
 		logutil.Info(
 			"CDC-Task-Pause-Success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
+			zap.String("state", exec.stateMachine.State().String()),
 		)
 	}()
 
-	if exec.isRunning {
+	if exec.stateMachine.IsRunning() {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.ClosePause()
-		exec.isRunning = false
 		// let Start() go
 		exec.holdCh <- 1
 	}
@@ -329,23 +382,33 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 // Cancel cdc task
 func (exec *CDCTaskExecutor) Cancel() error {
+	// Transition to Cancelling state
+	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
+	}
+
 	logutil.Info(
 		"CDC-Task-Cancel-Start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
+		zap.String("state", exec.stateMachine.State().String()),
 	)
 	defer func() {
+		// Transition to Cancelled state
+		if err := exec.stateMachine.Transition(TransitionCancelComplete); err != nil {
+			logutil.Warnf("failed to transition to Cancelled state: %v", err)
+		}
 		logutil.Info(
 			"CDC-Task-Cancel-Success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
+			zap.String("state", exec.stateMachine.State().String()),
 		)
 	}()
 
-	if exec.isRunning {
+	if exec.stateMachine.IsRunning() {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
-		exec.isRunning = false
 		// let Start() go
 		exec.holdCh <- 1
 	}
@@ -444,6 +507,10 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		return err
 	}
 
+	// Track failed tables for better error reporting
+	failedTables := make(map[string]error)
+	successCount := 0
+
 	for key, info := range allAccountTbls[accountId] {
 		// already running
 		if val, ok := exec.runningReaders.Load(key); ok {
@@ -476,7 +543,9 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
 		if err != nil {
 			logutil.Errorf("cdc task %s get table err msg for table %s failed, err: %v", exec.spec.TaskName, key, err)
-			return err
+			// Don't return immediately - try other tables
+			failedTables[key] = err
+			continue
 		}
 		if hasError {
 			continue
@@ -485,12 +554,40 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
-			return err
-		} else {
-			info.IdChanged = newTableInfo.IdChanged
-			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
+			// Persist error to database for this table (if watermarkUpdater is available)
+			if exec.watermarkUpdater != nil {
+				watermarkKey := cdc.WatermarkKey{
+					AccountId: uint64(exec.spec.Accounts[0].GetId()),
+					TaskId:    exec.spec.TaskId,
+					DBName:    newTableInfo.SourceDbName,
+					TableName: newTableInfo.SourceTblName,
+				}
+				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error()); updateErr != nil {
+					logutil.Warnf("failed to persist error message for table %s: %v", key, updateErr)
+				}
+			}
+			// Don't return immediately - try other tables
+			failedTables[key] = err
+			continue
 		}
+
+		info.IdChanged = newTableInfo.IdChanged
+		successCount++
+		logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
 	}
+
+	// Log summary
+	if len(failedTables) > 0 {
+		failedKeys := make([]string, 0, len(failedTables))
+		for k := range failedTables {
+			failedKeys = append(failedKeys, k)
+		}
+		logutil.Warnf("cdc task %s: %d tables succeeded, %d tables failed: %v",
+			exec.spec.TaskName, successCount, len(failedTables), failedKeys)
+		// Return error to trigger retry by TableDetector
+		return moerr.NewInternalErrorf(ctx, "failed to add pipeline for %d tables", len(failedTables))
+	}
+
 	return nil
 }
 
@@ -618,7 +715,6 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if err != nil {
 		return err
 	}
-	go sinker.Run(ctx, exec.activeRoutine)
 
 	// step 3. new reader (using V2 tableChangeStream)
 	frequencyStr := exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string)
@@ -641,6 +737,15 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.noFull,
 		frequency,
 	)
+
+	// step 4. register reader to runningReaders BEFORE starting goroutines
+	// This ensures the reader can be cleaned up if anything fails
+	key := cdc.GenDbTblKey(info.SourceDbName, info.SourceTblName)
+	exec.runningReaders.Store(key, reader)
+
+	// step 5. start goroutines (sinker first, then reader)
+	// If these fail, the cleanup will be handled by activeRoutine channels
+	go sinker.Run(ctx, exec.activeRoutine)
 	go reader.Run(ctx, exec.activeRoutine)
 
 	return

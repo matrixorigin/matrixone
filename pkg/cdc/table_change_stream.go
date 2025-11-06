@@ -569,8 +569,3 @@ func (s *TableChangeStream) Wait() {
 func (s *TableChangeStream) GetTableInfo() *DbTableInfo {
 	return s.tableInfo
 }
-
-// Deprecated: Use GetTableInfo() instead
-func (s *TableChangeStream) Info() *DbTableInfo {
-	return s.GetTableInfo()
-}

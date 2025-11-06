@@ -158,21 +158,6 @@ func TestNewTableChangeStream_CompositePK(t *testing.T) {
 	assert.Equal(t, 2, stream.insCompositedPkColIdx) // Composite PK col
 }
 
-func TestTableChangeStream_Info(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	assert.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "table1",
-	}
-
-	stream := createTestStream(mp, tableInfo)
-
-	assert.Equal(t, tableInfo, stream.Info())
-}
-
 func TestTableChangeStream_ForceNextInterval(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)

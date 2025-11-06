@@ -2213,18 +2213,24 @@ func Test_handleShowCdc(t *testing.T) {
 }
 
 func TestCdcTask_Resume(t *testing.T) {
-	cdc := &CDCTaskExecutor{
+	executor := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
-		holdCh: make(chan int, 1),
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
 		startFunc: func(_ context.Context) error {
 			return nil
 		},
 	}
+	// Transition to Paused state first
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+	_ = executor.stateMachine.Transition(TransitionPause)
+	_ = executor.stateMachine.Transition(TransitionPauseComplete)
 
-	err := cdc.Resume()
+	err := executor.Resume()
 	assert.NoErrorf(t, err, "Resume()")
 }
 
@@ -2253,17 +2259,20 @@ func TestCdcTask_Restart(t *testing.T) {
 	cdcTask := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
-		cnUUID:           "test-uuid", // Add cnUUID to prevent nil pointer
+		cnUUID:           "test-uuid",
 		spec: &task.CreateCdcDetails{
 			TaskId:   "task1",
 			TaskName: "task1",
 		},
-		holdCh: make(chan int, 1),
+		holdCh:       make(chan int, 1),
+		stateMachine: NewExecutorStateMachine(),
 		startFunc: func(_ context.Context) error {
 			return nil
 		},
-		isRunning: false, // Set to false so Restart() won't try to UnRegister
 	}
+	// Must be in Running state to Restart
+	_ = cdcTask.stateMachine.Transition(TransitionStart)
+	_ = cdcTask.stateMachine.Transition(TransitionStartSuccess)
 
 	err := cdcTask.Restart()
 	assert.NoErrorf(t, err, "Restart()")
@@ -2278,15 +2287,18 @@ func TestCdcTask_Pause(t *testing.T) {
 		<-holdCh
 	}()
 
-	cdc := &CDCTaskExecutor{
+	executor := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
-		isRunning: true,
-		holdCh:    holdCh,
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
 	}
-	err := cdc.Pause()
+	// Transition to Running state
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+	err := executor.Pause()
 	assert.NoErrorf(t, err, "Pause()")
 }
 
@@ -2299,16 +2311,20 @@ func TestCdcTask_Cancel(t *testing.T) {
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
-	cdc := &CDCTaskExecutor{
+	executor := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
-		holdCh:    ch,
-		isRunning: true,
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       ch,
 	}
-	err := cdc.Cancel()
+	// Transition to Running state
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+
+	err := executor.Cancel()
 	assert.NoErrorf(t, err, "Cancel()")
 }
 
