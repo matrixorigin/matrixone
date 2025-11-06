@@ -52,12 +52,12 @@ const (
 )
 
 const (
-	diffAddedLine   = "+"
-	diffRemovedLine = "-"
+	diffAddedLine   = "I"
+	diffRemovedLine = "D"
 
-	diffInsert = iota
-	diffDelete
-	diffUpdate
+	diffInsert = "INSERT"
+	diffDelete = "DELETE"
+	diffUpdate = "UPDATE"
 )
 
 const (
@@ -233,25 +233,25 @@ type tablePair struct {
 	baseSnapshot *plan.Snapshot
 }
 
-type diffExtra struct {
-	inputArgs struct {
-		bh BackgroundExec
-
-		dagInfo branchMetaInfo
-		tarRel  engine.Relation
-		baseRel engine.Relation
-
-		tarSnapshot  *plan.Snapshot
-		baseSnapshot *plan.Snapshot
-	}
-
-	outputArgs struct {
-		rows       [][]any
-		pkKind     int
-		pkColIdxes []int
-		colTypes   []types.Type
-	}
-}
+//type diffExtra struct {
+//	inputArgs struct {
+//		bh BackgroundExec
+//
+//		dagInfo branchMetaInfo
+//		tarRel  engine.Relation
+//		baseRel engine.Relation
+//
+//		tarSnapshot  *plan.Snapshot
+//		baseSnapshot *plan.Snapshot
+//	}
+//
+//	outputArgs struct {
+//		rows       [][]any
+//		pkKind     int
+//		pkColIdxes []int
+//		colTypes   []types.Type
+//	}
+//}
 
 func handleDataBranch(
 	execCtx *ExecCtx,
@@ -266,7 +266,7 @@ func handleDataBranch(
 	case *tree.DataBranchDeleteTable:
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
-		return handleBranchDiff(execCtx, ses, st, nil)
+		return handleBranchDiff(execCtx, ses, st)
 	case *tree.DataBranchMerge:
 		return handleBranchMerge(execCtx, ses, st)
 	default:
@@ -276,91 +276,270 @@ func handleDataBranch(
 	return nil
 }
 
-func handleBranchDiff(
-	execCtx *ExecCtx,
+func diffOnBase(
+	ctx context.Context,
 	ses *Session,
-	stmt *tree.DataBranchDiff,
-	extra *diffExtra,
-) (err error) {
+	bh BackgroundExec,
+	srcTable tree.TableName,
+	dstTable tree.TableName,
+) (
+	rows1 [][]any,
+	rows2 [][]any,
+	colTypes []types.Type,
+	pkColIdxes []int,
+	mrs *MysqlResultSet,
+	lcaType int,
+	srcRel engine.Relation,
+	dstRel engine.Relation,
+	err error,
+) {
 
 	var (
-		bh       BackgroundExec
 		tables   tablePair
-		deferred func(error) error
 		dagInfo  branchMetaInfo
-	)
+		colIdxes []int
+		pkKind   int
 
-	if extra != nil {
-		bh = extra.inputArgs.bh
-		tables.tarRel = extra.inputArgs.tarRel
-		tables.baseRel = extra.inputArgs.baseRel
-		tables.tarSnapshot = extra.inputArgs.tarSnapshot
-		tables.baseSnapshot = extra.inputArgs.baseSnapshot
-		dagInfo = extra.inputArgs.dagInfo
-	} else {
-		// do not open another transaction,
-		// if the clone already executed within a transaction.
-		if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
-			return
-		}
-
-		defer func() {
-			if deferred != nil {
-				err = deferred(err)
-			}
-		}()
-
-		if tables, err = getPairedRelations(
-			execCtx.reqCtx, ses, bh, stmt.TargetTable, stmt.BaseTable,
-		); err != nil {
-			return
-		}
-
-		if dagInfo, err = decideLCABranchTSFromBranchDAG(
-			execCtx.reqCtx, ses, tables,
-		); err != nil {
-			return
-		}
-	}
-
-	var (
 		tarHandle  []engine.ChangesHandle
 		baseHandle []engine.ChangesHandle
-
-		tarTblDef  = tables.tarRel.GetTableDef(execCtx.reqCtx)
-		baseTblDef = tables.baseRel.GetTableDef(execCtx.reqCtx)
 	)
 
-	defer func() {
+	closeHandle := func() {
 		for _, h := range tarHandle {
 			_ = h.Close()
 		}
 		for _, h := range baseHandle {
 			_ = h.Close()
 		}
+		tarHandle = nil
+		baseHandle = nil
+	}
+
+	defer func() {
+		closeHandle()
+		rows1 = sortDiffResultRows(rows1, pkColIdxes, colTypes)
+		rows2 = sortDiffResultRows(rows2, pkColIdxes, colTypes)
 	}()
 
-	if tarHandle, baseHandle, err = constructChangeHandle(
-		execCtx.reqCtx, ses, bh, tables, dagInfo,
+	if tables, err = getPairedRelations(
+		ctx, ses, bh, srcTable, dstTable,
 	); err != nil {
 		return
 	}
 
-	if err = diff(
-		execCtx.reqCtx,
-		ses,
-		tarTblDef,
-		baseTblDef,
-		tarHandle,
-		baseHandle,
-		stmt.OutputOpt,
-		dagInfo,
-		extra,
+	srcRel = tables.tarRel
+	dstRel = tables.baseRel
+
+	if dagInfo, err = decideLCABranchTSFromBranchDAG(
+		ctx, ses, tables,
 	); err != nil {
 		return
 	}
+
+	if mrs, colIdxes, colTypes, pkKind, pkColIdxes, err = buildShowDiffSchema(
+		ctx, ses, tables.tarRel.GetTableDef(ctx), tables.baseRel.CopyTableDef(ctx),
+	); err != nil {
+		return
+	}
+
+	if dagInfo.lcaTableId == 0 {
+		// has no lca
+		lcaType = lcaEmpty
+		if tarHandle, baseHandle, err = constructChangeHandle(
+			ctx, ses, bh, tables, dagInfo,
+		); err != nil {
+			return
+		}
+
+		if rows1, err = hashDiff(
+			ctx, ses, tables.tarRel, tables.baseRel, tarHandle, baseHandle, dagInfo,
+			colTypes, colIdxes, pkKind, pkColIdxes,
+		); err != nil {
+			return
+		}
+
+		closeHandle()
+		return
+	}
+
+	// merge left into right
+	var (
+		lcaRel      engine.Relation
+		lcaSnapshot *plan.Snapshot
+	)
+
+	lcaSnapshot = &plan2.Snapshot{
+		Tenant: &plan.SnapshotTenant{
+			TenantID: ses.GetAccountId(),
+		},
+	}
+
+	if dagInfo.lcaTableId == tables.tarRel.GetTableID(ctx) {
+		// left is the LCA
+		lcaType = lcaLeft
+		lcaRel = tables.tarRel
+		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.baseBranchTS.Physical()}
+		if tables.tarSnapshot != nil && tables.tarSnapshot.TS.Less(*lcaSnapshot.TS) {
+			lcaSnapshot.TS = tables.tarSnapshot.TS
+		}
+	} else if dagInfo.lcaTableId == tables.baseRel.GetTableID(ctx) {
+		// right is the LCA
+		lcaType = lcaRight
+		lcaRel = tables.baseRel
+		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
+		if tables.baseSnapshot != nil && tables.baseSnapshot.TS.Less(*lcaSnapshot.TS) {
+			lcaSnapshot.TS = tables.baseSnapshot.TS
+		}
+	} else {
+		// LCA is other table
+		lcaType = lcaOther
+		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
+		if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
+			lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
+		}
+
+		if lcaRel, err = getRelationById(
+			ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
+			return
+		}
+	}
+
+	//extra1.inputArgs.bh = bh
+	//extra1.inputArgs.tarRel = tables.tarRel
+	//extra1.inputArgs.baseRel = lcaRel
+	//extra1.inputArgs.tarSnapshot = tables.tarSnapshot
+	//extra1.inputArgs.baseSnapshot = lcaSnapshot
+
+	//tables.tarRel = tables.tarRel
+	//tables.baseRel = lcaRel
+	//tables.tarSnapshot = tables.tarSnapshot
+	//tables.baseSnapshot = lcaSnapshot
+	tmpPair := tablePair{
+		tarRel:       tables.tarRel,
+		baseRel:      lcaRel,
+		tarSnapshot:  tables.tarSnapshot,
+		baseSnapshot: lcaSnapshot,
+	}
+
+	if dagInfo, err = decideLCABranchTSFromBranchDAG(
+		ctx, ses, tmpPair,
+	); err != nil {
+		return
+	}
+
+	if dagInfo.tarBranchTS.IsEmpty() {
+		dagInfo.tarBranchTS = types.TimestampToTS(*tmpPair.baseSnapshot.TS)
+	}
+
+	if tarHandle, baseHandle, err = constructChangeHandle(
+		ctx, ses, bh, tmpPair, dagInfo,
+	); err != nil {
+		return
+	}
+
+	if rows1, err = hashDiff(
+		ctx, ses, tmpPair.tarRel, lcaRel, tarHandle, baseHandle, dagInfo,
+		colTypes, colIdxes, pkKind, pkColIdxes,
+	); err != nil {
+		return
+	}
+
+	closeHandle()
+
+	//extra2.inputArgs.bh = bh
+	//extra2.inputArgs.tarRel = tables.baseRel
+	//extra2.inputArgs.baseRel = lcaRel
+	//extra2.inputArgs.tarSnapshot = tables.baseSnapshot
+	//extra2.inputArgs.baseSnapshot = lcaSnapshot
+	//tables.tarRel = tables.baseRel
+	//tables.baseRel = lcaRel
+	//tables.tarSnapshot = tables.baseSnapshot
+	//tables.baseSnapshot = lcaSnapshot
+
+	tmpPair = tablePair{
+		tarRel:       tables.baseRel,
+		baseRel:      lcaRel,
+		tarSnapshot:  tables.baseSnapshot,
+		baseSnapshot: lcaSnapshot,
+	}
+
+	if dagInfo, err = decideLCABranchTSFromBranchDAG(
+		ctx, ses, tmpPair,
+	); err != nil {
+		return
+	}
+
+	if dagInfo.tarBranchTS.IsEmpty() {
+		dagInfo.tarBranchTS = types.TimestampToTS(*tmpPair.baseSnapshot.TS)
+	}
+
+	if tarHandle, baseHandle, err = constructChangeHandle(
+		ctx, ses, bh, tmpPair, dagInfo,
+	); err != nil {
+		return
+	}
+
+	if rows2, err = hashDiff(
+		ctx, ses, tmpPair.tarRel, lcaRel, tarHandle, baseHandle, dagInfo,
+		colTypes, colIdxes, pkKind, pkColIdxes,
+	); err != nil {
+		return
+	}
+
+	closeHandle()
 
 	return
+}
+
+func handleBranchDiff(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchDiff,
+) (err error) {
+
+	var (
+		bh       BackgroundExec
+		deferred func(error) error
+	)
+
+	// do not open another transaction,
+	// if the clone already executed within a transaction.
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	var (
+		rows1      [][]any
+		rows2      [][]any
+		colTypes   []types.Type
+		pkColIdxes []int
+		lcaType    int
+		mrs        *MysqlResultSet
+		srcRel     engine.Relation
+		dstRel     engine.Relation
+	)
+
+	if rows1, rows2, colTypes, pkColIdxes, mrs, lcaType, srcRel, dstRel, err = diffOnBase(
+		execCtx.reqCtx, ses, bh, stmt.TargetTable, stmt.BaseTable,
+	); err != nil {
+		return err
+	}
+
+	collector := &rowsCollector{}
+
+	if err = mergeDiff(
+		execCtx, ses, srcRel, dstRel, rows1, rows2, lcaType, 0, colTypes, pkColIdxes, collector,
+	); err != nil {
+		return err
+	}
+
+	return satisfyDiffOutputOpt(execCtx.reqCtx, ses, collector.rows, mrs, colTypes, stmt.OutputOpt)
 }
 
 func handleBranchMerge(
@@ -373,17 +552,7 @@ func handleBranchMerge(
 		bh          BackgroundExec
 		deferred    func(error) error
 		conflictOpt int
-
-		limitDiff int64
-		tables    tablePair
-		dagInfo   branchMetaInfo
 	)
-
-	branchDiff := &tree.DataBranchDiff{
-		OutputOpt: &tree.DiffOutputOpt{
-			Limit: &limitDiff,
-		},
-	}
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
 		return err
@@ -394,16 +563,20 @@ func handleBranchMerge(
 		}
 	}()
 
-	if tables, err = getPairedRelations(
+	var (
+		rows1      [][]any
+		rows2      [][]any
+		colTypes   []types.Type
+		pkColIdxes []int
+		lcaType    int
+		srcRel     engine.Relation
+		dstRel     engine.Relation
+	)
+
+	if rows1, rows2, colTypes, pkColIdxes, _, lcaType, srcRel, dstRel, err = diffOnBase(
 		execCtx.reqCtx, ses, bh, stmt.SrcTable, stmt.DstTable,
 	); err != nil {
-		return
-	}
-
-	if dagInfo, err = decideLCABranchTSFromBranchDAG(
-		execCtx.reqCtx, ses, tables,
-	); err != nil {
-		return
+		return err
 	}
 
 	conflictOpt = tree.CONFLICT_FAIL
@@ -411,123 +584,19 @@ func handleBranchMerge(
 		conflictOpt = stmt.ConflictOpt.Opt
 	}
 
-	if dagInfo.lcaTableId == 0 {
-		// has no lca
-		var (
-			extra diffExtra
-		)
-		extra.inputArgs.bh = bh
-		extra.inputArgs.dagInfo = dagInfo
-		extra.inputArgs.tarRel = tables.tarRel
-		extra.inputArgs.baseRel = tables.baseRel
-		extra.inputArgs.tarSnapshot = tables.tarSnapshot
-		extra.inputArgs.baseSnapshot = tables.baseSnapshot
-
-		if err = handleBranchDiff(execCtx, ses, branchDiff, &extra); err != nil {
-			return
-		}
-
-		extra.outputArgs.rows = sortDiffResultRows(extra)
-		return mergeDiff(
-			execCtx, bh, ses, tables.baseRel,
-			extra.outputArgs.rows, nil,
-			lcaEmpty, conflictOpt,
-			extra.outputArgs.colTypes,
-			extra.outputArgs.pkColIdxes,
-		)
+	if err = mergeDiff(
+		execCtx, ses, srcRel, dstRel, rows1, rows2, lcaType, conflictOpt, colTypes, pkColIdxes, nil,
+	); err != nil {
+		return err
 	}
 
-	// merge left into right
-	var (
-		extra1      diffExtra
-		extra2      diffExtra
-		lcaType     int
-		lcaRel      engine.Relation
-		lcaSnapshot *plan.Snapshot
-	)
-
-	lcaSnapshot = &plan2.Snapshot{
-		Tenant: &plan.SnapshotTenant{
-			TenantID: ses.GetAccountId(),
-		},
-	}
-
-	if dagInfo.lcaTableId == tables.tarRel.GetTableID(execCtx.reqCtx) {
-		// left is the LCA
-		lcaType = lcaLeft
-		lcaRel = tables.tarRel
-		extra1.inputArgs.dagInfo = dagInfo
-		extra2.inputArgs.dagInfo = dagInfo
-		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.baseBranchTS.Physical()}
-		if tables.tarSnapshot != nil && tables.tarSnapshot.TS.Less(*lcaSnapshot.TS) {
-			lcaSnapshot.TS = tables.tarSnapshot.TS
-		}
-	} else if dagInfo.lcaTableId == tables.baseRel.GetTableID(execCtx.reqCtx) {
-		// right is the LCA
-		lcaType = lcaRight
-		lcaRel = tables.baseRel
-		extra1.inputArgs.dagInfo = dagInfo
-		extra2.inputArgs.dagInfo = dagInfo
-		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-		if tables.baseSnapshot != nil && tables.baseSnapshot.TS.Less(*lcaSnapshot.TS) {
-			lcaSnapshot.TS = tables.baseSnapshot.TS
-		}
-	} else {
-		// LCA is other table
-		lcaType = lcaOther
-		//minBranchTS := dagInfo.tarBranchTS
-		//if dagInfo.baseBranchTS.LT(&minBranchTS) {
-		//	minBranchTS = dagInfo.baseBranchTS
-		//}
-		extra1.inputArgs.dagInfo = dagInfo
-		extra2.inputArgs.dagInfo = dagInfo
-
-		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-		if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
-			lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
-		}
-
-		if lcaRel, err = getRelationById(
-			execCtx.reqCtx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
-			return
-		}
-	}
-
-	extra1.inputArgs.bh = bh
-	extra1.inputArgs.tarRel = tables.tarRel
-	extra1.inputArgs.baseRel = lcaRel
-	extra1.inputArgs.tarSnapshot = tables.tarSnapshot
-	extra1.inputArgs.baseSnapshot = lcaSnapshot
-
-	if err = handleBranchDiff(execCtx, ses, branchDiff, &extra1); err != nil {
-		return
-	}
-
-	extra2.inputArgs.bh = bh
-	extra2.inputArgs.tarRel = tables.baseRel
-	extra2.inputArgs.baseRel = lcaRel
-	extra2.inputArgs.tarSnapshot = tables.baseSnapshot
-	extra2.inputArgs.baseSnapshot = lcaSnapshot
-
-	if err = handleBranchDiff(execCtx, ses, branchDiff, &extra2); err != nil {
-		return
-	}
-
-	extra1.outputArgs.rows = sortDiffResultRows(extra1)
-	extra2.outputArgs.rows = sortDiffResultRows(extra2)
-	return mergeDiff(
-		execCtx, bh, ses, tables.baseRel,
-		extra1.outputArgs.rows, extra2.outputArgs.rows,
-		lcaType, conflictOpt,
-		extra1.outputArgs.colTypes,
-		extra1.outputArgs.pkColIdxes,
-	)
+	return
 }
 
 func mergeDiff(
 	execCtx *ExecCtx,
-	bh BackgroundExec,
 	ses *Session,
+	srcRel engine.Relation,
 	dstRel engine.Relation,
 	rows1 [][]any,
 	rows2 [][]any,
@@ -535,160 +604,231 @@ func mergeDiff(
 	conflictOpt int,
 	colTypes []types.Type,
 	pkColIdxes []int,
+	outRows *rowsCollector,
 ) (err error) {
 
-	var cnt int
-	buf := acquireBuffer()
-	defer releaseBuffer(buf)
+	var (
+		replaceCnt int
+		deleteCnt  int
 
-	sqlRunner, runnerErr := newAsyncSQLExecutor(runtime.NumCPU())
-	if runnerErr != nil {
-		return runnerErr
-	}
-	defer func() {
-		waitErr := sqlRunner.Wait()
-		sqlRunner.Close()
-		if err == nil {
-			err = waitErr
-		}
-	}()
+		replaceIntoBuf *bytes.Buffer
+		deleteFromBuf  *bytes.Buffer
+	)
 
-	initSqlBuf := func() {
-		cnt = 0
-		buf.Reset()
-		buf.WriteString(fmt.Sprintf("replace into %s.%s values ",
+	if outRows == nil {
+		replaceIntoBuf = acquireBuffer()
+		deleteFromBuf = acquireBuffer()
+
+		defer func() {
+			releaseBuffer(replaceIntoBuf)
+			releaseBuffer(deleteFromBuf)
+		}()
+
+		replaceIntoBuf.Reset()
+		deleteFromBuf.Reset()
+
+		replaceIntoBuf.WriteString(fmt.Sprintf(
+			"replace into %s.%s values ",
 			dstRel.GetTableDef(execCtx.reqCtx).DbName,
 			dstRel.GetTableDef(execCtx.reqCtx).Name),
 		)
+
+		if len(pkColIdxes) == 1 {
+			deleteFromBuf.WriteString(fmt.Sprintf(
+				"delete from %s.%s where %s in (",
+				dstRel.GetTableDef(execCtx.reqCtx).DbName,
+				dstRel.GetTableDef(execCtx.reqCtx).Name,
+				dstRel.GetTableDef(execCtx.reqCtx).Cols[pkColIdxes[0]].Name,
+			))
+		} else {
+			pkNames := make([]string, len(pkColIdxes))
+			for i, pkColIdx := range pkColIdxes {
+				pkNames[i] = dstRel.GetTableDef(execCtx.reqCtx).Cols[pkColIdx].Name
+			}
+			deleteFromBuf.WriteString(fmt.Sprintf(
+				"delete from %s.%s where (%s) in (",
+				dstRel.GetTableDef(execCtx.reqCtx).DbName,
+				dstRel.GetTableDef(execCtx.reqCtx).Name,
+				strings.Join(pkNames, ","),
+			))
+		}
 	}
 
-	flushCurrent := func() error {
-		if cnt == 0 {
-			return nil
+	writeReplaceInto := func(row []any) {
+		if replaceCnt > 0 {
+			replaceIntoBuf.WriteString(",")
 		}
-
-		sql := buf.String()
-		if err := sqlRunner.Submit(func(ctx context.Context) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-
-			sqlRet, err := sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), sql)
-			if err != nil {
-				return err
-			}
-			sqlRet.Close()
-			return nil
-		}); err != nil {
-			return err
-		}
-
-		initSqlBuf()
-		return nil
-	}
-
-	writeOneRow := func(row []any) error {
-		if buf.Len() > 0 && buf.Bytes()[buf.Len()-1] == ')' {
-			buf.WriteString(",")
-		}
-		cnt++
-		buf.WriteString("(")
+		replaceCnt++
+		replaceIntoBuf.WriteString("(")
 		for j := 2; j < len(row); j++ {
-			formatValIntoString(ses, row[j], colTypes[j-2], buf)
+			formatValIntoString(ses, row[j], colTypes[j-2], replaceIntoBuf)
 			if j != len(row)-1 {
-				buf.WriteString(",")
+				replaceIntoBuf.WriteString(",")
 			}
 		}
-		buf.WriteString(")")
-
-		if cnt >= batchCnt/2 {
-			if err := flushCurrent(); err != nil {
-				return err
-			}
-		}
-		return nil
+		replaceIntoBuf.WriteString(")")
 	}
 
-	initSqlBuf()
-
-	switch lcaType {
-	case lcaEmpty:
-		for _, row := range rows1 {
-			if flag := row[1].(int); flag == diffInsert {
-				// apply into dstRel
-				err = writeOneRow(row)
-			} else if flag == diffUpdate {
-				// conflict: t1 insert/update, t2 insert/update
-				switch conflictOpt {
-				case tree.CONFLICT_FAIL:
-					return moerr.NewInternalErrorNoCtxf("merge diff conflict happend")
-				case tree.CONFLICT_SKIP:
-				// do nothing
-				case tree.CONFLICT_ACCEPT:
-					// apply into dstRel
-					err = writeOneRow(row)
-				}
-			} //else {
-			// diff delete
-			// do nothing
-			//}
-
-			if err != nil {
-				return err
+	writeDeleteFrom := func(row []any) {
+		if deleteCnt > 0 {
+			deleteFromBuf.WriteString(",")
+		}
+		deleteCnt++
+		if len(pkColIdxes) > 1 {
+			deleteFromBuf.WriteString("(")
+		}
+		for idx, colIdx := range pkColIdxes {
+			formatValIntoString(ses, row[colIdx+2], colTypes[colIdx+2], deleteFromBuf)
+			if idx != len(pkColIdxes)-1 {
+				deleteFromBuf.WriteString(",")
 			}
 		}
-	case lcaOther, lcaLeft, lcaRight:
-		i, j := 0, 0
-		for i < len(rows1) && j < len(rows2) {
-			// row1.(insert, delete, update) v.s. row2.(insert, delete, update)
-			if rows1[i][1].(int) == diffDelete {
-				i++
+		if len(pkColIdxes) > 1 {
+			deleteFromBuf.WriteString("(")
+		}
+	}
+
+	if lcaType == lcaEmpty {
+		var prevRow []any
+		for _, row := range rows1 {
+			if outRows != nil {
+				outRows.addRow(row)
 				continue
 			}
 
-			cmp := compareRows(rows1[i], rows2[j], pkColIdxes, colTypes, true)
-			if cmp == 0 { // conflict
-				switch conflictOpt {
-				case tree.CONFLICT_FAIL:
-					return moerr.NewInternalErrorNoCtxf("merge diff conflict happend")
-				case tree.CONFLICT_SKIP:
-					i++
-					j++
-				case tree.CONFLICT_ACCEPT:
-					err = writeOneRow(rows1[i])
-					i++
-					j++
+			if len(prevRow) == 0 || row[0] == prevRow[0] {
+				prevRow = row
+				if row[0].(string) == srcRel.GetTableName() {
+					writeReplaceInto(row)
 				}
 			} else {
-				err = writeOneRow(rows1[i])
-				i++
-				if cmp > 0 {
-					j++
+				if compareRows(row, prevRow, pkColIdxes, colTypes, true) == 0 {
+					switch conflictOpt {
+					case tree.CONFLICT_FAIL:
+						return moerr.NewInternalErrorNoCtxf("merge diff conflict happend %v <=> %v", row, prevRow)
+					case tree.CONFLICT_SKIP:
+					// do nothing
+					case tree.CONFLICT_ACCEPT:
+						if row[0].(string) == srcRel.GetTableName() {
+							writeReplaceInto(row)
+						}
+					}
+				} else {
+					if row[0].(string) == srcRel.GetTableName() {
+						writeReplaceInto(row)
+					}
 				}
 			}
+		}
+	} else {
+		writeRow := func(row []any) {
+			if row[1].(string) == diffDelete {
+				writeDeleteFrom(row)
+			} else {
+				writeReplaceInto(row)
+			}
+		}
 
-			if err != nil {
-				return err
+		// lcaOther, lcaLeft,lcaRight, let rows1 be the diff between the src table and lca
+		i, j := 0, 0
+		for i < len(rows1) && j < len(rows2) {
+			if cmp := compareRows(
+				rows1[i], rows2[j], pkColIdxes, colTypes, true,
+			); cmp == 0 {
+				if rows1[i][1] == rows2[j][1] {
+					// insert = insert
+					// delete = delete
+					// update = update
+					if compareRows(rows1[i], rows2[j], pkColIdxes, colTypes, false) == 0 {
+						// insert/delete/update the same row, skip
+						i++
+						j++
+						continue
+					}
+
+					if outRows != nil {
+						outRows.addRow(rows1[i])
+						outRows.addRow(rows2[j])
+						i++
+						j++
+						continue
+					}
+
+					switch conflictOpt {
+					case tree.CONFLICT_FAIL:
+						return moerr.NewInternalErrorNoCtxf("merge diff conflict happend %v <=> %v", rows1[i], rows2[j])
+					case tree.CONFLICT_SKIP:
+						i++
+						j++
+					case tree.CONFLICT_ACCEPT:
+						writeRow(rows1[i])
+						i++
+						j++
+					}
+				}
+			} else {
+				if cmp > 0 {
+					if outRows != nil {
+						outRows.addRow(rows2[j])
+					}
+					j++
+				} else {
+					if outRows != nil {
+						outRows.addRow(rows1[i])
+					} else {
+						writeRow(rows1[i])
+					}
+					i++
+				}
 			}
 		}
 
 		for ; i < len(rows1); i++ {
-			if rows1[i][1].(int) == diffDelete {
-				continue
-			}
-
-			if err = writeOneRow(rows1[i]); err != nil {
-				return err
+			if outRows != nil {
+				outRows.addRow(rows1[i])
+			} else {
+				writeRow(rows1[i])
 			}
 		}
-	default:
+
+		if outRows != nil {
+			for ; j < len(rows2); j++ {
+				outRows.addRow(rows2[j])
+			}
+		}
 	}
 
-	if err := flushCurrent(); err != nil {
-		return err
+	if outRows == nil {
+		err = sqlexec.RunTxn(sqlexec.NewSqlProcess(ses.proc), func(txnExecutor executor.TxnExecutor) error {
+			var (
+				err2 error
+				ret  executor.Result
+			)
+
+			if deleteCnt > 0 {
+				deleteFromBuf.WriteString(")")
+				if ret, err2 = txnExecutor.Exec(
+					deleteFromBuf.String(), executor.StatementOption{},
+				); err2 != nil {
+					return err2
+				}
+				ret.Close()
+			}
+
+			if replaceCnt > 0 {
+				if ret, err2 = txnExecutor.Exec(
+					replaceIntoBuf.String(), executor.StatementOption{},
+				); err2 != nil {
+					return err2
+				}
+				ret.Close()
+			}
+
+			return nil
+		})
 	}
 
-	return nil
+	return err
 }
 
 func compareRows(
@@ -696,12 +836,30 @@ func compareRows(
 	row2 []any,
 	pkColIdxes []int,
 	colTypes []types.Type,
-	onlyByPK bool,
+	comparePK bool,
 ) int {
 
-	for i, idx := range pkColIdxes {
+	if comparePK {
+		for i, idx := range pkColIdxes {
+			if cmp := types.CompareValues(
+				row1[idx+2], row2[idx+2], colTypes[i].Oid,
+			); cmp == 0 {
+				continue
+			} else {
+				return cmp
+			}
+		}
+		return 0
+	}
+
+	for i := 2; i < len(row1); i++ {
+		if slices.Index(pkColIdxes, i-2) != -1 {
+			// skip pk
+			continue
+		}
+
 		if cmp := types.CompareValues(
-			row1[idx+2], row2[idx+2], colTypes[i].Oid,
+			row1[i], row2[i], colTypes[i-2].Oid,
 		); cmp == 0 {
 			continue
 		} else {
@@ -709,29 +867,21 @@ func compareRows(
 		}
 	}
 
-	if onlyByPK {
-		return 0
-	}
-
-	// "+" < "-"
-	// duplicate pks, the "-" will be the first
-	return strings.Compare(row2[1].(string), row1[1].(string))
+	return 0
 }
 
 func sortDiffResultRows(
-	extra diffExtra,
+	rows [][]any,
+	pkColIdxes []int,
+	colTypes []types.Type,
 ) (newRows [][]any) {
 
-	var (
-		rows = extra.outputArgs.rows
-	)
-
 	twoRowsCompare := func(a, b []any, onlyByPK bool) int {
-		return compareRows(a, b, extra.outputArgs.pkColIdxes, extra.outputArgs.colTypes, onlyByPK)
+		return compareRows(a, b, pkColIdxes, colTypes, onlyByPK)
 	}
 
 	slices.SortFunc(rows, func(a, b []any) int {
-		return twoRowsCompare(a, b, false)
+		return twoRowsCompare(a, b, true)
 	})
 
 	appendNewRow := func(row []any) {
@@ -745,8 +895,11 @@ func sortDiffResultRows(
 
 	mergeTwoRows := func(row1, row2 []any) {
 		// merge two rows to a single row
-		// key the row with "+" flag, should be the second
-		newRows = append(newRows, row2)
+		if row1[1].(string) == diffAddedLine {
+			newRows = append(newRows, row1)
+		} else {
+			newRows = append(newRows, row2)
+		}
 		newRows[len(newRows)-1][1] = diffUpdate
 	}
 
@@ -772,35 +925,40 @@ func sortDiffResultRows(
 	return
 }
 
-func diff(
+func hashDiff(
 	ctx context.Context,
 	ses *Session,
-	tarTblDef *plan.TableDef,
-	baseTblDef *plan.TableDef,
+	tarRel engine.Relation,
+	baseRel engine.Relation,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
-	outputOpt *tree.DiffOutputOpt,
 	dagInfo branchMetaInfo,
-	extra *diffExtra,
-) (err error) {
+	colTypes []types.Type,
+	colIdxes []int,
+	pkKind int,
+	pkColIdxes []int,
+) (
+	rows [][]any,
+	err error,
+) {
 
 	var (
-		mp     = ses.proc.Mp()
-		pkKind int
-
-		pkColIdxes     []int
-		neededColIdxes []int
-		neededColTypes []types.Type
+		mp = ses.proc.Mp()
 
 		baseDataHashmap      databranchutils.BranchHashmap
 		baseTombstoneHashmap databranchutils.BranchHashmap
+
+		tarTblDef  = tarRel.GetTableDef(ctx)
+		baseTblDef = baseRel.GetTableDef(ctx)
 	)
 
 	collector := &rowsCollector{}
 	delsRunner, runnerErr := newAsyncSQLExecutor(runtime.NumCPU(), ctx)
 	if runnerErr != nil {
-		return runnerErr
+		err = runnerErr
+		return
 	}
+
 	var delsWaited bool
 	defer func() {
 		if !delsWaited {
@@ -818,38 +976,7 @@ func diff(
 		if baseTombstoneHashmap != nil {
 			baseTombstoneHashmap.Close()
 		}
-
-		if extra != nil && err == nil {
-			extra.outputArgs.rows = collector.rows
-			extra.outputArgs.pkKind = pkKind
-			extra.outputArgs.colTypes = neededColTypes
-			extra.outputArgs.pkColIdxes = pkColIdxes
-		}
 	}()
-
-	// case 1: fake pk, combined all columns as the PK
-	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		pkKind = fakeKind
-		for i, col := range baseTblDef.Cols {
-			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				pkColIdxes = append(pkColIdxes, i)
-			}
-		}
-	} else if baseTblDef.Pkey.CompPkeyCol != nil {
-		// case 2: composite pk, combined all pks columns as the PK
-		pkKind = compositeKind
-		pkNames := baseTblDef.Pkey.Names
-		for _, name := range pkNames {
-			idx := int(baseTblDef.Name2ColIndex[name])
-			pkColIdxes = append(pkColIdxes, idx)
-		}
-	} else {
-		// normal pk
-		pkKind = normalKind
-		pkName := baseTblDef.Pkey.PkeyColName
-		idx := int(baseTblDef.Name2ColIndex[pkName])
-		pkColIdxes = append(pkColIdxes, idx)
-	}
 
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
 		ctx, mp, dagInfo.lcaTableId, pkColIdxes, baseHandle,
@@ -858,7 +985,6 @@ func diff(
 	}
 
 	var (
-		mrs      *MysqlResultSet
 		pkVecs   []*vector.Vector
 		checkRet []databranchutils.GetResult
 
@@ -873,7 +999,6 @@ func diff(
 		if vec == nil || vec.Length() == 0 {
 			return nil
 		}
-
 		taskVec := vec
 		if err := delsRunner.Submit(func(taskCtx context.Context) error {
 			defer taskVec.Free(mp)
@@ -886,7 +1011,7 @@ func diff(
 				tarTblDef, baseTblDef,
 				snap, dagInfo.lcaTableId,
 				pkColIdxes,
-				neededColTypes,
+				colTypes,
 			)
 			if err != nil {
 				return err
@@ -915,12 +1040,6 @@ func diff(
 			baseDelsOnLCA.Free(mp)
 		}
 	}()
-
-	if mrs, neededColIdxes, neededColTypes, err = buildShowDiffSchema(
-		ctx, ses, tarTblDef, baseTblDef,
-	); err != nil {
-		return
-	}
 
 	// check existence
 	for _, handle := range tarHandle {
@@ -952,12 +1071,12 @@ func diff(
 				for i := range checkRet {
 					// not exists in the base table
 					if !checkRet[i].Exists {
-						row := make([]any, len(neededColIdxes)+2)
+						row := make([]any, len(colIdxes)+2)
 						row[0] = tarTblDef.Name
 						row[1] = diffAddedLine
 
-						for x, idx := range neededColIdxes {
-							row[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), neededColTypes[x].Oid)
+						for x, idx := range colIdxes {
+							row[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), colTypes[x].Oid)
 						}
 						collector.addRow(row)
 					} else {
@@ -974,7 +1093,7 @@ func diff(
 								return
 							}
 
-							for _, idx := range neededColIdxes {
+							for _, idx := range colIdxes {
 								// skip the keys, already compared
 								if slices.Index(pkColIdxes, idx) != -1 {
 									continue
@@ -988,13 +1107,13 @@ func diff(
 							}
 
 							if !allEqual { // the diff comes from the update operations
-								row1 := make([]any, len(neededColIdxes)+2)
-								row2 := make([]any, len(neededColIdxes)+2)
-								row1[0], row1[1] = tarTblDef.Name, diffRemovedLine
+								row1 := make([]any, len(colIdxes)+2)
+								row2 := make([]any, len(colIdxes)+2)
+								row1[0], row1[1] = baseTblDef.Name, diffAddedLine
 								row2[0], row2[1] = tarTblDef.Name, diffAddedLine
-								for x, idx := range neededColIdxes {
+								for x, idx := range colIdxes {
 									row1[idx+2] = tuple[idx]
-									row2[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), neededColTypes[x].Oid)
+									row2[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), colTypes[x].Oid)
 								}
 								collector.addRows([][]any{row1, row2})
 							}
@@ -1044,7 +1163,7 @@ func diff(
 	// iterate the left base table data
 	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
 		for _, r := range data {
-			row := append([]interface{}{}, tarTblDef.Name, diffRemovedLine)
+			row := append([]interface{}{}, baseTblDef.Name, diffAddedLine)
 			if tuple, _, err := baseDataHashmap.DecodeRow(r); err != nil {
 				return err
 			} else {
@@ -1109,21 +1228,21 @@ func diff(
 		return
 	}
 	delsWaited = true
-
-	return satisfyDiffOutputOpt(ctx, ses, collector, mrs, neededColTypes, outputOpt)
+	rows = collector.rows
+	return
 }
 
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	ses *Session,
-	collector *rowsCollector,
+	rows [][]any,
 	mrs *MysqlResultSet,
 	neededColTypes []types.Type,
 	outputOpt *tree.DiffOutputOpt,
 ) (err error) {
 
 	fillMrsWithRows := func(limit int64) {
-		rows := collector.snapshot()
+		//rows := collector.snapshot()
 		for i, row := range rows {
 			if limit >= 0 && int64(i) >= limit {
 				break
@@ -1167,7 +1286,7 @@ func satisfyDiffOutputOpt(
 		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 		mrs.AddColumn(col)
-		mrs.AddRow([]any{int64(len(collector.rows))})
+		mrs.AddRow([]any{int64(len(rows))})
 
 		return trySaveQueryResult(ctx, ses, mrs)
 	}
@@ -1226,11 +1345,16 @@ func handleDelsOnLCA(
 	var (
 		sql         string
 		flag        = diffRemovedLine
+		tableName   = tarTblDef.Name
 		lcaTblDef   *plan.TableDef
 		prepareSqls []string
 		cleanSqls   []string
 		mots        = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 	)
+
+	if !isTarDels {
+		tableName = baseTblDef.Name
+	}
 
 	buf := acquireBuffer()
 	defer releaseBuffer(buf)
@@ -1252,10 +1376,6 @@ func handleDelsOnLCA(
 		}); err != nil {
 			return nil, err
 		}
-	}
-
-	if !isTarDels {
-		flag = diffAddedLine
 	}
 
 	// composite pk
@@ -1385,7 +1505,7 @@ func handleDelsOnLCA(
 		sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
 			for i := range rowCnt {
 				row := make([]any, len(cols)+2)
-				row[0] = tarTblDef.Name
+				row[0] = tableName
 				row[1] = flag
 				for j := range cols {
 					row[j+2] = types.DecodeValue(cols[j].GetRawBytesAt(i), colTypes[j].Oid)
@@ -1449,11 +1569,42 @@ func buildShowDiffSchema(
 	ses *Session,
 	tarTblDef *plan.TableDef,
 	baseTblDef *plan.TableDef,
-) (mrs *MysqlResultSet, neededColIdxes []int, neededColTypes []types.Type, err error) {
+) (
+	mrs *MysqlResultSet,
+	neededColIdxes []int,
+	neededColTypes []types.Type,
+	pkKind int,
+	pkColIdxes []int,
+	err error,
+) {
 
 	var (
 		showCols = make([]*MysqlColumn, 0, 2)
 	)
+
+	// case 1: fake pk, combined all columns as the PK
+	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		pkKind = fakeKind
+		for i, col := range baseTblDef.Cols {
+			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
+				pkColIdxes = append(pkColIdxes, i)
+			}
+		}
+	} else if baseTblDef.Pkey.CompPkeyCol != nil {
+		// case 2: composite pk, combined all pks columns as the PK
+		pkKind = compositeKind
+		pkNames := baseTblDef.Pkey.Names
+		for _, name := range pkNames {
+			idx := int(baseTblDef.Name2ColIndex[name])
+			pkColIdxes = append(pkColIdxes, idx)
+		}
+	} else {
+		// normal pk
+		pkKind = normalKind
+		pkName := baseTblDef.Pkey.PkeyColName
+		idx := int(baseTblDef.Name2ColIndex[pkName])
+		pkColIdxes = append(pkColIdxes, idx)
+	}
 
 	//  -----------------------------------------
 	// |  tar_table_name  | flag |  columns data |
@@ -1490,7 +1641,7 @@ func buildShowDiffSchema(
 		mrs.AddColumn(col)
 	}
 
-	return mrs, neededColIdxes, neededColTypes, nil
+	return
 }
 
 func buildHashmapForBaseTable(
