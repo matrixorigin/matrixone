@@ -506,7 +506,7 @@ func (s *TableChangeStream) processWithTxn(
 		return err
 	}
 
-	logutil.Info(
+	logutil.Debug(
 		"CDC-TableChangeStream-CollectChanges",
 		zap.String("table", s.tableInfo.String()),
 		zap.String("from-ts", fromTs.ToString()),
@@ -618,7 +618,7 @@ func (s *TableChangeStream) processWithTxn(
 			s.progressTracker.UpdateWatermark(toTs)
 			s.progressTracker.RecordTransaction()
 
-			logutil.Info(
+			logutil.Debug(
 				"CDC-TableChangeStream-RoundComplete",
 				zap.String("table", s.tableInfo.String()),
 				zap.Uint64("batches-processed", batchCount),

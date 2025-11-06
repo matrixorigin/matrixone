@@ -106,7 +106,7 @@ func (pt *ProgressTracker) SetState(state string) {
 		pt.lastStateChange = time.Now()
 		pt.stateChangeCount.Add(1)
 
-		logutil.Info(
+		logutil.Debug(
 			"CDC-ProgressTracker-StateChange",
 			zap.String("table", pt.tableKey()),
 			zap.String("new-state", state),
@@ -134,7 +134,7 @@ func (pt *ProgressTracker) StartRound(fromTs, toTs types.TS) {
 	pt.currentRoundBatches.Store(0)
 	pt.totalRounds.Add(1)
 
-	logutil.Info(
+	logutil.Debug(
 		"CDC-ProgressTracker-RoundStart",
 		zap.String("table", pt.tableKey()),
 		zap.String("from-ts", fromTs.ToString()),
@@ -179,7 +179,7 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 	currentRoundRows := pt.currentRoundRows.Load()
 	currentRoundBatches := pt.currentRoundBatches.Load()
 
-	logutil.Info(
+	logutil.Debug(
 		"CDC-ProgressTracker-RoundEnd",
 		zap.String("table", pt.tableKey()),
 		zap.Bool("success", success),
@@ -230,7 +230,7 @@ func (pt *ProgressTracker) UpdateWatermark(newWatermark types.TS) {
 	pt.lastWatermarkUpdate = time.Now()
 	pt.watermarkUpdateCount.Add(1)
 
-	logutil.Info(
+	logutil.Debug(
 		"CDC-ProgressTracker-WatermarkUpdate",
 		zap.String("table", pt.tableKey()),
 		zap.String("old-watermark", oldWatermark.ToString()),

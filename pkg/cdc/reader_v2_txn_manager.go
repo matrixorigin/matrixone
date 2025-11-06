@@ -150,6 +150,15 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 
 	toTs := tm.tracker.GetToTs()
 
+	logutil.Debug(
+		"CDC-TransactionManager-CommitTransaction-Start",
+		zap.String("task-id", tm.taskId),
+		zap.String("db", tm.dbName),
+		zap.String("table", tm.tableName),
+		zap.String("from-ts", tm.tracker.GetFromTs().ToString()),
+		zap.String("to-ts", toTs.ToString()),
+	)
+
 	// Step 1: Send COMMIT to sinker
 	tm.sinker.SendCommit()
 	// Send dummy to ensure COMMIT is sent

@@ -223,12 +223,8 @@ var CreateMysqlSinker2 = func(
 		ar,
 	)
 
-	// 6. Start consumer goroutine
-	sinker.wg.Add(1)
-	go func() {
-		defer sinker.wg.Done()
-		sinker.Run(ctx, ar)
-	}()
+	// Note: Run() will be started by the caller (e.g., cdc_executor.go)
+	// This maintains compatibility with the old mysqlSinker pattern
 
 	logutil.Info(
 		"CDC-CreateMysqlSinker2-Success",
@@ -259,7 +255,7 @@ func NewMysqlSinker2(
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
 		ar:               ar,
-		cmdCh:            make(chan *Command, 0), // Unbuffered for backpressure
+		cmdCh:            make(chan *Command), // Unbuffered for backpressure
 		closed:           false,
 	}
 
@@ -530,12 +526,41 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 
 	// Build and execute INSERT SQL
 	if cmd.InsertAtmBatch != nil && cmd.InsertAtmBatch.RowCount() > 0 {
-		// Note: InsertAtmBatch needs to be converted to regular batch for BuildInsertSQL
-		// For now, we'll skip this - will implement in next iteration
-		// TODO: Implement conversion from AtomicBatch to batch.Batch for inserts
-		logutil.Warn("CDC-MySQLSinker2-InsertAtmBatch-Skipped",
-			zap.String("table", s.dbTblInfo.String()),
-			zap.Int("rows", insertRows))
+		// AtomicBatch contains multiple source batches, we need to process each one
+		for _, srcBatch := range cmd.InsertAtmBatch.Batches {
+			if srcBatch == nil || srcBatch.RowCount() == 0 {
+				continue
+			}
+
+			sqls, err := s.builder.BuildInsertSQL(ctx, srcBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
+			if err != nil {
+				logutil.Error("CDC-MySQLSinker2-BuildInsertSQL-Failed",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Int("rows", srcBatch.RowCount()),
+					zap.Error(err))
+				return err
+			}
+
+			for i, sql := range sqls {
+				sqlStart := time.Now()
+				if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
+					logutil.Error("CDC-MySQLSinker2-ExecInsertSQL-Failed",
+						zap.String("table", s.dbTblInfo.String()),
+						zap.Int("sql-index", i),
+						zap.Int("total-sqls", len(sqls)),
+						zap.Duration("duration", time.Since(sqlStart)),
+						zap.Error(err))
+					return err
+				}
+
+				if time.Since(sqlStart) > time.Second {
+					logutil.Warn("CDC-MySQLSinker2-ExecInsertSQL-Slow",
+						zap.String("table", s.dbTblInfo.String()),
+						zap.Int("sql-index", i),
+						zap.Duration("duration", time.Since(sqlStart)))
+				}
+			}
+		}
 	}
 
 	// Build and execute DELETE SQL
@@ -575,6 +600,14 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 		zap.Int("insert-rows", insertRows),
 		zap.Int("delete-rows", deleteRows),
 		zap.Duration("total-duration", time.Since(start)))
+
+	// Clean up atomic batches after processing
+	if cmd.InsertAtmBatch != nil {
+		cmd.InsertAtmBatch.Close()
+	}
+	if cmd.DeleteAtmBatch != nil {
+		cmd.DeleteAtmBatch.Close()
+	}
 
 	return nil
 }

@@ -152,7 +152,7 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		rows = data.InsertBatch.RowCount()
 	}
 
-	logutil.Info(
+	logutil.Debug(
 		"CDC-DataProcessor-ProcessSnapshot-Start",
 		zap.String("task-id", dp.taskId),
 		zap.Uint64("account-id", dp.accountId),
@@ -162,6 +162,17 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		zap.String("from-ts", dp.fromTs.ToString()),
 		zap.String("to-ts", dp.toTs.ToString()),
 	)
+
+	// Skip if no data (empty table snapshot)
+	if rows == 0 {
+		logutil.Debug(
+			"CDC-DataProcessor-ProcessSnapshot-SkipEmpty",
+			zap.String("task-id", dp.taskId),
+			zap.String("db", dp.dbName),
+			zap.String("table", dp.tableName),
+		)
+		return nil
+	}
 
 	// Begin transaction if needed (unless initSnapshotSplitTxn is set)
 	tracker := dp.txnManager.GetTracker()
@@ -190,7 +201,11 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 
 	// Note: We don't clean data.InsertBatch here because Sink() takes ownership
 
-	logutil.Info(
+	// Note: For initSnapshotSplitTxn mode, we DON'T update watermark after each batch
+	// because snapshot data might span multiple batches.
+	// Watermark should only be updated when ALL snapshot data is processed (in processNoMoreData)
+
+	logutil.Debug(
 		"CDC-DataProcessor-ProcessSnapshot-Complete",
 		zap.String("task-id", dp.taskId),
 		zap.String("db", dp.dbName),
@@ -278,6 +293,10 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 		if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
 			return err
 		}
+	} else {
+		// Transaction already active - update the toTs to the latest value
+		// This is important when multiple Tail batches are processed in one transaction
+		tracker.UpdateToTs(dp.toTs)
 	}
 
 	// Send accumulated data to sinker
@@ -299,11 +318,10 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 		zap.Int("delete-rows", dp.deleteAtmBatch.RowCount()),
 	)
 
-	// Close atomic batches (Sink() takes ownership, but we need to clean our references)
-	dp.insertAtmBatch.Close()
-	dp.deleteAtmBatch.Close()
-
-	// Reset for next batch
+	// Note: Sink() takes ownership of the atomic batches
+	// Don't Close them here - they might still be used by Sinker asynchronously
+	// The Sinker or Command should be responsible for closing them
+	// For now, just reset our references
 	dp.insertAtmBatch = nil
 	dp.deleteAtmBatch = nil
 
@@ -338,6 +356,9 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 	// Commit transaction if one is active
 	tracker := dp.txnManager.GetTracker()
 	if tracker != nil && tracker.hasBegin {
+		// Update toTs to the latest value before committing
+		// This ensures the watermark advances to the current toTs
+		tracker.UpdateToTs(dp.toTs)
 		if err := dp.txnManager.CommitTransaction(ctx); err != nil {
 			logutil.Error(
 				"CDC-DataProcessor-NoMoreData-CommitFailed",
@@ -348,6 +369,35 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 				zap.Error(err),
 			)
 			return err
+		}
+	} else {
+		// Even if no transaction is active (e.g., initSnapshotSplitTxn=true),
+		// we still need to update watermark as a heartbeat to indicate progress.
+		// This ensures watermark advances even when there's no data change.
+		logutil.Debug(
+			"CDC-DataProcessor-NoMoreData-HeartbeatUpdate",
+			zap.String("task-id", dp.taskId),
+			zap.String("db", dp.dbName),
+			zap.String("table", dp.tableName),
+			zap.String("from-ts", dp.fromTs.ToString()),
+			zap.String("to-ts", dp.toTs.ToString()),
+		)
+
+		if err := dp.txnManager.watermarkUpdater.UpdateWatermarkOnly(
+			ctx,
+			dp.txnManager.watermarkKey,
+			&dp.toTs,
+		); err != nil {
+			logutil.Error(
+				"CDC-DataProcessor-NoMoreData-UpdateWatermarkFailed",
+				zap.String("task-id", dp.taskId),
+				zap.Uint64("account-id", dp.accountId),
+				zap.String("db", dp.dbName),
+				zap.String("table", dp.tableName),
+				zap.String("to-ts", dp.toTs.ToString()),
+				zap.Error(err),
+			)
+			// Note: UpdateWatermarkOnly always returns nil, but we log it anyway
 		}
 	}
 

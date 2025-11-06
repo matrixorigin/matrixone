@@ -949,7 +949,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	u.cacheUncommitted[*key] = *watermark
 
 	// Log watermark updates for better observability
-	logutil.Info(
+	logutil.Debug(
 		"CDC-WatermarkUpdater-BufferUpdate",
 		zap.String("key", key.String()),
 		zap.String("old-watermark", oldWatermark.ToString()),

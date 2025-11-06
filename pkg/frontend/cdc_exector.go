@@ -181,9 +181,11 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 
-	// Transition to Starting state
-	if err = exec.stateMachine.Transition(TransitionStart); err != nil {
-		return moerr.NewInternalErrorf(rootCtx, "cannot start: %v", err)
+	// Transition to Starting state (skip if already Starting, e.g., from Resume)
+	if exec.stateMachine.State() != StateStarting {
+		if err = exec.stateMachine.Transition(TransitionStart); err != nil {
+			return moerr.NewInternalErrorf(rootCtx, "cannot start: %v", err)
+		}
 	}
 
 	logutil.Info(
@@ -896,13 +898,9 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		frequency,
 	)
 
-	// step 4. register reader to runningReaders BEFORE starting goroutines
-	// This ensures the reader can be cleaned up if anything fails
-	key := cdc.GenDbTblKey(info.SourceDbName, info.SourceTblName)
-	exec.runningReaders.Store(key, reader)
-
-	// step 5. start goroutines (sinker first, then reader)
-	// If these fail, the cleanup will be handled by activeRoutine channels
+	// step 4. start goroutines (sinker first, then reader)
+	// Note: Reader will register itself in runningReaders during Run()
+	// to prevent duplicate readers (see TableChangeStream.Run line 207)
 	go sinker.Run(ctx, exec.activeRoutine)
 	go reader.Run(ctx, exec.activeRoutine)
 

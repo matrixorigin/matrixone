@@ -146,6 +146,16 @@ func (t *TransactionTracker) GetToTs() types.TS {
 	return t.toTs
 }
 
+// UpdateToTs updates the transaction end timestamp
+// This is used when multiple batches are processed in one transaction
+// and we need to track the latest toTs
+func (t *TransactionTracker) UpdateToTs(toTs types.TS) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.toTs = toTs
+	t.expectedWatermark = toTs
+}
+
 // GetExpectedWatermark returns the expected watermark after commit
 func (t *TransactionTracker) GetExpectedWatermark() types.TS {
 	t.mu.Lock()
