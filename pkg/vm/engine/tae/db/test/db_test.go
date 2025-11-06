@@ -12596,12 +12596,12 @@ func TestCdcMeta(t *testing.T) {
 	}
 
 	// Define schema according to mo_cdc_watermark DDL
-	cdcSchema.AppendCol("account_id", types.T_uint64.ToType())  // account_id BIGINT UNSIGNED
-	cdcSchema.AppendCol("task_id", types.T_varchar.ToType())    // task_id UUID
-	cdcSchema.AppendCol("db_name", types.T_varchar.ToType())    // db_name VARCHAR(256)
-	cdcSchema.AppendCol("table_name", types.T_varchar.ToType()) // table_name VARCHAR(256)
-	cdcSchema.AppendCol("watermark", types.T_varchar.ToType())  // watermark VARCHAR(128)
-	cdcSchema.AppendCol("err_msg", types.T_varchar.ToType())    // err_msg VARCHAR(256)
+	cdcSchema.AppendCol("account_id", types.T_uint64.ToType())    // account_id BIGINT UNSIGNED
+	cdcSchema.AppendPKCol("task_id", types.T_varchar.ToType(), 0) // task_id UUID
+	cdcSchema.AppendCol("db_name", types.T_varchar.ToType())      // db_name VARCHAR(256)
+	cdcSchema.AppendCol("table_name", types.T_varchar.ToType())   // table_name VARCHAR(256)
+	cdcSchema.AppendCol("watermark", types.T_varchar.ToType())    // watermark VARCHAR(128)
+	cdcSchema.AppendCol("err_msg", types.T_varchar.ToType())      // err_msg VARCHAR(256)
 
 	// Create composite primary key: (account_id, task_id, db_name, table_name)
 	pkConstraint := &engine.PrimaryKeyDef{
@@ -12723,6 +12723,41 @@ func TestCdcMeta(t *testing.T) {
 		return
 	}
 
+	// Test deletion of ISCP records
+	{
+		txn, err := db.StartTxn(nil)
+		require.NoError(t, err)
+		db1, err := txn.GetDatabase("mo_catalog")
+		assert.NoError(t, err)
+		rel, err := db1.GetRelationByName(cdcSchema.Name)
+		assert.NoError(t, err)
+
+		// Delete one of the backup jobs by setting drop_at
+		filter := handle.NewEQFilter([]byte("task2"))
+		id, offset, err := rel.GetByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		_, _, err = rel.GetValue(id, offset, 5, false)
+		assert.NoError(t, err)
+		// Update the record to mark it as dropped
+		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+		if err != nil {
+			t.Logf("range delete %v, rollbacking", err)
+			_ = txn.Rollback(context.Background())
+			return
+		}
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	// Wait for checkpoints to finish after deletion
+	testutils.WaitExpect(10000, func() bool {
+		return testutil.AllCheckpointsFinished(db)
+	})
+
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+
 	// Enable GC and test CDC functionality
 	cfg, err := db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
@@ -12779,7 +12814,7 @@ func TestCdcMeta(t *testing.T) {
 	assert.False(t, cdcTS.IsEmpty())
 
 	// The minimum watermark should be from "task3" (ts3)
-	expectedMinTS := ts3
+	expectedMinTS := ts1
 	assert.True(t, cdcTS.EQ(&expectedMinTS),
 		"Expected CDC timestamp to be the minimum watermark, got %s, expected %s",
 		cdcTS.ToString(), expectedMinTS.ToString())

@@ -1351,7 +1351,26 @@ func (sm *SnapshotMeta) GetCDC(
 
 		// Find tableInfo by matching account_id, db_name, table_name
 		// Build PK from account_id, db_name, table_name to find tableInfo
-		pk := fmt.Sprintf("%d-%s-%s", accountID, dbName, tableName)
+		// PK format is the same as mo_tables: (account_id,db_name,table_name)
+		// We need to encode it the same way as mo_tables does
+		packer := types.NewPacker()
+		packer.EncodeUint32(uint32(accountID)) // account_id is uint32 in mo_tables
+		packer.EncodeStringType([]byte(dbName))
+		packer.EncodeStringType([]byte(tableName))
+		pkBytes := packer.Bytes()
+		packer.Close()
+
+		// Decode tuple to get the string representation
+		tuple, _, _, err := types.DecodeTuple(pkBytes)
+		if err != nil {
+			logutil.Warn("GC-CDC-DecodeTuple-Error",
+				zap.Error(err),
+				zap.Uint64("account-id", accountID),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName))
+			return nil
+		}
+		pk := tuple.ErrString(nil)
 
 		// Find tableInfo from tablePKIndex
 		if tInfos, ok := tablePKIndexClone[pk]; ok && len(tInfos) > 0 {
