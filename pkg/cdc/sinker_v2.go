@@ -16,12 +16,18 @@ package cdc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"go.uber.org/zap"
 )
 
@@ -90,6 +96,150 @@ const (
 
 // Compile-time check that mysqlSinker2 implements Sinker interface
 var _ Sinker = (*mysqlSinker2)(nil)
+
+// CreateMysqlSinker2 creates a new MySQL sinker with v2 architecture
+// This is the main entry point for creating CDC sink, replacing the old CreateMysqlSinker
+// Defined as var for test mocking
+var CreateMysqlSinker2 = func(
+	sinkUri UriInfo,
+	accountId uint64,
+	taskId string,
+	dbTblInfo *DbTableInfo,
+	watermarkUpdater *CDCWatermarkUpdater,
+	tableDef *plan.TableDef,
+	retryTimes int,
+	retryDuration time.Duration,
+	ar *ActiveRoutine,
+	maxSqlLength uint64,
+	sendSqlTimeout string,
+) (Sinker, error) {
+	// 1. Determine if we need to record transactions for debugging
+	var doRecord bool
+	if tableDef != nil {
+		doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
+	}
+
+	// 2. Create Executor (replaces Sink in old architecture)
+	executor, err := NewExecutor(
+		sinkUri.User, sinkUri.Password,
+		sinkUri.Ip, sinkUri.Port,
+		retryTimes, retryDuration,
+		sendSqlTimeout,
+		doRecord,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Execute DDL initialization (same as old version)
+	ctx := context.Background()
+
+	// Helper function to add padding
+	addPadding := func(sql string) []byte {
+		padding := strings.Repeat(" ", v2SQLBufReserved)
+		return []byte(padding + sql)
+	}
+
+	// CREATE DATABASE
+	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)
+	err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
+	if err != nil {
+		executor.Close()
+		return nil, err
+	}
+
+	// USE DATABASE
+	useDbSQL := fmt.Sprintf("USE `%s`", dbTblInfo.SinkDbName)
+	err = executor.ExecSQL(ctx, ar, addPadding(useDbSQL), false)
+	if err != nil {
+		executor.Close()
+		return nil, err
+	}
+
+	// DROP TABLE if table ID changed (truncate scenario)
+	if dbTblInfo.IdChanged {
+		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)
+		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
+		if err != nil {
+			executor.Close()
+			return nil, err
+		}
+		dbTblInfo.IdChanged = false
+	}
+
+	// CREATE TABLE
+	var createSql string
+	if tableDef != nil {
+		newTableDef := *tableDef
+		newTableDef.DbName = dbTblInfo.SinkDbName
+		newTableDef.Name = dbTblInfo.SinkTblName
+		newTableDef.Fkeys = nil
+		newTableDef.Partition = nil
+
+		if newTableDef.TableType == catalog.SystemClusterRel {
+			executor.Close()
+			return nil, moerr.NewInternalErrorNoCtx("cluster table is not supported")
+		}
+		if newTableDef.TableType == catalog.SystemExternalRel {
+			executor.Close()
+			return nil, moerr.NewInternalErrorNoCtx("external table is not supported")
+		}
+
+		createSql, _, err = plan2.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
+		if err != nil {
+			executor.Close()
+			return nil, err
+		}
+		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+	}
+
+	err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
+	if err != nil {
+		executor.Close()
+		return nil, err
+	}
+
+	// 4. Create SQL Statement Builder
+	builder, err := NewCDCStatementBuilder(
+		dbTblInfo.SinkDbName,
+		dbTblInfo.SinkTblName,
+		tableDef,
+		maxSqlLength,
+		sinkUri.SinkTyp == CDCSinkType_MO,
+	)
+	if err != nil {
+		executor.Close()
+		return nil, err
+	}
+
+	// 5. Create mysqlSinker2
+	sinker := NewMysqlSinker2(
+		executor,
+		accountId,
+		taskId,
+		dbTblInfo,
+		watermarkUpdater,
+		builder,
+		ar,
+	)
+
+	// 6. Start consumer goroutine
+	sinker.wg.Add(1)
+	go func() {
+		defer sinker.wg.Done()
+		sinker.Run(ctx, ar)
+	}()
+
+	logutil.Info(
+		"CDC-CreateMysqlSinker2-Success",
+		zap.String("db", dbTblInfo.SinkDbName),
+		zap.String("table", dbTblInfo.SinkTblName),
+		zap.String("task-id", taskId),
+		zap.Uint64("account-id", accountId),
+	)
+
+	return sinker, nil
+}
 
 // NewMysqlSinker2 creates a new improved MySQL sinker
 func NewMysqlSinker2(
