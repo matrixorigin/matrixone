@@ -29,6 +29,7 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -238,7 +239,7 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
+	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
 	if err != nil {
 		return err
 	}

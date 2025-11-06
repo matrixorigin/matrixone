@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -46,6 +46,7 @@ type HnswModel[T types.RealNumbers] struct {
 
 	// info required for build
 	MaxCapacity uint
+	NThread     uint
 
 	// from metadata.  info required for search
 	Timestamp int64
@@ -66,29 +67,48 @@ func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexC
 	idx := &HnswModel[T]{}
 
 	idx.Id = id
+	idx.NThread = uint(nthread)
+	idx.MaxCapacity = max_capacity
 
-	idx.Index, err = usearch.NewIndex(cfg.Usearch)
+	err = idx.initIndex(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	idx.MaxCapacity = max_capacity
+	return idx, nil
+}
+
+func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
+	idx.Index, err = usearch.NewIndex(cfg.Usearch)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			if idx.Index != nil {
+				idx.Index.Destroy()
+				idx.Index = nil
+			}
+		}
+	}()
 
 	err = idx.Index.Reserve(idx.MaxCapacity)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = idx.Index.ChangeThreadsAdd(uint(nthread))
+	err = idx.Index.ChangeThreadsAdd(idx.NThread)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = idx.Index.ChangeThreadsSearch(uint(nthread))
+	err = idx.Index.ChangeThreadsSearch(idx.NThread)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return idx, nil
+
+	return nil
 }
 
 // Destroy the struct
@@ -189,6 +209,15 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	}
 	idx.Index = nil
 	idx.Path = f.Name()
+
+	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
+	/*
+		fi, err := os.Stat(idx.Path)
+		if err != nil {
+			return err
+		}
+		idx.FileSize := fi.Size()
+	*/
 
 	return nil
 }
@@ -323,7 +352,7 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 	}
 
 	if uint(len(vec)) != dim {
-		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch dimension not match (expected %d but got %d)", dim, len(vec)))
 	}
 
 	defer runtime.KeepAlive(vec)
@@ -383,13 +412,14 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 
 // load chunk from database
 func (idx *HnswModel[T]) loadChunkFromBuffer(ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	stream_chan chan executor.Result,
 	error_chan chan error,
 	buffer []byte) (stream_closed bool, err error) {
 	var res executor.Result
 	var ok bool
 
+	procCtx := sqlproc.GetContext()
 	select {
 	case res, ok = <-stream_chan:
 		if !ok {
@@ -397,8 +427,8 @@ func (idx *HnswModel[T]) loadChunkFromBuffer(ctx context.Context,
 		}
 	case err = <-error_chan:
 		return false, err
-	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-procCtx.Done():
+		return false, moerr.NewInternalError(procCtx, "context cancelled")
 	case <-ctx.Done():
 		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
 	}
@@ -416,7 +446,7 @@ func (idx *HnswModel[T]) loadChunkFromBuffer(ctx context.Context,
 }
 
 func (idx *HnswModel[T]) LoadIndexFromBuffer(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread int64,
@@ -433,7 +463,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 
 	if !view {
-		return moerr.NewInternalError(proc.Ctx, "LoadIndexFromBuffer only enable when view = true")
+		return moerr.NewInternalError(sqlproc.GetContext(), "LoadIndexFromBuffer only enable when view = true")
 	}
 	idx.View = true
 
@@ -451,11 +481,11 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		// run streaming sql
 		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
 
-		ctx, cancel := context.WithCancelCause(proc.GetTopContext())
+		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
 
 		go func() {
-			_, err2 := runSql_streaming(ctx, proc, sql, stream_chan, error_chan)
+			_, err2 := runSql_streaming(ctx, sqlproc, sql, stream_chan, error_chan)
 			if err2 != nil {
 				error_chan <- err2
 				return
@@ -465,7 +495,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		// incremental load from database
 		sql_closed := false
 		for !sql_closed {
-			sql_closed, err = idx.loadChunkFromBuffer(ctx, proc, stream_chan, error_chan, idx.buffer)
+			sql_closed, err = idx.loadChunkFromBuffer(ctx, sqlproc, stream_chan, error_chan, idx.buffer)
 			if err != nil {
 				// notify the producer to stop the sql streaming
 				cancel(err)
@@ -497,7 +527,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 
 	chksum := vectorindex.CheckSumFromBuffer(idx.buffer)
 	if chksum != idx.Checksum {
-		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
+		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index buffer")
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -540,12 +570,14 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 
 // load chunk from database
 func (idx *HnswModel[T]) loadChunk(ctx context.Context,
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	stream_chan chan executor.Result,
 	error_chan chan error,
 	fp *os.File) (stream_closed bool, err error) {
 	var res executor.Result
 	var ok bool
+
+	procCtx := sqlproc.GetContext()
 
 	select {
 	case res, ok = <-stream_chan:
@@ -554,8 +586,8 @@ func (idx *HnswModel[T]) loadChunk(ctx context.Context,
 		}
 	case err = <-error_chan:
 		return false, err
-	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-procCtx.Done():
+		return false, moerr.NewInternalError(procCtx, "context cancelled")
 	case <-ctx.Done():
 		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
 	}
@@ -589,7 +621,7 @@ func (idx *HnswModel[T]) loadChunk(ctx context.Context,
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
 func (idx *HnswModel[T]) LoadIndex(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread int64,
@@ -607,7 +639,18 @@ func (idx *HnswModel[T]) LoadIndex(
 		return nil
 	}
 
+	if idx.FileSize == 0 && len(idx.Path) == 0 {
+		// indx is newly created and not save to file yet so simply create a usearch index here
+		return idx.initIndex(idxcfg)
+	}
+
+	if len(idx.Checksum) == 0 {
+		// Checksum is empty.  We shouldn't get the file from database
+		return moerr.NewInternalErrorNoCtx("checksum is empty.  Cannot read index file from database")
+	}
+
 	if len(idx.Path) == 0 {
+
 		// create tempfile for writing
 		fp, err = os.CreateTemp("", "hnsw")
 		if err != nil {
@@ -642,11 +685,11 @@ func (idx *HnswModel[T]) LoadIndex(
 		// run streaming sql
 		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
 
-		ctx, cancel := context.WithCancelCause(proc.GetTopContext())
+		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
 
 		go func() {
-			_, err2 := runSql_streaming(ctx, proc, sql, stream_chan, error_chan)
+			_, err2 := runSql_streaming(ctx, sqlproc, sql, stream_chan, error_chan)
 			if err2 != nil {
 				error_chan <- err2
 				return
@@ -656,7 +699,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		// incremental load from database
 		sql_closed := false
 		for !sql_closed {
-			sql_closed, err = idx.loadChunk(ctx, proc, stream_chan, error_chan, fp)
+			sql_closed, err = idx.loadChunk(ctx, sqlproc, stream_chan, error_chan, fp)
 			if err != nil {
 				// notify the producer to stop the sql streaming
 				cancel(err)
@@ -687,6 +730,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
+
 	}
 
 	// check checksum
@@ -695,7 +739,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		return err
 	}
 	if chksum != idx.Checksum {
-		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
+		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with the index file")
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
