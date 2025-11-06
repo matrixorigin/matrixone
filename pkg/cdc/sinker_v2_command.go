@@ -17,6 +17,7 @@ package cdc
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -191,7 +192,7 @@ func (c *Command) String() string {
 // Validate checks if the command is valid
 func (c *Command) Validate() error {
 	if c == nil {
-		return fmt.Errorf("command is nil")
+		return moerr.NewInternalErrorNoCtx("command is nil")
 	}
 
 	switch c.Type {
@@ -201,16 +202,16 @@ func (c *Command) Validate() error {
 
 	case CmdInsertBatch:
 		if c.InsertBatch == nil {
-			return fmt.Errorf("InsertBatch is required for CmdInsertBatch")
+			return moerr.NewInternalErrorNoCtx("InsertBatch is required for CmdInsertBatch")
 		}
 		if c.InsertBatch.RowCount() == 0 {
-			return fmt.Errorf("InsertBatch has no rows")
+			return moerr.NewInternalErrorNoCtx("InsertBatch has no rows")
 		}
 		return nil
 
 	case CmdInsertDeleteBatch:
 		if c.InsertAtmBatch == nil && c.DeleteAtmBatch == nil {
-			return fmt.Errorf("at least one of InsertAtmBatch or DeleteAtmBatch is required")
+			return moerr.NewInternalErrorNoCtx("at least one of InsertAtmBatch or DeleteAtmBatch is required")
 		}
 		return nil
 
@@ -219,6 +220,6 @@ func (c *Command) Validate() error {
 		return nil
 
 	default:
-		return fmt.Errorf("unknown command type: %v", c.Type)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown command type: %v", c.Type))
 	}
 }

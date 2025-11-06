@@ -69,7 +69,7 @@ func NewCDCStatementBuilder(
 	isMO bool,
 ) (*CDCStatementBuilder, error) {
 	if tableDef == nil {
-		return nil, fmt.Errorf("tableDef is required")
+		return nil, moerr.NewInternalErrorNoCtx("tableDef is required")
 	}
 
 	b := &CDCStatementBuilder{
@@ -383,7 +383,7 @@ func (b *CDCStatementBuilder) formatDeleteRow(ctx context.Context, pkValue any) 
 	// Composite PK: unpack tuple
 	pkBytes, ok := pkValue.([]byte)
 	if !ok {
-		return nil, fmt.Errorf("composite PK must be []byte, got %T", pkValue)
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("composite PK must be []byte, got %T", pkValue))
 	}
 
 	pkTuple, _, err := types.UnpackWithSchema(pkBytes)
@@ -392,8 +392,8 @@ func (b *CDCStatementBuilder) formatDeleteRow(ctx context.Context, pkValue any) 
 	}
 
 	if len(pkTuple) != len(b.pkColTypes) {
-		return nil, fmt.Errorf("PK tuple length mismatch: expected %d, got %d",
-			len(b.pkColTypes), len(pkTuple))
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("PK tuple length mismatch: expected %d, got %d",
+			len(b.pkColTypes), len(pkTuple)))
 	}
 
 	if b.isMO {

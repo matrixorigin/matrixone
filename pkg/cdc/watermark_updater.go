@@ -465,7 +465,7 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	if len(u.readKeysBuffer) == 0 {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkRead)
 	defer cancel()
 
 	readSql := u.constructReadWMSQL(u.readKeysBuffer)
@@ -568,7 +568,7 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
 	u.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
 	defer cancel()
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
@@ -603,7 +603,7 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err erro
 	if len(u.committingErrMsgBuffer) == 0 {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdateErrMsg)
 	defer cancel()
 	errMsgSql := u.constructBatchUpdateWMErrMsgSQL(u.committingErrMsgBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -669,7 +669,7 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	if len(u.addCommittedBuffer) == 0 {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkAdd)
 	defer cancel()
 	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)

@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -382,7 +383,7 @@ func (s *TableDetector) Close() {
 }
 
 func (s *TableDetector) scanTable() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseTableDetectorScan)
 	defer cancel()
 	var (
 		accountIds string

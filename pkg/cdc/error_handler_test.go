@@ -15,11 +15,11 @@
 package cdc
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -181,7 +181,7 @@ func TestBuildErrorMetadata(t *testing.T) {
 			name: "new retryable error",
 			old:  nil,
 			record: &ErrorRecord{
-				Error:       errors.New("table not found"),
+				Error:       moerr.NewInternalErrorNoCtx("table not found"),
 				IsRetryable: true,
 				Timestamp:   baseTime,
 			},
@@ -190,7 +190,7 @@ func TestBuildErrorMetadata(t *testing.T) {
 				RetryCount:  1,
 				FirstSeen:   baseTime,
 				LastSeen:    baseTime,
-				Message:     "table not found",
+				Message:     "internal error: table not found",
 			},
 		},
 		{
@@ -200,10 +200,10 @@ func TestBuildErrorMetadata(t *testing.T) {
 				RetryCount:  1,
 				FirstSeen:   baseTime,
 				LastSeen:    baseTime,
-				Message:     "table not found",
+				Message:     "internal error: table not found",
 			},
 			record: &ErrorRecord{
-				Error:       errors.New("table not found"),
+				Error:       moerr.NewInternalErrorNoCtx("table not found"),
 				IsRetryable: true,
 				Timestamp:   laterTime,
 			},
@@ -212,7 +212,7 @@ func TestBuildErrorMetadata(t *testing.T) {
 				RetryCount:  2,
 				FirstSeen:   baseTime,  // Preserved
 				LastSeen:    laterTime, // Updated
-				Message:     "table not found",
+				Message:     "internal error: table not found",
 			},
 		},
 		{
@@ -224,7 +224,7 @@ func TestBuildErrorMetadata(t *testing.T) {
 				LastSeen:    baseTime,
 			},
 			record: &ErrorRecord{
-				Error:       errors.New("different error"),
+				Error:       moerr.NewInternalErrorNoCtx("different error"),
 				IsRetryable: false,
 				Timestamp:   laterTime,
 			},
@@ -233,7 +233,7 @@ func TestBuildErrorMetadata(t *testing.T) {
 				RetryCount:  1,         // Reset
 				FirstSeen:   laterTime, // Reset
 				LastSeen:    laterTime,
-				Message:     "different error",
+				Message:     "internal error: different error",
 			},
 		},
 	}
@@ -384,7 +384,7 @@ func TestBuildErrorMetadata_MultipleRetries(t *testing.T) {
 
 	// First error
 	record1 := &ErrorRecord{
-		Error:       errors.New("table not found"),
+		Error:       moerr.NewInternalErrorNoCtx("table not found"),
 		IsRetryable: true,
 		Timestamp:   baseTime,
 	}
@@ -394,7 +394,7 @@ func TestBuildErrorMetadata_MultipleRetries(t *testing.T) {
 
 	// Second error (1 minute later)
 	record2 := &ErrorRecord{
-		Error:       errors.New("table not found"),
+		Error:       moerr.NewInternalErrorNoCtx("table not found"),
 		IsRetryable: true,
 		Timestamp:   baseTime.Add(1 * time.Minute),
 	}
@@ -405,7 +405,7 @@ func TestBuildErrorMetadata_MultipleRetries(t *testing.T) {
 
 	// Third error (2 minutes later)
 	record3 := &ErrorRecord{
-		Error:       errors.New("table not found"),
+		Error:       moerr.NewInternalErrorNoCtx("table not found"),
 		IsRetryable: true,
 		Timestamp:   baseTime.Add(2 * time.Minute),
 	}

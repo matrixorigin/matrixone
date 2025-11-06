@@ -211,7 +211,7 @@ func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo) *TableChangeStrea
 
 // Test Run() integration with mocked dependencies
 func TestTableChangeStream_Run_Integration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
 
 	mp := mpool.MustNewZero()
@@ -371,7 +371,7 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 
 // Test StaleRead retry logic
 func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
 
 	mp := mpool.MustNewZero()
@@ -510,7 +510,7 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 
 // Test StaleRead with startTs set (should fail, not retry)
 func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
 
 	mp := mpool.MustNewZero()
@@ -612,7 +612,7 @@ func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 
 // Test end-to-end with real change processing
 func TestTableChangeStream_EndToEnd(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
 
 	mp := mpool.MustNewZero()
