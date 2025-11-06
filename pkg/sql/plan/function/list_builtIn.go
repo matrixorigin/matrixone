@@ -7074,27 +7074,6 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: fulltext_expand_overload(types.T_float32),
 	},
-
-	// function `HNSW_CDC_UPDATE`
-	{
-		functionId: HNSW_CDC_UPDATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int32, types.T_int32, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return hnswCdcUpdate
-				},
-			},
-		},
-	},
 }
 
 // fulltext_match supports varchar, char and text.  Expand the function signature to all possible combination of input types

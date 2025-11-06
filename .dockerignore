@@ -1,36 +1,51 @@
-# https://docs.docker.com/engine/reference/builder/#dockerignore-file
-
-# macOS
-.DS_Store
-
-# Visual Studio Code
-.vscode/
-.devcontainer/
-
-# JetBrains
-.idea/
-
-# generate files
-mo-service
-mo-server
-gen_config
-store/
+# Ignore build artifacts
 mo-data/
-**/scratch/
-ut-report/
+logs/
+*.log
 
-# cgo compiler files linked system lib, so ignore it
-**/*.o
-**/*.a
+# Ignore version control
+.git/
+.gitignore
 
-# go 
-vendor/
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# bvt generate files
-test/distributed/resources/into_outfile/outfile_*.csv
-test/distributed/resources/into_outfile_2/outfile_*.csv
-test/distributed/resources/json/export_*.csv
+# Ignore documentation
+*.md
+!README.md
 
-#make compose bvt generate files
-docker-compose-log/
+# Ignore test files
+test/
+report/
 
+# Ignore temporary files
+*.tmp
+*.temp
+cov.out
+coverage*.out
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Ignore build artifacts
+cgo/*.o
+cgo/*.a
+
+# Keep what we need
+!etc/
+!proto/
+!pkg/
+!cmd/
+!vendor/
+!go.mod
+!go.sum
+!Makefile
+!thirdparties/

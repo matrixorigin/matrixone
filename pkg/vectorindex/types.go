@@ -15,9 +15,9 @@
 package vectorindex
 
 import (
-	"encoding/json"
 	"runtime"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -114,9 +114,9 @@ type VectorIndexCdc[T types.RealNumbers] struct {
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
-func NewVectorIndexCdc[T types.RealNumbers]() *VectorIndexCdc[T] {
+func NewVectorIndexCdc[T types.RealNumbers](capacity int) *VectorIndexCdc[T] {
 	return &VectorIndexCdc[T]{
-		Data: make([]VectorIndexCdcEntry[T], 0, 8192),
+		Data: make([]VectorIndexCdcEntry[T], 0, capacity),
 	}
 }
 
@@ -163,7 +163,7 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
 
-	b, err := json.Marshal(h)
+	b, err := sonic.Marshal(h)
 	if err != nil {
 		return "", err
 	}

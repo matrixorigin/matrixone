@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 const (
@@ -339,8 +341,9 @@ func NewGenericHnswSqlWriter[T types.RealNumbers](algo string, jobID JobID, info
 
 	// get the first indexdef as they are the same
 	idxdef := indexdef[0]
+	writer_capacity := 8192
 
-	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T]()}
+	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T](writer_capacity)}
 
 	paramstr := idxdef.IndexAlgoParams
 	var meta, storage string
@@ -460,6 +463,13 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
 	}
+
+	if row[w.partsPos[0]] == nil {
+		// vector is nil, do Delete
+		w.cdc.Delete(key)
+		return nil
+	}
+
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
@@ -476,10 +486,18 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 }
 
 func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
+
 	key, ok := row[w.pkPos].(int64)
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
 	}
+
+	if row[w.partsPos[0]] == nil {
+		// vector is nil, do Delete
+		w.cdc.Delete(key)
+		return nil
+	}
+
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
@@ -512,10 +530,12 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// pad extra space at the front and send SQL
-	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension, js)
 
-	return []byte(sql), nil
+	return []byte(js), nil
+}
+
+func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension)
 }
 
 // Implementation of Ivfflat Sql writer

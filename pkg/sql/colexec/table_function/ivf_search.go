@@ -29,6 +29,7 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -194,7 +195,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Type = vectorindex.IVFFLAT
 
 		// get version
-		version, err := getVersion(proc, u.tblcfg)
+		version, err := getVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
 		if err != nil {
 			return err
 		}
@@ -248,7 +249,7 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 		Probe:             uint(u.tblcfg.Nprobe),
 		BackgroundQueries: make([]*plan.Query, 1),
 	}
-	u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, fa, rt)
+	u.keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), key, algo, fa, rt)
 	if err != nil {
 		return err
 	}

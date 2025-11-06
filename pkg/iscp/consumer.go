@@ -14,20 +14,26 @@
 
 package iscp
 
-import "github.com/matrixorigin/matrixone/pkg/sql/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
 
 func NewConsumer(
 	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
 	tableDef *plan.TableDef,
 	jobID JobID,
 	info *ConsumerInfo,
 ) (Consumer, error) {
 
 	if info.ConsumerType == int8(ConsumerType_CNConsumer) {
-		return NewInteralSqlConsumer(cnUUID, tableDef, jobID, info)
+		return NewInteralSqlConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, jobID, info)
 	}
 	if info.ConsumerType == int8(ConsumerType_IndexSync) {
-		return NewIndexConsumer(cnUUID, tableDef, jobID, info)
+		return NewIndexConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, jobID, info)
 	}
 	panic("todo")
 

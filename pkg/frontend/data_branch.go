@@ -573,7 +573,7 @@ func mergeDiff(
 				return ctx.Err()
 			}
 
-			sqlRet, err := sqlexec.RunSql(ses.proc, sql)
+			sqlRet, err := sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), sql)
 			if err != nil {
 				return err
 			}
@@ -1365,7 +1365,7 @@ func handleDelsOnLCA(
 	// why runTxn here?
 	// we need to ensure the temporary created table should be clear if some err happened.
 	// the left sqls are read only,
-	if err = sqlexec.RunTxn(ses.proc, func(txnExecutor executor.TxnExecutor) error {
+	if err = sqlexec.RunTxn(sqlexec.NewSqlProcess(ses.proc), func(txnExecutor executor.TxnExecutor) error {
 		var (
 			sqlRet executor.Result
 		)
@@ -2010,7 +2010,7 @@ func getTablesCreationCommitTS(
 		ses.accountId, base.GetTableDef(ctx).DbName, base.GetTableName(),
 	))
 
-	if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), buf.String()); err != nil {
 		return
 	}
 
@@ -2161,7 +2161,7 @@ func constructBranchDAG(
 	}()
 
 	if sqlRet, err = sqlexec.RunSql(
-		ses.proc,
+		sqlexec.NewSqlProcess(ses.proc),
 		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
 	); err != nil {
 		return

@@ -80,33 +80,8 @@ var (
 	}
 )
 
-func _dupType(typ *plan.Type) *plan.Type {
-	return &plan.Type{
-		Id:          typ.Id,
-		NotNullable: typ.NotNullable,
-		Width:       typ.Width,
-		Scale:       typ.Scale,
-	}
-}
-
-func _dupColDef(src *plan.ColDef) *plan.ColDef {
-	return &plan.ColDef{
-		Name:       src.Name,
-		OriginName: src.OriginName,
-		Typ:        *_dupType(&src.Typ),
-	}
-}
-
-func _getColDefs(colDefs []*plan.ColDef) []*plan.ColDef {
-	ret := make([]*plan.ColDef, 0, len(colDefs))
-	for _, v := range colDefs {
-		ret = append(ret, _dupColDef(v))
-	}
-	return ret
-}
-
 func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	colDefs := _getColDefs(defaultColDefs)
+	colDefs := DeepCopyColDefList(defaultColDefs)
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,

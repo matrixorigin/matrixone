@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -75,12 +73,12 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 	return err
 }
 
-func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (timestamp.Timestamp, error) {
+func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta, response *txn.TxnResponse, req *txn.TxnCommitRequest) (timestamp.Timestamp, error) {
 	//2PC
 	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
-	return h.Handle.HandleCommit(ctx, *meta, nil, nil)
+	return h.Handle.HandleCommit(ctx, *meta, response, req)
 }
 
 func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {
@@ -138,7 +136,7 @@ func (h *mockHandle) handleCmds(
 				return
 			}
 		case CmdCommit:
-			if _, err = h.HandleCommit(ctx, txn); err != nil {
+			if _, err = h.HandleCommit(ctx, txn, nil, nil); err != nil {
 				return
 			}
 		case CmdRollback:
@@ -168,7 +166,6 @@ func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mo
 	mh.Handle = &Handle{
 		db: tae,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 	return mh
 }
 
