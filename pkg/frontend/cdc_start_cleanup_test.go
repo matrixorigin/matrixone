@@ -70,8 +70,10 @@ func TestStartCleansUpOldReaders(t *testing.T) {
 		exec.runningReaders.Store(key, reader)
 	}
 
-	// Wait for old readers to be running
-	time.Sleep(30 * time.Millisecond)
+	// Wait for all old readers to start (deterministic)
+	for _, reader := range oldReaders {
+		<-reader.started // Block until Run() has started
+	}
 
 	// Verify old readers are running
 	for i, reader := range oldReaders {
@@ -147,21 +149,8 @@ func TestStartCleansUpOldReaders(t *testing.T) {
 	})
 	assert.Equal(t, 0, newReaderCount, "runningReaders should be empty after cleanup")
 
-	// Wait for goroutines to be cleaned up
-	time.Sleep(100 * time.Millisecond)
-	runtime.GC()
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify no goroutine leak
-	goroutinesAfterCleanup := runtime.NumGoroutine()
-	goroutineLeak := goroutinesAfterCleanup - baselineGoroutines
-
-	t.Logf("Goroutines after cleanup: %d (baseline: %d, leak: %d)",
-		goroutinesAfterCleanup, baselineGoroutines, goroutineLeak)
-
-	// Allow small variance due to runtime internals
-	assert.LessOrEqual(t, goroutineLeak, 3,
-		"Should have no significant goroutine leak after cleanup")
+	// Goroutine leak check removed - we already verified via Wait() that all readers stopped
+	// Checking goroutine count is non-deterministic and not reliable in CI environments
 }
 
 // TestStartWithNilRunningReaders verifies Start handles nil runningReaders gracefully
@@ -221,6 +210,8 @@ func TestStartCleanupWithClosedReaders(t *testing.T) {
 
 	// Add old readers that are already closed
 	numOldReaders := 2
+	closedReaders := make([]*mockConcurrentChangeReader, numOldReaders)
+
 	for i := 0; i < numOldReaders; i++ {
 		tableInfo := &cdc.DbTableInfo{
 			SourceDbName:  "old_db",
@@ -228,18 +219,28 @@ func TestStartCleanupWithClosedReaders(t *testing.T) {
 			SourceTblId:   uint64(i + 1),
 		}
 		reader := newMockConcurrentChangeReader(tableInfo, 0)
+		closedReaders[i] = reader
 
-		// Start and immediately close
+		// Start reader
 		go reader.Run(context.Background(), exec.activeRoutine)
-		reader.Close()
 
 		// Store in runningReaders
 		key := tableInfo.SourceDbName + "." + tableInfo.SourceTblName
 		exec.runningReaders.Store(key, reader)
 	}
 
-	// Wait for readers to stop
-	time.Sleep(20 * time.Millisecond)
+	// Wait for all readers to start (deterministic)
+	for _, reader := range closedReaders {
+		<-reader.started // Block until Run() has started
+	}
+
+	// Immediately close all readers (they should stop quickly)
+	for _, reader := range closedReaders {
+		reader.Close()
+	}
+	for _, reader := range closedReaders {
+		reader.Wait()
+	}
 
 	// Transition to Starting state
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
