@@ -391,6 +391,16 @@ func MakeSnapshotAndPitrFineFilter(
 			sp := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
+			// Check if this table belongs to a CDC database
+			// If so, protect aobject and atombstone data from being deleted
+			if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
+				if snapshotMeta.IsCDCDB(tableInfo.dbID) {
+					// This table is in a CDC database, protect its objects and tombstones
+					// Similar to ISCP, we cannot delete aobject and atombstone data
+					continue
+				}
+			}
+
 			if transObjects[name] != nil {
 				tables := transObjects[name]
 				if entry := tables[tableID]; entry != nil {

@@ -1085,6 +1085,10 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "GetSnapshot failed"
 		return
 	}
+	
+	// Note: CDC DBs are updated from watermark table data in updateTableInfo
+	// which is called during snapshotMeta.Update, so no need to call it here
+	
 	filesToGC, err := c.doGCAgainstGlobalCheckpointLocked(
 		ctx, gckp, snapshots, pitrs, memoryBuffer,
 	)
@@ -1840,3 +1844,7 @@ func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableSt
 	window := scan.Clone()
 	return window.Details(ctx, c.mutation.snapshotMeta, c.mp)
 }
+
+// Note: updateCDCDBsFromWatermarkLocked is no longer needed
+// because watermark table data is read in updateTableInfo
+// which is called during snapshotMeta.Update
