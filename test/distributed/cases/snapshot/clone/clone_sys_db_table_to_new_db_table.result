@@ -232,7 +232,7 @@ insert into table02 (col1, col2) values (133, 'database');
 drop snapshot if exists sp07;
 create snapshot sp07 for table test100 table01;
 create database test_1000 clone test100 {snapshot = 'sp07'};
-internal error: the snapshot sp07 doesnot contain the table table02
+internal error: cannot use a table-level snapshot to clone cluster/account/database
 drop database test100;
 drop database test_1000;
 Can't drop database 'test_1000'; database doesn't exist
@@ -273,7 +273,7 @@ drop snapshot if exists sp09;
 create snapshot sp09 for database test102;
 drop database if exists db09;
 create database db09 clone test103 {snapshot = 'sp09'};
-internal error: the snapshot sp09 doesnot contain the table table02
+internal error: database-level snapshot(sp09) does not belong to the database(test103)
 drop database test102;
 drop database test103;
 drop snapshot sp09;
