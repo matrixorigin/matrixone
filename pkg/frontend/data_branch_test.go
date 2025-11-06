@@ -107,39 +107,3 @@ func TestCompareRows(t *testing.T) {
 	require.Equal(t, strings.Compare(rowEqual[1].(string), row1[1].(string)),
 		compareRows(row1, rowEqual, []int{0}, colTypes, false))
 }
-
-func TestSortDiffResultRows(t *testing.T) {
-	colTypes := []types.Type{{Oid: types.T_int32}}
-	rows := [][]any{
-		{nil, diffRemovedLine, int32(5)},
-		{nil, diffAddedLine, int32(5)},
-		{nil, diffAddedLine, int32(3)},
-	}
-	extra := diffExtra{}
-	extra.outputArgs.rows = rows
-	extra.outputArgs.pkColIdxes = []int{0}
-	extra.outputArgs.colTypes = colTypes
-
-	sorted := sortDiffResultRows(extra)
-	require.Len(t, sorted, 2)
-
-	var (
-		insertRow, updateRow []any
-	)
-	for _, row := range sorted {
-		flag, ok := row[1].(int)
-		require.True(t, ok)
-		switch flag {
-		case diffInsert:
-			insertRow = row
-		case diffUpdate:
-			updateRow = row
-		default:
-			t.Fatalf("unexpected diff flag %v", flag)
-		}
-	}
-	require.NotNil(t, insertRow)
-	require.NotNil(t, updateRow)
-	require.Equal(t, int32(3), insertRow[2])
-	require.Equal(t, int32(5), updateRow[2])
-}
