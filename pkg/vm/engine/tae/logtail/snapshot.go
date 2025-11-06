@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"sort"
 	"sync"
 	"time"
@@ -386,6 +387,29 @@ func (st *specialTableInfo) getTombstonesStats() []objectio.ObjectStats {
 		tombstonesStats = append(tombstonesStats, obj.stats)
 	}
 	return tombstonesStats
+}
+
+func (st *specialTableInfo) clone() *specialTableInfo {
+	clone := &specialTableInfo{
+		tid:        st.tid,
+		objects:    make(map[objectio.Segmentid]*objectInfo),
+		tombstones: make(map[objectio.Segmentid]*objectInfo),
+	}
+	for id, info := range st.objects {
+		clone.objects[id] = &objectInfo{
+			stats:    info.stats,
+			createAt: info.createAt,
+			deleteAt: info.deleteAt,
+		}
+	}
+	for id, info := range st.tombstones {
+		clone.tombstones[id] = &objectInfo{
+			stats:    info.stats,
+			createAt: info.createAt,
+			deleteAt: info.deleteAt,
+		}
+	}
+	return clone
 }
 
 // General object processing functions
@@ -1291,38 +1315,36 @@ func (sm *SnapshotMeta) GetCDC(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (map[uint64]types.TS, error) {
-	idxes := []uint16{ColCdcAccountId, ColCdcDbName, ColCdcTableName, ColCdcWatermark, ColCdcDropAt}
-	tombstonesStats := sm.cdc.getTombstonesStats()
+	idxes := []uint16{ColCdcAccountId, ColCdcDbName, ColCdcTableName, ColCdcWatermark}
+
+	sm.RLock()
+	cdcClone := sm.cdc.clone()
+	tablePKIndexClone := make(map[string][]*tableInfo)
+	for k, v := range sm.tablePKIndex {
+		tablePKIndexClone[k] = v
+	}
+	sm.RUnlock()
+
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
+	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, cdcClone.getTombstonesStats())
 	dbWatermarks := make(map[uint64]types.TS)
 
 	processor := func(bat *batch.Batch, r int) error {
-		accountIDList := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[0])
+		accountIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
 		dbNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](bat.Vecs[1])
 		dbNameArea := bat.Vecs[1].GetArea()
 		tableNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](bat.Vecs[2])
 		tableNameArea := bat.Vecs[2].GetArea()
 		watermarkList := bat.Vecs[3]
-		dropAtList := bat.Vecs[4]
 
 		accountID := accountIDList[r]
 		dbName := string(dbNameVarlena[r].GetByteSlice(dbNameArea))
 		tableName := string(tableNameVarlena[r].GetByteSlice(tableNameArea))
-		watermark := watermarkList.GetStringAt(r)
-		dropAtBytes := dropAtList.GetStringAt(r)
-
-		// Skip deleted jobs
-		if len(dropAtBytes) > 0 {
-			dropAT := types.StringToTS(dropAtBytes)
-			if !dropAT.IsEmpty() {
-				return nil
-			}
-		}
+		watermark := watermarkList.GetBytesAt(r)
 
 		var cdcTS types.TS
 		if len(watermark) > 0 {
-			cdcTS = types.StringToTS(watermark)
+			cdcTS = types.StringToTS(util.UnsafeBytesToString(watermark))
 		} else {
 			cdcTS = types.TS{}
 		}
@@ -1332,7 +1354,7 @@ func (sm *SnapshotMeta) GetCDC(
 		pk := fmt.Sprintf("%d-%s-%s", accountID, dbName, tableName)
 
 		// Find tableInfo from tablePKIndex
-		if tInfos, ok := sm.tablePKIndex[pk]; ok && len(tInfos) > 0 {
+		if tInfos, ok := tablePKIndexClone[pk]; ok && len(tInfos) > 0 {
 			tableInfo := tInfos[0]
 			dbID := tableInfo.dbID
 
@@ -1347,21 +1369,20 @@ func (sm *SnapshotMeta) GetCDC(
 				zap.Uint64("db-id", dbID),
 				zap.String("db-name", dbName),
 				zap.String("table-name", tableName),
-				zap.String("watermark", watermark),
-				zap.String("ts", cdcTS.ToString()),
+				zap.String("watermark", cdcTS.ToString()),
 			)
 		} else {
 			logutil.Warn("GC-CDC-TableInfo-NotFound",
 				zap.String("pk", pk),
 				zap.String("db-name", dbName),
 				zap.String("table-name", tableName),
-				zap.Uint32("account-id", accountID))
+				zap.Uint64("account-id", accountID))
 		}
 
 		return nil
 	}
 
-	err := sm.cdc.processObjects(ctx, fs, idxes, ds, mp, processor)
+	err := cdcClone.processObjects(ctx, fs, idxes, ds, mp, processor)
 	if err != nil {
 		return nil, err
 	}
