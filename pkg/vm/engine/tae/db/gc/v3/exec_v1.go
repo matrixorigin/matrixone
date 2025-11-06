@@ -388,6 +388,9 @@ func MakeSnapshotAndPitrFineFilter(
 		cdcWatermarks = make(map[uint64]types.TS)
 	}
 
+	// Copy tableID to dbID mapping to avoid lock contention
+	tableIDToDBID := snapshotMeta.GetTableIDToDBIDMap()
+
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -426,9 +429,9 @@ func MakeSnapshotAndPitrFineFilter(
 							bm.Add(uint64(i))
 							continue
 						}
-						// Get dbID from tableInfo
-						if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
-							if cdcTS, ok := cdcWatermarks[tableInfo.dbID]; ok {
+						// Get dbID from tableID
+						if dbID, ok := tableIDToDBID[tableID]; ok {
+							if cdcTS, ok := cdcWatermarks[dbID]; ok {
 								// This table is in a CDC database
 								// For CNCreated or Appendable objects, check if we should protect them
 								if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
@@ -462,9 +465,9 @@ func MakeSnapshotAndPitrFineFilter(
 					bm.Add(uint64(i))
 					continue
 				}
-				// Get dbID from tableInfo
-				if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
-					if cdcTS, ok := cdcWatermarks[tableInfo.dbID]; ok {
+				// Get dbID from tableID
+				if dbID, ok := tableIDToDBID[tableID]; ok {
+					if cdcTS, ok := cdcWatermarks[dbID]; ok {
 						// This table is in a CDC database
 						// For CNCreated or Appendable objects, check if we should protect them
 						if stats.GetCNCreated() || stats.GetAppendable() {

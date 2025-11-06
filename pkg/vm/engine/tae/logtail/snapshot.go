@@ -2133,90 +2133,22 @@ func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
 	return sm.tableIDIndex[tid].pk
 }
 
-// UpdateCDCDBsFromWatermark updates cdcDBs from mo_cdc_watermark table
-// by querying catalog and finding tableInfo from account_id, db_name, table_name
-func (sm *SnapshotMeta) UpdateCDCDBsFromWatermark(
-	ctx context.Context,
-	checkpointCli interface {
-		GetCatalog() interface {
-			MakeDBIt(bool) interface {
-				Valid() bool
-				Next()
-				Get() interface {
-					GetPayload() interface {
-						GetID() uint64
-						GetName() string
-						MakeTableIt(bool) interface {
-							Valid() bool
-							Next()
-							Get() interface {
-								GetPayload() interface {
-									GetID() uint64
-									GetName() string
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	},
-) {
-	sm.Lock()
-	defer sm.Unlock()
-
-	// Clear existing cdcDBs
-	sm.cdcDBs = make(map[uint64]struct{})
-
-	catalog := checkpointCli.GetCatalog()
-	if catalog == nil {
-		return
-	}
-
-	// Iterate through all databases to find mo_catalog
-	dbIt := catalog.MakeDBIt(true)
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload()
-		if db.GetName() != catalog2.MO_CATALOG {
-			dbIt.Next()
-			continue
-		}
-
-		// Find mo_cdc_watermark table
-		tableIt := db.MakeTableIt(true)
-		for tableIt.Valid() {
-			table := tableIt.Get().GetPayload()
-			if table.GetName() == catalog2.MO_CDC_WATERMARK {
-				// Found watermark table, now we need to read its data
-				// But we can't directly read table data here, so we need to
-				// use a different approach: query through catalog to get watermark entries
-				// For now, we'll mark all databases that have entries in watermark table
-				// by checking if any table in any database matches watermark entries
-				
-				// Since we can't directly query watermark table here,
-				// we'll need to do this in a different way
-				// The actual implementation will need to query the watermark table
-				// through SQL or checkpoint data
-				logutil.Info("GC-CDC-Found-Watermark-Table",
-					zap.Uint64("db-id", db.GetID()),
-					zap.Uint64("table-id", table.GetID()))
-				break
-			}
-			tableIt.Next()
-		}
-		break
-	}
-
-	// For now, we'll need to implement this differently
-	// The watermark data should be read from checkpoint or through SQL query
-	// This is a placeholder that will be implemented based on how watermark data is accessed
-}
-
 // GetTableInfoByID returns tableInfo by table ID
 func (sm *SnapshotMeta) GetTableInfoByID(tableID uint64) *tableInfo {
 	sm.RLock()
 	defer sm.RUnlock()
 	return sm.tableIDIndex[tableID]
+}
+
+// GetTableIDToDBIDMap returns a copy of tableID to dbID mapping
+func (sm *SnapshotMeta) GetTableIDToDBIDMap() map[uint64]uint64 {
+	sm.RLock()
+	defer sm.RUnlock()
+	result := make(map[uint64]uint64, len(sm.tableIDIndex))
+	for tid, info := range sm.tableIDIndex {
+		result[tid] = info.dbID
+	}
+	return result
 }
 
 func (sm *SnapshotMeta) String() string {
