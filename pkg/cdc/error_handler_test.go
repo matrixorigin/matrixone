@@ -344,7 +344,7 @@ func TestShouldRetry(t *testing.T) {
 				IsRetryable: false,
 				FirstSeen:   time.Now().Add(-2 * time.Hour),
 			},
-			expected: true,
+			expected: false, // Permanently blocked (no auto-expiration)
 		},
 	}
 

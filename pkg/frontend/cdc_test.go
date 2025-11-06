@@ -2217,6 +2217,7 @@ func TestCdcTask_Resume(t *testing.T) {
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
+			Accounts: []*task.Account{{Id: 1}}, // Add account for clearAllTableErrors
 		},
 		stateMachine: NewExecutorStateMachine(),
 		holdCh:       make(chan int, 1),
@@ -2224,6 +2225,13 @@ func TestCdcTask_Resume(t *testing.T) {
 			return nil
 		},
 	}
+
+	// Initialize minimal ie for clearAllTableErrors
+	u, ie := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+	executor.ie = ie
+
 	// Transition to Paused state first
 	_ = executor.stateMachine.Transition(TransitionStart)
 	_ = executor.stateMachine.Transition(TransitionStartSuccess)

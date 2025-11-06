@@ -24,7 +24,7 @@ import (
 // Error handling constants
 const (
 	MaxRetryCount           = 3
-	ErrorExpirationDuration = 1 * time.Hour
+	ErrorExpirationDuration = 1 * time.Hour // Deprecated: No longer used
 )
 
 // ErrorRecord represents a CDC error with metadata for recording
@@ -173,6 +173,8 @@ func BuildErrorMetadata(old *ErrorMetadata, record *ErrorRecord) *ErrorMetadata 
 }
 
 // IsErrorExpired checks if a non-retryable error has expired
+// Deprecated: Error expiration mechanism removed. Non-retryable errors now permanently block
+// until manually cleared via Resume.
 func IsErrorExpired(meta *ErrorMetadata) bool {
 	if meta == nil || meta.IsRetryable {
 		return false
@@ -181,6 +183,10 @@ func IsErrorExpired(meta *ErrorMetadata) bool {
 }
 
 // ShouldRetry determines if an error should allow retry
+// Design:
+//   - nil metadata: allow retry (no error)
+//   - Retryable error: allow retry if count <= MaxRetryCount
+//   - Non-retryable error: permanently block (user must manually clear via Resume)
 func ShouldRetry(meta *ErrorMetadata) bool {
 	if meta == nil {
 		return true // No error, allow
@@ -191,6 +197,7 @@ func ShouldRetry(meta *ErrorMetadata) bool {
 		return meta.RetryCount <= MaxRetryCount
 	}
 
-	// Non-retryable error: check if expired
-	return IsErrorExpired(meta)
+	// Non-retryable error: permanently block
+	// User must manually clear error via Pause → Resume or directly update mo_cdc_watermark
+	return false
 }

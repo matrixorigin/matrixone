@@ -295,6 +295,18 @@ func (exec *CDCTaskExecutor) Resume() error {
 		)
 	}()
 
+	// Clear all table errors before resuming
+	// This allows tables with non-retryable errors to be retried after user fixes the issues
+	ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
+	if err := exec.clearAllTableErrors(ctx); err != nil {
+		logutil.Warn(
+			"CDC-Task-Resume-ClearErrorsFailed",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.Error(err),
+		)
+		// Don't fail Resume if clearing errors fails - continue anyway
+	}
+
 	go func() {
 		// closed in Pause, need renew
 		exec.activeRoutine = cdc.NewCdcActiveRoutine()
@@ -455,6 +467,29 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 		state,
 		errMsg,
 	)
+	return exec.ie.Exec(
+		defines.AttachAccountId(ctx, catalog.System_Account),
+		sql,
+		ie.SessionOverrideOptions{},
+	)
+}
+
+// clearAllTableErrors clears error messages for all tables in this task
+// This is called during Resume to allow retrying tables that had non-retryable errors
+// after user has fixed the underlying issues
+func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
+	accountId := uint64(exec.spec.Accounts[0].GetId())
+	taskId := exec.spec.TaskId
+
+	// Use SQL builder to construct safe SQL
+	sql := cdc.CDCSQLBuilder.ClearTaskTableErrorsSQL(accountId, taskId)
+
+	logutil.Info(
+		"CDC-Task-ClearTableErrors",
+		zap.String("task-id", taskId),
+		zap.Uint64("account-id", accountId),
+	)
+
 	return exec.ie.Exec(
 		defines.AttachAccountId(ctx, catalog.System_Account),
 		sql,

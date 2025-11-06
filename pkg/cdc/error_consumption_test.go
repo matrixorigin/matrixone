@@ -60,10 +60,10 @@ func TestErrorConsumption_ShouldRetryScenarios(t *testing.T) {
 			description: "Auto-converted non-retryable error should stop",
 		},
 		{
-			name:        "Expired Error",
+			name:        "Old Non-Retryable Error",
 			errMsg:      fmt.Sprintf("N:%d:old error", time.Now().Add(-2*time.Hour).Unix()),
-			shouldRetry: true,
-			description: "Expired error (>1h) should allow retry (cleared)",
+			shouldRetry: false,
+			description: "Non-retryable error should permanently block (no auto-expiration)",
 		},
 		{
 			name:        "Legacy Retryable",
@@ -96,28 +96,19 @@ func TestErrorConsumption_ShouldRetryScenarios(t *testing.T) {
 
 			// Additional assertions
 			if result {
-				// If should retry, either:
-				// 1. Retryable and count <= MaxRetryCount, OR
-				// 2. Non-retryable but expired (cleared)
-				if metadata.IsRetryable {
-					assert.LessOrEqual(t, metadata.RetryCount, MaxRetryCount,
-						"Retry count should not exceed MaxRetryCount")
-				} else {
-					// Non-retryable that allows retry must be expired
-					assert.True(t, IsErrorExpired(metadata),
-						"Non-retryable error that allows retry must be expired")
-				}
+				// If should retry, must be retryable and count <= MaxRetryCount
+				assert.True(t, metadata.IsRetryable, "Only retryable errors should allow retry")
+				assert.LessOrEqual(t, metadata.RetryCount, MaxRetryCount,
+					"Retry count should not exceed MaxRetryCount")
 			} else {
 				// If should not retry, either:
-				// 1. Non-retryable and not expired, OR
+				// 1. Non-retryable (permanently blocked), OR
 				// 2. Retryable but exceeded MaxRetryCount
 				if metadata.IsRetryable {
 					assert.Greater(t, metadata.RetryCount, MaxRetryCount,
 						"Retryable error that shouldn't retry must have exceeded MaxRetryCount")
-				} else {
-					assert.False(t, IsErrorExpired(metadata),
-						"Non-retryable error that shouldn't retry must not be expired")
 				}
+				// Non-retryable errors always block (no assertion needed)
 			}
 		})
 	}
@@ -168,10 +159,10 @@ func TestErrorConsumption_GetTableErrMsgLogic(t *testing.T) {
 			description: "Max retry exceeded -> hasError=true (table stops)",
 		},
 		{
-			name:        "Expired",
+			name:        "Old Non-Retryable",
 			errMsg:      fmt.Sprintf("N:%d:old error", time.Now().Add(-2*time.Hour).Unix()),
-			hasError:    false,
-			description: "Expired error -> hasError=false (cleared, table continues)",
+			hasError:    true,
+			description: "Old non-retryable error -> hasError=true (permanently blocked)",
 		},
 	}
 
@@ -276,24 +267,23 @@ func TestErrorConsumption_EdgeCases(t *testing.T) {
 		assert.False(t, ShouldRetry(metadata), "MaxRetryCount+1 should stop")
 	})
 
-	t.Run("Expired - Beyond 1 Hour", func(t *testing.T) {
-		// More than 1 hour ago (ErrorExpirationDuration = 1 * time.Hour)
-		// Create a timestamp that's definitely expired
+	t.Run("Old Non-Retryable Error", func(t *testing.T) {
+		// More than 1 hour ago
 		firstSeen := time.Now().Add(-2 * time.Hour)
 		errMsg := fmt.Sprintf("N:%d:error", firstSeen.Unix())
 		metadata := ParseErrorMetadata(errMsg)
 		require.NotNil(t, metadata)
 
-		// Verify metadata has correct FirstSeen
+		// Verify metadata
 		assert.Equal(t, firstSeen.Unix(), metadata.FirstSeen.Unix(), "FirstSeen should match")
+		assert.False(t, metadata.IsRetryable, "Should be non-retryable")
 
-		// Should be expired (more than 1 hour old)
+		// Note: IsErrorExpired is deprecated but still functional for backward compatibility
 		isExpired := IsErrorExpired(metadata)
-		assert.True(t, isExpired, "Error older than 1 hour should be expired")
+		assert.True(t, isExpired, "IsErrorExpired still works (deprecated)")
 
-		// Note: ShouldRetry for expired errors returns true (expired = cleared, allow retry)
-		// This is the design: expired errors are considered cleared and allow new attempts
+		// New behavior: Non-retryable errors permanently block (no auto-expiration)
 		result := ShouldRetry(metadata)
-		assert.True(t, result, "Expired errors should allow retry (cleared)")
+		assert.False(t, result, "Non-retryable errors permanently block (no auto-clear)")
 	})
 }
