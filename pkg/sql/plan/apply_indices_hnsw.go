@@ -19,6 +19,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -92,13 +93,28 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		return nodeID, err
 	}
 
+	useMMap, err := builder.compCtx.ResolveVariable("hnsw_use_mmap", true, false)
+	if err != nil {
+		return nodeID, err
+	}
+	useMMapStr := "false"
+	switch v := useMMap.(type) {
+	case int8:
+		if v != 0 {
+			useMMapStr = "true"
+		}
+	default:
+		return nodeID, moerr.NewInternalErrorNoCtx("invalid configuration value type for hnsw_use_mmap")
+	}
+
 	// generate JSON by fmt.Sprintf instead of sonic.Marshal for performance
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "use_mmap": %s}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		metaDef.IndexTableName,
 		idxDef.IndexTableName,
-		nThread.(int64))
+		nThread.(int64),
+		useMMapStr)
 
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewTag()

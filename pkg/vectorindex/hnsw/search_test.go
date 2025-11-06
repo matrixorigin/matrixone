@@ -141,6 +141,57 @@ func TestHnsw(t *testing.T) {
 	cache.Cache.Destroy()
 }
 
+func TestHnswWithMMap(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	// stub runSql function
+	runSql = mock_runSql
+	runSql_streaming = mock_runSql_streaming
+
+	// init cache
+	cache.VectorIndexCacheTTL = 2 * time.Second
+	cache.VectorIndexCacheTTL = 2 * time.Second
+	cache.Cache = cache.NewVectorIndexCache()
+
+	time.Sleep(1999 * time.Millisecond)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index", UseMMap: true}
+	fp32a := []float32{0, 1, 2}
+
+	var wg sync.WaitGroup
+	nthread := 64
+
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20000; j++ {
+				cache.Cache.Once()
+
+				algo := NewHnswSearch[float32](idxcfg, tblcfg)
+				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				require.Nil(t, err)
+				keys, ok := anykeys.([]int64)
+				require.True(t, ok)
+
+				require.Equal(t, len(keys), 4)
+				require.Equal(t, keys[0], int64(0))
+				require.Equal(t, distances[0], float64(0))
+				//os.Stderr.WriteString(fmt.Sprintf("keys %v distance %v\n", keys, distances))
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	time.Sleep(3 * time.Second)
+	cache.Cache.Destroy()
+}
+
 func makeMetaBatch(proc *process.Process) *batch.Batch {
 	indexfile := "resources/hnsw0.bin"
 

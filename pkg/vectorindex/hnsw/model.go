@@ -631,7 +631,6 @@ func (idx *HnswModel[T]) LoadIndex(
 		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
 		error_chan  = make(chan error)
-		fname       string
 	)
 
 	if idx.Index != nil {
@@ -657,8 +656,6 @@ func (idx *HnswModel[T]) LoadIndex(
 			return err
 		}
 
-		fname = fp.Name()
-
 		// load index to memory
 		defer func() {
 			if fp != nil {
@@ -666,15 +663,8 @@ func (idx *HnswModel[T]) LoadIndex(
 				fp = nil
 			}
 
-			if view {
-				// if view == true, remove the file.  right now view equals to read-only model when search.
-				// since model loads into memory anyway, we can safely remove the file after load.
-				// NOTE: when choose to load with usearch.View() mmap(), we cannot remove this file.
-				// for update, we need this file for Load() and unload().
-				if len(fname) > 0 {
-					os.Remove(fname)
-				}
-			}
+			// NOTE: when choose to load with usearch.View() mmap(), we cannot remove this file.
+			// for update, we need this file for Load() and unload().
 		}()
 
 		err = fallocate.Fallocate(fp, 0, idx.FileSize)
@@ -758,7 +748,7 @@ func (idx *HnswModel[T]) LoadIndex(
 	}
 
 	if view {
-		err = usearchidx.Load(idx.Path)
+		err = usearchidx.View(idx.Path)
 		idx.View = true
 	} else {
 		err = usearchidx.Load(idx.Path)

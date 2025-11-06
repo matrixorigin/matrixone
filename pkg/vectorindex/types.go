@@ -58,6 +58,9 @@ type IndexTableConfig struct {
 	ThreadsSearch int64  `json:"threads_search"`
 	IndexCapacity int64  `json:"index_capacity"`
 
+	// HNSW related
+	UseMMap bool `json:"use_mmap"`
+
 	// IVF related
 	EntriesTable       string `json:"entries"`
 	DataSize           int64  `json:"datasize"`

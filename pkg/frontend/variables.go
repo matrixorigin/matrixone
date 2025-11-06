@@ -3650,6 +3650,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
 		Default:           int64(1000000),
 	},
+	"hnsw_use_mmap": {
+		Name:              "hnsw_use_mmap",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("hnsw_use_mmap"),
+		Default:           int8(1),
+	},
 	"validate_password": {
 		Name:              "validate_password",
 		Scope:             ScopeGlobal,
