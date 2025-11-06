@@ -408,24 +408,6 @@ func MakeSnapshotAndPitrFineFilter(
 			sp := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
-			// Check if this table belongs to a CDC database
-			// If so, protect aobject and atombstone data from being deleted
-			// Similar to ISCP, we cannot delete aobject and atombstone data
-			if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
-				if watermark, ok := cdcWatermarks[tableInfo.dbID]; ok {
-					// This table is in a CDC database, check if we should protect it
-					// Protect if the object's createTS is after the watermark
-					if !watermark.IsEmpty() && createTS.GE(&watermark) {
-						// This object is after the watermark, protect it
-						continue
-					}
-					// For aobject and atombstone, always protect them if the db has CDC
-					if stats.GetAppendable() {
-						continue
-					}
-				}
-			}
-
 			if transObjects[name] != nil {
 				tables := transObjects[name]
 				if entry := tables[tableID]; entry != nil {
@@ -439,6 +421,25 @@ func MakeSnapshotAndPitrFineFilter(
 					if !logtail.ObjectIsSnapshotRefers(
 						entry.stats, pitr, &entry.createTS, &entry.dropTS, sp,
 					) {
+						// Check CDC logic similar to ISCP
+						if cdcWatermarks == nil {
+							bm.Add(uint64(i))
+							continue
+						}
+						// Get dbID from tableInfo
+						if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
+							if cdcTS, ok := cdcWatermarks[tableInfo.dbID]; ok {
+								// This table is in a CDC database
+								// For CNCreated or Appendable objects, check if we should protect them
+								if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
+									if (!entry.dropTS.IsEmpty() && entry.dropTS.LT(&cdcTS)) ||
+										entry.createTS.GT(&cdcTS) {
+										// Protect this object
+										continue
+									}
+								}
+							}
+						}
 						bm.Add(uint64(i))
 					}
 					continue
@@ -456,6 +457,25 @@ func MakeSnapshotAndPitrFineFilter(
 			if !logtail.ObjectIsSnapshotRefers(
 				&stats, pitr, &createTS, &deleteTS, sp,
 			) {
+				// Check CDC logic similar to ISCP
+				if cdcWatermarks == nil {
+					bm.Add(uint64(i))
+					continue
+				}
+				// Get dbID from tableInfo
+				if tableInfo := snapshotMeta.GetTableInfoByID(tableID); tableInfo != nil {
+					if cdcTS, ok := cdcWatermarks[tableInfo.dbID]; ok {
+						// This table is in a CDC database
+						// For CNCreated or Appendable objects, check if we should protect them
+						if stats.GetCNCreated() || stats.GetAppendable() {
+							if (!deleteTS.IsEmpty() && deleteTS.LT(&cdcTS)) ||
+								createTS.GT(&cdcTS) {
+								// Protect this object
+								continue
+							}
+						}
+					}
+				}
 				bm.Add(uint64(i))
 			}
 		}
