@@ -402,7 +402,9 @@ var predefinedFunids = map[int]int{
 
 	HASH_PARTITION: 349,
 
-	FUNCTION_END_NUMBER: 350,
+	MO_TUPLE_EXPR: 350,
+
+	FUNCTION_END_NUMBER: 351,
 }
 
 func Test_funids(t *testing.T) {
