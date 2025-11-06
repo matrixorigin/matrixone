@@ -37,8 +37,8 @@ import (
 )
 
 const (
-	DefaultSlowThreshold = 10 * time.Minute
-	DefaultPrintInterval = 5 * time.Minute
+	DefaultSlowThreshold = 5 * time.Minute // Reduced from 10 minutes for earlier detection
+	DefaultPrintInterval = 1 * time.Minute // Reduced from 5 minutes for more frequent updates
 )
 
 var (
@@ -140,25 +140,54 @@ func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs 
 func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	slowRunners := ""
+
 	now := time.Now()
+	totalRunners := len(s.activeRunners)
+	activeRunners := 0
+	slowRunners := 0
+	completedRunners := 0
+	slowRunnersDetails := ""
+
 	for info, state := range s.activeRunners {
-		if state.EndAt.Equal(time.Time{}) && state.CreateAt.Before(now.Add(-slowThreshold)) {
-			slowRunners = fmt.Sprintf(
-				"%s, %v %v->%v %v",
-				slowRunners,
-				info,
-				state.FromTs.ToString(),
-				state.ToTs.ToString(),
-				time.Since(state.CreateAt),
-			)
+		// Count active vs completed runners
+		if state.EndAt.Equal(time.Time{}) {
+			activeRunners++
+
+			// Check if slow
+			if state.CreateAt.Before(now.Add(-slowThreshold)) {
+				slowRunners++
+				duration := time.Since(state.CreateAt)
+				slowRunnersDetails += fmt.Sprintf(
+					"\n  %s: from=%s to=%s duration=%v",
+					info,
+					state.FromTs.ToString(),
+					state.ToTs.ToString(),
+					duration,
+				)
+			}
+		} else {
+			completedRunners++
 		}
 	}
+
+	// Always log summary
 	logutil.Info(
-		"CDC-State",
-		zap.Any("active runner count", len(s.activeRunners)),
-		zap.Any("slow runners", slowRunners),
+		"CDC-State-Summary",
+		zap.Int("total-runners", totalRunners),
+		zap.Int("active-runners", activeRunners),
+		zap.Int("completed-runners", completedRunners),
+		zap.Int("slow-runners", slowRunners),
+		zap.Duration("slow-threshold", slowThreshold),
 	)
+
+	// Log slow runners details if any
+	if slowRunners > 0 {
+		logutil.Warn(
+			"CDC-State-SlowRunners",
+			zap.Int("count", slowRunners),
+			zap.String("details", slowRunnersDetails),
+		)
+	}
 }
 
 type TableDetector struct {

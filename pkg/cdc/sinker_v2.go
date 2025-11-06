@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -244,10 +245,16 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 		return nil
 	}
 
-	// Commit transaction
+	// Commit transaction with timing
+	start := time.Now()
 	if err := s.executor.CommitTx(ctx); err != nil {
 		// Even on error, transition to ROLLED_BACK (tx is cleaned up in executor)
 		s.txnState.Store(v2TxnStateRolledBack)
+
+		logutil.Error("CDC-MySQLSinker2-CommitTxn-Failed",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
 		return err
 	}
 
@@ -257,8 +264,9 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	// Transition back to IDLE
 	s.txnState.Store(v2TxnStateIdle)
 
-	logutil.Debug("CDC-MySQLSinker2-CommitTxn",
-		zap.String("table", s.dbTblInfo.String()))
+	logutil.Info("CDC-MySQLSinker2-CommitTxn-Success",
+		zap.String("table", s.dbTblInfo.String()),
+		zap.Duration("commit-duration", time.Since(start)))
 
 	return nil
 }
@@ -297,44 +305,126 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 
 // handleInsertBatch handles INSERT batch command (snapshot data)
 func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) error {
+	start := time.Now()
+	rows := 0
+	if cmd.InsertBatch != nil {
+		rows = cmd.InsertBatch.RowCount()
+	}
+
 	// Build INSERT SQL statements
 	sqls, err := s.builder.BuildInsertSQL(ctx, cmd.InsertBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
 	if err != nil {
+		logutil.Error("CDC-MySQLSinker2-BuildInsertSQL-Failed",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Int("rows", rows),
+			zap.Error(err))
 		return err
 	}
 
+	logutil.Info("CDC-MySQLSinker2-InsertBatch-Start",
+		zap.String("table", s.dbTblInfo.String()),
+		zap.Int("rows", rows),
+		zap.Int("sql-count", len(sqls)),
+		zap.String("from-ts", cmd.Meta.FromTs.ToString()),
+		zap.String("to-ts", cmd.Meta.ToTs.ToString()))
+
 	// Execute each SQL statement
-	for _, sql := range sqls {
+	for i, sql := range sqls {
+		sqlStart := time.Now()
 		if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
+			logutil.Error("CDC-MySQLSinker2-ExecInsertSQL-Failed",
+				zap.String("table", s.dbTblInfo.String()),
+				zap.Int("sql-index", i),
+				zap.Int("total-sqls", len(sqls)),
+				zap.Duration("duration", time.Since(sqlStart)),
+				zap.Error(err))
 			return err
 		}
+
+		if time.Since(sqlStart) > time.Second {
+			logutil.Warn("CDC-MySQLSinker2-ExecInsertSQL-Slow",
+				zap.String("table", s.dbTblInfo.String()),
+				zap.Int("sql-index", i),
+				zap.Duration("duration", time.Since(sqlStart)))
+		}
 	}
+
+	logutil.Info("CDC-MySQLSinker2-InsertBatch-Complete",
+		zap.String("table", s.dbTblInfo.String()),
+		zap.Int("rows", rows),
+		zap.Int("sql-count", len(sqls)),
+		zap.Duration("total-duration", time.Since(start)))
 
 	return nil
 }
 
 // handleInsertDeleteBatch handles INSERT/DELETE batch command (tail data)
 func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command) error {
+	start := time.Now()
+	insertRows := 0
+	deleteRows := 0
+
+	if cmd.InsertAtmBatch != nil {
+		insertRows = cmd.InsertAtmBatch.RowCount()
+	}
+	if cmd.DeleteAtmBatch != nil {
+		deleteRows = cmd.DeleteAtmBatch.RowCount()
+	}
+
+	logutil.Info("CDC-MySQLSinker2-InsertDeleteBatch-Start",
+		zap.String("table", s.dbTblInfo.String()),
+		zap.Int("insert-rows", insertRows),
+		zap.Int("delete-rows", deleteRows),
+		zap.String("from-ts", cmd.Meta.FromTs.ToString()),
+		zap.String("to-ts", cmd.Meta.ToTs.ToString()))
+
 	// Build and execute INSERT SQL
 	if cmd.InsertAtmBatch != nil && cmd.InsertAtmBatch.RowCount() > 0 {
 		// Note: InsertAtmBatch needs to be converted to regular batch for BuildInsertSQL
 		// For now, we'll skip this - will implement in next iteration
 		// TODO: Implement conversion from AtomicBatch to batch.Batch for inserts
+		logutil.Warn("CDC-MySQLSinker2-InsertAtmBatch-Skipped",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Int("rows", insertRows))
 	}
 
 	// Build and execute DELETE SQL
 	if cmd.DeleteAtmBatch != nil && cmd.DeleteAtmBatch.RowCount() > 0 {
 		sqls, err := s.builder.BuildDeleteSQL(ctx, cmd.DeleteAtmBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
 		if err != nil {
+			logutil.Error("CDC-MySQLSinker2-BuildDeleteSQL-Failed",
+				zap.String("table", s.dbTblInfo.String()),
+				zap.Int("rows", deleteRows),
+				zap.Error(err))
 			return err
 		}
 
-		for _, sql := range sqls {
+		for i, sql := range sqls {
+			sqlStart := time.Now()
 			if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
+				logutil.Error("CDC-MySQLSinker2-ExecDeleteSQL-Failed",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Int("sql-index", i),
+					zap.Int("total-sqls", len(sqls)),
+					zap.Duration("duration", time.Since(sqlStart)),
+					zap.Error(err))
 				return err
+			}
+
+			if time.Since(sqlStart) > time.Second {
+				logutil.Warn("CDC-MySQLSinker2-ExecDeleteSQL-Slow",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Int("sql-index", i),
+					zap.Duration("duration", time.Since(sqlStart)))
 			}
 		}
 	}
+
+	logutil.Info("CDC-MySQLSinker2-InsertDeleteBatch-Complete",
+		zap.String("table", s.dbTblInfo.String()),
+		zap.Int("insert-rows", insertRows),
+		zap.Int("delete-rows", deleteRows),
+		zap.Duration("total-duration", time.Since(start)))
 
 	return nil
 }

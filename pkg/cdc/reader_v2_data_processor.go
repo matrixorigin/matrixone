@@ -147,11 +147,34 @@ func (dp *DataProcessor) ProcessChange(ctx context.Context, data *ChangeData) er
 
 // processSnapshot processes snapshot data
 func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) error {
+	rows := 0
+	if data.InsertBatch != nil {
+		rows = data.InsertBatch.RowCount()
+	}
+
+	logutil.Info(
+		"CDC-DataProcessor-ProcessSnapshot-Start",
+		zap.String("task-id", dp.taskId),
+		zap.Uint64("account-id", dp.accountId),
+		zap.String("db", dp.dbName),
+		zap.String("table", dp.tableName),
+		zap.Int("rows", rows),
+		zap.String("from-ts", dp.fromTs.ToString()),
+		zap.String("to-ts", dp.toTs.ToString()),
+	)
+
 	// Begin transaction if needed (unless initSnapshotSplitTxn is set)
 	tracker := dp.txnManager.GetTracker()
 	if tracker == nil || !tracker.hasBegin {
 		if !dp.initSnapshotSplitTxn {
 			if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
+				logutil.Error(
+					"CDC-DataProcessor-BeginTransaction-Failed",
+					zap.String("task-id", dp.taskId),
+					zap.String("db", dp.dbName),
+					zap.String("table", dp.tableName),
+					zap.Error(err),
+				)
 				return err
 			}
 		}
@@ -167,13 +190,12 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 
 	// Note: We don't clean data.InsertBatch here because Sink() takes ownership
 
-	logutil.Debug(
-		"CDC-DataProcessor-ProcessSnapshot",
+	logutil.Info(
+		"CDC-DataProcessor-ProcessSnapshot-Complete",
 		zap.String("task-id", dp.taskId),
-		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
-		zap.Bool("has-insert", data.InsertBatch != nil),
+		zap.Int("rows", rows),
 	)
 
 	return nil
@@ -181,6 +203,24 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 
 // processTailWip processes tail work-in-progress data (accumulate)
 func (dp *DataProcessor) processTailWip(ctx context.Context, data *ChangeData) error {
+	insertRows := 0
+	deleteRows := 0
+	if data.InsertBatch != nil {
+		insertRows = data.InsertBatch.RowCount()
+	}
+	if data.DeleteBatch != nil {
+		deleteRows = data.DeleteBatch.RowCount()
+	}
+
+	logutil.Debug(
+		"CDC-DataProcessor-ProcessTailWip",
+		zap.String("task-id", dp.taskId),
+		zap.String("db", dp.dbName),
+		zap.String("table", dp.tableName),
+		zap.Int("insert-rows", insertRows),
+		zap.Int("delete-rows", deleteRows),
+	)
+
 	// Get packer from pool
 	var packer *types.Packer
 	put := dp.packerPool.Get(&packer)

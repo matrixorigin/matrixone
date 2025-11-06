@@ -86,6 +86,9 @@ type TableChangeStream struct {
 	lastError    error
 	retryable    bool
 	hasSucceeded atomic.Bool // Tracks if reader has successfully processed data at least once
+
+	// Observability
+	progressTracker *ProgressTracker
 }
 
 // NewTableChangeStream creates a new table change stream
@@ -160,6 +163,14 @@ var NewTableChangeStream = func(
 		tableInfo.SourceTblName,
 	)
 
+	// Create progress tracker for observability
+	progressTracker := NewProgressTracker(
+		accountId,
+		taskId,
+		tableInfo.SourceDbName,
+		tableInfo.SourceTblName,
+	)
+
 	return &TableChangeStream{
 		txnManager:            txnManager,
 		dataProcessor:         dataProcessor,
@@ -186,6 +197,7 @@ var NewTableChangeStream = func(
 		insCompositedPkColIdx: insCompositedPkColIdx,
 		delTsColIdx:           delTsColIdx,
 		delCompositedPkColIdx: delCompositedPkColIdx,
+		progressTracker:       progressTracker,
 	}
 }
 
@@ -208,6 +220,10 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		zap.String("table", s.tableInfo.String()),
 		zap.Uint64("account-id", s.accountId),
 		zap.String("task-id", s.taskId),
+		zap.String("frequency", s.frequency.String()),
+		zap.String("start-ts", s.startTs.ToString()),
+		zap.String("end-ts", s.endTs.ToString()),
+		zap.Bool("no-full", s.noFull),
 	)
 
 	// 2. Register with CDC detector
@@ -215,11 +231,19 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		detector.cdcStateManager.AddActiveRunner(s.tableInfo)
 	}
 
-	// 3. Setup lifecycle
+	// 3. Register with observability manager
+	obsManager := GetObservabilityManager()
+	obsManager.RegisterTableStream(s)
+	defer obsManager.UnregisterTableStream(s)
+
+	// 4. Setup lifecycle
 	s.wg.Add(1)
 	defer s.cleanup(ctx)
 
-	// 4. Calculate initial delay based on last sync time
+	// 5. Initialize progress tracker
+	s.progressTracker.SetState("idle")
+
+	// 5. Calculate initial delay based on last sync time
 	if err := s.calculateInitialDelay(ctx); err != nil {
 		logutil.Error(
 			"CDC-TableChangeStream-CalculateInitialDelayFailed",
@@ -228,7 +252,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		)
 	}
 
-	// 5. Main loop
+	// 6. Main loop
 	for {
 		select {
 		case <-ctx.Done():
@@ -246,17 +270,28 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			s.tick.Reset(s.frequency)
 		}
 
-		// Process one round
-		if err := s.processOneRound(ctx, ar); err != nil {
+		// Process one round with detailed tracking
+		s.progressTracker.SetState("processing")
+		roundStart := time.Now()
+		err := s.processOneRound(ctx, ar)
+
+		if err != nil {
 			s.lastError = err
+			s.progressTracker.SetState("error")
+			s.progressTracker.RecordError(err)
+			s.progressTracker.EndRound(false, err)
+
 			logutil.Error(
 				"CDC-TableChangeStream-ProcessFailed",
 				zap.String("table", s.tableInfo.String()),
 				zap.Bool("retryable", s.retryable),
+				zap.Duration("round-duration", time.Since(roundStart)),
 				zap.Error(err),
 			)
 			return
 		}
+
+		s.progressTracker.SetState("idle")
 	}
 }
 
@@ -419,6 +454,7 @@ func (s *TableChangeStream) processWithTxn(
 	ar *ActiveRoutine,
 ) error {
 	// Get relation
+	s.progressTracker.SetState("reading")
 	_, _, rel, err := GetRelationById(ctx, s.cnEngine, txnOp, s.tableInfo.SourceTblId)
 	if err != nil {
 		// Table may have been truncated
@@ -442,6 +478,7 @@ func (s *TableChangeStream) processWithTxn(
 		)
 		// Clear error on first success (lazy, eventual consistency)
 		s.clearErrorOnFirstSuccess(ctx)
+		s.progressTracker.EndRound(true, nil)
 		return nil // Graceful end
 	}
 
@@ -449,6 +486,10 @@ func (s *TableChangeStream) processWithTxn(
 	if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 		toTs = s.endTs
 	}
+
+	// Start tracking this round
+	s.progressTracker.StartRound(fromTs, toTs)
+	s.progressTracker.SetTargetWatermark(toTs)
 
 	// Update CDC detector
 	if detector != nil && detector.cdcStateManager != nil {
@@ -461,8 +502,17 @@ func (s *TableChangeStream) processWithTxn(
 	changesHandle, err := CollectChanges(ctx, rel, fromTs, toTs, s.mp)
 	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 	if err != nil {
+		s.progressTracker.EndRound(false, err)
 		return err
 	}
+
+	logutil.Info(
+		"CDC-TableChangeStream-CollectChanges",
+		zap.String("table", s.tableInfo.String()),
+		zap.String("from-ts", fromTs.ToString()),
+		zap.String("to-ts", toTs.ToString()),
+		zap.Duration("collect-duration", time.Since(start)),
+	)
 
 	// Create change collector
 	collector := NewChangeCollector(
@@ -495,14 +545,22 @@ func (s *TableChangeStream) processWithTxn(
 	}()
 
 	// Process changes
+	s.progressTracker.SetState("processing")
+	batchCount := uint64(0)
+
 	for {
 		select {
 		case <-ctx.Done():
+			s.progressTracker.EndRound(false, ctx.Err())
 			return ctx.Err()
 		case <-ar.Pause:
-			return moerr.NewInternalErrorf(ctx, "paused")
+			err := moerr.NewInternalErrorf(ctx, "paused")
+			s.progressTracker.EndRound(false, err)
+			return err
 		case <-ar.Cancel:
-			return moerr.NewInternalErrorf(ctx, "cancelled")
+			err := moerr.NewInternalErrorf(ctx, "cancelled")
+			s.progressTracker.EndRound(false, err)
+			return err
 		default:
 		}
 
@@ -514,18 +572,61 @@ func (s *TableChangeStream) processWithTxn(
 		changeData, err := collector.Next(ctx)
 		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
+			s.progressTracker.EndRound(false, err)
 			return err
 		}
 
 		// Process change
 		if err = s.dataProcessor.ProcessChange(ctx, changeData); err != nil {
+			s.progressTracker.EndRound(false, err)
 			return err
+		}
+
+		// Track batch processing
+		if changeData.Type != ChangeTypeNoMoreData {
+			batchCount++
+			var rows uint64
+			if changeData.InsertBatch != nil {
+				rows = uint64(changeData.InsertBatch.RowCount())
+			}
+			if changeData.DeleteBatch != nil {
+				rows += uint64(changeData.DeleteBatch.RowCount())
+			}
+
+			// Record batch with estimated size
+			s.progressTracker.RecordBatch(rows, rows*100) // Rough estimate: 100 bytes per row
+
+			if batchCount%10 == 0 {
+				logutil.Info(
+					"CDC-TableChangeStream-ProcessingProgress",
+					zap.String("table", s.tableInfo.String()),
+					zap.Uint64("batches-processed", batchCount),
+					zap.Uint64("total-rows", s.progressTracker.totalRowsProcessed.Load()),
+					zap.String("from-ts", fromTs.ToString()),
+					zap.String("to-ts", toTs.ToString()),
+				)
+			}
 		}
 
 		// If no more data, we're done
 		if changeData.Type == ChangeTypeNoMoreData {
 			// Clear error on first success (lazy, eventual consistency)
 			s.clearErrorOnFirstSuccess(ctx)
+
+			// Mark successful round completion
+			s.progressTracker.EndRound(true, nil)
+			s.progressTracker.UpdateWatermark(toTs)
+			s.progressTracker.RecordTransaction()
+
+			logutil.Info(
+				"CDC-TableChangeStream-RoundComplete",
+				zap.String("table", s.tableInfo.String()),
+				zap.Uint64("batches-processed", batchCount),
+				zap.Uint64("round-rows", s.progressTracker.currentRoundRows.Load()),
+				zap.String("from-ts", fromTs.ToString()),
+				zap.String("to-ts", toTs.ToString()),
+			)
+
 			return nil
 		}
 	}

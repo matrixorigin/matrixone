@@ -340,7 +340,7 @@ func NewCDCWatermarkUpdater(
 
 func (u *CDCWatermarkUpdater) fillDefaults() {
 	if u.opts.exportStatsInterval == 0 {
-		u.opts.exportStatsInterval = time.Minute * 10
+		u.opts.exportStatsInterval = time.Minute // Reduced from 10 minutes to 1 minute for better observability
 	}
 	if u.opts.cronJobInterval == 0 {
 		u.opts.cronJobInterval = WatermarkUpdateInterval
@@ -352,7 +352,7 @@ func (u *CDCWatermarkUpdater) fillDefaults() {
 		u.customized.scheduleJob = u.scheduleJob
 	}
 	if u.opts.cronJobErrorSupressTimes == 0 {
-		u.opts.cronJobErrorSupressTimes = 500
+		u.opts.cronJobErrorSupressTimes = 50 // Reduced from 500 to 50 for more frequent error reporting
 	}
 }
 
@@ -944,7 +944,22 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 ) (err error) {
 	u.Lock()
 	defer u.Unlock()
+
+	oldWatermark, hasOld := u.cacheUncommitted[*key]
 	u.cacheUncommitted[*key] = *watermark
+
+	// Log watermark updates for better observability
+	logutil.Info(
+		"CDC-WatermarkUpdater-BufferUpdate",
+		zap.String("key", key.String()),
+		zap.String("old-watermark", oldWatermark.ToString()),
+		zap.String("new-watermark", watermark.ToString()),
+		zap.Bool("has-old", hasOld),
+		zap.Int("uncommitted-count", len(u.cacheUncommitted)),
+		zap.Int("committing-count", len(u.cacheCommitting)),
+		zap.Int("committed-count", len(u.cacheCommitted)),
+	)
+
 	return nil
 }
 
@@ -1030,10 +1045,23 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 	return func(ctx context.Context) {
 		if time.Since(u.stats.lastExportTime) > u.opts.exportStatsInterval {
 			u.stats.lastExportTime = time.Now()
+
+			// Export detailed statistics
+			u.RLock()
+			uncommittedCount := len(u.cacheUncommitted)
+			committingCount := len(u.cacheCommitting)
+			committedCount := len(u.cacheCommitted)
+			u.RUnlock()
+
 			logutil.Info(
-				"CDCWatermarkUpdater-Stats",
+				"CDC-WatermarkUpdater-Stats",
 				zap.Uint64("run-times", u.stats.runTimes.Load()),
 				zap.Uint64("skip-times", u.stats.skipTimes.Load()),
+				zap.Uint64("error-times", u.stats.errorTimes.Load()),
+				zap.Int("uncommitted-watermarks", uncommittedCount),
+				zap.Int("committing-watermarks", committingCount),
+				zap.Int("committed-watermarks", committedCount),
+				zap.Float64("skip-ratio", float64(u.stats.skipTimes.Load())/float64(u.stats.runTimes.Load())),
 			)
 		}
 		u.stats.runTimes.Add(1)
