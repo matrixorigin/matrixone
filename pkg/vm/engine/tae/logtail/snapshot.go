@@ -1373,7 +1373,7 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
-	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 {
+	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 && len(sm.cdc.objects) == 0 {
 		return 0, nil
 	}
 	bat := containers.NewBatch()
@@ -1408,10 +1408,17 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 			appendBatForMap(bat, tid, objectMap)
 		}
 	}
+	appendSpecialObjects := func(
+		bat *containers.Batch,
+		pitrTid uint64, pitrObjects map[objectio.Segmentid]*objectInfo,
+		cdcTid uint64, cdcObjects map[objectio.Segmentid]*objectInfo) {
+		appendBatForMap(bat, pitrTid, pitrObjects)
+		appendBatForMap(bat, cdcTid, cdcObjects)
+	}
 	appendBat(bat, sm.objects)
-	appendBatForMap(bat, sm.pitr.tid, sm.pitr.objects)
+	appendSpecialObjects(bat, sm.pitr.tid, sm.pitr.objects, sm.cdc.tid, sm.cdc.objects)
 	appendBat(deltaBat, sm.tombstones)
-	appendBatForMap(deltaBat, sm.pitr.tid, sm.pitr.tombstones)
+	appendSpecialObjects(deltaBat, sm.pitr.tid, sm.pitr.tombstones, sm.cdc.tid, sm.cdc.tombstones)
 	defer bat.Close()
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
@@ -1443,10 +1450,12 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	bat := containers.NewBatch()
 	snapTableBat := containers.NewBatch()
 	pitrTableBat := containers.NewBatch()
+	cdcTableBat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 		snapTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 		pitrTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
+		cdcTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	appendBat := func(bat *containers.Batch, table *tableInfo) {
 		vector.AppendFixed[uint32](
@@ -1475,6 +1484,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				appendBat(pitrTableBat, table)
 				continue
 			}
+			if table.tid == sm.cdc.tid {
+				appendBat(cdcTableBat, table)
+				continue
+			}
 
 			if _, ok := sm.snapshotTableIDs[table.tid]; ok {
 				appendBat(snapTableBat, table)
@@ -1484,6 +1497,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	defer bat.Close()
 	defer snapTableBat.Close()
 	defer pitrTableBat.Close()
+	defer cdcTableBat.Close()
 
 	aObjDelTsBat := containers.NewBatch()
 	for i, attr := range aObjectDelSchemaAttr {
@@ -1513,6 +1527,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	}
 
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(pitrTableBat)); err != nil {
+		return 0, err
+	}
+
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(cdcTableBat)); err != nil {
 		return 0, err
 	}
 
@@ -1594,20 +1612,29 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	}
 }
 
-func (sm *SnapshotMeta) RebuildPitr(ins *containers.Batch) {
+// General special table rebuild functions
+func (sm *SnapshotMeta) rebuildSpecialTable(ins *containers.Batch, tableInfo *specialTableInfo, tableName string) {
 	sm.Lock()
 	defer sm.Unlock()
 	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
 		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	if ins.Length() < 1 {
-		logutil.Warnf("RebuildPitr unexpected length %d", ins.Length())
+		logutil.Warnf("Rebuild%s unexpected length %d", tableName, ins.Length())
 		return
 	}
-	logutil.Infof("RebuildPitr tid %d", insTIDs[0])
+	logutil.Infof("Rebuild %s tid %d", tableName, insTIDs[0])
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
-		sm.pitr.tid = tid
+		tableInfo.tid = tid
 	}
+}
+
+func (sm *SnapshotMeta) RebuildPitr(ins *containers.Batch) {
+	sm.rebuildSpecialTable(ins, &sm.pitr, "Pitr")
+}
+
+func (sm *SnapshotMeta) RebuildCdc(ins *containers.Batch) {
+	sm.rebuildSpecialTable(ins, &sm.cdc, "Cdc")
 }
 
 func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
@@ -1632,6 +1659,7 @@ func (sm *SnapshotMeta) Rebuild(
 	ins *containers.Batch,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 ) {
 	sm.Lock()
 	defer sm.Unlock()
@@ -1651,6 +1679,20 @@ func (sm *SnapshotMeta) Rebuild(
 				}
 				logutil.Info(
 					"GC-Rebuild-P1",
+					zap.String("object-name", objectStats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+				)
+			}
+			continue
+		}
+		if tid == sm.cdc.tid {
+			if (*objects3)[objectStats.ObjectName().SegmentId()] == nil {
+				(*objects3)[objectStats.ObjectName().SegmentId()] = &objectInfo{
+					stats:    objectStats,
+					createAt: createTS,
+				}
+				logutil.Info(
+					"GC-Rebuild-CDC-P1",
 					zap.String("object-name", objectStats.ObjectName().String()),
 					zap.String("create-at", createTS.ToString()),
 				)
@@ -1720,7 +1762,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects)
+	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects, &sm.cdc.objects)
 
 	if len(bs) == 1 {
 		return nil
@@ -1747,7 +1789,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		deltaBat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones)
+	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones, &sm.cdc.tombstones)
 	return nil
 }
 
@@ -1809,6 +1851,8 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 			sm.RebuildTid(bat)
 		} else if id == int(PitrTidIdx) {
 			sm.RebuildPitr(bat)
+		} else if id == int(CdcTidIdx) {
+			sm.RebuildCdc(bat)
 		} else {
 			panic("unknown table info type")
 		}
@@ -2131,13 +2175,6 @@ func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
 	sm.RLock()
 	defer sm.RUnlock()
 	return sm.tableIDIndex[tid].pk
-}
-
-// GetTableInfoByID returns tableInfo by table ID
-func (sm *SnapshotMeta) GetTableInfoByID(tableID uint64) *tableInfo {
-	sm.RLock()
-	defer sm.RUnlock()
-	return sm.tableIDIndex[tableID]
 }
 
 // GetTableIDToDBIDMap returns a copy of tableID to dbID mapping

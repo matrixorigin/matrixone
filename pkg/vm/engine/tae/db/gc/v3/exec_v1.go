@@ -67,6 +67,7 @@ type CheckpointBasedGCJob struct {
 	snapshotMeta  *logtail.SnapshotMeta
 	snapshots     *logtail.SnapshotInfo
 	pitr          *logtail.PitrInfo
+	cdcWatermarks map[uint64]types.TS
 	ts            *types.TS
 	globalCkpLoc  objectio.Location
 	globalCkpVer  uint32
@@ -85,6 +86,7 @@ func NewCheckpointBasedGCJob(
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	snapshots *logtail.SnapshotInfo,
+	cdcWatermarks map[uint64]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
 	checkpointCli checkpoint.Runner,
 	buffer *containers.OneSchemaBatchBuffer,
@@ -99,6 +101,7 @@ func NewCheckpointBasedGCJob(
 		snapshotMeta:  snapshotMeta,
 		snapshots:     snapshots,
 		pitr:          pitr,
+		cdcWatermarks: cdcWatermarks,
 		ts:            ts,
 		globalCkpLoc:  globalCkpLoc,
 		globalCkpVer:  gckpVersion,
@@ -172,6 +175,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.pitr,
 		e.snapshotMeta,
 		transObjects,
+		e.cdcWatermarks,
 		e.checkpointCli,
 		e.fs,
 		e.mp,
@@ -358,6 +362,7 @@ func MakeSnapshotAndPitrFineFilter(
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
+	cdcWatermarks map[uint64]types.TS,
 	checkpointCli checkpoint.Runner,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
@@ -375,18 +380,6 @@ func MakeSnapshotAndPitrFineFilter(
 		snapshots,
 		pitrs,
 	)
-
-	// Get CDC dbid and minimum watermark map
-	cdcWatermarks, err := snapshotMeta.GetCDC(
-		context.Background(),
-		"",
-		fs,
-		mp,
-	)
-	if err != nil {
-		logutil.Warn("GC-CDC-GetCDC-Error", zap.Error(err))
-		cdcWatermarks = make(map[uint64]types.TS)
-	}
 
 	// Copy tableID to dbID mapping to avoid lock contention
 	tableIDToDBID := snapshotMeta.GetTableIDToDBIDMap()
