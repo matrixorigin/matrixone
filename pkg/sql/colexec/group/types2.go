@@ -177,6 +177,7 @@ func (ctr *container) freeGroupByBatches(proc *process.Process) {
 
 func (ctr *container) free(proc *process.Process) {
 	// free container stuff, WTH is the Free0?
+	ctr.inputDone = false
 	ctr.hr.Free0()
 
 	ctr.groupByEvaluate.Free()
@@ -193,6 +194,7 @@ func (ctr *container) free(proc *process.Process) {
 
 func (ctr *container) reset(proc *process.Process) {
 	ctr.state = vm.Build
+	ctr.inputDone = false
 	ctr.resetForSpill(proc)
 	ctr.freeSpillBkts(proc)
 }

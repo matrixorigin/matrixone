@@ -179,13 +179,8 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
-<<<<<<< HEAD
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
-=======
 				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
->>>>>>> 78f7b397b (Really spill.)
 				if errEncode != nil {
 					return errEncode
 				}
