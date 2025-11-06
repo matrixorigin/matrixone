@@ -30,6 +30,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type wmMockSQLExecutor struct {
@@ -983,6 +984,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		context.Background(),
 		key,
 		"err1",
+		nil, // Legacy format
 	)
 	// should be error because the watermark is not found
 	assert.Error(t, err)
@@ -1000,6 +1002,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		context.Background(),
 		key,
 		"err1",
+		nil, // Legacy format
 	)
 	assert.NoError(t, err)
 
@@ -1009,5 +1012,18 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
 	)
 	assert.NoError(t, err)
-	assert.Equal(t, []string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName, "err1"}, tuple)
+	assert.Len(t, tuple, 5)
+	assert.Equal(t, fmt.Sprintf("%d", key.AccountId), tuple[0])
+	assert.Equal(t, key.TaskId, tuple[1])
+	assert.Equal(t, key.DBName, tuple[2])
+	assert.Equal(t, key.TableName, tuple[3])
+
+	// Error message is now formatted as "N:timestamp:message" (non-retryable)
+	// Note: In "N:timestamp:message" format, retry count is always 0 (not tracked for non-retryable)
+	formattedErrMsg := tuple[4]
+	metadata := ParseErrorMetadata(formattedErrMsg)
+	require.NotNil(t, metadata)
+	assert.False(t, metadata.IsRetryable)
+	assert.Equal(t, 0, metadata.RetryCount) // Non-retryable format doesn't track retry count
+	assert.Contains(t, metadata.Message, "err1")
 }

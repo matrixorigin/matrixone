@@ -96,7 +96,7 @@ func (m *mockWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *Watermar
 	return nil
 }
 
-func (m *mockWatermarkUpdater) UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string) error {
+func (m *mockWatermarkUpdater) UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) error {
 	return nil
 }
 

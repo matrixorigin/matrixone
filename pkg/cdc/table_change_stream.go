@@ -276,15 +276,15 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 
 	// Persist error message if any
 	if s.lastError != nil {
-		errMsg := s.lastError.Error()
-		if s.retryable {
-			errMsg = RetryableErrorPrefix + errMsg
+		errorCtx := &ErrorContext{
+			IsRetryable:     s.retryable,
+			IsPauseOrCancel: IsPauseOrCancelError(s.lastError.Error()),
 		}
-		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, errMsg); err != nil {
+
+		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, s.lastError.Error(), errorCtx); err != nil {
 			logutil.Error(
 				"CDC-TableChangeStream-UpdateWatermarkErrMsgFailed",
 				zap.String("table", s.tableInfo.String()),
-				zap.String("save-err-msg", errMsg),
 				zap.Error(err),
 			)
 		}

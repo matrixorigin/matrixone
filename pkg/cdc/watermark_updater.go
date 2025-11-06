@@ -60,6 +60,7 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -279,6 +280,10 @@ type CDCWatermarkUpdater struct {
 	cacheCommitting  map[WatermarkKey]types.TS // Being persisted to database
 	cacheCommitted   map[WatermarkKey]types.TS // Synchronized with database
 
+	// Error metadata cache (similar to watermark cache)
+	// Cached in memory to avoid synchronous SQL queries in RecordError()
+	errorMetadataCache map[WatermarkKey]*ErrorMetadata
+
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
 
@@ -307,10 +312,11 @@ func NewCDCWatermarkUpdater(
 	opts ...UpdateOption,
 ) *CDCWatermarkUpdater {
 	u := &CDCWatermarkUpdater{
-		ie:               ie,
-		cacheUncommitted: make(map[WatermarkKey]types.TS),
-		cacheCommitting:  make(map[WatermarkKey]types.TS),
-		cacheCommitted:   make(map[WatermarkKey]types.TS),
+		ie:                 ie,
+		cacheUncommitted:   make(map[WatermarkKey]types.TS),
+		cacheCommitting:    make(map[WatermarkKey]types.TS),
+		cacheCommitted:     make(map[WatermarkKey]types.TS),
+		errorMetadataCache: make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
 
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
@@ -781,12 +787,131 @@ func (u *CDCWatermarkUpdater) GetFromCache(
 	return
 }
 
+// UpdateWatermarkErrMsg updates error message with automatic intelligent handling:
+// - Control signal filtering (pause/cancel)
+// - Retry count tracking and auto-increment
+// - Auto-conversion to non-retryable after MaxRetryCount
+// - Timestamp recording
+// - Error expiration support
+//
+// Parameters:
+//   - ctx: Context
+//   - key: Watermark key
+//   - errMsg: Error message (empty string to clear error)
+//   - errorCtx: Error context (can be nil for backward compatibility)
+//
+// Call examples:
+//   - Retryable: UpdateWatermarkErrMsg(ctx, key, "table not found", &ErrorContext{IsRetryable: true})
+//   - Non-retryable: UpdateWatermarkErrMsg(ctx, key, "type mismatch", &ErrorContext{IsRetryable: false})
+//   - Clear: UpdateWatermarkErrMsg(ctx, key, "", nil)
+//   - Legacy: UpdateWatermarkErrMsg(ctx, key, "retryable error:xxx", nil) // Auto-parsed
+//
+// Design: Uses in-memory cache to avoid synchronous SQL queries, preserving
+// the lazy batch processing design of WatermarkUpdater
 func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	ctx context.Context,
 	key *WatermarkKey,
 	errMsg string,
+	errorCtx *ErrorContext,
 ) (err error) {
-	job := NewUpdateWMErrMsgJob(ctx, key, errMsg)
+	// 1. Clear error: remove cache and persist empty string
+	if errMsg == "" {
+		u.Lock()
+		delete(u.errorMetadataCache, *key)
+		u.Unlock()
+
+		job := NewUpdateWMErrMsgJob(ctx, key, "")
+		if _, err = u.queue.Enqueue(job); err != nil {
+			return
+		}
+		job.WaitDone()
+		err = job.GetResult().Err
+		return
+	}
+
+	// 2. Parse error context (with backward compatibility)
+	isRetryable := false
+	isPauseOrCancel := false
+	message := errMsg
+
+	if errorCtx != nil {
+		// New API: use structured context
+		isRetryable = errorCtx.IsRetryable
+		isPauseOrCancel = errorCtx.IsPauseOrCancel || IsPauseOrCancelError(errMsg)
+	} else {
+		// Old API: parse from string prefix (backward compatible)
+		if strings.HasPrefix(errMsg, RetryableErrorPrefix) {
+			isRetryable = true
+			message = strings.TrimPrefix(errMsg, RetryableErrorPrefix)
+		} else if strings.HasPrefix(errMsg, "retryable:") {
+			isRetryable = true
+			message = strings.TrimPrefix(errMsg, "retryable:")
+		}
+
+		// Auto-detect control signals
+		isPauseOrCancel = IsPauseOrCancelError(errMsg)
+	}
+
+	// 3. Filter control signals (pause/cancel) - don't persist
+	if isPauseOrCancel {
+		logutil.Info(
+			"CDC-UpdateWatermarkErrMsg-SkipControlSignal",
+			zap.String("key", key.String()),
+			zap.String("signal", errMsg),
+		)
+		return nil
+	}
+
+	// 4. Read from memory cache (NO SQL query - preserves batch processing design)
+	u.RLock()
+	oldMetadata, exists := u.errorMetadataCache[*key]
+	u.RUnlock()
+
+	// Make a copy to avoid race conditions
+	var oldMetadataCopy *ErrorMetadata
+	if exists {
+		copy := *oldMetadata
+		oldMetadataCopy = &copy
+	}
+
+	// 5. Build new metadata (auto-increment retry count)
+	record := &ErrorRecord{
+		Error:       moerr.NewInternalErrorNoCtx(message),
+		IsRetryable: isRetryable,
+		Timestamp:   time.Now(),
+	}
+	newMetadata := BuildErrorMetadata(oldMetadataCopy, record)
+
+	// 6. Check if exceeded max retry count
+	if newMetadata.IsRetryable && newMetadata.RetryCount > MaxRetryCount {
+		logutil.Warn(
+			"CDC-UpdateWatermarkErrMsg-ExceededMaxRetry",
+			zap.String("key", key.String()),
+			zap.Int("retry-count", newMetadata.RetryCount),
+			zap.String("error", newMetadata.Message),
+		)
+		// Convert to non-retryable
+		newMetadata.IsRetryable = false
+		newMetadata.Message = fmt.Sprintf("max retry exceeded (%d): %s",
+			newMetadata.RetryCount, newMetadata.Message)
+	}
+
+	// 7. Update memory cache (like UpdateWatermarkOnly - no SQL)
+	u.Lock()
+	u.errorMetadataCache[*key] = newMetadata
+	u.Unlock()
+
+	// 8. Format and persist (async via job queue)
+	formattedMsg := FormatErrorMetadata(newMetadata)
+	logutil.Info(
+		"CDC-UpdateWatermarkErrMsg-Persist",
+		zap.String("key", key.String()),
+		zap.Bool("retryable", newMetadata.IsRetryable),
+		zap.Int("retry-count", newMetadata.RetryCount),
+		zap.String("formatted-msg", formattedMsg),
+	)
+
+	job := NewUpdateWMErrMsgJob(ctx, key, formattedMsg)
 	if _, err = u.queue.Enqueue(job); err != nil {
 		return
 	}

@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -554,7 +553,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
-			// Persist error to database for this table (if watermarkUpdater is available)
+			// Persist error to database for this table
 			if exec.watermarkUpdater != nil {
 				watermarkKey := cdc.WatermarkKey{
 					AccountId: uint64(exec.spec.Accounts[0].GetId()),
@@ -562,7 +561,10 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 					DBName:    newTableInfo.SourceDbName,
 					TableName: newTableInfo.SourceTblName,
 				}
-				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error()); updateErr != nil {
+				errorCtx := &cdc.ErrorContext{
+					IsRetryable: false, // Pipeline creation errors are not retryable by default
+				}
+				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warnf("failed to persist error message for table %s: %v", key, updateErr)
 				}
 			}
@@ -615,9 +617,45 @@ var GetTableErrMsg = func(
 	if errMsg == "" {
 		return false, nil
 	}
-	if strings.HasPrefix(errMsg, cdc.RetryableErrorPrefix) {
+
+	// Parse error metadata using unified parser
+	metadata := cdc.ParseErrorMetadata(errMsg)
+	if metadata == nil {
 		return false, nil
 	}
+
+	// Use unified retry logic
+	if cdc.ShouldRetry(metadata) {
+		// Log detailed retry information
+		if metadata.IsRetryable {
+			logutil.Infof("table %s.%s retryable error (attempt %d/%d): %s",
+				tbl.SourceDbName, tbl.SourceTblName,
+				metadata.RetryCount, cdc.MaxRetryCount,
+				metadata.Message)
+		} else {
+			// Expired non-retryable error
+			age := time.Since(metadata.FirstSeen)
+			logutil.Infof("table %s.%s non-retryable error expired (age: %s), will retry: %s",
+				tbl.SourceDbName, tbl.SourceTblName,
+				age, metadata.Message)
+		}
+		return false, nil
+	}
+
+	// Cannot retry
+	if metadata.IsRetryable {
+		// Exceeded max retry count
+		logutil.Warnf("table %s.%s exceeded max retry count (%d attempts): %s",
+			tbl.SourceDbName, tbl.SourceTblName,
+			metadata.RetryCount, metadata.Message)
+	} else {
+		// Fresh non-retryable error
+		age := time.Since(metadata.FirstSeen)
+		logutil.Infof("table %s.%s permanent error (age: %s): %s",
+			tbl.SourceDbName, tbl.SourceTblName,
+			age, metadata.Message)
+	}
+
 	hasError = true
 	return
 }
@@ -689,6 +727,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		ctx,
 		&watermarkKey,
 		"",
+		nil, // Clear error, no context needed
 	); err != nil {
 		return
 	}

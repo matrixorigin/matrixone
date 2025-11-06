@@ -41,10 +41,16 @@ const (
 	RetryableErrorPrefix = "retryable error:"
 )
 
+// ErrorContext provides context for error message updates
+type ErrorContext struct {
+	IsRetryable     bool // Whether the error is retryable
+	IsPauseOrCancel bool // Whether this is a pause/cancel control signal (optional, auto-detected if not set)
+}
+
 // WatermarkUpdater manages CDC watermarks
 type WatermarkUpdater interface {
 	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
-	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string) (err error)
+	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) (err error)
 	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
 	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
 	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
