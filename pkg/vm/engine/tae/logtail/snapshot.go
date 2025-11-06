@@ -1363,12 +1363,12 @@ func (sm *SnapshotMeta) GetCDC(
 		// Decode tuple to get the string representation
 		tuple, _, _, err := types.DecodeTuple(pkBytes)
 		if err != nil {
-			logutil.Warn("GC-CDC-DecodeTuple-Error",
+			logutil.Error("GC-CDC-DecodeTuple-Error",
 				zap.Error(err),
 				zap.Uint64("account-id", accountID),
 				zap.String("db-name", dbName),
 				zap.String("table-name", tableName))
-			return nil
+			return err
 		}
 		pk := tuple.ErrString(nil)
 
