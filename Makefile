@@ -75,6 +75,53 @@ endif
 all: build
 
 ###############################################################################
+# help
+###############################################################################
+
+.PHONY: help
+help:
+	@echo "MatrixOne Makefile Commands"
+	@echo "============================"
+	@echo ""
+	@echo "Build Commands:"
+	@echo "  make build              - Build mo-service binary"
+	@echo "  make debug              - Build with race detector and debug symbols"
+	@echo "  make musl               - Build static binary with musl"
+	@echo "  make mo-tool            - Build mo-tool utility"
+	@echo "  make clean              - Clean build artifacts"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make ut                 - Run unit tests"
+	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
+	@echo "  make compose            - Run docker compose BVT tests"
+	@echo ""
+	@echo "Development Environment (Local Multi-CN Cluster):"
+	@echo "  make dev-help           - Show all dev-* commands (full list)"
+	@echo "  make dev-build          - Build docker image"
+	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
+	@echo "  make dev-up-latest      - Start with official latest image"
+	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-down           - Stop cluster"
+	@echo "  make dev-restart        - Restart all services"
+	@echo "  make dev-restart-cn1    - Restart CN1 only (also: cn2, proxy, tn, log)"
+	@echo "  make dev-edit-cn1       - Edit CN1 config interactively (also: cn2, proxy, tn, log, common)"
+	@echo "  make dev-logs           - View all logs"
+	@echo "  make dev-mysql          - Connect to database via proxy"
+	@echo "  make dev-clean          - Stop and remove all data"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make fmt                - Format Go code"
+	@echo "  make static-check       - Run static analysis"
+	@echo ""
+	@echo "Other:"
+	@echo "  make vendor-build       - Build vendor directory"
+	@echo "  make pb                 - Generate protobuf files"
+	@echo ""
+	@echo "For more details:"
+	@echo "  make dev-help           - Development environment commands"
+	@echo "  See README.md and BUILD.md for full documentation"
+
+###############################################################################
 # build vendor directory
 ###############################################################################
 
@@ -244,6 +291,246 @@ compose-clean:
 	@cd $(ROOT_DIR) && rm -rf docker-compose-log && rm -rf test/distributed/resources/json/export*
 	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile/*.csv
 	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile_2/*.csv
+
+###############################################################################
+# Local Multi-CN Development Environment (docker-multi-cn-local-disk)
+###############################################################################
+
+DEV_DIR := etc/docker-multi-cn-local-disk
+DEV_VERSION ?= local
+DEV_MOUNT ?=
+
+.PHONY: dev-help
+dev-help:
+	@echo "Local Multi-CN Development Environment Commands:"
+	@echo "  make dev-build          - Build MatrixOne docker image (local tag)"
+	@echo "  make dev-up             - Start multi-CN cluster with local image"
+	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
+	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-down           - Stop multi-CN cluster"
+	@echo "  make dev-restart        - Restart multi-CN cluster (all services)"
+	@echo "  make dev-restart-cn1    - Restart CN1 only"
+	@echo "  make dev-restart-cn2    - Restart CN2 only"
+	@echo "  make dev-restart-proxy  - Restart Proxy only"
+	@echo "  make dev-restart-log    - Restart Log service only"
+	@echo "  make dev-restart-tn     - Restart TN only"
+	@echo "  make dev-ps             - Show service status"
+	@echo "  make dev-logs           - Show all logs (tail -f)"
+	@echo "  make dev-logs-cn1       - Show CN1 logs"
+	@echo "  make dev-logs-cn2       - Show CN2 logs"
+	@echo "  make dev-logs-proxy     - Show proxy logs"
+	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
+	@echo "  make dev-config         - Generate config from config.env"
+	@echo "  make dev-config-example - Create config.env.example file"
+	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
+	@echo "  make dev-edit-cn2       - Edit CN2 configuration interactively"
+	@echo "  make dev-edit-proxy     - Edit Proxy configuration interactively"
+	@echo "  make dev-edit-log       - Edit Log service configuration interactively"
+	@echo "  make dev-edit-tn        - Edit TN configuration interactively"
+	@echo "  make dev-edit-common    - Edit common configuration (all services)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make dev-build && make dev-up              # Build and start"
+	@echo "  make dev-up-test                           # Start with test files"
+	@echo "  make DEV_VERSION=latest dev-up             # Use official latest"
+	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
+	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
+	@echo ""
+	@echo "Configuration (Choose one method):"
+	@echo "  Method 1 (Interactive - Recommended):"
+	@echo "    make dev-edit-cn1                        # Edit CN1 config in editor"
+	@echo "    (Remove # to enable settings, save to apply)"
+	@echo "  Method 2 (Manual):"
+	@echo "    1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
+	@echo "    2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
+	@echo "    3. Generate: make dev-config (or auto-generated on dev-up)"
+
+.PHONY: dev-build
+dev-build:
+	@echo "Building MatrixOne docker image..."
+	@cd $(DEV_DIR) && ./start.sh build
+
+.PHONY: dev-up
+dev-up:
+	@echo "Starting MatrixOne Multi-CN cluster (version: $(DEV_VERSION))..."
+ifeq ($(DEV_MOUNT),)
+	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) up -d
+else
+	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) -m "$(DEV_MOUNT)" up -d
+endif
+	@echo ""
+	@echo "Services started! Connect with:"
+	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
+	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
+	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
+
+.PHONY: dev-up-latest
+dev-up-latest:
+	@$(MAKE) DEV_VERSION=latest dev-up
+
+.PHONY: dev-up-nightly
+dev-up-nightly:
+	@$(MAKE) DEV_VERSION=nightly dev-up
+
+.PHONY: dev-up-test
+dev-up-test:
+	@echo "Starting with test directory mounted..."
+	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) -m "../../test:/test:ro" up -d
+	@echo ""
+	@echo "Test directory mounted at /test in containers"
+	@echo "Run SQL files with: mysql> source /test/distributed/cases/your_test.sql;"
+
+.PHONY: dev-down
+dev-down:
+	@echo "Stopping MatrixOne Multi-CN cluster..."
+	@cd $(DEV_DIR) && ./start.sh down
+
+.PHONY: dev-restart
+dev-restart:
+	@echo "Restarting MatrixOne Multi-CN cluster..."
+	@cd $(DEV_DIR) && ./start.sh restart
+
+# Restart individual services
+.PHONY: dev-restart-cn1
+dev-restart-cn1:
+	@echo "Restarting CN1..."
+	@cd $(DEV_DIR) && docker compose restart mo-cn1
+
+.PHONY: dev-restart-cn2
+dev-restart-cn2:
+	@echo "Restarting CN2..."
+	@cd $(DEV_DIR) && docker compose restart mo-cn2
+
+.PHONY: dev-restart-proxy
+dev-restart-proxy:
+	@echo "Restarting Proxy..."
+	@cd $(DEV_DIR) && docker compose restart mo-proxy
+
+.PHONY: dev-restart-log
+dev-restart-log:
+	@echo "Restarting Log service..."
+	@cd $(DEV_DIR) && docker compose restart mo-log
+
+.PHONY: dev-restart-tn
+dev-restart-tn:
+	@echo "Restarting TN..."
+	@cd $(DEV_DIR) && docker compose restart mo-tn
+
+.PHONY: dev-ps
+dev-ps:
+	@cd $(DEV_DIR) && ./start.sh ps
+
+.PHONY: dev-logs
+dev-logs:
+	@cd $(DEV_DIR) && ./start.sh logs -f
+
+.PHONY: dev-logs-cn1
+dev-logs-cn1:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-cn1
+
+.PHONY: dev-logs-cn2
+dev-logs-cn2:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-cn2
+
+.PHONY: dev-logs-proxy
+dev-logs-proxy:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-proxy
+
+.PHONY: dev-logs-tn
+dev-logs-tn:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-tn
+
+.PHONY: dev-logs-log
+dev-logs-log:
+	@cd $(DEV_DIR) && ./start.sh logs -f mo-log
+
+.PHONY: dev-clean
+dev-clean:
+	@echo "WARNING: This will delete all data in mo-data/ and logs/!"
+	@read -p "Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		echo "Stopping services..."; \
+		cd $(DEV_DIR) && ./start.sh down; \
+		echo "Removing data..."; \
+		rm -rf mo-data logs; \
+		echo "Clean completed!"; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+.PHONY: dev-shell-cn1
+dev-shell-cn1:
+	@docker exec -it mo-cn1 sh
+
+.PHONY: dev-shell-cn2
+dev-shell-cn2:
+	@docker exec -it mo-cn2 sh
+
+.PHONY: dev-mysql
+dev-mysql:
+	@echo "Connecting to MatrixOne via proxy..."
+	@mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+.PHONY: dev-mysql-cn1
+dev-mysql-cn1:
+	@echo "Connecting to MatrixOne CN1..."
+	@mysql -h 127.0.0.1 -P 16001 -u root -p111
+
+.PHONY: dev-mysql-cn2
+dev-mysql-cn2:
+	@echo "Connecting to MatrixOne CN2..."
+	@mysql -h 127.0.0.1 -P 16002 -u root -p111
+
+.PHONY: dev-config
+dev-config:
+	@echo "Generating configuration files..."
+	@cd $(DEV_DIR) && ./generate-config.sh
+
+.PHONY: dev-config-example
+dev-config-example:
+	@echo "Creating example config.env file..."
+	@if [ -f "$(DEV_DIR)/config.env" ]; then \
+		echo "Warning: config.env already exists. Not overwriting."; \
+		echo "To recreate, run: rm $(DEV_DIR)/config.env && make dev-config-example"; \
+	else \
+		cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env; \
+		echo "✓ Created $(DEV_DIR)/config.env"; \
+		echo ""; \
+		echo "Edit the file to customize configuration:"; \
+		echo "  vim $(DEV_DIR)/config.env"; \
+		echo ""; \
+		echo "Then regenerate configs:"; \
+		echo "  make dev-config"; \
+		echo ""; \
+		echo "Or just restart (auto-generates):"; \
+		echo "  make dev-down && make dev-up"; \
+	fi
+
+# Interactive configuration editors for specific services
+.PHONY: dev-edit-cn1
+dev-edit-cn1:
+	@cd $(DEV_DIR) && ./edit-config.sh cn1
+
+.PHONY: dev-edit-cn2
+dev-edit-cn2:
+	@cd $(DEV_DIR) && ./edit-config.sh cn2
+
+.PHONY: dev-edit-proxy
+dev-edit-proxy:
+	@cd $(DEV_DIR) && ./edit-config.sh proxy
+
+.PHONY: dev-edit-log
+dev-edit-log:
+	@cd $(DEV_DIR) && ./edit-config.sh log
+
+.PHONY: dev-edit-tn
+dev-edit-tn:
+	@cd $(DEV_DIR) && ./edit-config.sh tn
+
+.PHONY: dev-edit-common
+dev-edit-common:
+	@cd $(DEV_DIR) && ./edit-config.sh common
 
 ###############################################################################
 # clean
