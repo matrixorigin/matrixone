@@ -3656,7 +3656,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("hnsw_use_mmap"),
-		Default:           int8(1),
+		Default:           int8(0),
 	},
 	"validate_password": {
 		Name:              "validate_password",
