@@ -129,7 +129,6 @@ use mo_catalog_new;
 show tables;
 Tables_in_mo_catalog_new
 mo_account
-mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -139,12 +138,9 @@ mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes
-mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
 mo_pitr
 mo_pubs
 mo_role
@@ -179,7 +175,6 @@ use mo_catalog_new_new;
 show tables;
 Tables_in_mo_catalog_new_new
 mo_account
-mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -189,12 +184,9 @@ mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes
-mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
 mo_pitr
 mo_pubs
 mo_role
@@ -232,7 +224,7 @@ insert into table02 (col1, col2) values (133, 'database');
 drop snapshot if exists sp07;
 create snapshot sp07 for table test100 table01;
 create database test_1000 clone test100 {snapshot = 'sp07'};
-internal error: cannot use a table-level snapshot to clone cluster/account/database
+internal error: the snapshot sp07 doesnot contain the table table02
 drop database test100;
 drop database test_1000;
 Can't drop database 'test_1000'; database doesn't exist
@@ -258,43 +250,25 @@ drop database db08;
 drop snapshot sp08;
 internal error: snapshot sp08 does not exist
 drop database if exists test102;
-
 create database test102;
-
 use test102;
-
 create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
-
 insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
-
 insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
-
 drop database if exists test103;
-
 create database test103;
-
 use test103;
-
 drop table if exists table02;
-
 create table table02 (col1 int unique key, col2 varchar(20));
-
 insert into table02 (col1, col2) values (133, 'database');
-
 drop snapshot if exists sp09;
-
 create snapshot sp09 for database test102;
-
 drop database if exists db09;
-
 create database db09 clone test103 {snapshot = 'sp09'};
 internal error: the snapshot sp09 doesnot contain the table table02
 drop database test102;
-
 drop database test103;
-
 drop snapshot sp09;
-
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 drop database if exists test102;
