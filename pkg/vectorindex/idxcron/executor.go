@@ -188,6 +188,30 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	return tasks, err
 }
 
+// The optimal number of LISTS is estimated the the formula below:
+// For datasets with less than one million rows, use lists = rows / 1000.
+// For datasets with more than one million rows, use lists = sqrt(rows).
+//
+// Faiss guidelines suggest using between 30 * nlist and 256 * nlist vectors for training, ideally from a representative sample of your data.
+//
+// we should estimate with the parameter kmeans_train_percent
+// say kmeans_train_percent is 1% (default) LISTS=1000 and Recommended samples count is between 30000 and 256000,
+//
+// Case 1:
+// e.g. 1 million vectors and last iteration is 10K vectors
+// #training_data = 1% x 1 million = 10000.  Not enough training data and perform re-index
+//
+// Case 2:
+// e.g. 5 million vectors and last iteration is 10K vectors
+// #training_data = 1% x 5 million = 50000.  Minimum requirement 30000 samples met but last iteration didn't meet requirement, so perform re-index
+//
+// Case 3:
+// e.g. 5 million vectors and last iteration is 3 million vectors
+// #training_data = 1% x 5 million = 50000.  Minimum requirement 30000 samples met and last iteration also meet requirement, so skip re-index
+//
+// Case 4:
+// e.g. 30 million vectors
+// #training_data = 1% x 30 million= 300000.  Exceed Faiss recommendation, skip re-index if last iteration also meet requirement.
 func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (err error) {
 
 	if len(task.IndexName) == 0 {
