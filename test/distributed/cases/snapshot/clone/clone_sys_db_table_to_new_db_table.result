@@ -129,6 +129,7 @@ use mo_catalog_new;
 show tables;
 Tables_in_mo_catalog_new
 mo_account
+mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -138,9 +139,12 @@ mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes
+mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
+mo_partition_metadata
+mo_partition_tables
 mo_pitr
 mo_pubs
 mo_role
@@ -175,6 +179,7 @@ use mo_catalog_new_new;
 show tables;
 Tables_in_mo_catalog_new_new
 mo_account
+mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -184,9 +189,12 @@ mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes
+mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
+mo_partition_metadata
+mo_partition_tables
 mo_pitr
 mo_pubs
 mo_role
