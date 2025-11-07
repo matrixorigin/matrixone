@@ -401,6 +401,7 @@ func assertTablesEqual(t *testing.T, ctx context.Context, db *sql.DB, schema, le
 	check := func(query string) {
 		rows, err := db.QueryContext(ctx, query)
 		require.NoErrorf(t, err, "sql: %s", query)
+		require.NoErrorf(t, rows.Err(), "sql: %s", query)
 		defer rows.Close()
 		rowCount := 0
 		for rows.Next() {
