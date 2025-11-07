@@ -331,6 +331,99 @@ client.disconnect()
 
 > Async usage: call the same helpers via `await async_client.cdc.create_database_task(...)` / `create_table_task(...)` or inside `async with client.session()`.
 
+### CDC API Overview
+
+The :class:`matrixone.cdc.CDCManager` class provides high-level helpers for all CDC lifecycle operations. Typical workflows are:
+
+```python
+from matrixone import Client
+from matrixone.cdc import CDCManager
+
+client = Client()
+client.connect(host='127.0.0.1', port=6001, user='root', password='111', database='test')
+
+cdc = CDCManager(client)
+
+# Create a table-level task
+task = cdc.create_table_task(
+    task_name='orders_sync',
+    source_uri='mysql://sys#root:111@127.0.0.1:6001',
+    sink_type='matrixone',
+    sink_uri='mysql://sys#root:111@127.0.0.1:6001',
+    table_mappings=[('sales', 'orders', 'backup', 'orders')],
+    options={'Frequency': '1h', 'NoFull': True},
+)
+
+# Pause and resume
+cdc.pause(task.task_name)
+cdc.resume(task.task_name)
+
+# Inspect metadata
+info = cdc.get(task.task_name)
+print(info.state)
+
+# Clean up
+cdc.drop(task.task_name)
+client.disconnect()
+```
+
+Key helper methods:
+
+* `create()` – create a CDC task from a raw mapping string.
+* `create_database_task()` – convenience wrapper for database-level replication.
+* `create_table_task()` – convenience wrapper for table-level replication using Python data structures.
+* `pause()`/`resume()`/`restart()` – control CDC task state.
+* `list()`/`get()` – retrieve CDC task metadata as :class:`matrixone.cdc.CDCTaskInfo` objects.
+* `list_watermarks()` – read per-table watermarks as :class:`matrixone.cdc.CDCWatermarkInfo`.
+
+Refer to :class:`matrixone.cdc.CDCManager` docstrings or ``examples/example_31_cdc_operations.py`` for a comprehensive lifecycle example.
+
+```python
+from matrixone import Client, build_mysql_uri
+
+client = Client()
+client.connect(database='test')
+
+source_uri = build_mysql_uri('127.0.0.1', 6001, user='admin', password='111', account='acct')
+mysql_sink = build_mysql_uri('192.168.1.100', 3306, user='root', password='111')
+
+# Database-level replication (automatically ensures Level='database')
+client.cdc.create_database_task(
+    task_name='replicate_sales',
+    source_uri=source_uri,
+    sink_type='mysql',
+    sink_uri=mysql_sink,
+    source_database='sales',
+    sink_database='sales_archive',
+    options={'Frequency': '30m'}
+)
+
+# Table-level replication helper (list of tuples/dicts/strings)
+client.cdc.create_table_task(
+    task_name='replicate_key_tables',
+    source_uri=source_uri,
+    sink_type='mysql',
+    sink_uri=mysql_sink,
+    table_mappings=[('sales', 'orders', 'sales_archive', 'orders_backup'), 'sales.customers:sales_archive.customers']
+)
+
+# Pause/resume lifecycle
+client.cdc.pause('replicate_sales')
+client.cdc.resume('replicate_sales')
+
+# Inspect status and per-table watermarks
+tasks = client.cdc.list()
+watermarks = client.cdc.list_watermarks('replicate_sales')
+
+# Drop task when no longer needed
+client.cdc.drop('replicate_sales')
+client.cdc.drop('replicate_key_tables')
+
+client.disconnect()
+```
+
+> Async usage: call the same helpers via `await async_client.cdc.create_database_task(...)` / `create_table_task(...)` or inside `async with client.session()`.
+
 ### Wrapping Existing Sessions (For Legacy Code)
 
 If you have existing SQLAlchemy code, wrap your sessions to add MatrixOne features:

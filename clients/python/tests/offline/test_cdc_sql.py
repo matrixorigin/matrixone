@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from matrixone.cdc import AsyncCDCManager, CDCManager, build_mysql_uri
+from matrixone.cdc import AsyncCDCManager, CDCManager, CDCSinkType, build_mysql_uri
 
 
 def test_build_mysql_uri() -> None:
@@ -38,7 +38,7 @@ class TestCDCManagerSQLGeneration:
         self.manager.create(
             task_name="cdc_task",
             source_uri="mysql://acc#user:pwd@127.0.0.1:6001",
-            sink_type="mysql",
+            sink_type=CDCSinkType.MYSQL,
             sink_uri="mysql://root:pwd@127.0.0.1:3306",
             table_mapping="test_db.*:sink_db.*",
             options=options,
@@ -55,7 +55,7 @@ class TestCDCManagerSQLGeneration:
         self.manager.create_database_task(
             task_name="cdc_db",
             source_uri="mysql://source",
-            sink_type="matrixone",
+            sink_type=CDCSinkType.MATRIXONE,
             sink_uri="mysql://sink",
             source_database="db1",
             sink_database="db2",
@@ -83,7 +83,7 @@ class TestCDCManagerSQLGeneration:
         self.manager.create_table_task(
             task_name="cdc_tables",
             source_uri="mysql://src",
-            sink_type="mysql",
+            sink_type=CDCSinkType.MYSQL,
             sink_uri="mysql://sink",
             table_mappings=[
                 ("db1", "orders", "db2", "orders_copy"),
@@ -103,7 +103,7 @@ class TestCDCManagerSQLGeneration:
             self.manager.create_table_task(
                 task_name="cdc_tables",
                 source_uri="mysql://src",
-                sink_type="mysql",
+            sink_type=CDCSinkType.MYSQL,
                 sink_uri="mysql://sink",
                 table_mappings=[("db1", "t1")],
                 options={"Level": "database"},
@@ -114,7 +114,6 @@ class TestCDCManagerSQLGeneration:
 
         base_kwargs = {
             "source_uri": "mysql://src",
-            "sink_type": "matrixone",
             "sink_uri": "mysql://sink",
         }
 
@@ -147,6 +146,7 @@ class TestCDCManagerSQLGeneration:
             self.mock_client.execute.reset_mock()
             self.manager.create_table_task(
                 task_name=task_name,
+                sink_type=CDCSinkType.MATRIXONE,
                 table_mappings=mappings,
                 options=options,
                 **base_kwargs,
@@ -259,7 +259,7 @@ class TestAsyncCDCManagerSQLGeneration:
         await manager.create(
             task_name="async_task",
             source_uri="mysql://src",
-            sink_type="matrixone",
+            sink_type=CDCSinkType.MATRIXONE,
             sink_uri="mysql://sink",
             table_mapping="*.*:*.*",
             options={"Level": "account"},
@@ -280,7 +280,7 @@ class TestAsyncCDCManagerSQLGeneration:
         await manager.create_database_task(
             task_name="async_db",
             source_uri="mysql://src",
-            sink_type="matrixone",
+            sink_type=CDCSinkType.MATRIXONE,
             sink_uri="mysql://sink",
             source_database="db1",
             sink_database="db2",
@@ -301,7 +301,7 @@ class TestAsyncCDCManagerSQLGeneration:
         await manager.create_table_task(
             task_name="async_tables",
             source_uri="mysql://src",
-            sink_type="mysql",
+            sink_type=CDCSinkType.MYSQL,
             sink_uri="mysql://sink",
             table_mappings=[("db1", "orders", "db2", "orders_copy")],
         )

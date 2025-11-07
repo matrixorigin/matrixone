@@ -12,18 +12,86 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CDC management utilities for MatrixOne Python SDK."""
+"""MatrixOne Change Data Capture (CDC) client helpers.
+
+The module exposes synchronous :class:`CDCManager` and asynchronous
+:class:`AsyncCDCManager` helpers that wrap common CDC SQL commands and convert
+result sets into typed data classes.  Each manager only requires a connected
+MatrixOne client (or session) and takes care of building the appropriate SQL
+statements.
+
+Typical usage::
+
+    from matrixone import Client
+    from matrixone.cdc import CDCManager
+
+    client = Client()
+    client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+
+    cdc = CDCManager(client)
+    task = cdc.create_table_task(
+        task_name="orders_sync",
+        source_uri="mysql://sys#root:111@127.0.0.1:6001",
+        sink_type="matrixone",
+        sink_uri="mysql://sys#root:111@127.0.0.1:6001",
+        table_mappings=[("sales", "orders", "backup", "orders")],
+        options={"Frequency": "1h"},
+    )
+    # ... pause/resume/list/drop as required ...
+    cdc.drop(task.task_name)
+
+Refer to ``examples/example_31_cdc_operations.py`` for a more complete
+end-to-end lifecycle demonstration.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+class CDCSinkType(str, Enum):
+    """Supported CDC sink types."""
+
+    MYSQL = "mysql"
+    MATRIXONE = "matrixone"
+
+    def __str__(self) -> str:  # pragma: no cover - str(Enum)
+        return self.value
+
 
 
 
 def build_mysql_uri(host: str, port: int, user: str, password: str = "", account: Optional[str] = None) -> str:
-    """Construct a MatrixOne/MySQL URI usable in CDC configuration."""
+    """Construct a CDC-friendly MySQL URI.
+
+    Parameters
+    ----------
+    host:
+        Hostname or IP address of the MatrixOne/MySQL endpoint.
+    port:
+        TCP port number.  Must be supplied as an integer.
+    user:
+        Login username.
+    password:
+        Optional password.  Defaults to the empty string which generates a
+        trailing ``":"`` segment in the authority portion of the URI.
+    account:
+        Optional MatrixOne account name.  When provided, the URI is rendered in
+        ``account#user`` form which is required for cross-account CDC tasks.
+
+    Returns
+    -------
+    str
+        A URI compatible with MatrixOne CDC ``CREATE CDC`` statements.
+
+    Examples
+    --------
+    >>> build_mysql_uri(host="127.0.0.1", port=6001, user="root", password="111")
+    'mysql://root:111@127.0.0.1:6001'
+    >>> build_mysql_uri("127.0.0.1", 6001, user="admin", password="pwd", account="demo")
+    'mysql://demo#admin:pwd@127.0.0.1:6001'
+    """
 
     if not host:
         raise ValueError("host is required")
@@ -75,7 +143,13 @@ class CDCWatermarkInfo:
 
 
 class BaseCDCManager:
-    """Shared SQL builders and helpers for CDC managers."""
+    """Shared SQL builders and helpers for CDC managers.
+
+    The base class is primarily an implementation detail – it exposes utility
+    methods for constructing CDC SQL statements and parsing result sets.  Most
+    applications should interact with :class:`CDCManager` or
+    :class:`AsyncCDCManager` instead of instantiating this class directly.
+    """
 
     def __init__(self, client):
         self.client = client
@@ -84,7 +158,7 @@ class BaseCDCManager:
         self,
         task_name: str,
         source_uri: str,
-        sink_type: str,
+        sink_type: CDCSinkType | str,
         sink_uri: str,
         table_mapping: str,
         options: Optional[Dict[str, Any]] = None,
@@ -310,7 +384,45 @@ class BaseCDCManager:
 
 
 class CDCManager(BaseCDCManager):
-    """Synchronous CDC manager for MatrixOne."""
+    """Synchronous helper for managing MatrixOne CDC tasks.
+
+    Parameters
+    ----------
+    client:
+        A connected :class:`~matrixone.client.Client` (or session) used to
+        execute CDC SQL statements. The manager does **not** open or close
+        connections on your behalf.
+    executor:
+        Optional alternative executor object. When provided the executor must
+        expose an ``execute(sql: str)`` method. This is primarily used by the
+        SQLAlchemy integration where a session object is supplied.
+
+    Notes
+    -----
+    All methods in :class:`CDCManager` return Python data classes or ``None``
+    and never attempt to parse or coerce complex result sets. For advanced
+    scenarios where raw cursor access is required, call
+    :meth:`matrixone.client.Client.execute` directly.
+
+    Examples
+    --------
+    >>> from matrixone import Client
+    >>> from matrixone.cdc import CDCManager
+    >>> client = Client()
+    >>> client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+    >>> cdc = CDCManager(client)
+    >>> task = cdc.create_table_task(
+    ...     task_name="orders_sync",
+    ...     source_uri="mysql://sys#root:111@127.0.0.1:6001",
+    ...     sink_type="matrixone",
+    ...     sink_uri="mysql://sys#root:111@127.0.0.1:6001",
+    ...     table_mappings=[("sales", "orders", "backup", "orders")],
+    ...     options={"Frequency": "1h"},
+    ... )
+    >>> cdc.pause(task.task_name)
+    >>> cdc.resume(task.task_name)
+    >>> cdc.drop(task.task_name)
+    """
 
     def __init__(self, client, executor=None):
         super().__init__(client)
@@ -323,11 +435,49 @@ class CDCManager(BaseCDCManager):
         self,
         task_name: str,
         source_uri: str,
-        sink_type: str,
+        sink_type: CDCSinkType | str,
         sink_uri: str,
         table_mapping: str,
         options: Optional[Dict[str, Any]] = None,
     ) -> CDCTaskInfo:
+        """Create a CDC task from a raw table-mapping string.
+
+        Parameters
+        ----------
+        task_name:
+            Name of the CDC task. Must be unique within the account.
+        source_uri:
+            MatrixOne connection URI identifying the source cluster/account.
+        sink_type:
+            Target sink type. ``"mysql"`` and ``"matrixone"`` are supported.
+        sink_uri:
+            Connection URI for the target sink.
+        table_mapping:
+            Raw table mapping string (``source_db.table:sink_db.table``). Use
+            :meth:`create_table_task` or :meth:`create_database_task` for
+            higher-level helpers.
+        options:
+            Optional dictionary of ``CREATE CDC`` options. Boolean values are
+            converted to ``true``/``false`` automatically.
+
+        Returns
+        -------
+        CDCTaskInfo
+            Lightweight descriptor describing the newly created task. Note that
+            MatrixOne assigns task IDs asynchronously, therefore ``task_id`` in
+            the returned object is always ``None``.
+
+        Examples
+        --------
+        >>> cdc.create(
+        ...     task_name="simple_sync",
+        ...     source_uri="mysql://sys#root:111@127.0.0.1:6001",
+        ...     sink_type="matrixone",
+        ...     sink_uri="mysql://sys#root:111@127.0.0.1:6001",
+        ...     table_mapping="sales.orders:backup.orders",
+        ...     options={"NoFull": True},
+        ... )
+        """
         sql = self._build_create_sql(task_name, source_uri, sink_type, sink_uri, table_mapping, options)
         self._get_executor().execute(sql)
         return CDCTaskInfo(
@@ -348,13 +498,38 @@ class CDCManager(BaseCDCManager):
         self,
         task_name: str,
         source_uri: str,
-        sink_type: str,
+        sink_type: CDCSinkType | str,
         sink_uri: str,
         source_database: str,
         sink_database: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> CDCTaskInfo:
-        """Create a database-level CDC task with pythonic parameters."""
+        """Create a CDC task that replicates an entire database.
+
+        Parameters
+        ----------
+        task_name:
+            Name of the CDC task.
+        source_uri:
+            MatrixOne URI of the source cluster/account.
+        sink_type:
+            CDC sink type (``"mysql"`` or ``"matrixone"``).
+        sink_uri:
+            Target connection URI.
+        source_database:
+            Name of the source database.
+        sink_database:
+            Optional sink database.  When omitted, the source database name is
+            reused.
+        options:
+            Additional ``CREATE CDC`` options. The ``Level`` option is enforced
+            to ``"database"``.
+
+        Returns
+        -------
+        CDCTaskInfo
+            Minimal descriptor of the created task.
+        """
 
         target_database = sink_database or source_database
         prepared_options = self._prepare_options(options, level="database")
@@ -377,7 +552,35 @@ class CDCManager(BaseCDCManager):
         table_mappings,
         options: Optional[Dict[str, Any]] = None,
     ) -> CDCTaskInfo:
-        """Create a table-level CDC task with high-level mapping helpers."""
+        """Create a CDC task for one or more tables.
+
+        Parameters
+        ----------
+        task_name:
+            Name of the CDC task.
+        source_uri:
+            MatrixOne URI of the source cluster/account.
+        sink_type:
+            CDC sink type (``"mysql"`` or ``"matrixone"``).
+        sink_uri:
+            Target connection URI.
+        table_mappings:
+            Table mapping specification expressed as
+
+            * raw mapping string, e.g. ``"db1.t1:backup.t1"``;
+            * sequence of mapping strings;
+            * dictionary mapping source to sink tables;
+            * sequence of tuples describing source/sink components (see
+              :meth:`_normalise_table_mappings`).
+        options:
+            Additional ``CREATE CDC`` options. ``Level`` is enforced to
+            ``"table"``.
+
+        Returns
+        -------
+        CDCTaskInfo
+            Minimal descriptor of the created task.
+        """
 
         mapping = self._normalise_table_mappings(table_mappings)
         prepared_options = self._prepare_options(options, level="table")
@@ -391,38 +594,47 @@ class CDCManager(BaseCDCManager):
         )
 
     def drop(self, task_name: str) -> None:
+        """Drop a single CDC task."""
         sql = self._build_drop_sql(task_name=task_name)
         self._get_executor().execute(sql)
 
     def drop_all(self) -> None:
+        """Drop all CDC tasks owned by the current account."""
         sql = self._build_drop_sql(all_tasks=True)
         self._get_executor().execute(sql)
 
     def pause(self, task_name: str) -> None:
+        """Pause a running CDC task."""
         sql = self._build_pause_sql(task_name=task_name)
         self._get_executor().execute(sql)
 
     def pause_all(self) -> None:
+        """Pause every CDC task in the account."""
         sql = self._build_pause_sql(all_tasks=True)
         self._get_executor().execute(sql)
 
     def resume(self, task_name: str) -> None:
+        """Resume a paused CDC task."""
         sql = self._build_resume_sql(task_name, restart=False)
         self._get_executor().execute(sql)
 
     def restart(self, task_name: str) -> None:
+        """Restart a CDC task (pause + resume)."""
         sql = self._build_resume_sql(task_name, restart=True)
         self._get_executor().execute(sql)
 
     def show_all(self):
+        """Execute ``SHOW CDC ALL`` and return the raw cursor/result."""
         sql = self._build_show_all_sql()
         return self._get_executor().execute(sql)
 
     def show_task(self, task_name: str):
+        """Execute ``SHOW CDC TASK`` for a specific task."""
         sql = self._build_show_task_sql(task_name)
         return self._get_executor().execute(sql)
 
     def list(self, task_name: Optional[str] = None) -> List[CDCTaskInfo]:
+        """Return CDC tasks as :class:`CDCTaskInfo` objects."""
         sql = self._build_select_tasks_sql(task_name)
         result = self._get_executor().execute(sql)
         if hasattr(result, "rows"):
@@ -432,12 +644,14 @@ class CDCManager(BaseCDCManager):
         return self._rows_to_tasks(rows)
 
     def get(self, task_name: str) -> CDCTaskInfo:
+        """Retrieve a single CDC task or raise :class:`ValueError`."""
         tasks = self.list(task_name)
         if not tasks:
             raise ValueError(f"CDC task '{task_name}' not found")
         return tasks[0]
 
     def exists(self, task_name: str) -> bool:
+        """Return ``True`` when the task exists, ``False`` otherwise."""
         try:
             self.get(task_name)
             return True
@@ -445,6 +659,7 @@ class CDCManager(BaseCDCManager):
             return False
 
     def list_watermarks(self, task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
+        """Return CDC watermark rows as :class:`CDCWatermarkInfo`."""
         sql = self._build_select_watermarks_sql(task_name)
         result = self._get_executor().execute(sql)
         if hasattr(result, "rows"):
@@ -455,7 +670,11 @@ class CDCManager(BaseCDCManager):
 
 
 class AsyncCDCManager(BaseCDCManager):
-    """Asynchronous CDC manager for MatrixOne."""
+    """Asynchronous CDC manager for MatrixOne.
+
+    The asynchronous API mirrors :class:`CDCManager` but all mutating
+    operations are ``async`` coroutines.
+    """
 
     def __init__(self, client, executor=None):
         super().__init__(client)
