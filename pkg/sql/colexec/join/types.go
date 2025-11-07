@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,6 +32,8 @@ var _ vm.Operator = new(InnerJoin)
 const (
 	Build = iota
 	Probe
+	LoopSpilledPartitions
+	ProcessSpilledPartition
 	End
 )
 
@@ -75,6 +78,12 @@ type container struct {
 	vecs     []*vector.Vector
 
 	mp *message.JoinMap
+
+	// for spilling
+	spilled          bool
+	partitionCnt     int
+	currentPartition int
+	hashmapBuilder   hashmap_util.HashmapBuilder
 
 	maxAllocSize int64
 }
@@ -153,6 +162,9 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.vs = nil
 	ctr.zvs = nil
 	ctr.probeState = psNextBatch
+
+	ctr.spilled = false
+	ctr.partitionCnt = 0
 
 	if innerJoin.OpAnalyzer != nil {
 		innerJoin.OpAnalyzer.Alloc(innerJoin.ctr.maxAllocSize)

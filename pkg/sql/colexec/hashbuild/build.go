@@ -16,8 +16,14 @@ package hashbuild
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -46,6 +52,16 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		return nil
 	}
 
+	if len(hashBuild.ctr.keyExecutors) == 0 {
+		hashBuild.ctr.keyExecutors = make([]colexec.ExpressionExecutor, len(hashBuild.Conditions))
+		for i, expr := range hashBuild.Conditions {
+			hashBuild.ctr.keyExecutors[i], err = colexec.NewExpressionExecutor(proc, expr)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
@@ -65,6 +81,30 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.build(ap, proc, analyzer); err != nil {
 				return result, err
 			}
+			if ctr.spilled {
+				ctr.state = Spill
+			} else {
+				analyzer.Alloc(ctr.hashmapBuilder.GetSize())
+				ctr.state = HandleRuntimeFilter
+			}
+
+		case Spill:
+			// we have spilled the batches, and the remaining batches are for partition 0.
+			// we need to build the hash map for partition 0 now.
+
+			if ap.NeedHashMap {
+				needUniqueVec := true
+				if ap.RuntimeFilterSpec == nil || ap.RuntimeFilterSpec.Expr == nil {
+					needUniqueVec = false
+				}
+				err := ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, needUniqueVec, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			if !ap.NeedBatches {
+				ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+			}
 			analyzer.Alloc(ctr.hashmapBuilder.GetSize())
 			ctr.state = HandleRuntimeFilter
 
@@ -76,13 +116,16 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case SendJoinMap:
 			var jm *message.JoinMap
-			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
+			if ctr.hashmapBuilder.InputBatchRowCount > 0 || ctr.spilled {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}
 				jm.IncRef(ap.JoinMapRefCnt)
+				jm.Spilled = ctr.spilled
+				jm.PartitionCnt = ctr.partitionCnt
+				jm.BuildOpID = ap.GetOperatorID()
 			}
 			if ap.JoinMapTag <= 0 {
 				panic("wrong joinmap message tag!")
@@ -98,9 +141,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
 	for {
-		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -117,28 +160,149 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 		if err != nil {
 			return err
 		}
-	}
-	return nil
-}
+		ctr.memUsed += int64(result.Batch.Size())
 
-func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
-	err := ctr.collectBuildBatches(ap, proc, analyzer)
-	if err != nil {
-		return err
+		if ap.Spillable && ctr.memUsed > ap.SpillMemoryThreshold {
+			ctr.spilled = true
+		}
 	}
-	if ap.NeedHashMap {
+
+	if ctr.spilled {
+		const numPartitions = 8
+		ctr.partitionCnt = numPartitions
+
+		partitionedBatches := make([][]*batch.Batch, numPartitions)
+		for i := range partitionedBatches {
+			partitionedBatches[i] = make([]*batch.Batch, 0)
+		}
+
+		// Partition each batch
+		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+			rowCount := bat.RowCount()
+			hashes := make([]uint64, rowCount)
+
+			for i, _ := range ap.Conditions {
+				vec, err := ctr.keyExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
+				if err != nil {
+					return err
+				}
+
+				// Compute hash values
+				hashCol := make([]uint64, rowCount)
+				if vec.GetType().IsFixedLen() && vec.GetType().TypeSize() == 8 {
+					// fast path for int64/uint64/float64/date/timestamp/decimal64
+					cols := vector.MustFixedColNoTypeCheck[int64](vec)
+					hashtable.Int64BatchHash(unsafe.Pointer(&cols[0]), &hashCol[0], rowCount)
+				} else {
+					// generic path
+					for i := 0; i < rowCount; i++ {
+						bytes := vec.GetBytesAt(i)
+						var state [3]uint64
+						hashtable.BytesBatchGenHashStatesWithSeed(&bytes, &state, 1, 0)
+						hashCol[i] = state[0]
+					}
+				}
+
+				// Combine hash values
+				if i == 0 {
+					copy(hashes, hashCol)
+				} else {
+					for i := range hashes {
+						hashes[i] ^= hashCol[i]
+					}
+				}
+			}
+
+			// Distribute rows to partitions using selection vectors
+			sels := make([][]int64, numPartitions)
+			for i := range sels {
+				sels[i] = make([]int64, 0, rowCount/numPartitions+1)
+			}
+
+			for row := 0; row < rowCount; row++ {
+				partition := hashes[row] % numPartitions
+				sels[partition] = append(sels[partition], int64(row))
+			}
+
+			// Create new batches for each partition
+			for i := range sels {
+				if len(sels[i]) > 0 {
+					newBat := batch.NewWithSize(len(bat.Vecs))
+					for j, vec := range bat.Vecs {
+						newBat.Vecs[j] = vector.NewVec(*vec.GetType())
+					}
+					for col := range bat.Vecs {
+						if err := newBat.Vecs[col].Union(bat.Vecs[col], sels[i], proc.Mp()); err != nil {
+							return err
+						}
+					}
+					newBat.SetRowCount(len(sels[i]))
+					partitionedBatches[i] = append(partitionedBatches[i], newBat)
+				}
+			}
+			bat.Clean(proc.Mp())
+		}
+
+		// Spill partitions 1-7 to disk
+		for i := 1; i < numPartitions; i++ {
+			if len(partitionedBatches[i]) == 0 {
+				continue
+			}
+
+			// Create a deterministic file name for the partition
+			partitionFileName := fmt.Sprintf("hashbuild_spill_%s_%d_%d", proc.QueryId(), ap.GetOperatorID(), i)
+
+			// Create writer using local file system
+			writer, err := os.Create(partitionFileName)
+			if err != nil {
+				return err
+			}
+
+			// Serialize and write batches
+			// Write count of batches first? No, read until EOF or logic to read all.
+			// We write batch by batch.
+			for _, bat := range partitionedBatches[i] {
+				data, err := bat.MarshalBinary()
+				if err != nil {
+					writer.Close()
+					return err
+				}
+				// Write size
+				sizeBuf := make([]byte, 4)
+				binary.LittleEndian.PutUint32(sizeBuf, uint32(len(data)))
+				if _, err := writer.Write(sizeBuf); err != nil {
+					writer.Close()
+					return err
+				}
+				// Write data
+				if _, err = writer.Write(data); err != nil {
+					writer.Close()
+					return err
+				}
+				bat.Clean(proc.Mp())
+			}
+			writer.Close()
+		}
+
+		// Keep partition 0 in memory
+		ctr.hashmapBuilder.Batches.Buf = partitionedBatches[0]
+		ctr.hashmapBuilder.InputBatchRowCount = 0
+		for _, bat := range partitionedBatches[0] {
+			ctr.hashmapBuilder.InputBatchRowCount += bat.RowCount()
+		}
+
+	} else if ap.NeedHashMap {
 		needUniqueVec := true
 		if ap.RuntimeFilterSpec == nil || ap.RuntimeFilterSpec.Expr == nil {
 			needUniqueVec = false
 		}
-		err = ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, needUniqueVec, proc)
-	}
-	if err != nil {
-		return err
-	}
-	if !ap.NeedBatches {
-		// if do not need merged batch, free it now to save memory
-		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+		err := ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, needUniqueVec, proc)
+		if err != nil {
+			return err
+		}
+		if !ap.NeedBatches {
+			ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+		}
 	}
 	return nil
 }

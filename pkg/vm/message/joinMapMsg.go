@@ -63,7 +63,6 @@ func (js *JoinSels) GetSels(k int32) []int32 {
 	return js.sels[i][j]
 }
 
-// JoinMap is used for join
 type JoinMap struct {
 	runtimeFilter_In bool
 	valid            bool
@@ -75,6 +74,11 @@ type JoinMap struct {
 	multiSels        JoinSels
 	delRows          *bitmap.Bitmap
 	batches          []*batch.Batch
+
+	// for spilling
+	Spilled      bool
+	PartitionCnt int
+	BuildOpID    int32
 }
 
 func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
@@ -179,6 +183,8 @@ func (jm *JoinMap) FreeMemory() {
 	}
 	jm.batches = nil
 	jm.valid = false
+	jm.Spilled = false
+	jm.PartitionCnt = 0
 }
 
 func (jm *JoinMap) Free() {
@@ -245,6 +251,9 @@ func (t JoinMapMsg) DebugString() string {
 	if t.JoinMapPtr != nil {
 		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowCnt)) + "\n")
 		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
+		if t.JoinMapPtr.Spilled {
+			buf.WriteString("joinmap spilled with partition count " + strconv.Itoa(t.JoinMapPtr.PartitionCnt) + "\n")
+		}
 	} else {
 		buf.WriteString("joinmapPtr is nil \n")
 	}
