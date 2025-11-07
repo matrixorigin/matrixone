@@ -28,6 +28,23 @@ const (
 	NonEqualIndexCondition    = 2
 )
 
+// calculatePostFilterOverFetchFactor returns the over-fetch multiplier based on limit size
+// for vector index queries with post-filtering (filters applied after index search).
+// Smaller limits need more over-fetching due to higher variance in filtering results.
+func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
+	if originalLimit < 10 {
+		return 5.0 // Small limits: 5x
+	} else if originalLimit < 50 {
+		return 2.0 // Medium limits: 2x
+	} else if originalLimit < 100 {
+		return 1.5 // Large limits: 1.5x
+	} else if originalLimit < 200 {
+		return 1.3 // Very large limits: 1.3x
+	} else {
+		return 1.2 // Huge limits: 1.2x
+	}
+}
+
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:
@@ -280,23 +297,16 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-
-				if !builder.checkValidIvfflatDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
-					continue
+				newNodeID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, projNode, sortNode, scanNode, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
 				}
-
-				return builder.applyIndicesForSortUsingIvfflat(nodeID, projNode, sortNode, scanNode,
-					colRefCnt, idxColMap, multiTableIndex)
 
 			case catalog.MoIndexHnswAlgo.ToString():
-
-				if !builder.checkValidHnswDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
-					continue
+				newNodeID, err := builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
 				}
-
-				return builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode,
-					colRefCnt, idxColMap, multiTableIndex)
-
 			}
 		}
 	}
