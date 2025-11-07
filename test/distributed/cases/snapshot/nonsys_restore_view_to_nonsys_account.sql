@@ -43,7 +43,7 @@ select * from v01;
 select * from v02;
 select * from v03;
 
-restore account acc01 from snapshot sp100;
+restore account acc01{snapshot="sp100"};
 
 show create view v01;
 select * from v01;
@@ -112,7 +112,7 @@ select * from v05;
 select * from v04{snapshot = 'sp02'};
 select * from v05{snapshot = 'sp02'};
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 select * from v04;
 select * from v05;
@@ -177,7 +177,7 @@ drop table Employees;
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
@@ -185,7 +185,7 @@ drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
@@ -249,7 +249,7 @@ drop view department_view;
 select * from employee_with_department_view;
 select * from employee_with_department_view {snapshot = 'sp04'};
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 
 select * from employee_view;
 select * from department_view;
@@ -261,7 +261,7 @@ truncate departments;
 select * from employee_view;
 select * from employee_view {snapshot = 'sp04'};
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 
 select * from employee_view;
 select * from department_view;
@@ -310,7 +310,7 @@ select * from view01{snapshot = 'sp05'};
 drop snapshot if exists sp06;
 create snapshot sp06 for account acc01;
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 
 select * from view01;
 select * from view01{snapshot = 'sp05'};
@@ -319,7 +319,7 @@ drop table partition01;
 select * from view01;
 select * from view01{snapshot = 'sp05'};
 
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 select * from view01;
 select * from view01{snapshot = 'sp06'};
 
@@ -366,7 +366,7 @@ drop database test01;
 select * from test01.EmployeeSalaryRanking;
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 select * from test01.EmployeeSalaryRanking;
 drop snapshot sp06;
@@ -443,13 +443,13 @@ drop table students;
 select * from StudentCoursesView;
 select * from StudentCoursesView {snapshot = 'sp07'};
 
-restore account acc01 database test02 table students from snapshot sp07;
+restore table test02.students{snapshot="sp07"};
 select * from Students;
 select * from Students {snapshot = 'sp07'};
 select * from Enrollments;
 select * from Enrollments {snapshot = 'sp07'};
 select * from StudentCoursesView;
-restore account acc01 database test02 table Enrollments from snapshot sp07;
+restore table test02.Enrollments{snapshot="sp07"};
 select * from Enrollments;
 select * from Enrollments {snapshot = 'sp07'};
 select * from StudentCoursesView;
@@ -500,7 +500,7 @@ create snapshot sp10 for account acc01;
 
 drop database test02;
 
-restore account acc01 from snapshot sp10;
+restore account acc01{snapshot="sp10"};
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
@@ -586,7 +586,7 @@ select * from test05.employee_with_department_view;
 select * from test04.employee_view {snapshot = 'sp100'};
 select * from test03.department_view {snapshot = 'sp100'};
 select * from test05.employee_with_department_view {snapshot = 'sp100'};
-restore account acc01 from snapshot sp100;
+restore account acc01{snapshot="sp100"};
 select * from test04.employee_view;
 select * from test03.department_view;
 select * from test05.employee_with_department_view;

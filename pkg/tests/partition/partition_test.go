@@ -148,11 +148,13 @@ func runPartitionTableCreateAndDeleteTestsWithPrepare(
 func runPartitionClusterTest(
 	t *testing.T,
 	fn func(embed.Cluster),
+	options ...embed.Option,
 ) error {
 	return runPartitionClusterTestWithReuse(
 		t,
 		fn,
 		true,
+		options...,
 	)
 }
 
@@ -160,16 +162,22 @@ func runPartitionClusterTestWithReuse(
 	t *testing.T,
 	fn func(embed.Cluster),
 	reuse bool,
+	options ...embed.Option,
 ) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	var c embed.Cluster
 	createFunc := func() embed.Cluster {
-		new, err := embed.NewCluster(
-			embed.WithCNCount(3),
-			embed.WithTesting(),
+		options = append(
+			[]embed.Option{
+				embed.WithCNCount(3),
+				embed.WithTesting(),
+			},
+			options...,
 		)
+
+		new, err := embed.NewCluster(options...)
 		require.NoError(t, err)
 		require.NoError(t, new.Start())
 		return new

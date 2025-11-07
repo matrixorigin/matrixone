@@ -54,7 +54,7 @@ d1
 drop snapshot if exists sp01_restore_lower;
 create snapshot sp01_restore_lower for account acc01;
 drop database test;
-restore account acc01 from snapshot sp01_restore_lower;
+restore account acc01{snapshot="sp01_restore_lower"};
 use test;
 show tables;
 Tables_in_test
@@ -86,7 +86,7 @@ b1
 select * from tT;
 d1
 4
-restore account acc01 from snapshot sp01_restore_lower to account acc02;
+restore account acc01{snapshot="sp01_restore_lower"} to account acc02;
 use test;
 show tables;
 Tables_in_test
@@ -173,7 +173,7 @@ select @@lower_case_table_names;
 @@lower_case_table_names
 0
 drop database test02;
-restore account acc01 from snapshot sp02_restore_lower;
+restore account acc01{snapshot="sp02_restore_lower"};
 use test02;
 show tables;
 Tables_in_test02
@@ -183,7 +183,7 @@ Employees
 show create table EmployeeDepartmentView;
 View    Create View    character_set_client    collation_connection
 EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
-restore account acc01 from snapshot sp02_restore_lower to account acc04;
+restore account acc01{snapshot="sp02_restore_lower"} to account acc04;
 use test02;
 show tables;
 Tables_in_test02

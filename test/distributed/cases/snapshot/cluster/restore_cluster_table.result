@@ -488,7 +488,7 @@ revoke role_r2 from role_r3;
 revoke role_r1 from role_r2;
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 operation_role_id    operation_user_id
-restore cluster from snapshot cluster_level_snapshot;
+restore cluster{snapshot="cluster_level_snapshot"};
 use db02;
 select * from department_id;
 SQL parser error: table "department_id" does not exist
@@ -647,7 +647,7 @@ use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
 insert into t2 values (1,6),(2,6),(3,6);
-restore account sys from snapshot cluster_level_snapshot;
+restore account sys{snapshot="cluster_level_snapshot"};
 use mo_catalog;
 show tables like 't1';
 Tables_in_mo_catalog
@@ -672,7 +672,7 @@ use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
 insert into t2 values (1,6),(2,6),(3,6);
-restore cluster from snapshot cluster_level_snapshot;
+restore cluster{snapshot="cluster_level_snapshot"};
 use mo_catalog;
 show tables like 't1';
 Tables_in_mo_catalog
@@ -697,7 +697,7 @@ use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
 insert into t2 values (1,6),(2,6),(3,6);
-restore account sys from snapshot account_level_snapshot;
+restore account sys{snapshot="account_level_snapshot"};
 use mo_catalog;
 show tables like 't1';
 Tables_in_mo_catalog
