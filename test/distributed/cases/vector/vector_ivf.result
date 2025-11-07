@@ -45,10 +45,10 @@ id    question    output_result    distance
 10007    有人说虽然安利事业没有门槛，但是营销人员的经营成本较高，自用产品、外出培训学习、通讯、筹办会议等都需要大量资金，实际上很难赚到钱，公司怎么看？    K7RvyQWlYbVqBACtSUJUo88PrgbGqKlT    0.7698024136451669
 10030    很多前景广阔的产品，譬如远红外产品、基因产品，安利都没有涉猎，直销龙头地位是否徒有其名？    d8nYTJ6aliGtGQgDtdPWBhBViExU0NiR    0.8129601642683892
 10027    有人说安利的奖金制度已经实施了60年，陈旧没有新意，难以帮助营销人员取得成功，安利公司怎么看？    rTPzes6tHxX0IUXrGiKzuM6kjbzDyg7e    0.8761100539746219
-10035    安利公司是正规公司吗    K72bfubj2yViG4FL6Q61WxCXYUrP0lpJ    0.8840225164299005
+10035    安利公司是正规公司吗    K72bfubj2yViG4FL6Q61WxCXYUrP0lpJ    0.8840225501420755
 10017    安利业务计划是否养老不养小？    vrvh0bjXrp3suo0RTKzfuxCgxp3PJGkD    0.8925610630399667
 10036    面对直播电商的崛起，安利是怎么布局的？    39Kdoahoamcz55nm7rjU7K4jBIBJz44k    0.902546319063523
-10044    人们在安利真的能挣到钱么？    M6SXZjCi8YHIsIMInXGxljKlRvR227dA    0.9115231772472074
+10044    人们在安利真的能挣到钱么？    M6SXZjCi8YHIsIMInXGxljKlRvR227dA    0.9115232426373633
 SELECT
 id,
 question,
@@ -100,7 +100,7 @@ vec_dist
 LIMIT 5;
 question    type    output_result    status    vec_dist
 安利纽崔莱是传销吗    material    0bglYp4p70Ju9E0JaC4zbNvoKTjANPoW    1    0.6037467094394899
-纽崔莱传销    material    oB7CbVnsi6BfklkBJ8SyWov71KckrAs3    1    0.6683829735358252
+纽崔莱传销    material    oB7CbVnsi6BfklkBJ8SyWov71KckrAs3    1    0.6683830181245154
 纽崔莱产品是骗人的吗    material    41bxUdrlKELgqUCaX5Uzs6xD0B9oDwfA    1    0.7056399613949145
 安利纽崔莱是骗人的吗    material    uLv6KlO7HH3wWsL0etbiW87l7EiXHNuf    1    0.7524124130020065
 SELECT
@@ -140,7 +140,7 @@ AVG(l2_distance(question_vector, '[-0.0110015869140625, -0.0037708282470703125, 
 FROM
 `ca_specify_answer_dataset`;
 total_records    avg_distance
-101    1.103091285960509
+101    1.103091279468914
 SELECT COUNT(*)  FROM `ca_specify_answer_dataset`  WHERE `question_vector` IS NOT NULL;
 COUNT(*)
 101

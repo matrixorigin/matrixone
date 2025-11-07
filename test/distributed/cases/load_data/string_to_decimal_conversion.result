@@ -1,0 +1,75 @@
+drop database if exists test_string_to_decimal;
+create database test_string_to_decimal;
+use test_string_to_decimal;
+create table test_basic_decimal64(
+int_string decimal(10, 0),
+decimal_string decimal(10, 2),
+sci_notation decimal(18, 2),
+negative decimal(10, 2)
+);
+load data infile {'filepath'='$resources/load_data/string_to_decimal_basic.parq', 'format'='parquet'}
+into table test_basic_decimal64;
+select * from test_basic_decimal64 order by int_string;
+int_string    decimal_string    sci_notation    negative
+0    99.99    0.15    -0.01
+123    123.45    100000.00    -99.99
+456    0.01    100.00    -12.34
+create table test_special_formats(
+leading_space decimal(10, 2),
+trailing_space decimal(10, 2),
+both_spaces decimal(10, 2),
+leading_zero decimal(10, 2),
+positive_sign decimal(10, 2),
+uppercase_e decimal(18, 2)
+);
+load data infile {'filepath'='$resources/load_data/string_to_decimal_special.parq', 'format'='parquet'}
+into table test_special_formats;
+select * from test_special_formats order by leading_space;
+leading_space    trailing_space    both_spaces    leading_zero    positive_sign    uppercase_e
+0.00    0.00    0.00    0.00    0.00    0.00
+1.00    1.00    1.00    1.00    1.00    1000.00
+123.45    123.45    123.45    123.45    123.45    123000.00
+create table test_nulls(
+id int,
+value decimal(10, 2)
+);
+load data infile {'filepath'='$resources/load_data/string_to_decimal_nulls.parq', 'format'='parquet'}
+into table test_nulls;
+select * from test_nulls order by id;
+id    value
+1    123.45
+2    null
+3    456.78
+4    null
+5    -99.99
+select count(*) as total, count(value) as non_null from test_nulls;
+total    non_null
+5    3
+create table test_boundaries(
+max_int decimal(18, 0),
+min_int decimal(18, 0),
+max_decimal decimal(18, 2)
+);
+load data infile {'filepath'='$resources/load_data/string_to_decimal_boundaries.parq', 'format'='parquet'}
+into table test_boundaries;
+select * from test_boundaries;
+max_int    min_int    max_decimal
+999999999999999999    -999999999999999999    9999999999999999.99
+create table test_decimal128(
+large_int decimal(38, 0),
+high_precision decimal(38, 10)
+);
+load data infile {'filepath'='$resources/load_data/string_to_decimal128.parq', 'format'='parquet'}
+into table test_decimal128;
+select * from test_decimal128;
+large_int    high_precision
+12345678901234567890    123456789012345678.1234567890
+-9876543210987654321    -987654321098765432.9876543210
+create table test_invalid(
+test_case varchar(50),
+value decimal(10, 2)
+);
+load data infile {'filepath'='$resources/load_data/string_to_decimal_invalid.parq', 'format'='parquet'}
+into table test_invalid;
+internal error: failed to parse 'abc' as DECIMAL(10,2): invalid input: abc beyond the range, can't be converted to Decimal64(10,2).
+drop database test_string_to_decimal;

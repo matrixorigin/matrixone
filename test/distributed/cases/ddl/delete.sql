@@ -1,3 +1,5 @@
+set experimental_fulltext_index=1;
+set experimental_ivf_index=1;
 drop database if exists test_delete;
 create database test_delete;
 use test_delete;
@@ -27,4 +29,90 @@ drop table if exists t1;
 create table t1 (a int primary key, b int, c int, d int, e int, f int, g int, key b_idx(b), key c_idx(c), key d_idx(d), key e_idx(d), key f_idx(f), key g_idx(g));
 insert into t1 select *,*,*,*,*,*,* from generate_series(0,2000000,1)g;
 delete from t1 where a < 1000002 and a > 1000000;
+
+drop table if exists ca_comprehensive_dataset;
+create table ca_comprehensive_dataset (
+  id           int primary key,
+  answer       json,
+  delete_flag  tinyint not null default 0
+);
+insert into ca_comprehensive_dataset values
+-- 命中：根路径匹配 + delete_flag=1
+(1 , '{"document":"多层级专题.txt"}', 1),
+-- 不命中：delete_flag=0
+(2 , '{"document":"多层级专题.txt"}', 0),
+-- 不命中：document 不同
+(3 , '{"document":"其他.txt"}', 1),
+-- 不命中：document 在子对象
+(4 , '{"meta":{"document":"多层级专题.txt"}}', 1),
+-- 不命中：document=null
+(5 , '{"document":null}', 1),
+-- 不命中：document 为数组
+(6 , '{"document":["多层级专题.txt","a.txt"]}', 1),
+-- 不命中：两侧空格
+(7 , '{"document":" 多层级专题.txt "}', 1),
+-- 不命中：大小写不同
+(8 , '{"document":"多层级专题.TXT"}', 1),
+-- 命中：再插一条匹配行
+(9 , '{"document":"多层级专题.txt"}', 1),
+-- 不命中：缺少 document
+(10, '{"title":"something"}', 1),
+-- 不命中：布尔类型
+(11, '{"document":true}', 1);
+select id, delete_flag, json_unquote(json_extract(answer,'$.document')) as doc
+from ca_comprehensive_dataset order by id;
+
+delete from ca_comprehensive_dataset
+where json_unquote(json_extract(answer, '$.document')) = '多层级专题.txt'
+  and delete_flag = 1;
+
+select count(*) as remain from ca_comprehensive_dataset;          -- 总数校验
+select group_concat(id order by id) as left_ids from ca_comprehensive_dataset;
+
+delete from ca_comprehensive_dataset
+where trim(json_unquote(json_extract(answer, '$.document'))) = '多层级专题.txt'
+  and delete_flag = 1;
+
+delete from ca_comprehensive_dataset
+where json_unquote(json_extract(answer, '$.document')) is null
+  and delete_flag = 1;
+
+delete from ca_comprehensive_dataset
+where lower(json_unquote(json_extract(answer, '$.document'))) = lower('多层级专题.TXT')
+  and delete_flag = 1;
+
+prepare del_stmt from
+  'delete from ca_comprehensive_dataset
+    where json_unquote(json_extract(answer, ''$.document'')) = ?
+      and delete_flag = 1';
+set @doc := '其他.txt';
+execute del_stmt using @doc;
+deallocate prepare del_stmt;
+
+select id, delete_flag, json_unquote(json_extract(answer,'$.document')) as doc
+from ca_comprehensive_dataset order by id;
+
+DROP TABLE IF EXISTS `ca_comprehensive_dataset`;
+CREATE TABLE `ca_comprehensive_dataset` (
+  `md5_id` varchar(255) NOT NULL,
+  `question` text DEFAULT NULL,
+  `answer` json DEFAULT NULL,
+  `source_type` varchar(255) DEFAULT NULL,
+  `content_type` varchar(255) DEFAULT NULL,
+  `keyword` varchar(255) DEFAULT NULL,
+  `question_vector` vecf64(1024) DEFAULT NULL COMMENT '摘要的向量集',
+  `allow_access` varchar(511) DEFAULT NULL,
+  `allow_identities` varchar(512) DEFAULT NULL,
+  `delete_flag` int DEFAULT NULL,
+  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP(),
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
+  PRIMARY KEY (`md5_id`),
+ FULLTEXT `idx_ft_question`(`question`) WITH PARSER ngram,
+  KEY `idx_vec_question` USING ivfflat (`question_vector`) lists = 256  op_type 'vector_l2_ops' ,
+  KEY `idx_comprehensive_allow_access` (`allow_access`),
+  KEY `idx_comprehensive_allow_identities` (`allow_identities`),
+  KEY `idx_comprehensive_content_type` (`content_type`)
+);
+delete from ca_comprehensive_dataset limit 1;
+
 drop database test_delete;

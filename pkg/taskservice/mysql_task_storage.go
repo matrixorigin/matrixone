@@ -247,7 +247,7 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 	return int(affected), nil
 }
 
-func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.AsyncTask, condition ...Condition) (int, error) {
+func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.AsyncTask, condition ...Condition) (n int, err error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -260,14 +260,22 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 	if err != nil {
 		return 0, err
 	}
-	defer func(tx *sql.Tx) {
-		_ = tx.Rollback()
-	}(tx)
+	defer func() {
+		if err != nil {
+			if e := tx.Rollback(); e != nil {
+				err = errors.Join(e, err)
+			}
+		} else {
+			if e := tx.Commit(); e != nil {
+				err = errors.Join(e, err)
+			}
+		}
+	}()
 
 	updateSql := updateAsyncTask + buildWhereClause(newConditions(condition...))
-	n := 0
+	n = 0
 	for _, t := range tasks {
-		err := func() error {
+		err = func() error {
 			execResult := &task.ExecuteResult{
 				Code: task.ResultCode_Success,
 			}
@@ -310,16 +318,10 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 			return nil
 		}()
 		if err != nil {
-			if e := tx.Rollback(); e != nil {
-				return 0, errors.Join(e, err)
-			}
-			return 0, err
+			return
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return 0, err
-	}
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) DeleteAsyncTask(ctx context.Context, condition ...Condition) (int, error) {
@@ -491,7 +493,7 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context, condition ...Condi
 	return tasks, nil
 }
 
-func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, asyncTask task.AsyncTask) (int, error) {
+func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, asyncTask task.AsyncTask) (n int, err error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -511,9 +513,17 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
-	defer func(tx *sql.Tx) {
-		_ = tx.Rollback()
-	}(tx)
+	defer func() {
+		if err != nil {
+			if e := tx.Rollback(); e != nil {
+				err = errors.Join(e, err)
+			}
+		} else {
+			if e := tx.Commit(); e != nil {
+				err = errors.Join(e, err)
+			}
+		}
+	}()
 
 	j, err := json.Marshal(asyncTask.Metadata.Options)
 	if err != nil {
@@ -563,8 +573,8 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
-
-	return int(affected2) + int(affected1), nil
+	n = int(affected2) + int(affected1)
+	return n, err
 }
 
 func (m *mysqlTaskStorage) taskExists(ctx context.Context, taskMetadataID string) (bool, error) {
@@ -740,7 +750,7 @@ func (m *mysqlTaskStorage) RunAddDaemonTask(ctx context.Context, db SqlExecutor,
 	return int(affected), nil
 }
 
-func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, condition ...Condition) (int, error) {
+func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, condition ...Condition) (n int, err error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -753,21 +763,23 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 	if err != nil {
 		return 0, err
 	}
-	defer func(tx *sql.Tx) {
-		_ = tx.Rollback()
-	}(tx)
-
-	n, err := m.RunUpdateDaemonTask(ctx, tasks, tx, condition...)
-	if err != nil {
-		if e := tx.Rollback(); e != nil {
-			return 0, errors.Join(e, err)
+	defer func() {
+		if err != nil {
+			if e := tx.Rollback(); e != nil {
+				err = errors.Join(e, err)
+			}
+		} else {
+			if e := tx.Commit(); e != nil {
+				err = errors.Join(e, err)
+			}
 		}
-		return 0, err
+	}()
+
+	n, err = m.RunUpdateDaemonTask(ctx, tasks, tx, condition...)
+	if err != nil {
+		return
 	}
-	if err = tx.Commit(); err != nil {
-		return 0, err
-	}
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, db SqlExecutor, condition ...Condition) (int, error) {
@@ -961,7 +973,7 @@ func (m *mysqlTaskStorage) RunQueryDaemonTask(ctx context.Context, db SqlExecuto
 	return tasks, nil
 }
 
-func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.DaemonTask) (int, error) {
+func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.DaemonTask) (n int, err error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -974,13 +986,21 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 	if err != nil {
 		return 0, err
 	}
-	defer func(tx *sql.Tx) {
-		_ = tx.Rollback()
-	}(tx)
+	defer func() {
+		if err != nil {
+			if e := tx.Rollback(); e != nil {
+				err = errors.Join(e, err)
+			}
+		} else {
+			if e := tx.Commit(); e != nil {
+				err = errors.Join(e, err)
+			}
+		}
+	}()
 
-	n := 0
+	n = 0
 	for _, t := range tasks {
-		err := func() error {
+		err = func() error {
 			var lastHeartbeat time.Time
 			if !t.LastHeartbeat.IsZero() {
 				lastHeartbeat = t.LastHeartbeat
@@ -1001,16 +1021,10 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 			return nil
 		}()
 		if err != nil {
-			if e := tx.Rollback(); e != nil {
-				return 0, errors.Join(e, err)
-			}
-			return 0, err
+			return
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return 0, err
-	}
-	return n, nil
+	return n, err
 }
 
 func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (n int, err error) {
@@ -1146,7 +1160,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		affectedCdcRow += affectedTaskRow
 	}
 
-	return affectedCdcRow, nil
+	return affectedCdcRow, err
 }
 
 func buildDaemonTaskWhereClause(c *conditions) string {

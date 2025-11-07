@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +30,9 @@ import (
 
 const (
 	ISCPWorkerThread = 10
+
+	SubmitRetryTimes    = 1000
+	SubmitRetryDuration = time.Hour
 )
 
 type Worker interface {
@@ -92,6 +96,7 @@ func (w *worker) Submit(iteration *IterationContext) error {
 
 func (w *worker) onItem(iterCtx *IterationContext) {
 	err := retry(
+		w.ctx,
 		func() error {
 			err := ExecuteIteration(
 				w.ctx,
@@ -111,7 +116,9 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			}
 			return err
 		},
-		DefaultRetryTimes,
+		SubmitRetryTimes,
+		DefaultRetryInterval,
+		SubmitRetryDuration,
 	)
 	if err != nil {
 		statuses := make([]*JobStatus, len(iterCtx.jobNames))
@@ -120,29 +127,38 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 				ErrorMsg: err.Error(),
 			}
 		}
-		for {
-			select {
-			case <-w.ctx.Done():
-				return
-			default:
-			}
-			err = FlushJobStatusOnIterationState(
-				w.ctx,
-				w.cnUUID,
-				w.cnEngine,
-				w.cnTxnClient,
-				iterCtx.accountID,
-				iterCtx.tableID,
-				iterCtx.jobNames,
-				iterCtx.jobIDs,
-				iterCtx.lsn,
-				statuses,
-				iterCtx.fromTS,
-				ISCPJobState_Completed,
+		preLSN := make([]uint64, len(iterCtx.lsn))
+		for i := range iterCtx.lsn {
+			preLSN[i] = iterCtx.lsn[i] - 1
+		}
+		err = retry(
+			w.ctx,
+			func() error {
+				return FlushJobStatusOnIterationState(
+					w.ctx,
+					w.cnUUID,
+					w.cnEngine,
+					w.cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					iterCtx.fromTS,
+					ISCPJobState_Completed,
+					preLSN,
+				)
+			},
+			SubmitRetryTimes,
+			DefaultRetryInterval,
+			SubmitRetryDuration,
+		)
+		if err != nil {
+			logutil.Error(
+				"ISCP-Task workerflush job status failed",
+				zap.Error(err),
 			)
-			if err == nil {
-				break
-			}
 		}
 	}
 }
