@@ -21,6 +21,26 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 
+
+def build_mysql_uri(host: str, port: int, user: str, password: str = "", account: Optional[str] = None) -> str:
+    """Construct a MatrixOne/MySQL URI usable in CDC configuration."""
+
+    if not host:
+        raise ValueError("host is required")
+    if port is None:
+        raise ValueError("port is required")
+    if not isinstance(port, int):
+        raise ValueError("port must be an integer")
+    if not user:
+        raise ValueError("user is required")
+
+    netloc = f"{user}:{password or ''}@{host}:{port}"
+    if account:
+        return f"mysql://{account}#{netloc}"
+    return f"mysql://{netloc}"
+
+
+
 @dataclass
 class CDCTaskInfo:
     """High-level CDC task metadata returned by manager helper methods."""
@@ -138,6 +158,62 @@ class BaseCDCManager:
         if task_name:
             base_sql += f" AND t.task_name = '{task_name}'"
         return base_sql
+
+    @staticmethod
+    def _normalise_table_mappings(table_mappings) -> str:
+        """Normalise Python structures into CDC table mapping strings."""
+
+        if table_mappings is None:
+            raise ValueError("table_mappings cannot be None")
+
+        if isinstance(table_mappings, str):
+            return table_mappings
+
+        parts = []
+        if isinstance(table_mappings, dict):
+            for src, dest in table_mappings.items():
+                parts.append(f"{src}:{dest}")
+        else:
+            for item in table_mappings:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+
+                if not isinstance(item, (list, tuple)):
+                    raise ValueError(f"Unsupported table mapping entry: {item!r}")
+
+                if len(item) == 2:
+                    src, dest = item
+                    if "." in src and "." in dest:
+                        parts.append(f"{src}:{dest}")
+                    else:
+                        src_db, src_table = src, dest
+                        parts.append(f"{src_db}.{src_table}:{src_db}.{src_table}")
+                elif len(item) == 3:
+                    src_db, src_table, sink_table = item
+                    parts.append(f"{src_db}.{src_table}:{src_db}.{sink_table}")
+                elif len(item) == 4:
+                    src_db, src_table, sink_db, sink_table = item
+                    parts.append(f"{src_db}.{src_table}:{sink_db}.{sink_table}")
+                else:
+                    raise ValueError(f"Unsupported table mapping tuple: {item!r}")
+
+        if not parts:
+            raise ValueError("table_mappings cannot be empty")
+        return ",".join(parts)
+
+    @staticmethod
+    def _prepare_options(options: Optional[Dict[str, Any]], level: Optional[str] = None) -> Dict[str, Any]:
+        """Copy and normalise options, enforcing Level when provided."""
+
+        prepared = dict(options or {})
+        if level:
+            existing = prepared.get("Level")
+            if existing is not None and str(existing).lower() != level.lower():
+                raise ValueError(f"Level option mismatch: expected '{level}', got '{existing}'")
+            prepared.setdefault("Level", level)
+        return prepared
+
 
     def _build_options(self, options: Optional[Dict[str, Any]]) -> Optional[str]:
         if not options:
@@ -268,6 +344,52 @@ class CDCManager(BaseCDCManager):
             additional_config=options,
         )
 
+    def create_database_task(
+        self,
+        task_name: str,
+        source_uri: str,
+        sink_type: str,
+        sink_uri: str,
+        source_database: str,
+        sink_database: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> CDCTaskInfo:
+        """Create a database-level CDC task with pythonic parameters."""
+
+        target_database = sink_database or source_database
+        prepared_options = self._prepare_options(options, level="database")
+        mapping = f"{source_database}:{target_database}"
+        return self.create(
+            task_name=task_name,
+            source_uri=source_uri,
+            sink_type=sink_type,
+            sink_uri=sink_uri,
+            table_mapping=mapping,
+            options=prepared_options,
+        )
+
+    def create_table_task(
+        self,
+        task_name: str,
+        source_uri: str,
+        sink_type: str,
+        sink_uri: str,
+        table_mappings,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> CDCTaskInfo:
+        """Create a table-level CDC task with high-level mapping helpers."""
+
+        mapping = self._normalise_table_mappings(table_mappings)
+        prepared_options = self._prepare_options(options, level="table")
+        return self.create(
+            task_name=task_name,
+            source_uri=source_uri,
+            sink_type=sink_type,
+            sink_uri=sink_uri,
+            table_mapping=mapping,
+            options=prepared_options,
+        )
+
     def drop(self, task_name: str) -> None:
         sql = self._build_drop_sql(task_name=task_name)
         self._get_executor().execute(sql)
@@ -367,6 +489,52 @@ class AsyncCDCManager(BaseCDCManager):
             additional_config=options,
         )
 
+    async def create_database_task(
+        self,
+        task_name: str,
+        source_uri: str,
+        sink_type: str,
+        sink_uri: str,
+        source_database: str,
+        sink_database: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> CDCTaskInfo:
+        """Create a database-level CDC task asynchronously."""
+
+        target_database = sink_database or source_database
+        prepared_options = self._prepare_options(options, level="database")
+        mapping = f"{source_database}:{target_database}"
+        return await self.create(
+            task_name=task_name,
+            source_uri=source_uri,
+            sink_type=sink_type,
+            sink_uri=sink_uri,
+            table_mapping=mapping,
+            options=prepared_options,
+        )
+
+    async def create_table_task(
+        self,
+        task_name: str,
+        source_uri: str,
+        sink_type: str,
+        sink_uri: str,
+        table_mappings,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> CDCTaskInfo:
+        """Create a table-level CDC task asynchronously."""
+
+        mapping = self._normalise_table_mappings(table_mappings)
+        prepared_options = self._prepare_options(options, level="table")
+        return await self.create(
+            task_name=task_name,
+            source_uri=source_uri,
+            sink_type=sink_type,
+            sink_uri=sink_uri,
+            table_mapping=mapping,
+            options=prepared_options,
+        )
+
     async def drop(self, task_name: str) -> None:
         sql = self._build_drop_sql(task_name=task_name)
         await self._get_executor().execute(sql)
@@ -429,5 +597,3 @@ class AsyncCDCManager(BaseCDCManager):
         else:
             rows = result.fetchall() if result else []
         return self._rows_to_watermarks(rows)
-
-

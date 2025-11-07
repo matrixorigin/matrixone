@@ -286,19 +286,32 @@ client.disconnect()
 Create and control Change Data Capture (CDC) tasks directly from the Python SDK:
 
 ```python
-from matrixone import Client
+from matrixone import Client, build_mysql_uri
 
 client = Client()
 client.connect(database='test')
 
-# Create CDC task (full database replication)
-client.cdc.create(
+source_uri = build_mysql_uri('127.0.0.1', 6001, user='admin', password='111', account='acct')
+mysql_sink = build_mysql_uri('192.168.1.100', 3306, user='root', password='111')
+
+# Database-level replication (automatically ensures Level='database')
+client.cdc.create_database_task(
     task_name='replicate_sales',
-    source_uri="mysql://acct#admin:111@127.0.0.1:6001",
+    source_uri=source_uri,
     sink_type='mysql',
-    sink_uri="mysql://root:111@192.168.1.100:3306",
-    table_mapping='sales.*:sales_archive.*',
-    options={'Level': 'database', 'Frequency': '200ms'}
+    sink_uri=mysql_sink,
+    source_database='sales',
+    sink_database='sales_archive',
+    options={'Frequency': '30m'}
+)
+
+# Table-level replication helper (list of tuples/dicts/strings)
+client.cdc.create_table_task(
+    task_name='replicate_key_tables',
+    source_uri=source_uri,
+    sink_type='mysql',
+    sink_uri=mysql_sink,
+    table_mappings=[('sales', 'orders', 'sales_archive', 'orders_backup'), 'sales.customers:sales_archive.customers']
 )
 
 # Pause/resume lifecycle
@@ -311,11 +324,12 @@ watermarks = client.cdc.list_watermarks('replicate_sales')
 
 # Drop task when no longer needed
 client.cdc.drop('replicate_sales')
+client.cdc.drop('replicate_key_tables')
 
 client.disconnect()
 ```
 
-> Async usage: call the same APIs via `await async_client.cdc.create(...)` or inside `async with client.session()`.
+> Async usage: call the same helpers via `await async_client.cdc.create_database_task(...)` / `create_table_task(...)` or inside `async with client.session()`.
 
 ### Wrapping Existing Sessions (For Legacy Code)
 
