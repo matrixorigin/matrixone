@@ -529,7 +529,7 @@ drop database if exists snapshot_read_3;
 drop database if exists test_snapshot_restore_3;
 -- @session
 
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;

@@ -177,29 +177,37 @@ type RestoreSnapShot struct {
 }
 
 func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
-	ctx.WriteString("restore ")
 	switch node.Level {
 	case RESTORELEVELCLUSTER:
-		ctx.WriteString("cluster")
+		ctx.WriteString("restore cluster")
 	case RESTORELEVELACCOUNT:
-		ctx.WriteString("account ")
+		ctx.WriteString("restore account ")
 		node.AccountName.Format(ctx)
 	case RESTORELEVELDATABASE:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" database ")
+		ctx.WriteString("restore database ")
+		if len(node.AccountName) > 0 {
+			node.AccountName.Format(ctx)
+			ctx.WriteByte('.')
+		}
 		node.DatabaseName.Format(ctx)
 	case RESTORELEVELTABLE:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" database ")
-		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" table ")
+		ctx.WriteString("restore table ")
+		if len(node.AccountName) > 0 {
+			node.AccountName.Format(ctx)
+			ctx.WriteByte('.')
+		}
+		if len(node.DatabaseName) > 0 {
+			node.DatabaseName.Format(ctx)
+			ctx.WriteByte('.')
+		}
 		node.TableName.Format(ctx)
+	default:
+		ctx.WriteString("restore ")
 	}
 
-	ctx.WriteString(" from snapshot ")
+	ctx.WriteString("{snapshot=")
 	node.SnapShotName.Format(ctx)
+	ctx.WriteByte('}')
 
 	if len(node.ToAccountName) > 0 {
 		ctx.WriteString(" to account ")

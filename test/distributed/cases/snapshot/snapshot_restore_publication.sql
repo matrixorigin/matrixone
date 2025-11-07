@@ -39,7 +39,7 @@ use sub_db1;
 show tables;
 -- @session
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:5,6
 show publications;
 show databases like 'db1';
@@ -142,7 +142,7 @@ show tables;
 show subscriptions;
 -- @session
 
-restore account sys from snapshot snapshot3;
+restore account sys{snapshot="snapshot3"};
 
 -- @ignore:5,6
 show publications;
@@ -235,7 +235,7 @@ select * from t2;
 show subscriptions;
 -- @session
 
-restore account sys from snapshot snapshot4;
+restore account sys{snapshot="snapshot4"};
 
 -- @ignore:5,6
 show publications;
@@ -339,7 +339,7 @@ select * from t2;
 show subscriptions;
 -- @session
 
-restore account sys from snapshot snapshot6;
+restore account sys{snapshot="snapshot6"};
 
 -- @ignore:5,6
 show publications;
@@ -366,7 +366,7 @@ show tables;
 show subscriptions;
 -- @session
 
-restore account sys from snapshot snapshot5;
+restore account sys{snapshot="snapshot5"};
 -- @session:id=7&user=test_tenant_1:test_account&password=111
 show databases like 'sub_db1';
 use sub_db1;

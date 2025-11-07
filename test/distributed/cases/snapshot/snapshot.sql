@@ -72,7 +72,7 @@ select * from cluster01;
 drop snapshot if exists `binary`;
 create snapshot `binary` for account;
 select count(*) from cluster01{snapshot = `binary`};
-restore account sys from snapshot `binary`;
+restore account sys{snapshot=`binary`};
 select count(*) from cluster01{snapshot = `binary`};
 drop snapshot if exists `binary`;
 
@@ -84,7 +84,7 @@ select * from cluster01;
 drop snapshot if exists `_binary`;
 create snapshot `_binary` for account;
 select count(*) from cluster01{snapshot = `_binary`};
-restore account sys from snapshot `_binary`;
+restore account sys{snapshot=`_binary`};
 select count(*) from cluster01{snapshot = `_binary`};
 drop snapshot if exists `_binary`;
 drop table if exists cluster01;

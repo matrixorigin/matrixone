@@ -260,7 +260,7 @@ Drop database Payroll;
 Drop database Projects;
 Drop database Company;
 
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 
 select * from Company.Departments;
 select * from Company.Employees;
@@ -546,7 +546,7 @@ Drop database Payroll;
 Drop database Projects;
 Drop database Company;
 
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 
 select * from Company.Departments;
 select * from Company.Employees;
@@ -869,7 +869,7 @@ select * from Salaries;
 select * from ProjectBonuses;
 select * from DepartmentBudgets;
 
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 
 select * from acc_test02.pri01;
 select * from acc_test02.aff01;
