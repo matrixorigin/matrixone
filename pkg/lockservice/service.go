@@ -128,8 +128,7 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options pb.LockOptions,
-) (pb.Result, error) {
+	options pb.LockOptions) (pb.Result, error) {
 	if !s.canLockOnServiceStatus(txnID, options, tableID, rows) {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
 	}
