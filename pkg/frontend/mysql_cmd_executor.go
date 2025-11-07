@@ -1888,7 +1888,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 		return es, nil
 	} else {
 		for _, v := range options {
-			if strings.EqualFold(v.Name, "VERBOSE") {
+			if strings.EqualFold(v.Name, tree.VerboseOption) {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
 					es.Verbose = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
@@ -1896,7 +1896,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else {
 					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
-			} else if strings.EqualFold(v.Name, "ANALYZE") {
+			} else if strings.EqualFold(v.Name, tree.AnalyzeOption) {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
 					es.Analyze = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
@@ -1904,7 +1904,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else {
 					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
-			} else if strings.EqualFold(v.Name, "FORMAT") {
+			} else if strings.EqualFold(v.Name, tree.FormatOption) {
 				if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = explain.EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
@@ -1913,6 +1913,10 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
 				} else {
 					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else if strings.EqualFold(v.Name, tree.CheckOption) {
+				if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
+					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
 				}
 			} else {
 				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
