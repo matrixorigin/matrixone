@@ -1,4 +1,3 @@
-
 """Offline tests for CDC manager SQL generation and helpers."""
 
 from __future__ import annotations
@@ -8,7 +7,14 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from matrixone.cdc import AsyncCDCManager, CDCManager, CDCSinkType, build_mysql_uri
+from matrixone.cdc import (
+    AsyncCDCManager,
+    CDCManager,
+    CDCSinkType,
+    CDCTaskInfo,
+    CDCWatermarkInfo,
+    build_mysql_uri,
+)
 
 
 def test_build_mysql_uri() -> None:
@@ -103,7 +109,7 @@ class TestCDCManagerSQLGeneration:
             self.manager.create_table_task(
                 task_name="cdc_tables",
                 source_uri="mysql://src",
-            sink_type=CDCSinkType.MYSQL,
+                sink_type=CDCSinkType.MYSQL,
                 sink_uri="mysql://sink",
                 table_mappings=[("db1", "t1")],
                 options={"Level": "database"},
@@ -118,42 +124,119 @@ class TestCDCManagerSQLGeneration:
         }
 
         cases = [
-            (
-                "table_alpha",
-                [("db1", "orders", "backup_db", "orders")],
-                {"NoFull": True, "Frequency": "1h"},
-                "CREATE CDC table_alpha 'mysql://src' 'matrixone' 'mysql://sink' "
+            {
+                "task_name": "table_alpha",
+                "mappings": [("db1", "orders", "backup_db", "orders")],
+                "options": {"NoFull": True, "Frequency": "1h"},
+                "expected": "CREATE CDC table_alpha 'mysql://src' 'matrixone' 'mysql://sink' "
                 "'db1.orders:backup_db.orders' {'NoFull'='true', 'Frequency'='1h', 'Level'='table'}",
-            ),
-            (
-                "table_beta",
-                [("db1.customers", "backup_db.customers")],
-                {"Frequency": "2h", "MaxSqlLength": 2097152},
-                "CREATE CDC table_beta 'mysql://src' 'matrixone' 'mysql://sink' "
+                "watermarks": [
+                    (
+                        "task-alpha",
+                        "table_alpha",
+                        "db1",
+                        "orders",
+                        "2025-11-07 10:00:00",
+                        None,
+                    )
+                ],
+                "expected_late": False,
+            },
+            {
+                "task_name": "table_beta",
+                "mappings": [("db1.customers", "backup_db.customers")],
+                "options": {"Frequency": "2h", "MaxSqlLength": 2097152},
+                "expected": "CREATE CDC table_beta 'mysql://src' 'matrixone' 'mysql://sink' "
                 "'db1.customers:backup_db.customers' {'Frequency'='2h', 'MaxSqlLength'='2097152', 'Level'='table'}",
-            ),
-            (
-                "table_gamma",
-                [("db1", "events", "backup_db", "events")],
-                {"Frequency": "24h", "SendSqlTimeout": "45m", "InitSnapshotSplitTxn": False},
-                "CREATE CDC table_gamma 'mysql://src' 'matrixone' 'mysql://sink' "
+                "watermarks": [
+                    (
+                        "task-beta",
+                        "table_beta",
+                        "db1",
+                        "customers",
+                        "2025-11-07 08:00:00",
+                        None,
+                    )
+                ],
+                "expected_late": False,
+            },
+            {
+                "task_name": "table_gamma",
+                "mappings": [("db1", "events", "backup_db", "events")],
+                "options": {"Frequency": "24h", "SendSqlTimeout": "45m", "InitSnapshotSplitTxn": False},
+                "expected": "CREATE CDC table_gamma 'mysql://src' 'matrixone' 'mysql://sink' "
                 "'db1.events:backup_db.events' {'Frequency'='24h', 'SendSqlTimeout'='45m', "
                 "'InitSnapshotSplitTxn'='false', 'Level'='table'}",
-            ),
+                "watermarks": [
+                    (
+                        "task-gamma",
+                        "table_gamma",
+                        "db1",
+                        "events",
+                        "2025-11-06 00:00:00",
+                        "target timeout",
+                    )
+                ],
+                "expected_late": True,
+            },
         ]
 
-        for task_name, mappings, options, expected_sql in cases:
+        for case in cases:
+            task_name = case["task_name"]
             self.mock_client.execute.reset_mock()
             self.manager.create_table_task(
                 task_name=task_name,
                 sink_type=CDCSinkType.MATRIXONE,
-                table_mappings=mappings,
-                options=options,
+                table_mappings=case["mappings"],
+                options=case["options"],
                 **base_kwargs,
             )
 
             sql = self.mock_client.execute.call_args[0][0]
-            assert sql == expected_sql
+            assert sql == case["expected"]
+
+        # Expand helper coverage with mocked list/list_watermarks flows
+        # Configure list() to return the CDCTaskInfo objects corresponding to our cases
+        tasks = [
+            CDCTaskInfo(
+                task_id=f"task-{case['task_name']}",
+                task_name=case["task_name"],
+                source_uri="mysql://src",
+                sink_uri="mysql://sink",
+                sink_type=CDCSinkType.MATRIXONE.value,
+                table_mapping=case["expected"].split(" '")[2],
+                state="running",
+                checkpoint=None,
+                err_msg="error" if case["expected_late"] else None,
+                created_time=None,
+                additional_config=case["options"],
+            )
+            for case in cases
+        ]
+
+        self.mock_client.execute.reset_mock()
+        # Mock list() and list_watermarks() helpers to test operational helpers
+        manager = CDCManager(self.mock_client)
+        manager.list = Mock(return_value=tasks)  # type: ignore
+
+        def _fake_list_watermarks(task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
+            items: List[CDCWatermarkInfo] = []
+            for case in cases:
+                if task_name and case["task_name"] != task_name:
+                    continue
+                items.extend(CDCWatermarkInfo(*row) for row in case["watermarks"])
+            return items
+
+        manager.list_watermarks = Mock(side_effect=_fake_list_watermarks)  # type: ignore
+
+        failing = manager.list_failing_tasks()
+        assert {task.task_name for task in failing} == {"table_gamma"}
+
+        stuck = manager.list_stuck_tasks()
+        assert {task.task_name for task in stuck} == {"table_gamma"}
+
+        late = manager.list_late_table_watermarks(task_name="table_gamma")
+        assert {mark.table for mark in late} == {"events"}
 
     def test_drop_and_pause_variants(self) -> None:
         self.manager.drop("cdc_task")

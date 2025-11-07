@@ -56,7 +56,7 @@ from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
 from .stage import Stage, StageManager, AsyncStageManager
-from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri, build_mysql_uri
+from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -149,7 +149,6 @@ __all__ = [
     "CDCWatermarkInfo",
     "CDCManager",
     "AsyncCDCManager",
-    "build_mysql_uri",
     "build_mysql_uri",
     # SQLAlchemy extensions
     "VectorType",

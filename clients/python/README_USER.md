@@ -375,6 +375,9 @@ Key helper methods:
 * `pause()`/`resume()`/`restart()` – control CDC task state.
 * `list()`/`get()` – retrieve CDC task metadata as :class:`matrixone.cdc.CDCTaskInfo` objects.
 * `list_watermarks()` – read per-table watermarks as :class:`matrixone.cdc.CDCWatermarkInfo`.
+* `list_failing_tasks()` – return tasks whose `err_msg` field is populated.
+* `list_stuck_tasks()` – highlight running tasks that have per-table errors.
+* `list_late_table_watermarks()` – detect tables whose watermarks lag behind expected thresholds (supports custom per-task/per-table overrides).
 
 Refer to :class:`matrixone.cdc.CDCManager` docstrings or ``examples/example_31_cdc_operations.py`` for a comprehensive lifecycle example.
 

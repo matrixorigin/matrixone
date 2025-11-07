@@ -46,10 +46,14 @@ end-to-end lifecycle demonstration.
 
 from __future__ import annotations
 
+import datetime
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+
 class CDCSinkType(str, Enum):
     """Supported CDC sink types."""
 
@@ -58,8 +62,6 @@ class CDCSinkType(str, Enum):
 
     def __str__(self) -> str:  # pragma: no cover - str(Enum)
         return self.value
-
-
 
 
 def build_mysql_uri(host: str, port: int, user: str, password: str = "", account: Optional[str] = None) -> str:
@@ -107,6 +109,56 @@ def build_mysql_uri(host: str, port: int, user: str, password: str = "", account
         return f"mysql://{account}#{netloc}"
     return f"mysql://{netloc}"
 
+
+_FREQUENCY_PATTERN = re.compile(r"^(?P<value>\d+)(?P<unit>ms|s|m|h)$", re.IGNORECASE)
+
+
+def _parse_frequency_to_timedelta(value: str) -> datetime.timedelta:
+    match = _FREQUENCY_PATTERN.match(value.strip())
+    if not match:
+        raise ValueError(f"Unsupported frequency value: {value!r}")
+    amount = int(match.group("value"))
+    unit = match.group("unit").lower()
+    if unit == "ms":
+        return datetime.timedelta(milliseconds=amount)
+    if unit == "s":
+        return datetime.timedelta(seconds=amount)
+    if unit == "m":
+        return datetime.timedelta(minutes=amount)
+    if unit == "h":
+        return datetime.timedelta(hours=amount)
+    raise ValueError(f"Unsupported frequency unit: {unit}")
+
+
+def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.datetime]:
+    if not value:
+        return None
+    value = value.strip()
+    dt: Optional[datetime.datetime] = None
+    for candidate in (value, value.replace(" ", "T")):
+        try:
+            dt = datetime.datetime.fromisoformat(candidate)
+            break
+        except ValueError:
+            dt = None
+    if dt is None:
+        formats = (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S.%f%z",
+        )
+        for fmt in formats:
+            try:
+                dt = datetime.datetime.strptime(value, fmt)
+                break
+            except ValueError:
+                continue
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
 
 
 @dataclass
@@ -287,7 +339,6 @@ class BaseCDCManager:
                 raise ValueError(f"Level option mismatch: expected '{level}', got '{existing}'")
             prepared.setdefault("Level", level)
         return prepared
-
 
     def _build_options(self, options: Optional[Dict[str, Any]]) -> Optional[str]:
         if not options:
@@ -667,6 +718,84 @@ class CDCManager(BaseCDCManager):
         else:
             rows = result.fetchall() if result else []
         return self._rows_to_watermarks(rows)
+
+    # ------------------------------------------------------------------
+    # Operational helpers
+    # ------------------------------------------------------------------
+    def list_failing_tasks(self) -> List[CDCTaskInfo]:
+        """Return tasks with non-empty ``err_msg`` fields."""
+
+        tasks = self.list()
+        return [task for task in tasks if task.err_msg]
+
+    def list_stuck_tasks(self) -> List[CDCTaskInfo]:
+        """Return running tasks whose tables report errors."""
+
+        failing_tasks: List[CDCTaskInfo] = []
+        for task in self.list():
+            if task.state and task.state.lower() != "running":
+                continue
+            watermarks = self.list_watermarks(task.task_name)
+            if any(mark.err_msg for mark in watermarks):
+                failing_tasks.append(task)
+        return failing_tasks
+
+    def list_late_table_watermarks(
+        self,
+        *,
+        task_name: Optional[str] = None,
+        default_threshold: datetime.timedelta = datetime.timedelta(minutes=10),
+        thresholds: Optional[Dict[str, datetime.timedelta]] = None,
+    ) -> List[CDCWatermarkInfo]:
+        """Find tables whose watermarks lag behind their expected schedule.
+
+        For each watermark the helper attempts to determine an acceptable lag
+        threshold:
+
+        * If ``thresholds`` contains an entry for ``task_name.table`` (or just
+          ``table`` when ``task_name`` is not provided) that value is used.
+        * Otherwise the task's configured ``Frequency`` option is used plus a
+          10 minute buffer.
+        * If no frequency can be determined the ``default_threshold`` is used.
+        """
+
+        tasks_by_name = {task.task_name: task for task in self.list(task_name)}
+        thresholds = thresholds or {}
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def resolve_threshold(task: CDCTaskInfo, table: str) -> datetime.timedelta:
+            keys = [f"{task.task_name}.{table}", table]
+            for key in keys:
+                if key in thresholds:
+                    return thresholds[key]
+
+            freq = None
+            if task.additional_config:
+                freq = task.additional_config.get("Frequency")
+            if not freq and task.table_mapping:
+                task_options = task.additional_config or {}
+                freq = task_options.get("Frequency")
+            if freq:
+                try:
+                    return _parse_frequency_to_timedelta(str(freq)) + datetime.timedelta(minutes=10)
+                except ValueError:
+                    pass
+            return default_threshold
+
+        late_watermarks: List[CDCWatermarkInfo] = []
+        for mark in self.list_watermarks(task_name):
+            task = tasks_by_name.get(mark.task_name or "")
+            if task is None:
+                continue
+
+            watermark_time = _parse_watermark_timestamp(mark.watermark)
+            if watermark_time is None:
+                continue
+            threshold = resolve_threshold(task, mark.table or "")
+            if now - watermark_time > threshold:
+                late_watermarks.append(mark)
+
+        return late_watermarks
 
 
 class AsyncCDCManager(BaseCDCManager):

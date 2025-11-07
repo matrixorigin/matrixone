@@ -21,6 +21,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
+import datetime
+
 from matrixone import Client, build_mysql_uri
 from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
@@ -38,6 +40,7 @@ class CDCOperationsExample:
         self.connection_kwargs: Optional[dict] = None
         self.table_tasks: list[str] = []
         self.table_names: list[str] = []
+        self.table_task_mapping: dict[str, str] = {}
         self.results = {
             "steps_run": 0,
             "steps_passed": 0,
@@ -61,9 +64,7 @@ class CDCOperationsExample:
         client.connect(**self.connection_kwargs)
 
         try:
-            self.logger.info(
-                "Connected to MatrixOne", extra={"host": host, "port": port, "database": database}
-            )
+            self.logger.info("Connected to MatrixOne", extra={"host": host, "port": port, "database": database})
             self._run_lifecycle(client, host, port, user, password, database)
         except Exception as err:
             self.logger.error("CDC lifecycle execution failed", exc_info=err)
@@ -105,6 +106,10 @@ class CDCOperationsExample:
         self._execute_step(
             "Verify table-level CDC tasks",
             lambda: self._verify_table_tasks(client),
+        )
+        self._execute_step(
+            "Inspect CDC operational helpers",
+            lambda: self._inspect_operational_helpers(client),
         )
         self._execute_step(
             "Drop table-level CDC tasks",
@@ -165,9 +170,7 @@ class CDCOperationsExample:
             table = f"cdc_demo_table_{cfg['label']}"
             if table not in self.table_names:
                 self.table_names.append(table)
-            client.execute(
-                f"CREATE TABLE IF NOT EXISTS {database}.{table} (id INT PRIMARY KEY, value VARCHAR(255))"
-            )
+            client.execute(f"CREATE TABLE IF NOT EXISTS {database}.{table} (id INT PRIMARY KEY, value VARCHAR(255))")
             client.execute(
                 f"CREATE TABLE IF NOT EXISTS {self.backup_database}.{table} (id INT PRIMARY KEY, value VARCHAR(255))"
             )
@@ -186,7 +189,7 @@ class CDCOperationsExample:
                     table_mappings=[(database, table, self.backup_database, table)],
                     options=cfg["options"],
                 )
-                return task_name
+                return task_name, table
             finally:
                 try:
                     worker_client.disconnect()
@@ -196,8 +199,9 @@ class CDCOperationsExample:
         with ThreadPoolExecutor(max_workers=len(table_configs)) as executor:
             futures = [executor.submit(worker, cfg) for cfg in table_configs]
             for future in as_completed(futures):
-                task_name = future.result()
+                task_name, table = future.result()
                 self.table_tasks.append(task_name)
+                self.table_task_mapping[task_name] = table
                 self._wait_for_task_state(client, task_name, "running")
 
     def _verify_table_tasks(self, client: Client) -> None:
@@ -208,6 +212,43 @@ class CDCOperationsExample:
             entries = client.cdc.list(task_name)
             assert entries, f"CDC list empty for {task_name}"
 
+    def _inspect_operational_helpers(self, client: Client) -> None:
+        """Demonstrate CDC operational helper APIs."""
+
+        failing_tasks = client.cdc.list_failing_tasks()
+        self.logger.info(
+            "CDC failing tasks",
+            extra={"count": len(failing_tasks), "tasks": [task.task_name for task in failing_tasks]},
+        )
+
+        stuck_tasks = client.cdc.list_stuck_tasks()
+        self.logger.info(
+            "CDC stuck tasks",
+            extra={"count": len(stuck_tasks), "tasks": [task.task_name for task in stuck_tasks]},
+        )
+
+        late_default = client.cdc.list_late_table_watermarks()
+        self.logger.info(
+            "CDC late tables (default thresholds)",
+            extra={"count": len(late_default), "tables": [f"{w.task_name}.{w.table}" for w in late_default]},
+        )
+
+        if self.table_task_mapping:
+            strict_thresholds = {
+                f"{task}.{table}": datetime.timedelta(seconds=0) for task, table in self.table_task_mapping.items()
+            }
+            late_strict = client.cdc.list_late_table_watermarks(
+                thresholds=strict_thresholds,
+                default_threshold=datetime.timedelta(seconds=0),
+            )
+            self.logger.info(
+                "CDC late tables (strict thresholds)",
+                extra={
+                    "count": len(late_strict),
+                    "tables": [f"{w.task_name}.{w.table}" for w in late_strict],
+                },
+            )
+
     def _drop_table_tasks(self, client: Client) -> None:
         while self.table_tasks:
             task_name = self.table_tasks.pop()
@@ -216,6 +257,7 @@ class CDCOperationsExample:
                 self.logger.info("Dropped table-level CDC task", extra={"task_name": task_name})
             except Exception as err:  # pragma: no cover
                 self.logger.warning("Failed to drop table-level CDC task", exc_info=err)
+            self.table_task_mapping.pop(task_name, None)
 
     def _prepare_environment(self, client: Client, database: str) -> None:
         assert self.pitr_name and self.backup_database
@@ -225,9 +267,7 @@ class CDCOperationsExample:
             try:
                 client.pitr.delete(existing_pitr.name)
             except Exception as err:  # pragma: no cover - best effort cleanup
-                self.logger.warning(
-                    "Failed to drop existing PITR", extra={"pitr": existing_pitr.name}, exc_info=err
-                )
+                self.logger.warning("Failed to drop existing PITR", extra={"pitr": existing_pitr.name}, exc_info=err)
 
         client.execute(f"CREATE DATABASE IF NOT EXISTS {self.backup_database}")
         # Ensure PITR window comfortably exceeds the longest CDC frequency used (24h)
@@ -260,9 +300,7 @@ class CDCOperationsExample:
             },
         )
 
-    def _wait_for_task_state(
-        self, client: Client, task_name: str, expected: str, timeout: float = 240.0
-    ) -> None:
+    def _wait_for_task_state(self, client: Client, task_name: str, expected: str, timeout: float = 240.0) -> None:
         expected = expected.lower()
         deadline = time.time() + timeout
         last_state: Optional[str] = None
@@ -274,10 +312,7 @@ class CDCOperationsExample:
                 return
             time.sleep(2.0)
 
-        raise RuntimeError(
-            f"Task '{task_name}' did not reach state '{expected}' within {timeout}s"
-            f" (last: {last_state})"
-        )
+        raise RuntimeError(f"Task '{task_name}' did not reach state '{expected}' within {timeout}s" f" (last: {last_state})")
 
     def _execute_step(self, label: str, func: Callable[[], None]) -> None:
         self.results["steps_run"] += 1
@@ -326,6 +361,7 @@ class CDCOperationsExample:
                 self.logger.info("Dropped table-level CDC task", extra={"task_name": task_name})
             except Exception as err:  # pragma: no cover
                 self.logger.warning("Failed to drop table-level CDC task", exc_info=err)
+            self.table_task_mapping.pop(task_name, None)
 
         if self.task_name:
             try:
