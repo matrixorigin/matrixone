@@ -316,9 +316,9 @@ create account acc03 admin_name = 'test_account' identified by '123';
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
-restore account acc01 from snapshot snapshot_cls;
-restore account acc02 from snapshot snapshot_cls;
-restore account acc03 from snapshot snapshot_cls;
+restore account acc01{snapshot="snapshot_cls"};
+restore account acc02{snapshot="snapshot_cls"};
+restore account acc03{snapshot="snapshot_cls"};
 
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;

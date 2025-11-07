@@ -58,31 +58,31 @@ insert into acc_test02.aff01 values (9000,'MILLER','CLERK',7782,'1982-01-23',130
 select count(*) from acc_test02.aff01;
 -- @session
 
-restore account acc01 from snapshot snapshot_01;
+restore account acc01{snapshot="snapshot_01"};
 -- @session:id=2&user=acc01:test_account&password=111
 show tables from acc_test02;
 select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
 -- @session
 
-restore account acc01 from snapshot snapshot_01;
+restore account acc01{snapshot="snapshot_01"};
 -- @session:id=2&user=acc01:test_account&password=111
 show tables from acc_test02;
 select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
 -- @session
 
-restore account acc01 from snapshot snapshot_01;
+restore account acc01{snapshot="snapshot_01"};
 -- @session:id=2&user=acc01:test_account&password=111
 show tables from acc_test02;
 select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
 -- @session
 
-restore account acc01 from snapshot snapshot_01;
+restore account acc01{snapshot="snapshot_01"};
 -- @session:id=2&user=acc01:test_account&password=111
 show tables from acc_test02;
 select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
 -- @session
 
-restore account acc01 from snapshot snapshot_01;
+restore account acc01{snapshot="snapshot_01"};
 -- @session:id=2&user=acc01:test_account&password=111
 show tables from acc_test02;
 select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
@@ -354,7 +354,7 @@ Drop database Payroll;
 Drop database Projects;
 Drop database Company;
 
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 
 select * from Company.Departments;
 select * from Company.Employees;

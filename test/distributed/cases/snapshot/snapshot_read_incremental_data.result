@@ -112,7 +112,7 @@ col1    col2    col3
 4    10    null
 1    -321    null
 2    -1    null
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 select * from rs01;
 col1    col2    col3
 1    null    database

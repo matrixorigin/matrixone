@@ -128,7 +128,7 @@ create snapshot snapshot_01 for account;
 drop database test_snapshot_restore;
 drop database snapshot_read;
 
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
@@ -277,7 +277,7 @@ create snapshot snapshot_01 for account test_account;
 drop database test_snapshot_restore;
 drop database snapshot_read;
 
-restore account test_account from snapshot snapshot_01;
+restore account test_account{snapshot="snapshot_01"};
 
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
@@ -428,7 +428,7 @@ drop database test_snapshot_restore;
 drop database snapshot_read;
 -- @session
 
-restore account test_account from snapshot snapshot_01;
+restore account test_account{snapshot="snapshot_01"};
 
 -- @session:id=5&user=test_account:test_user&password=111
 use test_snapshot_restore;
@@ -581,7 +581,7 @@ drop database snapshot_read;
 -- @session
 
 
-restore account test_account from snapshot snapshot_01;
+restore account test_account{snapshot="snapshot_01"};
 -- @session:id=8&user=test_account:test_user&password=111
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
@@ -595,7 +595,7 @@ select count(*) from snapshot_read.students;
 -- @session
 
 create account test_account_01 admin_name = 'test_user' identified by '111';
-restore account test_account from snapshot snapshot_01 to account test_account_01 ;
+restore account test_account{snapshot=snapshot_01} to account test_account_01 ;
 
 -- @session:id=9&user=test_account_01:test_user&password=111
 use test_snapshot_restore;
@@ -617,7 +617,7 @@ show snapshots;
 
 drop snapshot if exists snapshot_01;
 create snapshot snapshot_01 for account;
-restore account sys database mo_catalog from snapshot snapshot_01;
+restore database mo_catalog{snapshot="snapshot_01"};
 drop snapshot if exists snapshot_01;
 
 drop snapshot if exists snapshot_01;
@@ -626,7 +626,7 @@ create account test_account_01 admin_name = 'test_user' identified by '111';
 drop account if exists test_account_02;
 create account test_account_02 admin_name = 'test_user' identified by '111';
 create snapshot snapshot_01 for account test_account_01;
-restore account test_account_02 from snapshot snapshot_01;
+restore account test_account_02{snapshot="snapshot_01"};
 drop snapshot if exists snapshot_01;
 drop account if exists test_account_01;
 drop account if exists test_account_02;

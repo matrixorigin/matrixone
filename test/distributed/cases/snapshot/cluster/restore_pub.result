@@ -183,7 +183,7 @@ Database
 drop database if exists sub_db4;
 show databases like 'sub_db4';
 Database
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pubname1    db1    *    acc01    acc01    2025-07-18 22:49:24    null    publish db1 database

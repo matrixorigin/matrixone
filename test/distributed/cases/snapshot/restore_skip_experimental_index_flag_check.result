@@ -19,7 +19,7 @@ create fulltext index ftidx on src (body, title);
 drop snapshot if exists snap01;
 create snapshot snap01 for account sys;
 drop database test01;
-restore account sys from snapshot snap01;
+restore account sys{snapshot="snap01"};
 show variables like "experimental_fulltext_index";
 Variable_name    Value
 experimental_fulltext_index    on
@@ -46,7 +46,7 @@ create fulltext index ftidx on src (body, title);
 drop snapshot if exists snap01;
 create snapshot snap01 for account sys;
 drop database test01;
-restore account sys from snapshot snap01;
+restore account sys{snapshot="snap01"};
 show variables like "experimental_fulltext_index";
 Variable_name    Value
 experimental_fulltext_index    on
@@ -68,7 +68,7 @@ insert into t1 values(2, "[1,2,4]", "[1,2,4,4,5]");
 drop snapshot if exists snap02;
 create snapshot snap02 for account sys;
 drop database vecdb2;
-restore account sys from snapshot snap02;
+restore account sys{snapshot="snap02"};
 show variables like "experimental_ivf_index";
 Variable_name    Value
 experimental_ivf_index    on
@@ -90,7 +90,7 @@ insert into t1 values(2, "[1,2,4]", "[1,2,4,4,5]");
 drop snapshot if exists snap02;
 create snapshot snap02 for account sys;
 drop database vecdb2;
-restore account sys from snapshot snap02;
+restore account sys{snapshot="snap02"};
 show variables like "experimental_ivf_index";
 Variable_name    Value
 experimental_ivf_index    on
@@ -110,7 +110,7 @@ DROP TABLE vector_empty;
 drop snapshot if exists snap03;
 create snapshot snap03 for account sys;
 drop database test03;
-restore account sys from snapshot snap03;
+restore account sys{snapshot="snap03"};
 show variables like "experimental_hnsw_index";
 Variable_name    Value
 experimental_hnsw_index    on
@@ -130,7 +130,7 @@ DROP TABLE vector_empty;
 drop snapshot if exists snap03;
 create snapshot snap03 for account sys;
 drop database test03;
-restore account sys from snapshot snap03;
+restore account sys{snapshot="snap03"};
 show variables like "experimental_hnsw_index";
 Variable_name    Value
 experimental_hnsw_index    on
