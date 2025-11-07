@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -372,6 +373,11 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 		// Even if no transaction is active (e.g., initSnapshotSplitTxn=true),
 		// we still need to update watermark as a heartbeat to indicate progress.
 		// This ensures watermark advances even when there's no data change.
+		tableLabel := dp.dbName + "." + dp.tableName
+
+		// Metrics: heartbeat watermark update
+		v2.CdcHeartbeatCounter.WithLabelValues(tableLabel).Inc()
+
 		logutil.Debug(
 			"CDC-DataProcessor-NoMoreData-HeartbeatUpdate",
 			zap.String("task-id", dp.taskId),

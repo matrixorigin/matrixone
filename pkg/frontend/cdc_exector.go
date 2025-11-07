@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -204,6 +205,10 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 				logutil.Warnf("failed to set executor state to Failed: %v", setFailErr)
 			}
 
+			// Metrics: task failed
+			v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+			v2.CdcTaskErrorCounter.WithLabelValues("start_failed", "false").Inc()
+
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
 			exec.activeRoutine.ClosePause()
@@ -274,6 +279,10 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return moerr.NewInternalErrorf(ctx, "cannot transition to running: %v", err)
 	}
 
+	// Metrics: task started
+	v2.CdcTaskTotalGauge.WithLabelValues("running").Inc()
+	v2.CdcTaskStateChangeCounter.WithLabelValues("starting", "running").Inc()
+
 	// start success, clear err msg
 	clearErrMsgErr := exec.updateErrMsg(ctx, "")
 
@@ -309,6 +318,10 @@ func (exec *CDCTaskExecutor) Resume() error {
 		zap.String("state", exec.stateMachine.State().String()),
 	)
 	defer func() {
+		// Metrics: task resumed
+		v2.CdcTaskTotalGauge.WithLabelValues("paused").Dec()
+		v2.CdcTaskStateChangeCounter.WithLabelValues("paused", "starting").Inc()
+
 		logutil.Info(
 			"CDC-Task-Resume-Success",
 			zap.String("task-id", exec.spec.TaskId),
@@ -400,6 +413,14 @@ func (exec *CDCTaskExecutor) Pause() error {
 		if err := exec.stateMachine.Transition(TransitionPauseComplete); err != nil {
 			logutil.Warnf("failed to transition to Paused state: %v", err)
 		}
+
+		// Metrics: task paused
+		if wasRunning {
+			v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
+			v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
+			v2.CdcTaskStateChangeCounter.WithLabelValues("running", "paused").Inc()
+		}
+
 		logutil.Info(
 			"CDC-Task-Pause-Success",
 			zap.String("task-id", exec.spec.TaskId),
@@ -449,6 +470,13 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		if err := exec.stateMachine.Transition(TransitionCancelComplete); err != nil {
 			logutil.Warnf("failed to transition to Cancelled state: %v", err)
 		}
+
+		// Metrics: task cancelled
+		if wasRunning {
+			v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
+			v2.CdcTaskStateChangeCounter.WithLabelValues("running", "cancelled").Inc()
+		}
+
 		logutil.Info(
 			"CDC-Task-Cancel-Success",
 			zap.String("task-id", exec.spec.TaskId),

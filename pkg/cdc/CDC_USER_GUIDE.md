@@ -17,11 +17,12 @@
 7. [DROP CDC - Dropping a CDC Task](#drop-cdc---dropping-a-cdc-task)
 8. [RESTART CDC - Restarting a CDC Task](#restart-cdc---restarting-a-cdc-task)
 9. [Monitoring and Error Handling](#monitoring-and-error-handling)
-10. [Configuration Options Reference](#configuration-options-reference)
-11. [Best Practices](#best-practices)
-12. [Troubleshooting](#troubleshooting)
-13. [Test Scenarios](#test-scenarios)
-14. [FAQ](#faq)
+10. [Metrics and Observability](#metrics-and-observability)
+11. [Configuration Options Reference](#configuration-options-reference)
+12. [Best Practices](#best-practices)
+13. [Troubleshooting](#troubleshooting)
+14. [Test Scenarios](#test-scenarios)
+15. [FAQ](#faq)
 
 ---
 
@@ -586,6 +587,42 @@ Require manual intervention:
 
 **Resolution**: Fix the issue, then `resume cdc task <task_name>` to clear errors
 
+### Debugging with Logs
+
+CDC components emit structured logs with the `CDC-` prefix. Combine logs with metrics to triage issues quickly.
+
+**Where to find logs**:
+
+```bash
+tail -f log/system.log | grep "CDC-"
+```
+
+**Common prefixes**:
+
+- `CDC-Task-*`: Task lifecycle (start, pause, cancel, fail)
+- `CDC-DataProcessor-*`: Snapshot/tail batches, heartbeat loops, transaction commits
+- `CDC-WatermarkUpdater-*`: Cache updates, persistence, lag details
+- `CDC-TableChangeStream-*`: Per-table polling rounds, errors, duplicate readers
+- `CDC-Sinker-*`: SQL execution, transaction begin/commit/rollback, retries
+
+**Enable verbose logging**: Production defaults to `info`. For deep dives, temporarily raise the log level in `etc/mo-service.toml` and restart the CN node:
+
+```toml
+[log]
+level = "debug"
+```
+
+Remember to revert to `info` afterwards to avoid excessive log volume.
+
+**Useful greps**:
+
+- `grep 'CDC-Task-Start' log/system.log` – verify tasks transition to `running`
+- `grep 'CDC-DataProcessor-NoMoreData-HeartbeatUpdate'` – confirm heartbeat ticks without data
+- `grep 'CDC-WatermarkUpdater-BufferUpdate'` – inspect old/new watermarks and cache sizes
+- `grep 'CDC-Sinker'` – pinpoint SQL failures or retry reasons
+
+Cross-referencing log timestamps with Prometheus alerts (e.g., watermark lag spikes) narrows down the failing component quickly.
+
 ### Monitoring Queries
 
 #### Check Overall Task Health
@@ -641,6 +678,708 @@ order by lag_minutes desc;
 | `schema mismatch: <details>` | Source and target schemas differ | Align schemas or adjust table mapping |
 | `authentication failed` | Invalid credentials in connection string | Update credentials and restart task |
 | `connection timeout` | Network issue or target unavailable | Check network, wait for automatic retry |
+
+---
+
+## Metrics and Observability
+
+### Overview
+
+MatrixOne CDC provides comprehensive Prometheus metrics for monitoring task health, performance, and data flow. These metrics enable real-time monitoring, alerting, and capacity planning.
+
+### Accessing Metrics
+
+Metrics are exposed via the Prometheus endpoint:
+
+```bash
+# Access metrics endpoint
+curl http://<cn-host>:<port>/metrics | grep mo_cdc
+
+# Example
+curl http://localhost:7001/metrics | grep mo_cdc
+```
+
+### Task Grouping for Mixed-Frequency Environments
+
+When you have multiple CDC tasks with different frequencies (e.g., real-time, hourly, daily), use the **task_group label** strategy to manage alerts:
+
+#### Labeling Strategy
+
+Add labels to your tasks using naming conventions or external configuration:
+
+**Option 1: Use Task Naming Convention**
+- Create tasks with prefixes: `realtime_*`, `hourly_*`, `daily_*`
+- Use Prometheus relabeling to extract task_group from task name
+
+**Option 2: Use External Label Configuration**
+- Maintain a config file mapping task_id → task_group
+- Apply labels when scraping metrics
+
+**Example Prometheus Relabel Config**:
+```yaml
+scrape_configs:
+  - job_name: 'matrixone-cdc'
+    static_configs:
+      - targets: ['<cn-host>:<port>']
+    metric_relabel_configs:
+      # Extract task_group from table label
+      # Format: account.task-id.db.table
+      - source_labels: [table]
+        regex: '.*\\.realtime_.*'
+        target_label: task_group
+        replacement: 'realtime'
+      - source_labels: [table]
+        regex: '.*\\.hourly_.*'
+        target_label: task_group
+        replacement: 'hourly'
+      - source_labels: [table]
+        regex: '.*\\.daily_.*'
+        target_label: task_group
+        replacement: 'daily'
+```
+
+**Benefits**:
+- Single unified alert rule set
+- Easy to add new task groups
+- Clear monitoring dashboards per frequency
+
+### Available Metrics
+
+#### Task Lifecycle Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_task_total` | Gauge | `state` | Total number of CDC tasks by state |
+| `mo_cdc_task_state_change_total` | Counter | `from_state`, `to_state` | Count of task state transitions |
+| `mo_cdc_task_error_total` | Counter | `error_type`, `retryable` | Count of task errors by type |
+
+**Example Queries**:
+```promql
+# Total running tasks
+mo_cdc_task_total{state="running"}
+
+# Failed tasks
+mo_cdc_task_total{state="failed"}
+
+# Task errors in last 5 minutes
+rate(mo_cdc_task_error_total[5m])
+
+# State transition rate
+rate(mo_cdc_task_state_change_total[5m])
+```
+
+#### Watermark Health Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_watermark_lag_seconds` | Gauge | `table` | Time lag between current time and watermark (absolute value) |
+| `mo_cdc_watermark_lag_ratio` | Gauge | `table` | Ratio of actual lag to expected lag (frequency-agnostic, <2 normal, >5 critical) ⚠️ *Planned feature* |
+| `mo_cdc_watermark_cache_size` | Gauge | `tier` | Number of watermarks in each cache tier |
+| `mo_cdc_watermark_update_total` | Counter | `table`, `update_type` | Count of watermark updates |
+| `mo_cdc_watermark_commit_duration_seconds` | Histogram | - | Duration of watermark commits to database |
+
+**Example Queries**:
+```promql
+# Maximum watermark lag across all tables (absolute)
+max(mo_cdc_watermark_lag_seconds)
+
+# Tables with >1 minute absolute lag (for real-time tasks)
+mo_cdc_watermark_lag_seconds{task_group="realtime"} > 60
+
+# Tables with >5 hour absolute lag (for hourly tasks)
+mo_cdc_watermark_lag_seconds{task_group="hourly"} > 18000
+
+# Tables with >5 day absolute lag (for daily tasks)
+mo_cdc_watermark_lag_seconds{task_group="daily"} > 432000
+
+# Watermark cache distribution
+mo_cdc_watermark_cache_size{tier="uncommitted"}
+mo_cdc_watermark_cache_size{tier="committing"}
+mo_cdc_watermark_cache_size{tier="committed"}
+
+# Watermark commit latency (P99)
+histogram_quantile(0.99, mo_cdc_watermark_commit_duration_seconds_bucket)
+
+# ⚠️ Planned feature: Watermark Lag Ratio (frequency-agnostic)
+# mo_cdc_watermark_lag_ratio  # <2: normal, 2-5: warning, >5: critical
+```
+
+#### Heartbeat Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_heartbeat_total` | Counter | `table` | Count of heartbeat updates (watermark advances without data changes) |
+
+**Purpose**: Indicates CDC task is alive even when no data changes occur.
+
+**Example Queries**:
+```promql
+# Heartbeat rate (updates per second)
+rate(mo_cdc_heartbeat_total[1m])
+
+# Tables without heartbeat (last 5 minutes)
+absent_over_time(mo_cdc_heartbeat_total[5m])
+```
+
+#### Data Processing Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_rows_processed_total` | Counter | `operation`, `table` | Total rows processed |
+| `mo_cdc_bytes_processed_total` | Counter | `operation`, `table` | Total bytes processed |
+| `mo_cdc_batch_size_rows` | Histogram | `type` | Distribution of batch sizes |
+
+**Labels**:
+- `operation`: `read`, `insert`, `delete`
+- `type`: `snapshot`, `tail`
+
+**Example Queries**:
+```promql
+# Total rows synced in last hour
+sum(increase(mo_cdc_rows_processed_total{operation="insert"}[1h]))
+
+# Throughput (rows per second)
+sum(rate(mo_cdc_rows_processed_total[1m]))
+
+# Average batch size
+avg(mo_cdc_batch_size_rows)
+```
+
+#### Table Stream Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_table_stream_total` | Gauge | `state` | Number of active table streams |
+| `mo_cdc_table_stream_round_total` | Counter | `table`, `status` | Count of processing rounds |
+| `mo_cdc_table_stream_round_duration_seconds` | Histogram | `table` | Duration of processing rounds |
+
+**Example Queries**:
+```promql
+# Active table streams
+mo_cdc_table_stream_total{state="running"}
+
+# Success rate
+rate(mo_cdc_table_stream_round_total{status="success"}[5m])
+/
+rate(mo_cdc_table_stream_round_total[5m])
+
+# Processing duration P99
+histogram_quantile(0.99, mo_cdc_table_stream_round_duration_seconds_bucket)
+```
+
+#### Sinker Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_sinker_transaction_total` | Counter | `operation`, `status` | Count of transaction operations |
+| `mo_cdc_sinker_sql_total` | Counter | `sql_type`, `status` | Count of SQL executions |
+| `mo_cdc_sinker_sql_duration_seconds` | Histogram | `sql_type` | SQL execution duration |
+| `mo_cdc_sinker_retry_total` | Counter | `reason` | Count of retry attempts |
+
+**Labels**:
+- `operation`: `begin`, `commit`, `rollback`
+- `sql_type`: `insert`, `delete`, `ddl`
+- `status`: `success`, `error`
+
+**Example Queries**:
+```promql
+# Transaction commit rate
+rate(mo_cdc_sinker_transaction_total{operation="commit",status="success"}[1m])
+
+# SQL error rate
+rate(mo_cdc_sinker_sql_total{status="error"}[5m])
+
+# INSERT duration P99
+histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket{sql_type="insert"})
+
+# Total retries
+sum(mo_cdc_sinker_retry_total)
+```
+
+### Monitoring Dashboard Queries
+
+#### Health Overview
+
+```promql
+# Tasks Summary
+sum by (state) (mo_cdc_task_total)
+
+# Active Tables
+count(mo_cdc_watermark_lag_seconds)
+
+# Overall Health (green if <5s lag)
+avg(mo_cdc_watermark_lag_seconds) < 5
+```
+
+#### Performance Metrics
+
+```promql
+# Throughput (rows/second)
+sum(rate(mo_cdc_rows_processed_total{operation="insert"}[1m]))
+
+# Total Data Synced (last 24h)
+sum(increase(mo_cdc_bytes_processed_total[24h]))
+
+# Heartbeat Frequency
+sum(rate(mo_cdc_heartbeat_total[1m]))
+```
+
+#### Error Monitoring
+
+```promql
+# Error Rate
+sum(rate(mo_cdc_task_error_total[5m]))
+
+# Failed Transactions
+sum(mo_cdc_sinker_transaction_total{status="error"})
+
+# SQL Failures by Type
+sum by (sql_type) (rate(mo_cdc_sinker_sql_total{status="error"}[5m]))
+```
+
+### Alert Rules
+
+#### Critical Alerts
+
+These alerts indicate immediate action required:
+
+```yaml
+# 1. No Running Tasks
+- alert: CDCNoRunningTasks
+  expr: mo_cdc_task_total{state="running"} == 0
+  for: 5m
+  severity: critical
+  description: "All CDC tasks have stopped"
+
+# 2. Task Failed
+- alert: CDCTaskFailed
+  expr: mo_cdc_task_total{state="failed"} > 0
+  for: 1m
+  severity: critical
+  description: "One or more CDC tasks in failed state"
+
+# 3. Watermark Lag Ratio (Unified Alert - Planned Feature)
+# ⚠️ Note: mo_cdc_watermark_lag_ratio is a planned metric
+# When available, it will provide frequency-agnostic alerting
+# - alert: CDCWatermarkLagHigh
+#   expr: mo_cdc_watermark_lag_ratio > 5
+#   for: 3m
+#   severity: critical
+#   description: "Watermark lag is 5x higher than expected"
+
+# 3. Watermark Stuck (Current Recommended Approach: Group-based)
+# Use separate rules for different task frequencies if you have task groups
+# Example for real-time tasks (Frequency < 1 minute):
+- alert: CDCWatermarkStuck_Realtime
+  expr: mo_cdc_watermark_lag_seconds{task_group="realtime"} > 300
+  for: 2m
+  severity: critical
+  description: "Real-time task watermark stuck >5 minutes (table: {{ $labels.table }})"
+
+# Example for hourly tasks:
+- alert: CDCWatermarkStuck_Hourly
+  expr: mo_cdc_watermark_lag_seconds{task_group="hourly"} > 18000
+  for: 30m
+  severity: critical
+  description: "Hourly task watermark stuck >5 hours (table: {{ $labels.table }})"
+
+# Example for daily tasks:
+- alert: CDCWatermarkStuck_Daily
+  expr: mo_cdc_watermark_lag_seconds{task_group="daily"} > 432000
+  for: 6h
+  severity: critical
+  description: "Daily task watermark stuck >5 days (table: {{ $labels.table }})"
+
+# 4. No Heartbeat (Use Different Windows for Different Task Groups)
+# For real-time tasks (default):
+- alert: CDCNoHeartbeat_Realtime
+  expr: rate(mo_cdc_heartbeat_total{task_group="realtime"}[5m]) == 0
+  for: 5m
+  severity: critical
+  description: "No heartbeat detected for real-time task (table: {{ $labels.table }})"
+
+# For hourly tasks:
+- alert: CDCNoHeartbeat_Hourly
+  expr: increase(mo_cdc_heartbeat_total{task_group="hourly"}[3h]) == 0
+  for: 3h
+  severity: critical
+  description: "No heartbeat detected for hourly task (table: {{ $labels.table }})"
+
+# For daily tasks:
+- alert: CDCNoHeartbeat_Daily
+  expr: increase(mo_cdc_heartbeat_total{task_group="daily"}[3d]) == 0
+  for: 3d
+  severity: critical
+  description: "No heartbeat detected for daily task (table: {{ $labels.table }})"
+```
+
+#### Warning Alerts
+
+These alerts indicate potential issues:
+
+```yaml
+# 1. High Watermark Lag
+- alert: CDCHighWatermarkLag
+  expr: mo_cdc_watermark_lag_seconds > 60
+  for: 3m
+  severity: warning
+  description: "Watermark lag >1 minute (table: {{ $labels.table }})"
+
+# 2. High Error Rate
+- alert: CDCHighErrorRate
+  expr: rate(mo_cdc_task_error_total[5m]) > 0.01
+  for: 5m
+  severity: warning
+  description: "High error rate detected (>0.01/s)"
+
+# 3. Slow SQL Execution
+- alert: CDCSQLSlow
+  expr: histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket) > 1
+  for: 5m
+  severity: warning
+  description: "SQL P99 latency >1s (type: {{ $labels.sql_type }})"
+
+# 4. Frequent Retries
+- alert: CDCFrequentRetries
+  expr: rate(mo_cdc_sinker_retry_total[5m]) > 0.1
+  for: 5m
+  severity: warning
+  description: "High retry rate (>0.1/s, reason: {{ $labels.reason }})"
+```
+
+### Grafana Dashboard Setup
+
+#### Panel 1: Task Overview
+
+```json
+{
+  "title": "CDC Tasks Overview",
+  "targets": [
+    {
+      "expr": "sum by (state) (mo_cdc_task_total)",
+      "legendFormat": "{{ state }}"
+    }
+  ],
+  "type": "stat"
+}
+```
+
+#### Panel 2: Watermark Lag
+
+```json
+{
+  "title": "Watermark Lag (seconds)",
+  "targets": [
+    {
+      "expr": "mo_cdc_watermark_lag_seconds",
+      "legendFormat": "{{ table }}"
+    }
+  ],
+  "type": "graph",
+  "alert": {
+    "conditions": [
+      {
+        "evaluator": { "params": [60], "type": "gt" },
+        "query": { "datasourceId": 1, "model": { "expr": "mo_cdc_watermark_lag_seconds" } }
+      }
+    ]
+  }
+}
+```
+
+#### Panel 3: Heartbeat Rate
+
+```json
+{
+  "title": "Heartbeat Rate (per second)",
+  "targets": [
+    {
+      "expr": "sum(rate(mo_cdc_heartbeat_total[1m]))",
+      "legendFormat": "Heartbeat Rate"
+    }
+  ],
+  "type": "graph"
+}
+```
+
+#### Panel 4: Throughput
+
+```json
+{
+  "title": "Throughput (rows/second)",
+  "targets": [
+    {
+      "expr": "sum by (operation) (rate(mo_cdc_rows_processed_total[1m]))",
+      "legendFormat": "{{ operation }}"
+    }
+  ],
+  "type": "graph"
+}
+```
+
+### Metric Usage Examples
+
+#### Example 1: Check if CDC is Running
+
+```bash
+# Query Prometheus
+curl -s 'http://localhost:7001/metrics' | grep 'mo_cdc_task_total{state="running"}'
+
+# Expected output:
+# mo_cdc_task_total{state="running"} 1.0
+```
+
+#### Example 2: Monitor Watermark Lag
+
+```bash
+# Get current watermark lag for all tables
+curl -s 'http://localhost:7001/metrics' | grep 'mo_cdc_watermark_lag_seconds'
+
+# Expected output:
+# mo_cdc_watermark_lag_seconds{table="0.task-id.db1.table1"} 0.524
+# mo_cdc_watermark_lag_seconds{table="0.task-id.db1.table2"} 1.203
+```
+
+**Interpretation** (depends on task `Frequency` setting):
+
+For default frequency (200ms):
+- < 1 second: Excellent (real-time sync)
+- 1-10 seconds: Good (normal operation)
+- 10-60 seconds: Fair (possible backlog)
+- \> 60 seconds: Poor (investigate)
+
+For custom frequency:
+- Lag < 2x frequency: Normal (e.g., 1h frequency → <2h lag is normal)
+- Lag > 5x frequency: Investigate
+- Lag > 10x frequency: Stuck
+
+**Example**: If `Frequency='1h'`, watermark lag of 30 minutes is normal.
+
+#### Example 3: Verify Heartbeat
+
+```bash
+# Check heartbeat counter
+curl -s 'http://localhost:7001/metrics' | grep 'mo_cdc_heartbeat_total'
+
+# Expected output:
+# mo_cdc_heartbeat_total{table="0.task-id.db1.table1"} 150.0
+```
+
+**Interpretation**:
+- Value increasing: CDC is alive (even without data changes)
+- Value stuck: CDC may be stuck or paused
+
+#### Example 4: Check Data Throughput
+
+```bash
+# Check rows processed
+curl -s 'http://localhost:7001/metrics' | grep 'mo_cdc_rows_processed_total'
+
+# Expected output:
+# mo_cdc_rows_processed_total{operation="insert",table="db1.table1"} 10523.0
+# mo_cdc_rows_processed_total{operation="delete",table="db1.table1"} 42.0
+```
+
+### Monitoring Best Practices
+
+#### 1. Set Up Alerts
+
+Configure alerts for critical conditions:
+- ✅ Task failures (`mo_cdc_task_total{state="failed"} > 0`)
+- ✅ Watermark stuck (`mo_cdc_watermark_lag_seconds > 300`)
+- ✅ No heartbeat (`rate(mo_cdc_heartbeat_total[5m]) == 0`)
+- ✅ High error rate (`rate(mo_cdc_task_error_total[5m]) > 0.01`)
+
+#### 2. Monitor Watermark Lag
+
+Check watermark lag regularly (adjust thresholds based on task `Frequency`):
+
+```promql
+# For default Frequency (200ms):
+# Green: < 10s
+# Yellow: 10-60s
+# Red: > 60s
+mo_cdc_watermark_lag_seconds
+
+# For custom Frequency tasks, adjust thresholds:
+# Frequency=1h: Green < 2h, Yellow 2-5h, Red > 5h
+# Frequency=1d: Green < 2d, Yellow 2-5d, Red > 5d
+```
+
+**Rule of thumb**: Normal lag ≈ task frequency. Alert if lag > 5x frequency.
+
+#### 3. Track Heartbeats
+
+Ensure heartbeats are regular (rate depends on task frequency):
+
+```promql
+# Expected rate varies by Frequency setting:
+# - Frequency=200ms: ~5 heartbeats/second
+# - Frequency=1s: ~1 heartbeat/second  
+# - Frequency=1h: ~0.0003 heartbeats/second (1 per hour)
+# - Frequency=1d: ~0.000012 heartbeats/second (1 per day)
+rate(mo_cdc_heartbeat_total[1m])
+
+# For hourly/daily tasks, use longer time windows:
+increase(mo_cdc_heartbeat_total[1h])  # Count in last hour
+increase(mo_cdc_heartbeat_total[1d])  # Count in last day
+```
+
+#### 4. Monitor Cache Health
+
+Watermark cache should flow smoothly:
+
+```promql
+# Ideal state:
+# - uncommitted: 1-10 (recent updates)
+# - committing: 0 (processed quickly)
+# - committed: matches number of tables
+mo_cdc_watermark_cache_size{tier="uncommitted"}  # Should be low (<10)
+mo_cdc_watermark_cache_size{tier="committing"}   # Should be 0 most of the time
+mo_cdc_watermark_cache_size{tier="committed"}    # Should equal number of active tables
+```
+
+**Red Flags**:
+- `committing` always > 0: Commits stuck or slow
+- `uncommitted` growing: Updates faster than commits (acceptable if temporary)
+
+#### 5. Performance Tracking
+
+Monitor throughput and latency:
+
+```promql
+# Current throughput
+sum(rate(mo_cdc_rows_processed_total{operation="insert"}[1m]))
+
+# SQL execution time P99
+histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket{sql_type="insert"})
+```
+
+#### 6. Adjust Monitoring for Custom Frequency Tasks
+
+When tasks use custom `Frequency` (e.g., hourly or daily sync), adjust monitoring accordingly:
+
+**Watermark Lag Thresholds**:
+- `Frequency='200ms'` (default): Alert if lag > 5 minutes
+- `Frequency='1h'`: Alert if lag > 5 hours (5x frequency)
+- `Frequency='1d'`: Alert if lag > 5 days (5x frequency)
+
+**Heartbeat Detection Windows**:
+- `Frequency='200ms'`: Check `rate(...[5m])` (5-minute window)
+- `Frequency='1h'`: Check `increase(...[3h])` (3-hour window)
+- `Frequency='1d'`: Check `increase(...[3d])` (3-day window)
+
+**Example Alert Rule for Hourly Tasks**:
+```yaml
+- alert: CDCWatermarkStuck_Hourly
+  expr: mo_cdc_watermark_lag_seconds > 18000  # 5 hours
+  for: 30m
+  severity: critical
+  description: "Hourly task watermark stuck (table: {{ $labels.table }})"
+```
+
+### Integration with Monitoring Systems
+
+#### Prometheus Integration
+
+Add to `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'matrixone-cdc'
+    static_configs:
+      - targets: ['<cn-host>:<port>']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+```
+
+#### Grafana Integration
+
+1. Add Prometheus as data source
+2. Import dashboard JSON (see Appendix C)
+3. Configure alerts in Alert Rules
+
+#### Alert Manager Integration
+
+Example `alertmanager.yml`:
+
+```yaml
+route:
+  group_by: ['alertname', 'severity']
+  receiver: 'cdc-team'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'cdc-oncall'
+      continue: true
+
+receivers:
+  - name: 'cdc-team'
+    email_configs:
+      - to: 'cdc-team@example.com'
+  
+  - name: 'cdc-oncall'
+    pagerduty_configs:
+      - service_key: '<pagerduty-key>'
+```
+
+### Metric Retention
+
+Recommended Prometheus retention settings:
+
+```yaml
+# prometheus.yml
+storage:
+  tsdb:
+    retention.time: 30d  # Keep 30 days of metrics
+    retention.size: 50GB # Max 50GB storage
+```
+
+### Troubleshooting with Metrics
+
+#### Problem: Task Not Syncing
+
+**Check**:
+```promql
+# 1. Is task running?
+mo_cdc_task_total{state="running"}
+
+# 2. Any errors?
+mo_cdc_task_error_total
+
+# 3. Watermark advancing?
+mo_cdc_watermark_lag_seconds
+```
+
+#### Problem: High Latency
+
+**Check**:
+```promql
+# 1. SQL execution slow?
+histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket)
+
+# 2. Watermark commit slow?
+histogram_quantile(0.99, mo_cdc_watermark_commit_duration_seconds_bucket)
+
+# 3. Many retries?
+sum(rate(mo_cdc_sinker_retry_total[5m]))
+```
+
+#### Problem: Data Missing
+
+**Check**:
+```promql
+# 1. Processing rounds succeeding?
+mo_cdc_table_stream_round_total{status="error"}
+
+# 2. Rows being read but not inserted?
+mo_cdc_rows_processed_total{operation="read"}
+vs
+mo_cdc_rows_processed_total{operation="insert"}
+
+# 3. SQL failures?
+mo_cdc_sinker_sql_total{status="error"}
+```
 
 ---
 
@@ -1232,6 +1971,77 @@ A:
 3. Resume CDC task
 
 Or drop and create new task.
+
+### Metrics Questions
+
+**Q: How do I check if CDC is running properly?**  
+A: Use Prometheus metrics:
+```bash
+# Check task status
+curl http://localhost:7001/metrics | grep 'mo_cdc_task_total{state="running"}'
+
+# Check watermark lag (should be <10 seconds)
+curl http://localhost:7001/metrics | grep 'mo_cdc_watermark_lag_seconds'
+
+# Check heartbeat (should be increasing)
+curl http://localhost:7001/metrics | grep 'mo_cdc_heartbeat_total'
+```
+
+**Q: What does watermark lag mean?**  
+A: Watermark lag is the time difference between the current time and the last synchronized data timestamp.
+
+**For default frequency (200ms)**:
+- < 1s: Excellent (real-time)
+- 1-10s: Good (normal)
+- 10-60s: Fair (possible backlog)
+- \> 60s: Poor (investigate)
+
+**For custom frequency tasks**:
+- Normal lag ≈ task frequency (e.g., Frequency='1h' → lag ≈ 1 hour is normal)
+- Investigate if lag > 5x frequency
+- Alert if lag > 10x frequency (likely stuck)
+
+**Q: What is a heartbeat and why is it important?**  
+A: Heartbeat is a watermark update that occurs even when there's no data change. It indicates:
+- ✅ CDC task is alive and monitoring
+- ✅ Connection to source database is healthy
+- ✅ System is ready to process new changes
+
+A stopped heartbeat indicates CDC may be stuck or paused. **Note**: For tasks with `Frequency` >= 1 hour, heartbeats are naturally infrequent. Adjust monitoring windows:
+- Frequency=200ms: Check 5-minute window
+- Frequency=1h: Check 3-hour window  
+- Frequency=1d: Check 3-day window
+
+**Q: How do I set up alerts for CDC?**  
+A: Use the alert rules provided in the [Metrics and Observability](#metrics-and-observability) section with Prometheus Alertmanager.
+
+**Q: I have multiple tasks with different frequencies (1 day, 1 hour, 1 minute). How do I set unified alert rules?**  
+A: **Current best practice**: Use task grouping with naming conventions:
+
+1. **Name your tasks with frequency prefix**: `realtime_sync`, `hourly_backup`, `daily_archive`
+2. **Configure Prometheus relabeling** to extract `task_group` label from task names
+3. **Create separate alert rules per group**:
+
+```yaml
+# Real-time tasks (Frequency < 1 minute)
+- alert: CDCWatermarkStuck_Realtime
+  expr: mo_cdc_watermark_lag_seconds{task_group="realtime"} > 300  # 5 minutes
+  
+# Hourly tasks
+- alert: CDCWatermarkStuck_Hourly
+  expr: mo_cdc_watermark_lag_seconds{task_group="hourly"} > 18000  # 5 hours
+  
+# Daily tasks  
+- alert: CDCWatermarkStuck_Daily
+  expr: mo_cdc_watermark_lag_seconds{task_group="daily"} > 432000  # 5 days
+```
+
+See [Task Grouping](#task-grouping-for-mixed-frequency-environments) for detailed configuration.
+
+**Future enhancement**: A `mo_cdc_watermark_lag_ratio` metric is planned to provide frequency-agnostic unified alerting.
+
+**Q: Can I monitor CDC without Prometheus?**  
+A: Yes, you can use SQL queries on system tables (`mo_cdc_task`, `mo_cdc_watermark`), but metrics provide more real-time and detailed monitoring.
 
 ---
 

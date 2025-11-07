@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -1051,6 +1052,21 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			uncommittedCount := len(u.cacheUncommitted)
 			committingCount := len(u.cacheCommitting)
 			committedCount := len(u.cacheCommitted)
+
+			// Metrics: watermark cache sizes
+			v2.CdcWatermarkCacheGauge.WithLabelValues("uncommitted").Set(float64(uncommittedCount))
+			v2.CdcWatermarkCacheGauge.WithLabelValues("committing").Set(float64(committingCount))
+			v2.CdcWatermarkCacheGauge.WithLabelValues("committed").Set(float64(committedCount))
+
+			// Metrics: watermark lag for each table
+			for key, watermark := range u.cacheCommitted {
+				if !watermark.IsEmpty() {
+					wmTime := watermark.ToTimestamp().ToStdTime()
+					lagSeconds := time.Since(wmTime).Seconds()
+					tableLabel := key.String()
+					v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lagSeconds)
+				}
+			}
 			u.RUnlock()
 
 			logutil.Info(
