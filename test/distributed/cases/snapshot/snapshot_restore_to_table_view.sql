@@ -30,7 +30,7 @@ create snapshot sp06 for account;
 
 drop database test01;
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 select * from test01.EmployeeSalaries;
 select * from test01.EmployeeSalaryRanking;
@@ -72,7 +72,7 @@ create snapshot sp06 for account;
 drop table EmployeeSalaries;
 drop view EmployeeSalaryRanking;
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 select * from test01.EmployeeSalaries;
 select * from test01.EmployeeSalaryRanking;
@@ -183,7 +183,7 @@ create snapshot sp06 for account;
 
 drop database test01;
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 select * from test01.employees;
 select * from test01.departments;
@@ -200,7 +200,7 @@ drop table if exists departments;
 drop table if exists orders;
 drop table if exists sales_summary;
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 select * from test01.employees;
 select * from test01.departments;
@@ -441,7 +441,7 @@ drop database School;
 drop database University;
 drop database EducationSystem;
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 select * from School.Students;
 select * from School.Courses;

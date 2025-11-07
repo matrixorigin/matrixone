@@ -71,7 +71,7 @@ select count(*) from pri01;
 drop database sub01;
 -- @ignore:5,7
 show subscriptions;
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 -- @ignore:5,7
 show subscriptions;
 -- @session
@@ -148,7 +148,7 @@ drop publication pub02;
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7
 show subscriptions;
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 -- @ignore:5,7
 show subscriptions;
 show databases;
@@ -207,7 +207,7 @@ insert into table01 values('fhuwehwfw',3829032);
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
 
-restore account acc01 from snapshot sp03 to account acc02;
+restore account acc01{snapshot="sp03"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 show subscriptions;
@@ -270,8 +270,8 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account;
 
 drop database sub05;
-restore account sys database sub05 table t4 from snapshot sp05;
-restore account sys database sub05 from snapshot sp05;
+restore table sub05.t4{snapshot="sp05"};
+restore database sub05{snapshot="sp05"};
 show databases;
 use sub05;
 show tables;
@@ -322,7 +322,7 @@ show subscriptions;
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 -- @ignore:5,6
 show publications;
 -- @session
@@ -401,7 +401,7 @@ alter publication pub06 account acc02 database test07;
 show subscriptions;
 -- @session
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7
@@ -455,7 +455,7 @@ drop database if exists sub02;
 create database sub02 from sys publication pub11;
 -- @session
 
-restore account sys from snapshot sp10;
+restore account sys{snapshot="sp10"};
 
 -- @ignore:5,6
 show publications;
@@ -516,7 +516,7 @@ drop publication pub_full01;
 show subscriptions;
 -- @session
 
-restore account sys database pub_fulltext_table from snapshot sp_pub01;
+restore database pub_fulltext_table{snapshot="sp_pub01"};
 -- @ignore:5,6
 show publications;
 
@@ -562,7 +562,7 @@ drop database fulltext_sub02;
 show subscriptions;
 -- @session
 
-restore account acc01 from snapshot sp_full02;
+restore account acc01{snapshot="sp_full02"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -570,7 +570,7 @@ show databases;
 show subscriptions;
 -- @session
 
-restore account acc01 from snapshot sp_full02 to account acc04;
+restore account acc01{snapshot="sp_full02"} to account acc04;
 
 -- @session:id=4&user=acc04:test_account&password=111
 show databases;

@@ -47,7 +47,7 @@ drop publication pub02;
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7
 show subscriptions;
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 -- @ignore:5,7
 show subscriptions;
 show databases;

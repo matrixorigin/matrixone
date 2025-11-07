@@ -211,6 +211,6 @@ v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
-restore account acc02 from snapshot spsp02;
+restore account acc02{snapshot="spsp02"};
 drop snapshot if exists spsp02;
 drop account if exists acc02;

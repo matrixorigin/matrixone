@@ -102,7 +102,7 @@ create snapshot `binary` for account;
 select count(*) from cluster01{snapshot = `binary`};
 count(*)
 2
-restore account sys from snapshot `binary`;
+restore account sys{snapshot=`binary`};
 select count(*) from cluster01{snapshot = `binary`};
 count(*)
 2
@@ -120,7 +120,7 @@ create snapshot `_binary` for account;
 select count(*) from cluster01{snapshot = `_binary`};
 count(*)
 2
-restore account sys from snapshot `_binary`;
+restore account sys{snapshot=`_binary`};
 select count(*) from cluster01{snapshot = `_binary`};
 count(*)
 2

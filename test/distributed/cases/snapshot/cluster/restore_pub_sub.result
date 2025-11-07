@@ -50,7 +50,7 @@ drop database sub02;
 drop publication pub02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;

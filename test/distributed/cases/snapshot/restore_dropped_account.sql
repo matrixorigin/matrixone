@@ -9,7 +9,7 @@ show snapshots;
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 drop account acc01;
-restore account acc01 from snapshot spsp01;
+restore account acc01{snapshot="spsp01"};
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 drop account acc01;
@@ -115,7 +115,7 @@ show create table v01;
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
-restore account acc02 from snapshot spsp02;
+restore account acc02{snapshot="spsp02"};
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
@@ -216,7 +216,7 @@ create snapshot spsp03 for account acc03;
 drop account acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
 
-restore account acc03 from snapshot spsp03;
+restore account acc03{snapshot="spsp03"};
 drop account acc03;
 drop snapshot spsp03;
 
@@ -354,7 +354,7 @@ drop account acc04;
 drop account acc05;
 drop account acc06;
 
-restore cluster from snapshot spsp06;
+restore cluster{snapshot="spsp06"};
 
 -- @session:id=7&user=acc04:test_account&password=111
 use test04;
@@ -395,7 +395,7 @@ create snapshot spsp07 for account acc07;
 
 drop account acc07;
 
-restore account acc07 from snapshot spsp07;
+restore account acc07{snapshot="spsp07"};
 
 -- @session:id=11&user=acc07:test_account&password=111
 show databases;

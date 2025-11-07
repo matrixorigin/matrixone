@@ -18,10 +18,10 @@ create snapshot snapshot2 for account;
 drop table if exists cluster_table_1;
 select * from mo_catalog.cluster_table_1;
 SQL parser error: table "cluster_table_1" does not exist
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 select * from mo_catalog.cluster_table_1;
 SQL parser error: table "cluster_table_1" does not exist
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 select * from mo_catalog.cluster_table_1;
 a    b
 drop snapshot if exists snapshot1;

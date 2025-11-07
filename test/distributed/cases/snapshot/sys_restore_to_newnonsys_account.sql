@@ -30,7 +30,7 @@ select count(*) from s3t;
 select * from s3t where col1 = 23;
 -- @session
 
-restore account acc01 from snapshot sp01 to account acc02;
+restore account acc01{snapshot="sp01"} to account acc02;
 
 -- @session:id=3&user=acc02:test_account&password=111
 show databases;
@@ -51,14 +51,14 @@ show create table s3t;
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 
-restore account acc01 from snapshot sp02 to account acc02;
+restore account acc01{snapshot="sp02"} to account acc02;
 
 -- @session:id=3&user=acc02:test_account&password=111
 use acc_test01;
 show create table s3t;
 -- @session
 
-restore account acc01 from snapshot sp01 to account acc02;
+restore account acc01{snapshot="sp01"} to account acc02;
 
 -- @session:id=3&user=acc02:test_account&password=111
 show databases;
@@ -206,7 +206,7 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 
 -- @session:id=3&user=acc02:test_account&password=111
 show databases;
@@ -253,9 +253,9 @@ create snapshot sp08 for account acc01;
 -- @ignore:1
 show snapshots;
 
-restore account acc01 from snapshot sp07 to account acc02;
+restore account acc01{snapshot="sp07"} to account acc02;
 
-restore account acc01 from snapshot sp08 to account acc02;
+restore account acc01{snapshot="sp08"} to account acc02;
 
 -- @session:id=1&user=acc02:test_account&password=111
 use test01;
@@ -305,7 +305,7 @@ alter table table02 add column new decimal after col2;
 drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 
-restore account acc01 from snapshot sp10 to account acc02;
+restore account acc01{snapshot="sp10"} to account acc02;
 
 -- @session:id=3&user=acc02:test_account&password=111
 use test02;
@@ -315,7 +315,7 @@ select * from table02;
 select * from table01;
 -- @session
 
-restore account acc01 from snapshot sp09 to account acc02;
+restore account acc01{snapshot="sp09"} to account acc02;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop database test02;
@@ -354,7 +354,7 @@ insert into rs01 values (10, -1, null);
 select count(*) from rs01;
 -- @session
 
-restore account acc01 from snapshot sp03 to account sys;
+restore account acc01{snapshot="sp03"} to account sys;
 drop snapshot sp03;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -388,7 +388,7 @@ create snapshot fu_sp01 for account acc01;
 drop database fulltext_index_acc01;
 -- @session
 
-restore account acc01 from snapshot fu_sp01 to account acc02;
+restore account acc01{snapshot="fu_sp01"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 show databases;
