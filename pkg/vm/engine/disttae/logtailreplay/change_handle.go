@@ -44,6 +44,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
+type checkpointEntryReader interface {
+	ReadMeta(context.Context) error
+	PrefetchData(string)
+	ConsumeCheckpointWithTableID(context.Context, func(context.Context, objectio.ObjectEntry, bool) error) error
+}
+
+var newCKPReaderWithTableID = func(version uint32, location objectio.Location, tableID uint64, mp *mpool.MPool, fs fileservice.FileService) checkpointEntryReader {
+	return logtail.NewCKPReaderWithTableID_V2(version, location, tableID, mp, fs)
+}
+
 const (
 	JTCDCLoad tasks.JobType = 300 + iota
 )
@@ -801,11 +811,13 @@ func getObjectsFromCheckpointEntries(
 	dataCNObjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneAobjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneCNObjMap := make(map[string]*objectio.ObjectEntry)
-	readers := make([]*logtail.CKPReader, 0)
+	readers := make([]checkpointEntryReader, 0)
 	for _, entry := range checkpoint {
-		reader := logtail.NewCKPReaderWithTableID_V2(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
+		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
 		readers = append(readers, reader)
-		ioutil.Prefetch(sid, fs, entry.GetLocation())
+		if fs != nil && sid != "" {
+			_ = ioutil.Prefetch(sid, fs, entry.GetLocation())
+		}
 	}
 	for _, reader := range readers {
 		if err = reader.ReadMeta(ctx); err != nil {
