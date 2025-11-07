@@ -35,6 +35,7 @@ from .exceptions import ConnectionError, QueryError
 from .fulltext_manager import FulltextIndexManager
 from .load_data import LoadDataManager
 from .stage import StageManager
+from .cdc import CDCManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager
 from .moctl import MoCtlManager
@@ -229,6 +230,7 @@ class Client(BaseMatrixOneClient):
         self._load_data = None
         self._stage = None
         self._export = None
+        self._cdc = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -1817,6 +1819,13 @@ class Client(BaseMatrixOneClient):
         if self._stage is None:
             self._stage = StageManager(self)
         return self._stage
+
+    @property
+    def cdc(self) -> Optional[CDCManager]:
+        """Get CDC manager for change data capture operations."""
+        if self._cdc is None:
+            self._cdc = CDCManager(self)
+        return self._cdc
 
     @property
     def export(self):

@@ -56,6 +56,7 @@ from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
 from .stage import Stage, StageManager, AsyncStageManager
+from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -144,6 +145,10 @@ __all__ = [
     "Stage",
     "StageManager",
     "AsyncStageManager",
+    "CDCTaskInfo",
+    "CDCWatermarkInfo",
+    "CDCManager",
+    "AsyncCDCManager",
     # SQLAlchemy extensions
     "VectorType",
     "Vectorf32",

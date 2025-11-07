@@ -38,6 +38,7 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
   - Export to local files or external stages (``stage://`` protocol)
   - Support for raw SQL, SQLAlchemy, and MatrixOne queries
   - Transaction-aware exports for consistency
+- 🔁 **Change Data Capture (CDC)**: Create, monitor, and control CDC tasks directly from Python (`client.cdc`, `async_client.cdc`)
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently
@@ -279,6 +280,42 @@ client.export.to_csv_stage('s3_stage', 'backup2.csv', stmt)
 
 client.disconnect()
 ```
+
+### CDC Task Management
+
+Create and control Change Data Capture (CDC) tasks directly from the Python SDK:
+
+```python
+from matrixone import Client
+
+client = Client()
+client.connect(database='test')
+
+# Create CDC task (full database replication)
+client.cdc.create(
+    task_name='replicate_sales',
+    source_uri="mysql://acct#admin:111@127.0.0.1:6001",
+    sink_type='mysql',
+    sink_uri="mysql://root:111@192.168.1.100:3306",
+    table_mapping='sales.*:sales_archive.*',
+    options={'Level': 'database', 'Frequency': '200ms'}
+)
+
+# Pause/resume lifecycle
+client.cdc.pause('replicate_sales')
+client.cdc.resume('replicate_sales')
+
+# Inspect status and per-table watermarks
+tasks = client.cdc.list()
+watermarks = client.cdc.list_watermarks('replicate_sales')
+
+# Drop task when no longer needed
+client.cdc.drop('replicate_sales')
+
+client.disconnect()
+```
+
+> Async usage: call the same APIs via `await async_client.cdc.create(...)` or inside `async with client.session()`.
 
 ### Wrapping Existing Sessions (For Legacy Code)
 
