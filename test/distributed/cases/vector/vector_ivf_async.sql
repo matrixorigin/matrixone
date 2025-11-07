@@ -65,7 +65,7 @@ insert into ivf4 values (0, 1, "[1,2,3]"), (1, 2, "[2,2,3]"), (2, 3, "[1,3,3]"),
 -- empty data
 create index idx01 using ivfflat on ivf4(c) op_type "vector_l2_ops" LISTS=1 ASYNC;
 
-select sleep(20);
+select sleep(30);
 
 select *, L2_DISTANCE(c, "[2,2,3]") from ivf4 order by L2_DISTANCE(c, "[2,2,3]") LIMIT 6;
 
