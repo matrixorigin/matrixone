@@ -10,6 +10,7 @@ MO-DIAG (MatrixOne Diagnostic Tool) provides:
 
 * **Index Inspection**: View and analyze all types of indexes (IVF, HNSW, Fulltext, and regular)
 * **Health Monitoring**: Check index health across all tables in a database
+* **CDC Health Checks**: Evaluate CDC task status, errors, and watermark lag
 * **Row Count Verification**: Verify consistency between main tables and index tables
 * **IVF Status Monitoring**: Monitor IVF vector index centroid distribution and balance
 * **Table Statistics**: Detailed table and index statistics using metadata scan
@@ -22,6 +23,7 @@ Features
 * 🎯 **Interactive Mode**: Full-featured shell with tab completion and history
 * 🚀 **Non-Interactive Mode**: Execute single commands for scripting
 * 📊 **Comprehensive Diagnostics**: Inspect all aspects of tables and indexes
+* 🩺 **CDC Monitoring**: Run CDC health checks to surface lagging or errored tasks
 * 🔍 **Smart Completion**: Auto-complete table names, database names, and commands
 * 📝 **Command History**: Browse and search command history with arrows and Ctrl+R
 * 🎨 **Colored Output**: Easy-to-read colored output for better visibility
@@ -366,6 +368,47 @@ This is essential for monitoring IVF vector index health and balance.
       2. Centroid 18: 165 vectors (version 1)
       3. Centroid 67: 158 vectors (version 1)
       ...
+
+CDC Monitoring Commands
+-----------------------
+
+cdc_health
+~~~~~~~~~~
+
+Run CDC task health diagnostics to spot errors, stuck tasks, and delayed watermarks.
+
+.. code-block:: text
+
+   Usage: cdc_health [threshold_minutes]
+   
+   Example:
+       cdc_health
+       cdc_health 5
+
+**What it checks:**
+
+* Tasks whose `err_msg` field is populated
+* Running tasks whose tables report per-table errors
+* Tables whose watermarks lag beyond the configured threshold (default 10 minutes)
+
+**Sample output:**
+
+.. code-block:: text
+
+   📈 CDC Health Overview
+   Threshold for watermark lag: 10.0 minute(s)
+   Evaluated CDC tasks: 3
+
+   No CDC tasks currently report errors.
+
+   Running tasks with per-table errors (1):
+     • nightly_sync (state: running)
+
+   Tables lagging beyond threshold (2):
+     • nightly_sync.analytics.orders (watermark: 2025-11-07 15:02:10)
+     • nightly_sync.analytics.payments (watermark: 2025-11-07 14:55:42)
+
+   Healthy tasks (no reported issues): 2
 
 Table Statistics Commands
 -------------------------
