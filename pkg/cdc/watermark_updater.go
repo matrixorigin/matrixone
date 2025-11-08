@@ -87,6 +87,11 @@ const (
 	UpdateWatermarkCronJobNamePrefix = "CDCWatermarkUpdater-CronJob"
 )
 
+const (
+	watermarkCommitMaxRetries   = 3
+	watermarkCircuitBreakPeriod = 30 * time.Second
+)
+
 var cdcWatermarkUpdater atomic.Pointer[CDCWatermarkUpdater]
 
 const (
@@ -285,6 +290,9 @@ type CDCWatermarkUpdater struct {
 	// Cached in memory to avoid synchronous SQL queries in RecordError()
 	errorMetadataCache map[WatermarkKey]*ErrorMetadata
 
+	commitFailureCount map[WatermarkKey]uint32    // consecutive persistence failures per key
+	commitCircuitOpen  map[WatermarkKey]time.Time // keys in circuit-breaker cool-down
+
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
 
@@ -318,6 +326,8 @@ func NewCDCWatermarkUpdater(
 		cacheCommitting:    make(map[WatermarkKey]types.TS),
 		cacheCommitted:     make(map[WatermarkKey]types.TS),
 		errorMetadataCache: make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
+		commitFailureCount: make(map[WatermarkKey]uint32),
+		commitCircuitOpen:  make(map[WatermarkKey]time.Time),
 
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
@@ -539,15 +549,7 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 // 2. Clear cacheUncommitted (make room for new updates)
 // 3. Execute batch UPDATE SQL to persist cacheCommitting to database
 // 4. On success: Move cacheCommitting -> cacheCommitted
-// 5. On failure: Clear cacheCommitting (watermarks lost, acceptable by design)
-//
-// Failure Handling:
-// - If SQL execution fails, watermarks in cacheCommitting are lost
-// - This is acceptable under the consistency model (watermark lag is OK)
-// - Next read will get watermark from cacheCommitted (old value) or database
-// - The lost watermarks will cause re-processing of data (idempotent by design)
-//
-// TODO: Consider restoring failed watermarks to cacheUncommitted for retry
+// 5. On failure: Return watermarks to cacheUncommitted for retry (with circuit breaker)
 func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	if len(u.committingBuffer) == 0 {
 		return "", nil
@@ -558,18 +560,38 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		u.Unlock()
 		return "", nil
 	}
+	skippedDueToCircuit := false
 	// move uncommitted watermarks to committing
 	for key, watermark := range u.cacheUncommitted {
+		if openedAt, ok := u.commitCircuitOpen[key]; ok {
+			if time.Since(openedAt) < watermarkCircuitBreakPeriod {
+				logutil.Debug(
+					"CDC-WatermarkCommit-CircuitOpenSkip",
+					zap.String("key", key.String()),
+					zap.Time("opened-at", openedAt),
+				)
+				skippedDueToCircuit = true
+				continue
+			}
+			delete(u.commitCircuitOpen, key)
+			delete(u.commitFailureCount, key)
+			logutil.Info(
+				"CDC-WatermarkCommit-CircuitReset",
+				zap.String("key", key.String()),
+			)
+		}
 		u.cacheCommitting[key] = watermark
-	}
-	// clear uncommitted watermarks
-	for key := range u.cacheUncommitted {
 		delete(u.cacheUncommitted, key)
 	}
+	committingCount := len(u.cacheCommitting)
 	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
 	u.Unlock()
 
-	if commitSql != "" {
+	if committingCount == 0 {
+		if skippedDueToCircuit {
+			err = moerr.NewInternalErrorNoCtx("watermark commit skipped due to circuit breaker")
+		}
+	} else if commitSql != "" {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
 		defer cancel()
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -580,11 +602,37 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	defer u.Unlock()
 
 	if err != nil {
-		errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
+		if commitSql != "" {
+			errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
+		} else {
+			errMsg = err.Error()
+		}
+		now := time.Now()
+		for key, watermark := range u.cacheCommitting {
+			if existing, ok := u.cacheUncommitted[key]; ok && existing.GT(&watermark) {
+				// keep newer watermark
+			} else {
+				u.cacheUncommitted[key] = watermark
+			}
+			retry := u.commitFailureCount[key] + 1
+			u.commitFailureCount[key] = retry
+			if retry >= watermarkCommitMaxRetries {
+				if _, opened := u.commitCircuitOpen[key]; !opened {
+					u.commitCircuitOpen[key] = now
+					logutil.Error(
+						"CDC-WatermarkCommit-CircuitOpen",
+						zap.String("key", key.String()),
+						zap.Uint32("retry-count", retry),
+					)
+				}
+			}
+		}
 	} else {
 		// commit watermarks from committing to committed
 		for key, watermark := range u.cacheCommitting {
 			u.cacheCommitted[key] = watermark
+			delete(u.commitFailureCount, key)
+			delete(u.commitCircuitOpen, key)
 		}
 	}
 
@@ -924,6 +972,12 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	}
 	job.WaitDone()
 	err = job.GetResult().Err
+	if err == nil {
+		u.Lock()
+		delete(u.commitFailureCount, *key)
+		delete(u.commitCircuitOpen, *key)
+		u.Unlock()
+	}
 	return
 }
 

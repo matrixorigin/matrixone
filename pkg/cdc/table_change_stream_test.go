@@ -372,9 +372,9 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 // Test StaleRead retry logic
 func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
-	defer cancel()
 
 	mp := mpool.MustNewZero()
+	var wg sync.WaitGroup
 	pool := fileservice.NewPool(
 		128,
 		func() *types.Packer { return types.NewPacker() },
@@ -384,7 +384,6 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 
 	var packer *types.Packer
 	put := pool.Get(&packer)
-	defer put.Put()
 
 	// Track read attempts
 	var readCount atomic.Int32
@@ -395,17 +394,14 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
 			return nil, nil
 		})
-	defer stub1.Reset()
 
 	stub2 := gostub.Stub(&FinishTxnOp,
 		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	defer stub2.Reset()
 
 	stub3 := gostub.Stub(&GetTxn,
 		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
 			return nil
 		})
-	defer stub3.Reset()
 
 	stub4 := gostub.Stub(&GetRelationById,
 		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
@@ -421,7 +417,6 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 			readCount.Add(1)
 			return "", "", nil, nil
 		})
-	defer stub4.Reset()
 
 	stub5 := gostub.Stub(&GetSnapshotTS,
 		func(txnOp client.TxnOperator) timestamp.Timestamp {
@@ -430,19 +425,24 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 				LogicalTime:  0,
 			}
 		})
-	defer stub5.Reset()
 
 	stub6 := gostub.Stub(&CollectChanges,
 		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer), nil
 		})
-	defer stub6.Reset()
 
 	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-	defer stub7.Reset()
 
 	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	defer stub8.Reset()
+	stubs := []*gostub.Stubs{stub1, stub2, stub3, stub4, stub5, stub6, stub7, stub8}
+	defer func() {
+		cancel()
+		wg.Wait()
+		put.Put()
+		for _, stub := range stubs {
+			stub.Reset()
+		}
+	}()
 
 	// Create watermark updater
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
@@ -486,7 +486,11 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 	)
 
 	// Run in background
-	go stream.Run(ctx, NewCdcActiveRoutine())
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		stream.Run(ctx, NewCdcActiveRoutine())
+	}()
 
 	// Wait for first attempt (StaleRead)
 	select {
@@ -506,6 +510,7 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 
 	// Verify retry happened
 	assert.GreaterOrEqual(t, readCount.Load(), int32(2), "Should have at least 2 read attempts (initial + retry)")
+	cancel()
 }
 
 // Test StaleRead with startTs set (should fail, not retry)
@@ -830,17 +835,23 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 		func(packer *types.Packer) { packer.Close() },
 	)
 
-	// Setup minimal stubs
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			time.Sleep(100 * time.Millisecond)
-			return nil, nil
-		})
-	defer stub1.Reset()
+	var wg sync.WaitGroup
+	defer wg.Wait()
 
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	defer stub2.Reset()
+	stubs := []*gostub.Stubs{
+		gostub.Stub(&GetTxnOp,
+			func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+				time.Sleep(100 * time.Millisecond)
+				return nil, nil
+			}),
+		gostub.Stub(&FinishTxnOp,
+			func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {}),
+	}
+	defer func() {
+		for _, stub := range stubs {
+			stub.Reset()
+		}
+	}()
 
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
 	updater.Start()
@@ -873,9 +884,13 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 
 	// Run in background
 	started := make(chan struct{})
+	runDone := make(chan struct{})
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		close(started)
 		stream.Run(ctx, ar)
+		close(runDone)
 	}()
 
 	<-started
@@ -885,16 +900,12 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 	ar.ClosePause()
 
 	// Wait for stream to stop
-	done := make(chan struct{})
-	go func() {
-		stream.Wait()
-		close(done)
-	}()
-
 	select {
-	case <-done:
+	case <-runDone:
 		t.Log("Stream stopped gracefully after pause")
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stream did not stop after pause")
 	}
+
+	stream.Wait()
 }

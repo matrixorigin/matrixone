@@ -40,6 +40,7 @@ type testChangesHandle struct {
 	data            []*batch.Batch
 	mp              *mpool.MPool
 	packer          *types.Packer
+	ownsPacker      bool
 	called          int
 	toTs            types.TS
 }
@@ -58,9 +59,15 @@ func newTestChangesHandle(
 		dbId:    dbId,
 		tblId:   tblId,
 		mp:      mp,
-		packer:  packer,
 		toTs:    toTs,
 	}
+
+	// Always allocate a dedicated packer for the handle to avoid sharing pooled instances
+	// across goroutines in tests, which can lead to race conditions when the original packer
+	// is returned to the pool while still in use.
+	ret.packer = types.NewPacker()
+	ret.ownsPacker = true
+
 	/*
 		assume tables looks like:
 			test.t*
@@ -142,6 +149,10 @@ func (changes *testChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 }
 
 func (changes *testChangesHandle) Close() error {
+	if changes.ownsPacker && changes.packer != nil {
+		changes.packer.Close()
+		changes.packer = nil
+	}
 	return nil
 }
 

@@ -432,17 +432,18 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 // clearErrorOnFirstSuccess clears error message on first successful data processing
 // This preserves lazy batch processing design (asynchronous, eventual consistency)
 func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
-	if !s.hasSucceeded.Load() {
-		s.hasSucceeded.Store(true)
-		// Clear error asynchronously (preserves lazy batch processing design)
-		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, "", nil); err != nil {
-			logutil.Warn(
-				"CDC-TableChangeStream-ClearErrorOnSuccessFailed",
-				zap.String("table", s.tableInfo.String()),
-				zap.Error(err),
-			)
-			// Don't fail the operation if error clearing fails
-		}
+	if !s.hasSucceeded.CompareAndSwap(false, true) {
+		return
+	}
+	// Clear error asynchronously (preserves lazy batch processing design)
+	if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, "", nil); err != nil {
+		s.hasSucceeded.Store(false)
+		logutil.Warn(
+			"CDC-TableChangeStream-ClearErrorOnSuccessFailed",
+			zap.String("table", s.tableInfo.String()),
+			zap.Error(err),
+		)
+		// Don't fail the operation if error clearing fails
 	}
 }
 

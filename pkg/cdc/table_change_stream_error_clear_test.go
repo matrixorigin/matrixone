@@ -195,8 +195,15 @@ func TestClearErrorOnFirstSuccess(t *testing.T) {
 			stream.clearErrorOnFirstSuccess(ctx)
 		})
 
-		// hasSucceeded should still be set
-		assert.True(t, stream.hasSucceeded.Load(), "hasSucceeded flag should be set even if error clearing fails")
+		// hasSucceeded should remain false so future successes can retry clearing
+		assert.False(t, stream.hasSucceeded.Load(), "hasSucceeded flag should remain unset when clearing fails")
+		assert.Equal(t, 1, updater.getClearErrorCallCount(), "Clear error should have been attempted once")
+
+		// After failure, clearing should be retried and succeed
+		updater.failClear = false
+		stream.clearErrorOnFirstSuccess(ctx)
+		assert.True(t, stream.hasSucceeded.Load(), "hasSucceeded flag should be set after successful clear")
+		assert.Equal(t, 2, updater.getClearErrorCallCount(), "Clear error should be retried after failure")
 	})
 
 	t.Run("ConcurrentClearErrorSafety", func(t *testing.T) {
