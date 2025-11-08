@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 from .client import Client
-from .cdc import CDCSinkType, build_mysql_uri
+from .cdc import CDCSinkType, build_mysql_uri, _parse_watermark_timestamp
 
 # Set default logging level to ERROR to keep output clean
 # Users can override this with --log-level parameter
@@ -199,6 +199,7 @@ if PROMPT_TOOLKIT_AVAILABLE:
                     options = [
                         '--details',
                         '--no-watermarks',
+                        '--watermarks-only',
                         '--pause',
                         '--resume',
                         '--restart',
@@ -222,6 +223,7 @@ if PROMPT_TOOLKIT_AVAILABLE:
                         '--details',
                         '--json',
                         '--no-watermarks',
+                        '--watermarks-only',
                         '--pause',
                         '--resume',
                         '--restart',
@@ -381,6 +383,50 @@ def _format_cdc_value(value: Any) -> Optional[str]:
     decoded = _decode_hex_string(text)
     formatted = _format_json_if_possible(decoded)
     return formatted
+
+
+def _parse_duration(value: str) -> datetime.timedelta:
+    text = value.strip().lower()
+    if not text:
+        raise ValueError("Duration cannot be empty.")
+
+    units = {"s": "seconds", "m": "minutes", "h": "hours"}
+    unit = None
+    number = text
+
+    if text[-1] in units:
+        unit = text[-1]
+        number = text[:-1]
+
+    try:
+        amount = float(number)
+    except ValueError:
+        raise ValueError(f"Unable to parse duration '{value}'. Use formats like 5m, 30s, 1.5h.") from None
+
+    if amount < 0:
+        raise ValueError("Duration must be non-negative.")
+
+    if unit is None:
+        return datetime.timedelta(minutes=amount)
+
+    kwargs = {units[unit]: amount}
+    return datetime.timedelta(**kwargs)
+
+
+def _format_duration(delta: datetime.timedelta) -> str:
+    total_seconds = delta.total_seconds()
+    if total_seconds == 0:
+        return "0s"
+    if total_seconds % 3600 == 0:
+        hours = total_seconds / 3600
+        return f"{hours:g}h"
+    if total_seconds % 60 == 0:
+        minutes = total_seconds / 60
+        return f"{minutes:g}m"
+    if total_seconds < 60:
+        return f"{total_seconds:g}s"
+    minutes = total_seconds / 60
+    return f"{minutes:.1f}m"
 
 
 def _parse_options_string(raw: str) -> Optional[Dict[str, Any]]:
@@ -988,7 +1034,7 @@ class MatrixOneCLI(cmd.Cmd):
         """
         Check CDC task health, including error states and watermark lag.
 
-        Usage: cdc_health [threshold_minutes] [--task=<task_name>] [--threshold=<minutes>] [--strict] [--details]
+        Usage: cdc_health [threshold] [--task=<task_name>] [--threshold=<duration>] [--strict] [--details]
         Example:
             cdc_health
             cdc_health 5
@@ -1002,7 +1048,7 @@ class MatrixOneCLI(cmd.Cmd):
         """
 
         tokens = [token for token in arg.strip().split() if token]
-        threshold_minutes = 10.0
+        threshold_delta = datetime.timedelta(minutes=10)
         task_filter: Optional[str] = None
         strict_mode = False
         show_details = False
@@ -1017,30 +1063,28 @@ class MatrixOneCLI(cmd.Cmd):
             elif token.startswith("--threshold="):
                 value = token.split("=", 1)[1]
                 try:
-                    threshold_minutes = float(value)
-                except ValueError:
-                    print("❌ --threshold expects a numeric value (minutes).")
+                    threshold_delta = _parse_duration(value)
+                except ValueError as exc:
+                    print(error(str(exc)))
                     return
             else:
-                # Backwards-compatible positional numeric threshold
+                # Backwards-compatible positional numeric threshold interpreted as minutes
                 try:
-                    threshold_minutes = float(token)
+                    threshold_delta = _parse_duration(f"{float(token)}m")
                 except ValueError:
-                    print("❌ Unknown option. Use 'cdc_health [threshold_minutes] [--task=<task>] [--threshold=<minutes>] [--strict]'")
+                    print("❌ Unknown option. Use 'cdc_health [threshold] [--task=<task>] [--threshold=<duration>] [--strict]'")
                     return
 
         if strict_mode:
-            threshold_minutes = 0.0
+            threshold_delta = datetime.timedelta(0)
 
-        if threshold_minutes < 0:
-            print("❌ Threshold must be a non-negative number of minutes.")
-            return
+        threshold_display = _format_duration(threshold_delta)
 
         if not self.client:
             print("❌ Not connected. Use 'connect' first.")
             return
 
-        threshold = datetime.timedelta(minutes=threshold_minutes)
+        threshold = threshold_delta
 
         try:
             all_tasks = self.client.cdc.list(task_filter)
@@ -1060,7 +1104,7 @@ class MatrixOneCLI(cmd.Cmd):
 
         total_tasks = len(all_tasks)
         print(f"\n{header('📈 CDC Health Overview')}")
-        print(info(f"Threshold for watermark lag: {threshold_minutes:.1f} minute(s)"))
+        print(info(f"Threshold for watermark lag: {threshold_display}"))
         print(info(f"Evaluated CDC tasks: {total_tasks}"))
         if task_filter:
             print(info(f"Task filter: {task_filter}"))
@@ -1125,8 +1169,8 @@ class MatrixOneCLI(cmd.Cmd):
         Inspect a specific CDC task, optionally pausing/resuming and reviewing per-table watermarks.
 
         Usage:
-            cdc_task <task_name> [--details] [--no-watermarks] [--table=<name>] \
-                     [--threshold=<minutes>] [--strict] [--pause|--resume|--restart]
+            cdc_task <task_name> [--details] [--no-watermarks] [--watermarks-only] [--table=<name>] \
+                     [--threshold=<duration>] [--strict] [--pause|--resume|--restart]
 
         Examples:
             cdc_task cdc_orders_sync
@@ -1137,7 +1181,7 @@ class MatrixOneCLI(cmd.Cmd):
 
         tokens = [token for token in arg.strip().split() if token]
         if not tokens:
-            print("❌ Usage: cdc_task <task_name> [--details] [--no-watermarks] [--table=<name>] [--threshold=<minutes>] [--strict] [--pause|--resume|--restart]")
+            print("❌ Usage: cdc_task <task_name> [--details] [--no-watermarks] [--table=<name>] [--threshold=<duration>] [--strict] [--pause|--resume|--restart]")
             return
 
         if not self.client:
@@ -1149,10 +1193,11 @@ class MatrixOneCLI(cmd.Cmd):
 
         show_details = False
         include_watermarks = True
-        threshold_minutes = 10.0
+        threshold_delta = datetime.timedelta(minutes=10)
         strict_mode = False
         table_filter: Optional[str] = None
         action: Optional[str] = None
+        watermarks_only = False
 
         i = 0
         while i < len(options):
@@ -1161,6 +1206,8 @@ class MatrixOneCLI(cmd.Cmd):
                 show_details = True
             elif token == "--no-watermarks":
                 include_watermarks = False
+            elif token == "--watermarks-only":
+                watermarks_only = True
             elif token in ("--pause", "--resume", "--restart"):
                 chosen = token[2:]
                 if action and action != chosen:
@@ -1172,9 +1219,9 @@ class MatrixOneCLI(cmd.Cmd):
             elif token.startswith("--threshold="):
                 value = token.split("=", 1)[1]
                 try:
-                    threshold_minutes = float(value)
-                except ValueError:
-                    print("❌ --threshold expects a numeric value (minutes).")
+                    threshold_delta = _parse_duration(value)
+                except ValueError as exc:
+                    print(error(str(exc)))
                     return
             elif token == "--threshold":
                 i += 1
@@ -1183,9 +1230,9 @@ class MatrixOneCLI(cmd.Cmd):
                     return
                 value = options[i]
                 try:
-                    threshold_minutes = float(value)
-                except ValueError:
-                    print("❌ --threshold expects a numeric value (minutes).")
+                    threshold_delta = _parse_duration(value)
+                except ValueError as exc:
+                    print(error(str(exc)))
                     return
             elif token.startswith("--table="):
                 table_filter = token.split("=", 1)[1] or None
@@ -1201,10 +1248,10 @@ class MatrixOneCLI(cmd.Cmd):
             i += 1
 
         if strict_mode:
-            threshold_minutes = 0.0
+            threshold_delta = datetime.timedelta(0)
 
-        if threshold_minutes < 0:
-            print("❌ Threshold must be a non-negative number of minutes.")
+        if watermarks_only and not include_watermarks:
+            print("❌ --watermarks-only cannot be combined with --no-watermarks.")
             return
 
         try:
@@ -1231,39 +1278,26 @@ class MatrixOneCLI(cmd.Cmd):
                 print(error(f"Failed to {action} task '{task_name}': {exc}"))
                 return
 
-        threshold = datetime.timedelta(minutes=threshold_minutes)
+        threshold = threshold_delta
+        threshold_display = _format_duration(threshold_delta)
 
-        print(f"\n{header('🧭 CDC Task Inspect')}")
-        print(info(f"Task: {task.task_name}"))
-        print(info(f"State: {task.state or 'unknown'}"))
-        sink_type = task.sink_type or 'unknown'
-        print(info(f"Sink type: {sink_type}"))
-        if task.err_msg:
-            print(error(f"Task error: {task.err_msg}"))
-        _print_cdc_field("Checkpoint:", task.checkpoint)
-        _print_cdc_field("NoFull:", task.no_full)
-        _print_cdc_field("Options:", task.additional_config)
-        _print_cdc_field("Table mapping:", task.table_mapping)
-        _print_cdc_field("Source URI:", task.source_uri)
-        _print_cdc_field("Sink URI:", task.sink_uri)
+        if not watermarks_only:
+            print(f"\n{header('🧭 CDC Task Inspect')}")
+            print(info(f"Task: {task.task_name}"))
+            print(info(f"State: {task.state or 'unknown'}"))
+            sink_type = task.sink_type or 'unknown'
+            print(info(f"Sink type: {sink_type}"))
+            if task.err_msg:
+                print(error(f"Task error: {task.err_msg}"))
+            _print_cdc_field("Checkpoint:", task.checkpoint)
+            _print_cdc_field("NoFull:", task.no_full)
+            _print_cdc_field("Options:", task.additional_config)
+            _print_cdc_field("Table mapping:", task.table_mapping)
+            _print_cdc_field("Source URI:", task.source_uri)
+            _print_cdc_field("Sink URI:", task.sink_uri)
 
-        try:
-            late_marks = self.client.cdc.list_late_table_watermarks(
-                task_name=task_name,
-                default_threshold=threshold,
-            )
-        except Exception as exc:
-            print(error(f"Failed to evaluate watermarks: {exc}"))
-            late_marks = []
-
-        late_keys = {
-            (mark.database or '', mark.table or '')
-            for mark in late_marks
-        }
-
-        print(info(f"Tables exceeding threshold: {len(late_marks)}"))
-        if table_filter:
-            print(info(f"Watermark filter: {table_filter}"))
+        threshold_seconds = threshold.total_seconds()
+        late_count = 0
 
         if include_watermarks:
             try:
@@ -1286,26 +1320,57 @@ class MatrixOneCLI(cmd.Cmd):
                     return pattern in candidates
 
                 watermarks = [mark for mark in watermarks if _match_watermark(mark)]
-                late_marks = [mark for mark in late_marks if _match_watermark(mark)]
-                late_keys = {
-                    (mark.database or '', mark.table or '')
-                    for mark in late_marks
-                }
 
-            print(f"\n{header('🕒 Watermarks')} (threshold {threshold_minutes:.1f} minute(s))")
+            print(f"\n{header('🕒 Watermarks')} (threshold {threshold_display})")
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            print(info("Adjust via '--threshold=<duration>' (supports s/m/h) or '--strict' for zero tolerance."))
+            print(info(f"Current UTC: {now_utc.isoformat()}"))
             if not watermarks:
                 print(info("No watermarks found for this task."))
             else:
                 for mark in watermarks:
-                    key = (mark.database or '', mark.table or '')
                     location_parts = [part for part in (mark.database, mark.table) if part]
                     location = '.'.join(location_parts) if location_parts else '(unknown)'
-                    status = warning('⚠️  late') if key in late_keys else success('✓ on schedule')
                     watermark_value = mark.watermark or 'N/A'
+                    watermark_time = None
+                    if mark.watermark:
+                        ts = _parse_watermark_timestamp(mark.watermark)
+                        if ts is None:
+                            numeric = mark.watermark.split('-', 1)[0]
+                            if numeric.isdigit():
+                                try:
+                                    watermark_time = datetime.datetime.fromtimestamp(
+                                        int(numeric) / 1_000_000_000,
+                                        datetime.timezone.utc,
+                                    )
+                                except (ValueError, OverflowError):
+                                    watermark_time = None
+                        else:
+                            watermark_time = ts
+                    watermark_time_str = (
+                        f" ({watermark_time.isoformat()})" if watermark_time else ""
+                    )
+                    delay_str = ""
+                    if watermark_time:
+                        delay_seconds = (now_utc - watermark_time).total_seconds()
+                        delay_str = f" Δ={delay_seconds:.3f}s"
+                        is_late = delay_seconds >= threshold_seconds
+                    else:
+                        delay_seconds = None
+                        is_late = False
+                    if is_late:
+                        late_count += 1
+                    status = warning('⚠️  late') if is_late else success('✓ on schedule')
                     err_msg = f" | error: {mark.err_msg}" if mark.err_msg else ''
-                    print(f"  • {location} → {watermark_value} ({status}){err_msg}")
+                    print(
+                        f"  • {location} → {watermark_value}{watermark_time_str} ({status}){delay_str}{err_msg}"
+                    )
         else:
-            print(f"\n{info('Watermark listing skipped (--no-watermarks).')} Late tables detected: {len(late_marks)}")
+            print(f"\n{info('Watermark listing skipped (--no-watermarks).')} Late tables detected: {late_count}")
+
+        print(info(f"Tables exceeding threshold: {late_count}"))
+        if table_filter:
+            print(info(f"Watermark filter: {table_filter}"))
 
         if show_details:
             try:
@@ -1471,14 +1536,22 @@ class MatrixOneCLI(cmd.Cmd):
             return
 
         options: Optional[Dict[str, Any]] = None
+        print(info("Common CDC options include Frequency=1h, NoFull=true, MaxSqlLength=2097152, SendSqlTimeout=30m."))
+        print(info("Enter key=value pairs separated by commas (e.g. Frequency=1h,NoFull=true) or press Enter to skip. Type 'help' for more guidance."))
         while True:
             raw_options = self._prompt(
-                "Additional CDC options (key=value, comma separated) - leave blank if none",
+                "Additional CDC options",
                 default=""
             )
             raw_options = raw_options.strip()
             if not raw_options:
                 break
+            if raw_options.lower() in {"help", "?", "examples"}:
+                print(info("Examples:"))
+                print("  Frequency=1h")
+                print("  NoFull=true")
+                print("  Frequency=30m,NoFull=true,SendSqlTimeout=45m")
+                continue
             try:
                 options = _parse_options_string(raw_options)
                 break

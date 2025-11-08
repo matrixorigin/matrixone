@@ -135,6 +135,13 @@ def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.dateti
         return None
     value = value.strip()
     dt: Optional[datetime.datetime] = None
+    numeric_part = value.split("-", 1)[0]
+    if numeric_part.isdigit():
+        try:
+            nanos = int(numeric_part)
+            dt = datetime.datetime.fromtimestamp(nanos / 1_000_000_000, tz=datetime.timezone.utc)
+        except (ValueError, OverflowError):
+            dt = None
     for candidate in (value, value.replace(" ", "T")):
         try:
             dt = datetime.datetime.fromisoformat(candidate)
@@ -763,6 +770,8 @@ class CDCManager(BaseCDCManager):
         thresholds = thresholds or {}
         now = datetime.datetime.now(datetime.timezone.utc)
 
+        use_frequency = default_threshold == datetime.timedelta(minutes=10)
+
         def resolve_threshold(task: CDCTaskInfo, table: str) -> datetime.timedelta:
             keys = [f"{task.task_name}.{table}", table]
             for key in keys:
@@ -775,7 +784,7 @@ class CDCManager(BaseCDCManager):
             if not freq and task.table_mapping:
                 task_options = task.additional_config or {}
                 freq = task_options.get("Frequency")
-            if freq:
+            if freq and use_frequency:
                 try:
                     return _parse_frequency_to_timedelta(str(freq)) + datetime.timedelta(minutes=10)
                 except ValueError:
@@ -792,7 +801,7 @@ class CDCManager(BaseCDCManager):
             if watermark_time is None:
                 continue
             threshold = resolve_threshold(task, mark.table or "")
-            if now - watermark_time > threshold:
+            if now - watermark_time >= threshold:
                 late_watermarks.append(mark)
 
         return late_watermarks
