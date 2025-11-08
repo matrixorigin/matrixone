@@ -282,14 +282,5 @@ func onPreUpdateCDCTasks(
 
 	affectedCdcRow += int(cnt)
 
-	// restart cdc task
-	if targetTaskStatus == task.TaskStatus_RestartRequested {
-		if cnt, err = dao.DeleteManyWatermark(
-			ctx, keys,
-		); err != nil {
-			return
-		}
-		affectedCdcRow += int(cnt)
-	}
 	return
 }

@@ -1279,20 +1279,12 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	sql17 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql17).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql18 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
-	mock.ExpectExec(sql18).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sql19 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql19).WillReturnResult(sqlmock.NewResult(1, 1))
-
 	genSqlIdx := func(sql string) int {
 		mSql15, err := regexp.MatchString(sql15, sql)
 		assert.NoError(t, err)
 		mSql16, err := regexp.MatchString(sql16, sql)
 		assert.NoError(t, err)
 		mSql17, err := regexp.MatchString(sql17, sql)
-		assert.NoError(t, err)
-		mSql19, err := regexp.MatchString(sql19, sql)
 		assert.NoError(t, err)
 
 		if mSql15 {
@@ -1301,8 +1293,6 @@ func Test_updateCdcTask_restart(t *testing.T) {
 			return mSqlIdx16
 		} else if mSql17 {
 			return mSqlIdx17
-		} else if mSql19 {
-			return mSqlIdx19
 		}
 
 		return -1
@@ -1335,6 +1325,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }

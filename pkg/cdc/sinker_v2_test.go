@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -395,6 +396,111 @@ func TestMysqlSinker2_SendMethods(t *testing.T) {
 		assert.Equal(t, CmdCommit, <-received)
 		assert.Equal(t, CmdRollback, <-received)
 	})
+}
+
+func TestMysqlSinker2_SendAfterClose_NoPanic(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	executor := &Executor{conn: db}
+
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+
+	ar := NewCdcActiveRoutine()
+	sinker := NewMysqlSinker2(
+		executor,
+		1,
+		"task-1",
+		&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+		nil,
+		builder,
+		ar,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sinker.Run(ctx, ar)
+	}()
+
+	require.NotPanics(t, func() {
+		sinker.Close()
+	})
+
+	wg.Wait()
+
+	require.NotPanics(t, func() {
+		sinker.SendDummy()
+	})
+}
+
+func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	executor := &Executor{conn: db}
+
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+
+	ar := NewCdcActiveRoutine()
+	sinker := NewMysqlSinker2(
+		executor,
+		1,
+		"task-1",
+		&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+		nil,
+		builder,
+		ar,
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sinker.SendDummy()
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		sinker.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("Close blocked while sendCommand pending")
+	}
+
+	wg.Wait()
 }
 
 func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {

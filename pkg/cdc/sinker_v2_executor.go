@@ -122,6 +122,10 @@ func (e *Executor) BeginTx(ctx context.Context) error {
 		return moerr.NewInternalError(ctx, "transaction already active")
 	}
 
+	if err := e.ensureConnection(ctx); err != nil {
+		return err
+	}
+
 	e.resetRecordedTxn()
 
 	tx, err := e.conn.BeginTx(ctx, nil)
@@ -180,6 +184,10 @@ func (e *Executor) ExecSQL(
 ) error {
 	if len(sqlBuf) <= v2SQLBufReserved {
 		return moerr.NewInternalError(ctx, "SQL buffer too short")
+	}
+
+	if err := e.ensureConnection(ctx); err != nil {
+		return err
 	}
 
 	reuseQueryArg := sql.NamedArg{
@@ -289,6 +297,22 @@ func (e *Executor) retryWithBackoff(
 	}
 
 	return moerr.NewInternalError(ctx, "retry limit exceeded")
+}
+
+// ensureConnection makes sure executor has an active DB connection.
+func (e *Executor) ensureConnection(ctx context.Context) error {
+	if e.conn != nil {
+		return nil
+	}
+
+	if err := e.Connect(); err != nil {
+		return err
+	}
+
+	logutil.Info("cdc.executor.reconnected",
+		zap.String("ip", e.ip),
+		zap.Int("port", e.port))
+	return nil
 }
 
 // recordTxnSQL records SQL for debugging

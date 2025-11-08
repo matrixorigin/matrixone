@@ -16,9 +16,11 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -304,6 +306,46 @@ func TestExecutor_ExecSQL(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "too short")
+	})
+
+	t.Run("ExecSQLReestablishesConnectionWhenNil", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		executor := &Executor{
+			user:          "user",
+			password:      "pass",
+			ip:            "127.0.0.1",
+			port:          3306,
+			timeout:       "5s",
+			retryTimes:    0,
+			retryDuration: 0,
+			conn:          nil,
+			tx:            nil,
+		}
+
+		sqlBuf := []byte("     INSERT INTO test VALUES (1)")
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
+
+		ctx := context.Background()
+		ar := &ActiveRoutine{
+			Pause:  make(chan struct{}),
+			Cancel: make(chan struct{}),
+		}
+
+		err = executor.ExecSQL(ctx, ar, sqlBuf, false)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, executor.conn)
+		assert.NoError(t, mock.ExpectationsWereMet())
+
+		_ = executor.Close()
 	})
 }
 

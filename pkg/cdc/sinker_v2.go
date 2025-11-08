@@ -70,6 +70,8 @@ type mysqlSinker2 struct {
 
 	// Command channel for async communication
 	cmdCh chan *Command
+	// Channel closed during shutdown to unblock senders/listeners
+	closeCh chan struct{}
 
 	// Error state - atomic access, no panic risk
 	err atomic.Pointer[error]
@@ -78,9 +80,10 @@ type mysqlSinker2 struct {
 	txnState atomic.Int32 // 0=IDLE, 1=ACTIVE, 2=COMMITTED, 3=ROLLED_BACK
 
 	// Lifecycle management
-	closeMutex sync.Mutex
+	closeMutex sync.RWMutex
 	closed     bool
 	closeOnce  sync.Once
+	senderWG   sync.WaitGroup
 
 	// Consumer goroutine wait group
 	wg sync.WaitGroup
@@ -256,6 +259,7 @@ func NewMysqlSinker2(
 		watermarkUpdater: watermarkUpdater,
 		ar:               ar,
 		cmdCh:            make(chan *Command), // Unbuffered for backpressure
+		closeCh:          make(chan struct{}),
 		closed:           false,
 	}
 
@@ -283,6 +287,9 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Info("cdc.mysql_sinker2.run_start",
 		zap.String("table", s.dbTblInfo.String()))
 
+	s.wg.Add(1)
+	defer s.wg.Done()
+
 	defer func() {
 		logutil.Info("cdc.mysql_sinker2.run_end",
 			zap.String("table", s.dbTblInfo.String()))
@@ -291,6 +298,8 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.closeCh:
 			return
 		case <-ar.Pause:
 			return
@@ -631,12 +640,12 @@ func (s *mysqlSinker2) handleFlush(ctx context.Context, cmd *Command) error {
 // It validates watermark and queues appropriate commands for the consumer goroutine.
 func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	// Check if sinker is closed
-	s.closeMutex.Lock()
+	s.closeMutex.RLock()
 	if s.closed {
-		s.closeMutex.Unlock()
+		s.closeMutex.RUnlock()
 		return
 	}
-	s.closeMutex.Unlock()
+	s.closeMutex.RUnlock()
 
 	// Validate watermark (ensure we're not processing old data)
 	key := WatermarkKey{
@@ -692,14 +701,30 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 
 // sendCommand sends a command to the consumer goroutine
 func (s *mysqlSinker2) sendCommand(cmd *Command) {
-	s.closeMutex.Lock()
+	s.closeMutex.RLock()
 	if s.closed {
-		s.closeMutex.Unlock()
+		s.closeMutex.RUnlock()
 		return
 	}
-	s.closeMutex.Unlock()
+	cmdCh := s.cmdCh
+	closeCh := s.closeCh
+	s.senderWG.Add(1)
+	s.closeMutex.RUnlock()
 
-	s.cmdCh <- cmd
+	defer func() {
+		s.senderWG.Done()
+		if r := recover(); r != nil {
+			logutil.Warn("cdc.mysql_sinker2.send_after_close",
+				zap.String("table", s.dbTblInfo.String()),
+				zap.Any("recover", r))
+		}
+	}()
+
+	select {
+	case cmdCh <- cmd:
+	case <-closeCh:
+		return
+	}
 }
 
 // SendBegin queues a BEGIN transaction command
@@ -790,8 +815,15 @@ func (s *mysqlSinker2) Reset() {
 func (s *mysqlSinker2) Close() {
 	s.closeOnce.Do(func() {
 		s.closeMutex.Lock()
+		if s.closed {
+			s.closeMutex.Unlock()
+			return
+		}
 		s.closed = true
+		close(s.closeCh)
 		s.closeMutex.Unlock()
+
+		s.senderWG.Wait()
 
 		// Close command channel (stops consumer goroutine)
 		close(s.cmdCh)
