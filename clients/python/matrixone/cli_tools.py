@@ -3022,6 +3022,27 @@ class MatrixOneCLI(cmd.Cmd):
         pass
 
 
+def _create_connected_client(host, port, user, password, database, log_level):
+    """Create and return a connected MatrixOne client with logging configured."""
+    import logging
+
+    level = getattr(logging, log_level.upper(), logging.ERROR)
+    mo_logger = logging.getLogger('matrixone')
+    mo_logger.setLevel(level)
+    for handler in mo_logger.handlers:
+        handler.setLevel(level)
+
+    sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
+    client = Client(sql_log_mode=sql_log_mode)
+
+    mo_logger.setLevel(level)
+    for handler in mo_logger.handlers:
+        handler.setLevel(level)
+
+    client.connect(host=host, port=port, user=user, password=password, database=database)
+    return client
+
+
 def start_interactive_tool(host='localhost', port=6001, user='root', password='111', database=None, log_level='ERROR'):
     """
     Start the interactive diagnostic tool.
@@ -3034,30 +3055,15 @@ def start_interactive_tool(host='localhost', port=6001, user='root', password='1
         database: Database name (optional)
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: ERROR
     """
-    import logging
-
-    # Set logging level BEFORE creating Client
-    level = getattr(logging, log_level.upper(), logging.ERROR)
-
-    # Set for matrixone logger and all its handlers
-    mo_logger = logging.getLogger('matrixone')
-    mo_logger.setLevel(level)
-
-    # Set level for all existing handlers
-    for handler in mo_logger.handlers:
-        handler.setLevel(level)
-
-    # Create client with minimal SQL logging
-    sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
-    client = Client(sql_log_mode=sql_log_mode)
-
-    # Set level again after client creation (in case client adds handlers)
-    mo_logger.setLevel(level)
-    for handler in mo_logger.handlers:
-        handler.setLevel(level)
-
     try:
-        client.connect(host=host, port=port, user=user, password=password, database=database)
+        client = _create_connected_client(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database,
+            log_level=log_level,
+        )
         print(f"✓ Connected to {host}:{port}" + (f" (database: {database})" if database else ""))
     except Exception as e:
         print(f"⚠️  Failed to connect: {e}")
@@ -3105,38 +3111,47 @@ Examples:
     )
     parser.add_argument('--command', '-c', help='Execute a single command and exit (non-interactive mode)')
 
+    subparsers = parser.add_subparsers(dest='subcommand')
+
+    cdc_parser = subparsers.add_parser('cdc', help='Manage CDC tasks')
+    cdc_subparsers = cdc_parser.add_subparsers(dest='cdc_command')
+
+    cdc_show_parser = cdc_subparsers.add_parser('show', help='Show CDC tasks or a specific task')
+    cdc_show_parser.add_argument('task_name', nargs='?', help='Name of the CDC task to inspect')
+    cdc_show_parser.add_argument('--details', action='store_true', help='Show detailed information')
+    cdc_show_parser.add_argument('--no-watermarks', action='store_true', help='Skip watermark listing (task view)')
+    cdc_show_parser.add_argument('--watermarks-only', action='store_true', help='Show only watermarks (task view)')
+    cdc_show_parser.add_argument('--threshold', help='Watermark latency threshold (task view, e.g. 5m, 30s)')
+    cdc_show_parser.add_argument('--table', help='Filter watermarks by table name (task view)')
+    cdc_show_parser.add_argument('--strict', action='store_true', help='Zero tolerance for watermark delays (task view)')
+
+    cdc_create_parser = cdc_subparsers.add_parser('create', help='Launch guided CDC task creation')
+    cdc_create_parser.add_argument('--database-level', action='store_true', help='Force database-level replication')
+    cdc_create_parser.add_argument('--table-level', action='store_true', help='Force table-level replication')
+
+    cdc_drop_parser = cdc_subparsers.add_parser('drop', help='Drop a CDC task')
+    cdc_drop_parser.add_argument('task_name', help='Name of the CDC task to drop')
+    cdc_drop_parser.add_argument('--force', action='store_true', help='Skip confirmation prompts')
+
     args = parser.parse_args()
 
     # Non-interactive mode: execute single command
     if args.command:
-        import logging
-
-        # Set logging level
-        level = getattr(logging, args.log_level.upper(), logging.ERROR)
-        mo_logger = logging.getLogger('matrixone')
-        mo_logger.setLevel(level)
-        for handler in mo_logger.handlers:
-            handler.setLevel(level)
-
-        # Create client
-        sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
-        client = Client(sql_log_mode=sql_log_mode)
-
-        # Set level again after client creation
-        mo_logger.setLevel(level)
-        for handler in mo_logger.handlers:
-            handler.setLevel(level)
-
-        # Connect
         try:
-            client.connect(host=args.host, port=args.port, user=args.user, password=args.password, database=args.database)
+            client = _create_connected_client(
+                host=args.host,
+                port=args.port,
+                user=args.user,
+                password=args.password,
+                database=args.database,
+                log_level=args.log_level,
+            )
         except Exception as e:
             print(f"❌ Failed to connect: {e}")
             import sys
 
             sys.exit(1)
 
-        # Create CLI instance and execute command
         cli = MatrixOneCLI(client)
         try:
             cli.onecmd(args.command)
@@ -3151,16 +3166,90 @@ Examples:
                     client.disconnect()
                 except Exception:
                     pass
-    else:
-        # Interactive mode
-        start_interactive_tool(
-            host=args.host,
-            port=args.port,
-            user=args.user,
-            password=args.password,
-            database=args.database,
-            log_level=args.log_level,
-        )
+        return
+
+    if args.subcommand == 'cdc':
+        if not args.cdc_command:
+            print("❌ Usage: mo-diag cdc <show|create|drop> [...]")
+            return
+
+        try:
+            client = _create_connected_client(
+                host=args.host,
+                port=args.port,
+                user=args.user,
+                password=args.password,
+                database=args.database,
+                log_level=args.log_level,
+            )
+        except Exception as e:
+            print(f"❌ Failed to connect: {e}")
+            import sys
+
+            sys.exit(1)
+
+        cli = MatrixOneCLI(client)
+        try:
+            if args.cdc_command == 'show':
+                if not args.task_name:
+                    if args.no_watermarks or args.watermarks_only or args.threshold or args.table or args.strict:
+                        print("❌ Options --no-watermarks/--watermarks-only/--threshold/--table/--strict require a task name.")
+                        return
+                    command = "cdc_tasks"
+                    if args.details:
+                        command += " --details"
+                    cli.onecmd(command)
+                else:
+                    segments = [f"cdc_task {args.task_name}"]
+                    if args.details:
+                        segments.append("--details")
+                    if args.no_watermarks:
+                        segments.append("--no-watermarks")
+                    if args.watermarks_only:
+                        segments.append("--watermarks-only")
+                    if args.threshold:
+                        segments.append(f"--threshold={args.threshold}")
+                    if args.table:
+                        segments.append(f"--table={args.table}")
+                    if args.strict:
+                        segments.append("--strict")
+                    command = " ".join(segments)
+                    cli.onecmd(command)
+            elif args.cdc_command == 'create':
+                flags: List[str] = []
+                if args.database_level and args.table_level:
+                    print("❌ Specify only one of --database-level or --table-level.")
+                    return
+                if args.database_level:
+                    flags.append("--database-level")
+                if args.table_level:
+                    flags.append("--table-level")
+                cli.do_cdc_create(" ".join(flags))
+            elif args.cdc_command == 'drop':
+                segments = [args.task_name]
+                if args.force:
+                    segments.append("--force")
+                cli.do_cdc_drop(" ".join(segments))
+            else:
+                print(f"❌ Unknown CDC command '{args.cdc_command}'.")
+                return
+        finally:
+            if 'client' in locals() and client:
+                try:
+                    client.disconnect()
+                except Exception:
+                    pass
+        return
+
+    # Interactive mode
+    start_interactive_tool(
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        password=args.password,
+        database=args.database,
+        log_level=args.log_level,
+    )
 
 
 if __name__ == '__main__':
