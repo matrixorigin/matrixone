@@ -90,6 +90,7 @@ if PROMPT_TOOLKIT_AVAILABLE:
                 'cdc_health',
                 'cdc_tasks',
                 'cdc_create',
+                'cdc_drop',
                 'cdc_task',
                 'exit',
             ]
@@ -187,6 +188,21 @@ if PROMPT_TOOLKIT_AVAILABLE:
                 for option in options:
                     if option.startswith(partial):
                         yield Completion(option, start_position=-len(partial))
+
+            elif command == 'cdc_drop':
+                if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                    partial = words[1] if len(words) == 2 else ''
+                    for task in self._get_cdc_tasks():
+                        if task.startswith(partial):
+                            yield Completion(task, start_position=-len(partial))
+                else:
+                    partial = words[-1] if not text.endswith(' ') else ''
+                    options = [
+                        '--force',
+                    ]
+                    for option in options:
+                        if option.startswith(partial):
+                            yield Completion(option, start_position=-len(partial))
 
             elif command == 'cdc_task':
                 if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
@@ -375,6 +391,7 @@ def _format_cdc_value(value: Any) -> Optional[str]:
     if isinstance(value, (dict, list)):
         return json.dumps(value, indent=2, ensure_ascii=False, default=str)
     if isinstance(value, bytes):
+        creation_context: Dict[str, Any] = {}
         try:
             value = value.decode("utf-8")
         except UnicodeDecodeError:
@@ -427,6 +444,15 @@ def _format_duration(delta: datetime.timedelta) -> str:
         return f"{total_seconds:g}s"
     minutes = total_seconds / 60
     return f"{minutes:.1f}m"
+
+
+def _format_timestamp(value: datetime.datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    value = value.astimezone(datetime.timezone.utc)
+    formatted = value.strftime("%Y-%m-%d %H:%M:%S.%f %Z")
+    formatted = formatted.rstrip("0").rstrip(".")
+    return formatted
 
 
 def _parse_options_string(raw: str) -> Optional[Dict[str, Any]]:
@@ -1072,7 +1098,9 @@ class MatrixOneCLI(cmd.Cmd):
                 try:
                     threshold_delta = _parse_duration(f"{float(token)}m")
                 except ValueError:
-                    print("❌ Unknown option. Use 'cdc_health [threshold] [--task=<task>] [--threshold=<duration>] [--strict]'")
+                    print(
+                        "❌ Unknown option. Use 'cdc_health [threshold] [--task=<task>] [--threshold=<duration>] [--strict]'"
+                    )
                     return
 
         if strict_mode:
@@ -1181,7 +1209,9 @@ class MatrixOneCLI(cmd.Cmd):
 
         tokens = [token for token in arg.strip().split() if token]
         if not tokens:
-            print("❌ Usage: cdc_task <task_name> [--details] [--no-watermarks] [--table=<name>] [--threshold=<duration>] [--strict] [--pause|--resume|--restart]")
+            print(
+                "❌ Usage: cdc_task <task_name> [--details] [--no-watermarks] [--table=<name>] [--threshold=<duration>] [--strict] [--pause|--resume|--restart]"
+            )
             return
 
         if not self.client:
@@ -1324,7 +1354,7 @@ class MatrixOneCLI(cmd.Cmd):
             print(f"\n{header('🕒 Watermarks')} (threshold {threshold_display})")
             now_utc = datetime.datetime.now(datetime.timezone.utc)
             print(info("Adjust via '--threshold=<duration>' (supports s/m/h) or '--strict' for zero tolerance."))
-            print(info(f"Current UTC: {now_utc.isoformat()}"))
+            print(info(f"Current UTC: {_format_timestamp(now_utc)}"))
             if not watermarks:
                 print(info("No watermarks found for this task."))
             else:
@@ -1347,9 +1377,7 @@ class MatrixOneCLI(cmd.Cmd):
                                     watermark_time = None
                         else:
                             watermark_time = ts
-                    watermark_time_str = (
-                        f" ({watermark_time.isoformat()})" if watermark_time else ""
-                    )
+                    watermark_time_str = f" ({_format_timestamp(watermark_time)})" if watermark_time else ""
                     delay_str = ""
                     if watermark_time:
                         delay_seconds = (now_utc - watermark_time).total_seconds()
@@ -1362,9 +1390,7 @@ class MatrixOneCLI(cmd.Cmd):
                         late_count += 1
                     status = warning('⚠️  late') if is_late else success('✓ on schedule')
                     err_msg = f" | error: {mark.err_msg}" if mark.err_msg else ''
-                    print(
-                        f"  • {location} → {watermark_value}{watermark_time_str} ({status}){delay_str}{err_msg}"
-                    )
+                    print(f"  • {location} → {watermark_value}{watermark_time_str} ({status}){delay_str}{err_msg}")
         else:
             print(f"\n{info('Watermark listing skipped (--no-watermarks).')} Late tables detected: {late_count}")
 
@@ -1383,10 +1409,7 @@ class MatrixOneCLI(cmd.Cmd):
                     columns = [col[0] for col in getattr(result, 'description', [])]
 
                 if rows and columns:
-                    detail_payload = [
-                        {columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))}
-                        for row in rows
-                    ]
+                    detail_payload = [{columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))} for row in rows]
                 else:
                     detail_payload = rows
 
@@ -1509,9 +1532,7 @@ class MatrixOneCLI(cmd.Cmd):
             return
 
         sink_type_default = CDCSinkType.MATRIXONE.value
-        sink_type_input = self._prompt(
-            "Sink type (mysql/matrixone)", default=sink_type_default
-        ).strip().lower()
+        sink_type_input = self._prompt("Sink type (mysql/matrixone)", default=sink_type_default).strip().lower()
         try:
             sink_type = CDCSinkType(sink_type_input)
         except ValueError:
@@ -1537,12 +1558,13 @@ class MatrixOneCLI(cmd.Cmd):
 
         options: Optional[Dict[str, Any]] = None
         print(info("Common CDC options include Frequency=1h, NoFull=true, MaxSqlLength=2097152, SendSqlTimeout=30m."))
-        print(info("Enter key=value pairs separated by commas (e.g. Frequency=1h,NoFull=true) or press Enter to skip. Type 'help' for more guidance."))
-        while True:
-            raw_options = self._prompt(
-                "Additional CDC options",
-                default=""
+        print(
+            info(
+                "Enter key=value pairs separated by commas (e.g. Frequency=1h,NoFull=true) or press Enter to skip. Type 'help' for more guidance."
             )
+        )
+        while True:
+            raw_options = self._prompt("Additional CDC options", default="")
             raw_options = raw_options.strip()
             if not raw_options:
                 break
@@ -1570,15 +1592,11 @@ class MatrixOneCLI(cmd.Cmd):
                 sink_database = self._prompt("Sink database", default=sink_db_default).strip()
                 if not sink_database:
                     sink_database = source_database
-                task = self.client.cdc.create_database_task(
-                    task_name=task_name,
-                    source_uri=source_uri,
-                    sink_type=sink_type,
-                    sink_uri=sink_uri,
-                    source_database=source_database,
-                    sink_database=sink_database,
-                    options=options,
-                )
+                creation_context = {
+                    "mode": "database",
+                    "source_database": source_database,
+                    "sink_database": sink_database,
+                }
             else:
                 print(info("Enter table mappings in the form source_db.table[:sink_db.table]."))
                 print(info("Press Enter on an empty prompt when you are done."))
@@ -1598,25 +1616,141 @@ class MatrixOneCLI(cmd.Cmd):
                     print("❌ At least one table mapping is required for table-level replication.")
                     return
 
-                table_tuples = [
-                    (m["source_db"], m["source_table"], m["sink_db"], m["sink_table"])
-                    for m in mappings
-                ]
+                table_tuples = [(m["source_db"], m["source_table"], m["sink_db"], m["sink_table"]) for m in mappings]
+                creation_context = {
+                    "mode": "table",
+                    "table_mappings": mappings,
+                    "table_tuples": table_tuples,
+                }
+        except Exception as exc:
+            print(error(f"Failed to gather CDC task details: {exc}"))
+            return
 
+        sink_type_display = sink_type.value if isinstance(sink_type, CDCSinkType) else str(sink_type)
+        preview_payload: Dict[str, Any] = {
+            "task_name": task_name,
+            "level": level,
+            "source_uri": source_uri,
+            "sink_type": sink_type_display,
+            "sink_uri": sink_uri,
+        }
+        if options is not None:
+            preview_payload["options"] = options
+        if creation_context["mode"] == "database":
+            preview_payload["source_database"] = creation_context["source_database"]
+            preview_payload["sink_database"] = creation_context["sink_database"]
+        else:
+            preview_payload["table_mappings"] = creation_context["table_mappings"]
+
+        print(f"\n{header('📝 CDC Task Configuration Preview')}")
+        print(json.dumps(preview_payload, indent=2, ensure_ascii=False, default=str))
+        confirm = self._prompt("Proceed with CDC task creation? (yes/no)", default="no").strip().lower()
+        if confirm not in {"y", "yes"}:
+            print(info("CDC task creation cancelled."))
+            return
+
+        try:
+            if creation_context["mode"] == "database":
+                task = self.client.cdc.create_database_task(
+                    task_name=task_name,
+                    source_uri=source_uri,
+                    sink_type=sink_type,
+                    sink_uri=sink_uri,
+                    source_database=creation_context["source_database"],
+                    sink_database=creation_context["sink_database"],
+                    options=options,
+                )
+            else:
                 task = self.client.cdc.create_table_task(
                     task_name=task_name,
                     source_uri=source_uri,
                     sink_type=sink_type,
                     sink_uri=sink_uri,
-                    table_mappings=table_tuples,
+                    table_mappings=creation_context["table_tuples"],
                     options=options,
                 )
         except Exception as exc:
             print(error(f"Failed to create CDC task: {exc}"))
             return
 
-        print(success(f"\nCDC task '{task.task_name}' created successfully."))  # type: ignore[attr-defined]
-        print(info(f"Use 'cdc_task {task.task_name}' to inspect or manage the task."))  # type: ignore[attr-defined]
+        print(success(f"\nCDC task '{task.task_name}' created successfully."))
+        print(info(f"Use 'cdc_task {task.task_name}' to inspect or manage the task."))
+
+    def do_cdc_drop(self, arg):
+        """
+        Drop a CDC task with double confirmation.
+
+        Usage:
+            cdc_drop <task_name> [--force]
+
+        The command will prompt for confirmation twice unless ``--force`` is supplied.
+        """
+
+        tokens = [token for token in arg.strip().split() if token]
+        if not tokens:
+            print("❌ Usage: cdc_drop <task_name> [--force]")
+            return
+
+        task_name = tokens[0]
+        force = False
+        for token in tokens[1:]:
+            if token == "--force":
+                force = True
+            else:
+                print("❌ Unknown option. Usage: cdc_drop <task_name> [--force]")
+                return
+
+        if not self.client:
+            print("❌ Not connected. Use 'connect' first.")
+            return
+
+        try:
+            task = self.client.cdc.get(task_name)
+        except ValueError as exc:
+            print(error(str(exc)))
+            return
+        except Exception as exc:
+            print(error(f"Failed to load CDC task '{task_name}': {exc}"))
+            return
+
+        print(f"\n{header('⚠️  CDC Task Drop Preview')}")
+        summary_payload: Dict[str, Any] = {
+            "task_name": task.task_name,
+            "state": task.state,
+            "sink_type": task.sink_type,
+            "table_mapping": task.table_mapping,
+            "source_uri": task.source_uri,
+            "sink_uri": task.sink_uri,
+            "options": task.additional_config,
+            "no_full": task.no_full,
+            "checkpoint": task.checkpoint,
+        }
+        print(json.dumps(summary_payload, indent=2, ensure_ascii=False, default=str))
+
+        if not force:
+            first_confirm = self._prompt(
+                f"Confirm drop of CDC task '{task_name}'? (yes/no)",
+                default="no",
+            ).strip().lower()
+            if first_confirm not in {"y", "yes"}:
+                print(info("CDC task drop cancelled."))
+                return
+
+            second_confirm = self._prompt(
+                f"Type the task name '{task_name}' to confirm drop",
+                default="",
+            ).strip()
+            if second_confirm != task_name:
+                print(info("Confirmation mismatch. CDC task drop cancelled."))
+                return
+
+        try:
+            self.client.cdc.drop(task_name)
+        except Exception as exc:
+            print(error(f"Failed to drop CDC task '{task_name}': {exc}"))
+            return
+
+        print(success(f"CDC task '{task_name}' dropped successfully."))
 
     def do_verify_counts(self, arg):
         """
