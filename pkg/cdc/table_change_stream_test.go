@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -368,6 +369,126 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	_, exists := runningReaders.Load(key)
 	assert.True(t, exists)
 }
+
+// Regression test: Pause must not hang when collector blocks on context cancellation.
+func TestTableChangeStream_PauseDrainsBlockedCollector(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a"},
+			{Name: "ts"},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}},
+		Name2ColIndex: map[string]int32{
+			"a":  0,
+			"ts": 1,
+		},
+	}
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	// Prepare stubs for transactional helpers
+	stubs := []*gostub.Stubs{
+		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		}),
+		gostub.Stub(&FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {}),
+		gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
+		gostub.Stub(&GetRelationById, func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+			return "", "", nil, nil
+		}),
+		gostub.Stub(&GetSnapshotTS, func(client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{PhysicalTime: 1}
+		}),
+		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
+		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
+	}
+	defer func() {
+		for _, stub := range stubs {
+			stub.Reset()
+		}
+	}()
+
+	blockingHandleReady := make(chan struct{})
+	collectStub := gostub.Stub(&CollectChanges, func(context.Context, engine.Relation, types.TS, types.TS, *mpool.MPool) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: blockingHandleReady}, nil
+	})
+	defer collectStub.Reset()
+
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	stream := NewTableChangeStream(
+		nil,
+		nil,
+		mp,
+		pool,
+		1,
+		"task1",
+		tableInfo,
+		NewConsoleSinker(nil, nil),
+		updater,
+		tableDef,
+		false,
+		&sync.Map{},
+		types.TS{},
+		types.TS{},
+		false,
+		200*time.Millisecond,
+	)
+
+	ar := NewCdcActiveRoutine()
+	go stream.Run(ctx, ar)
+
+	select {
+	case <-blockingHandleReady:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("collector did not block as expected")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		stream.Wait()
+		close(done)
+	}()
+
+	ar.ClosePause()
+	stream.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stream wait did not finish after pause")
+	}
+}
+
+type blockingChangesHandle struct {
+	ready chan struct{}
+	once  sync.Once
+}
+
+func (h *blockingChangesHandle) Next(ctx context.Context, _ *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.once.Do(func() {
+		close(h.ready)
+	})
+	<-ctx.Done()
+	return nil, nil, engine.ChangesHandle_Tail_done, ctx.Err()
+}
+
+func (h *blockingChangesHandle) Close() error { return nil }
 
 // Test StaleRead retry logic
 func TestTableChangeStream_StaleRead_Retry(t *testing.T) {

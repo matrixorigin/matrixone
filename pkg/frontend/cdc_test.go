@@ -2337,6 +2337,31 @@ func TestCdcTask_Pause(t *testing.T) {
 	assert.NoErrorf(t, err, "Pause()")
 }
 
+func TestCdcTask_PauseWhileStarting(t *testing.T) {
+	holdCh := make(chan int, 1)
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+
+	err := executor.Pause()
+	assert.NoError(t, err)
+	assert.Equal(t, StatePaused, executor.stateMachine.State())
+	select {
+	case <-holdCh:
+		// value placed by Pause to unblock Start; drain to keep channel clean
+	default:
+	}
+}
+
 func TestCdcTask_Cancel(t *testing.T) {
 	// Note: GetTableDetector is already stubbed globally in init()
 	ch := make(chan int, 1)

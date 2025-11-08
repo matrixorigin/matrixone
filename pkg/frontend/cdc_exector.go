@@ -349,7 +349,15 @@ func (exec *CDCTaskExecutor) Resume() error {
 	go func() {
 		// closed in Pause, need renew
 		exec.activeRoutine = cdc.NewCdcActiveRoutine()
-		_ = exec.startFunc(context.Background())
+		if err := exec.startFunc(context.Background()); err != nil {
+			logutil.Error(
+				"cdc.frontend.task.resume_start_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("task-name", exec.spec.TaskName),
+				zap.String("state", exec.stateMachine.State().String()),
+				zap.Error(err),
+			)
+		}
 	}()
 	return nil
 }
@@ -380,7 +388,14 @@ func (exec *CDCTaskExecutor) Restart() error {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
 		// let Start() go
-		exec.holdCh <- 1
+		select {
+		case <-exec.holdCh:
+		default:
+		}
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
 	}
 
 	// Transition to Starting state (beginning restart)
@@ -390,7 +405,15 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 	go func() {
 		exec.activeRoutine = cdc.NewCdcActiveRoutine()
-		_ = exec.startFunc(context.Background())
+		if err := exec.startFunc(context.Background()); err != nil {
+			logutil.Error(
+				"cdc.frontend.task.restart_start_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("task-name", exec.spec.TaskName),
+				zap.String("state", exec.stateMachine.State().String()),
+				zap.Error(err),
+			)
+		}
 	}()
 	return nil
 }
@@ -530,7 +553,20 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	readerCount := 0
 	exec.runningReaders.Range(func(key, value interface{}) bool {
 		reader := value.(cdc.ChangeReader)
+		tableKey, _ := key.(string)
+		closeStart := time.Now()
+		logutil.Debug(
+			"cdc.frontend.task.stop_reader_close_start",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("table", tableKey),
+		)
 		reader.Close()
+		logutil.Debug(
+			"cdc.frontend.task.stop_reader_close_done",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("table", tableKey),
+			zap.Duration("cost", time.Since(closeStart)),
+		)
 		readerCount++
 		return true
 	})
@@ -538,7 +574,34 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	// Step 2: Wait for all readers to completely exit
 	exec.runningReaders.Range(func(key, value interface{}) bool {
 		reader := value.(cdc.ChangeReader)
-		reader.Wait()
+		tableKey, _ := key.(string)
+		waitStart := time.Now()
+		logutil.Debug(
+			"cdc.frontend.task.stop_reader_wait_start",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("table", tableKey),
+		)
+		done := make(chan struct{})
+		go func() {
+			reader.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			logutil.Debug(
+				"cdc.frontend.task.stop_reader_wait_done",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("table", tableKey),
+				zap.Duration("cost", time.Since(waitStart)),
+			)
+		case <-time.After(10 * time.Second):
+			logutil.Warn(
+				"cdc.frontend.task.stop_reader_wait_timeout",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("table", tableKey),
+				zap.Duration("waited", time.Since(waitStart)),
+			)
+		}
 		return true
 	})
 
@@ -548,7 +611,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 		return true
 	})
 
-	logutil.Info(
+	logutil.Debug(
 		"cdc.frontend.task.stop_all_readers_complete",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.Int("reader-count", readerCount),

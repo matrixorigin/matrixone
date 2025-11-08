@@ -18,10 +18,12 @@ import (
 	"context"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -275,4 +277,71 @@ func TestStartCleanupWithClosedReaders(t *testing.T) {
 		"Cleanup should be fast with already-stopped readers")
 
 	t.Logf("Cleanup duration: %v", cleanupDuration)
+}
+
+func TestRestartFailureDrainsHoldChAndMovesToFailed(t *testing.T) {
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-task-failure",
+			TaskName: "restart-task",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+
+	// Pretend we were running and the previous Start left a signal in holdCh
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	exec.holdCh <- 1
+
+	var callCount atomic.Int32
+	firstCallDone := make(chan struct{}, 1)
+	secondCallDone := make(chan struct{}, 1)
+
+	exec.startFunc = func(ctx context.Context) error {
+		call := callCount.Add(1)
+		switch call {
+		case 1:
+			defer func() { firstCallDone <- struct{}{} }()
+			require.NoError(t, exec.stateMachine.SetFailed("boom"))
+			return moerr.NewInternalErrorNoCtx("boom")
+		case 2:
+			defer func() { secondCallDone <- struct{}{} }()
+			require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+			return nil
+		default:
+			return nil
+		}
+	}
+
+	// First restart should not block even though holdCh already contains a signal.
+	require.NoError(t, exec.Restart())
+	select {
+	case <-firstCallDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first restart attempt")
+	}
+
+	assert.Equal(t, int32(1), callCount.Load())
+	assert.Equal(t, StateFailed, exec.stateMachine.State())
+
+	// Channel should still contain the original signal (simulating a Start that failed early).
+	select {
+	case exec.holdCh <- 1:
+		t.Fatal("holdCh should remain full after failed restart")
+	default:
+	}
+
+	// Second restart should drain the stale signal and transition back to Running.
+	require.NoError(t, exec.Restart())
+	select {
+	case <-secondCallDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second restart attempt")
+	}
+
+	assert.Equal(t, int32(2), callCount.Load())
+	assert.Equal(t, StateRunning, exec.stateMachine.State())
 }

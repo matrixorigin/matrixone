@@ -70,6 +70,8 @@ type TableChangeStream struct {
 	runningReaders   *sync.Map
 	runningReaderKey string
 	wg               sync.WaitGroup
+	runCancel        context.CancelFunc
+	cancelOnce       sync.Once
 
 	// Configuration
 	initSnapshotSplitTxn bool
@@ -203,6 +205,9 @@ var NewTableChangeStream = func(
 
 // Run starts the change stream
 func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
+	streamCtx, cancel := context.WithCancel(ctx)
+	s.runCancel = cancel
+
 	// 1. Check for duplicate readers
 	if _, loaded := s.runningReaders.LoadOrStore(s.runningReaderKey, s); loaded {
 		logutil.Warn(
@@ -244,7 +249,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	s.progressTracker.SetState("idle")
 
 	// 5. Calculate initial delay based on last sync time
-	if err := s.calculateInitialDelay(ctx); err != nil {
+	if err := s.calculateInitialDelay(streamCtx); err != nil {
 		logutil.Error(
 			"cdc.table_stream.calculate_initial_delay_failed",
 			zap.String("table", s.tableInfo.String()),
@@ -255,13 +260,36 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	// 6. Main loop
 	for {
 		select {
-		case <-ctx.Done():
+		case <-streamCtx.Done():
+			logutil.Info(
+				"cdc.table_stream.stop_context_done",
+				zap.String("table", s.tableInfo.String()),
+				zap.String("task-id", s.taskId),
+			)
+			s.cancelRun()
 			return
 		case <-ar.Pause:
+			logutil.Info(
+				"cdc.table_stream.stop_pause_signal",
+				zap.String("table", s.tableInfo.String()),
+				zap.String("task-id", s.taskId),
+			)
+			s.cancelRun()
 			return
 		case <-ar.Cancel:
+			logutil.Info(
+				"cdc.table_stream.stop_cancel_signal",
+				zap.String("table", s.tableInfo.String()),
+				zap.String("task-id", s.taskId),
+			)
+			s.cancelRun()
 			return
 		case <-s.tick.C:
+			logutil.Debug(
+				"cdc.table_stream.tick",
+				zap.String("table", s.tableInfo.String()),
+				zap.String("task-id", s.taskId),
+			)
 		}
 
 		// Reset frequency if forced
@@ -273,7 +301,12 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		// Process one round with detailed tracking
 		s.progressTracker.SetState("processing")
 		roundStart := time.Now()
-		err := s.processOneRound(ctx, ar)
+		logutil.Debug(
+			"cdc.table_stream.process_round_start",
+			zap.String("table", s.tableInfo.String()),
+			zap.String("task-id", s.taskId),
+		)
+		err := s.processOneRound(streamCtx, ar)
 
 		if err != nil {
 			s.lastError = err
@@ -291,23 +324,52 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			return
 		}
 
+		logutil.Debug(
+			"cdc.table_stream.process_round_done",
+			zap.String("table", s.tableInfo.String()),
+			zap.String("task-id", s.taskId),
+			zap.Duration("round-duration", time.Since(roundStart)),
+		)
 		s.progressTracker.SetState("idle")
 	}
 }
 
 // cleanup performs cleanup when the stream stops
 func (s *TableChangeStream) cleanup(ctx context.Context) {
+	startTime := time.Now()
+	logutil.Debug(
+		"cdc.table_stream.cleanup_start",
+		zap.String("table", s.tableInfo.String()),
+		zap.Uint64("account-id", s.accountId),
+		zap.String("task-id", s.taskId),
+	)
 	defer s.wg.Done()
+	defer func() {
+		logutil.Debug(
+			"cdc.table_stream.cleanup_done",
+			zap.String("table", s.tableInfo.String()),
+			zap.Uint64("account-id", s.accountId),
+			zap.String("task-id", s.taskId),
+			zap.Duration("cost", time.Since(startTime)),
+		)
+	}()
 
 	// Remove from running readers
 	s.runningReaders.Delete(s.runningReaderKey)
 
 	// Remove watermark cache
+	removeStart := time.Now()
 	if err := s.watermarkUpdater.RemoveCachedWM(ctx, s.watermarkKey); err != nil {
 		logutil.Error(
 			"cdc.table_stream.remove_cached_watermark_failed",
 			zap.String("table", s.tableInfo.String()),
 			zap.Error(err),
+		)
+	} else {
+		logutil.Debug(
+			"cdc.table_stream.remove_cached_watermark_done",
+			zap.String("table", s.tableInfo.String()),
+			zap.Duration("cost", time.Since(removeStart)),
 		)
 	}
 
@@ -328,14 +390,20 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	}
 
 	// Close sinker
+	closeStart := time.Now()
 	s.Close()
+	logutil.Debug(
+		"cdc.table_stream.close_done",
+		zap.String("table", s.tableInfo.String()),
+		zap.Duration("cost", time.Since(closeStart)),
+	)
 
 	// Unregister from CDC detector
 	if detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.RemoveActiveRunner(s.tableInfo)
 	}
 
-	logutil.Info(
+	logutil.Debug(
 		"cdc.table_stream.end",
 		zap.String("table", s.tableInfo.String()),
 		zap.Uint64("account-id", s.accountId),
@@ -689,6 +757,7 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 
 // Close closes the change stream
 func (s *TableChangeStream) Close() {
+	s.cancelRun()
 	s.sinker.Close()
 }
 
@@ -701,4 +770,13 @@ func (s *TableChangeStream) Wait() {
 // GetTableInfo returns the source table information
 func (s *TableChangeStream) GetTableInfo() *DbTableInfo {
 	return s.tableInfo
+}
+
+func (s *TableChangeStream) cancelRun() {
+	if s.runCancel == nil {
+		return
+	}
+	s.cancelOnce.Do(func() {
+		s.runCancel()
+	})
 }
