@@ -391,7 +391,6 @@ def _format_cdc_value(value: Any) -> Optional[str]:
     if isinstance(value, (dict, list)):
         return json.dumps(value, indent=2, ensure_ascii=False, default=str)
     if isinstance(value, bytes):
-        creation_context: Dict[str, Any] = {}
         try:
             value = value.decode("utf-8")
         except UnicodeDecodeError:
@@ -1581,6 +1580,7 @@ class MatrixOneCLI(cmd.Cmd):
                 print(error(str(exc)))
                 continue
 
+        creation_context: Dict[str, Any]
         try:
             if level == "database":
                 source_db_default = params.get("database") or ""
@@ -1728,10 +1728,14 @@ class MatrixOneCLI(cmd.Cmd):
         print(json.dumps(summary_payload, indent=2, ensure_ascii=False, default=str))
 
         if not force:
-            first_confirm = self._prompt(
-                f"Confirm drop of CDC task '{task_name}'? (yes/no)",
-                default="no",
-            ).strip().lower()
+            first_confirm = (
+                self._prompt(
+                    f"Confirm drop of CDC task '{task_name}'? (yes/no)",
+                    default="no",
+                )
+                .strip()
+                .lower()
+            )
             if first_confirm not in {"y", "yes"}:
                 print(info("CDC task drop cancelled."))
                 return
@@ -3193,7 +3197,9 @@ Examples:
             if args.cdc_command == 'show':
                 if not args.task_name:
                     if args.no_watermarks or args.watermarks_only or args.threshold or args.table or args.strict:
-                        print("❌ Options --no-watermarks/--watermarks-only/--threshold/--table/--strict require a task name.")
+                        print(
+                            "❌ Options --no-watermarks/--watermarks-only/--threshold/--table/--strict require a task name."
+                        )
                         return
                     command = "cdc_tasks"
                     if args.details:
