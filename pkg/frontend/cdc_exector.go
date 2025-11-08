@@ -190,7 +190,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	}
 
 	logutil.Info(
-		"CDC-Task-Start",
+		"cdc.frontend.task.start",
 		zap.String("task-id", taskId),
 		zap.String("task-name", taskName),
 		zap.String("cn-uuid", cnUUID),
@@ -202,7 +202,11 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		if err != nil {
 			// Transition to Failed state
 			if setFailErr := exec.stateMachine.SetFailed(err.Error()); setFailErr != nil {
-				logutil.Warnf("failed to set executor state to Failed: %v", setFailErr)
+				logutil.Warn(
+					"cdc.frontend.task.set_state_failed",
+					zap.String("target-state", StateFailed.String()),
+					zap.Error(setFailErr),
+				)
 			}
 
 			// Metrics: task failed
@@ -221,7 +225,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 			updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error())
 			logutil.Error(
-				"CDC-Task-Start-Failed",
+				"cdc.frontend.task.start_failed",
 				zap.String("task-id", taskId),
 				zap.String("task-name", taskName),
 				zap.String("state", exec.stateMachine.State().String()),
@@ -287,7 +291,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	clearErrMsgErr := exec.updateErrMsg(ctx, "")
 
 	logutil.Info(
-		"CDC-Task-Start-Success",
+		"cdc.frontend.task.start_success",
 		zap.String("task-id", taskId),
 		zap.String("task-name", taskName),
 		zap.String("state", exec.stateMachine.State().String()),
@@ -312,7 +316,7 @@ func (exec *CDCTaskExecutor) Resume() error {
 	}
 
 	logutil.Info(
-		"CDC-Task-Resume-Start",
+		"cdc.frontend.task.resume_start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
@@ -323,7 +327,7 @@ func (exec *CDCTaskExecutor) Resume() error {
 		v2.CdcTaskStateChangeCounter.WithLabelValues("paused", "starting").Inc()
 
 		logutil.Info(
-			"CDC-Task-Resume-Success",
+			"cdc.frontend.task.resume_success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.String("state", exec.stateMachine.State().String()),
@@ -335,7 +339,7 @@ func (exec *CDCTaskExecutor) Resume() error {
 	ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
 	if err := exec.clearAllTableErrors(ctx); err != nil {
 		logutil.Warn(
-			"CDC-Task-Resume-ClearErrorsFailed",
+			"cdc.frontend.task.resume_clear_errors_failed",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.Error(err),
 		)
@@ -358,14 +362,14 @@ func (exec *CDCTaskExecutor) Restart() error {
 	}
 
 	logutil.Info(
-		"CDC-Task-Restart-Start",
+		"cdc.frontend.task.restart_start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
 	)
 	defer func() {
 		logutil.Info(
-			"CDC-Task-Restart-Success",
+			"cdc.frontend.task.restart_success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.String("state", exec.stateMachine.State().String()),
@@ -402,7 +406,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 	}
 
 	logutil.Info(
-		"CDC-Task-Pause-Start",
+		"cdc.frontend.task.pause_start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
@@ -411,7 +415,10 @@ func (exec *CDCTaskExecutor) Pause() error {
 	defer func() {
 		// Transition to Paused state
 		if err := exec.stateMachine.Transition(TransitionPauseComplete); err != nil {
-			logutil.Warnf("failed to transition to Paused state: %v", err)
+			logutil.Warn(
+				"cdc.frontend.task.transition_paused_failed",
+				zap.Error(err),
+			)
 		}
 
 		// Metrics: task paused
@@ -422,7 +429,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 		}
 
 		logutil.Info(
-			"CDC-Task-Pause-Success",
+			"cdc.frontend.task.pause_success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.String("state", exec.stateMachine.State().String()),
@@ -459,7 +466,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	}
 
 	logutil.Info(
-		"CDC-Task-Cancel-Start",
+		"cdc.frontend.task.cancel_start",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.String("task-name", exec.spec.TaskName),
 		zap.String("state", exec.stateMachine.State().String()),
@@ -468,7 +475,10 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	defer func() {
 		// Transition to Cancelled state
 		if err := exec.stateMachine.Transition(TransitionCancelComplete); err != nil {
-			logutil.Warnf("failed to transition to Cancelled state: %v", err)
+			logutil.Warn(
+				"cdc.frontend.task.transition_cancelled_failed",
+				zap.Error(err),
+			)
 		}
 
 		// Metrics: task cancelled
@@ -478,7 +488,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		}
 
 		logutil.Info(
-			"CDC-Task-Cancel-Success",
+			"cdc.frontend.task.cancel_success",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.String("state", exec.stateMachine.State().String()),
@@ -512,7 +522,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	}
 
 	logutil.Info(
-		"CDC-Task-StopAllReaders-Start",
+		"cdc.frontend.task.stop_all_readers_start",
 		zap.String("task-id", exec.spec.TaskId),
 	)
 
@@ -539,7 +549,7 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	})
 
 	logutil.Info(
-		"CDC-Task-StopAllReaders-Complete",
+		"cdc.frontend.task.stop_all_readers_complete",
 		zap.String("task-id", exec.spec.TaskId),
 		zap.Int("reader-count", readerCount),
 	)
@@ -604,7 +614,7 @@ func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
 	sql := cdc.CDCSQLBuilder.ClearTaskTableErrorsSQL(accountId, taskId)
 
 	logutil.Info(
-		"CDC-Task-ClearTableErrors",
+		"cdc.frontend.task.clear_table_errors",
 		zap.String("task-id", taskId),
 		zap.Uint64("account-id", accountId),
 	)
@@ -633,7 +643,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	txnOp, err := cdc.GetTxnOp(ctx, exec.cnEngine, exec.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
 		logutil.Error(
-			"CDC-Task-HandleNewTables-GetTxnOpFailed",
+			"cdc.frontend.task.handle_new_tables_get_txnop_failed",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.Error(err),
@@ -652,7 +662,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 
 	if err != nil {
 		logutil.Error(
-			"CDC-Task-HandleNewTables-NewEngineFailed",
+			"cdc.frontend.task.handle_new_tables_new_engine_failed",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.Error(err),
@@ -671,8 +681,12 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 				readerInfo := reader.GetTableInfo()
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
-					logutil.Infof("cdc task wait old reader to stop %s %d->%d",
-						key, readerInfo.SourceTblId, info.SourceTblId)
+					logutil.Info(
+						"cdc.frontend.task.wait_old_reader",
+						zap.String("table", key),
+						zap.Uint64("old-table-id", readerInfo.SourceTblId),
+						zap.Uint64("new-table-id", info.SourceTblId),
+					)
 					waitChan := make(chan struct{})
 					go func() {
 						defer close(waitChan)
@@ -695,7 +709,12 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		}
 		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
 		if err != nil {
-			logutil.Errorf("cdc task %s get table err msg for table %s failed, err: %v", exec.spec.TaskName, key, err)
+			logutil.Error(
+				"cdc.frontend.task.get_table_errmsg_failed",
+				zap.String("task-name", exec.spec.TaskName),
+				zap.String("table", key),
+				zap.Error(err),
+			)
 			// Don't return immediately - try other tables
 			failedTables[key] = err
 			continue
@@ -704,9 +723,20 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			continue
 		}
 
-		logutil.Infof("cdc task find new table: %s", newTableInfo)
+		logutil.Info(
+			"cdc.frontend.task.new_table_detected",
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("table", key),
+			zap.String("source-db", newTableInfo.SourceDbName),
+			zap.String("source-table", newTableInfo.SourceTblName),
+		)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
-			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
+			logutil.Error(
+				"cdc.frontend.task.add_exec_pipeline_failed",
+				zap.String("task-name", exec.spec.TaskName),
+				zap.String("table", key),
+				zap.Error(err),
+			)
 			// Persist error to database for this table
 			if exec.watermarkUpdater != nil {
 				watermarkKey := cdc.WatermarkKey{
@@ -719,7 +749,11 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 					IsRetryable: false, // Pipeline creation errors are not retryable by default
 				}
 				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
-					logutil.Warnf("failed to persist error message for table %s: %v", key, updateErr)
+					logutil.Warn(
+						"cdc.frontend.task.persist_table_error_failed",
+						zap.String("table", key),
+						zap.Error(updateErr),
+					)
 				}
 			}
 			// Don't return immediately - try other tables
@@ -729,7 +763,11 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 
 		info.IdChanged = newTableInfo.IdChanged
 		successCount++
-		logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
+		logutil.Info(
+			"cdc.frontend.task.add_exec_pipeline_success",
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("table", key),
+		)
 	}
 
 	// Log summary
@@ -738,8 +776,13 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		for k := range failedTables {
 			failedKeys = append(failedKeys, k)
 		}
-		logutil.Warnf("cdc task %s: %d tables succeeded, %d tables failed: %v",
-			exec.spec.TaskName, successCount, len(failedTables), failedKeys)
+		logutil.Warn(
+			"cdc.frontend.task.add_exec_pipeline_summary",
+			zap.String("task-name", exec.spec.TaskName),
+			zap.Int("success-count", successCount),
+			zap.Int("failed-count", len(failedTables)),
+			zap.Strings("failed-tables", failedKeys),
+		)
 		// Return error to trigger retry by TableDetector
 		return moerr.NewInternalErrorf(ctx, "failed to add pipeline for %d tables", len(failedTables))
 	}
@@ -782,16 +825,24 @@ var GetTableErrMsg = func(
 	if cdc.ShouldRetry(metadata) {
 		// Log detailed retry information
 		if metadata.IsRetryable {
-			logutil.Infof("table %s.%s retryable error (attempt %d/%d): %s",
-				tbl.SourceDbName, tbl.SourceTblName,
-				metadata.RetryCount, cdc.MaxRetryCount,
-				metadata.Message)
+			logutil.Info(
+				"cdc.frontend.task.retryable_table_error",
+				zap.String("db", tbl.SourceDbName),
+				zap.String("table", tbl.SourceTblName),
+				zap.Int("retry-count", metadata.RetryCount),
+				zap.Int("max-retry", cdc.MaxRetryCount),
+				zap.String("message", metadata.Message),
+			)
 		} else {
 			// Expired non-retryable error
 			age := time.Since(metadata.FirstSeen)
-			logutil.Infof("table %s.%s non-retryable error expired (age: %s), will retry: %s",
-				tbl.SourceDbName, tbl.SourceTblName,
-				age, metadata.Message)
+			logutil.Info(
+				"cdc.frontend.task.expired_non_retryable_error",
+				zap.String("db", tbl.SourceDbName),
+				zap.String("table", tbl.SourceTblName),
+				zap.Duration("age", age),
+				zap.String("message", metadata.Message),
+			)
 		}
 		return false, nil
 	}
@@ -799,15 +850,23 @@ var GetTableErrMsg = func(
 	// Cannot retry
 	if metadata.IsRetryable {
 		// Exceeded max retry count
-		logutil.Warnf("table %s.%s exceeded max retry count (%d attempts): %s",
-			tbl.SourceDbName, tbl.SourceTblName,
-			metadata.RetryCount, metadata.Message)
+		logutil.Warn(
+			"cdc.frontend.task.max_retry_exceeded",
+			zap.String("db", tbl.SourceDbName),
+			zap.String("table", tbl.SourceTblName),
+			zap.Int("retry-count", metadata.RetryCount),
+			zap.String("message", metadata.Message),
+		)
 	} else {
 		// Fresh non-retryable error
 		age := time.Since(metadata.FirstSeen)
-		logutil.Infof("table %s.%s permanent error (age: %s): %s",
-			tbl.SourceDbName, tbl.SourceTblName,
-			age, metadata.Message)
+		logutil.Info(
+			"cdc.frontend.task.permanent_table_error",
+			zap.String("db", tbl.SourceDbName),
+			zap.String("table", tbl.SourceTblName),
+			zap.Duration("age", age),
+			zap.String("message", metadata.Message),
+		)
 	}
 
 	hasError = true
