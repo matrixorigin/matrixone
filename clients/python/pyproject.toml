@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matrixone-python-sdk"
-version = "0.1.10"
+version = "0.1.11"
 description = "A comprehensive Python SDK for MatrixOne database operations with vector search, fulltext search, and advanced features"
 readme = "README_USER.md"
 license = {text = "Apache-2.0"}
