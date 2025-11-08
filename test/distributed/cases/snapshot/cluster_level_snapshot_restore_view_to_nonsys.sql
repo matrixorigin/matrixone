@@ -43,7 +43,7 @@ select * from v02;
 select * from v03;
 -- @session
 
-restore account acc01 from snapshot sp100;
+restore account acc01{snapshot="sp100"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -117,7 +117,7 @@ select * from v04;
 select * from v05;
 -- @session
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -188,7 +188,7 @@ drop table Employees;
 select * from EmployeeDepartmentView;
 -- @session
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -197,7 +197,7 @@ drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 -- @session
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -264,7 +264,7 @@ drop view department_view;
 select * from employee_with_department_view;
 -- @session
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -276,7 +276,7 @@ truncate departments;
 select * from employee_view;
 -- @session
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -333,7 +333,7 @@ select * from view01;
 drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -342,7 +342,7 @@ drop table partition01;
 select * from view01;
 -- @session
 
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
@@ -394,7 +394,7 @@ drop database test01;
 select * from test01.EmployeeSalaryRanking;
 -- @session
 
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 select * from test01.EmployeeSalaryRanking;
@@ -460,7 +460,7 @@ select * from test02.employees_by_salary_view;
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 -- @session
 
-restore account acc01 from snapshot sp10;
+restore account acc01{snapshot="sp10"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test02;
@@ -559,7 +559,7 @@ select * from test03.department_view;
 select * from test05.employee_with_department_view;
 -- @session
 
-restore account acc01 from snapshot sp100;
+restore account acc01{snapshot="sp100"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 select * from test04.employee_view;

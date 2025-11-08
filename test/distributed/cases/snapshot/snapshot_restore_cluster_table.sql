@@ -20,11 +20,11 @@ drop table if exists cluster_table_1;
 
 -- @session:id=1&user=acc01:test_account&password=111
 select * from mo_catalog.cluster_table_1;
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 select * from mo_catalog.cluster_table_1;
 -- @session
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 select * from mo_catalog.cluster_table_1;

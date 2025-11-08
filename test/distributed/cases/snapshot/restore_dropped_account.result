@@ -10,7 +10,7 @@ account_name    admin_name    created_time    status    suspended_time    db_cou
 acc01    test_account    2025-07-19 05:50:41    open    null    5    65    0.0    0.0    
 sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
 drop account acc01;
-restore account acc01 from snapshot spsp01;
+restore account acc01{snapshot="spsp01"};
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
 acc01    test_account    2025-07-19 05:50:42    open    null    5    65    0.0    0.0    
@@ -132,7 +132,7 @@ v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
-restore account acc02 from snapshot spsp02;
+restore account acc02{snapshot="spsp02"};
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
 acc02    test_account    2025-07-19 05:50:43    open    null    9    71    0.0    0.0    
@@ -273,7 +273,7 @@ drop snapshot if exists spsp03;
 create snapshot spsp03 for account acc03;
 drop account acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
-restore account acc03 from snapshot spsp03;
+restore account acc03{snapshot="spsp03"};
 drop account acc03;
 drop snapshot spsp03;
 drop account if exists acc04;
@@ -419,7 +419,7 @@ create snapshot spsp06 for cluster;
 drop account acc04;
 drop account acc05;
 drop account acc06;
-restore cluster from snapshot spsp06;
+restore cluster{snapshot="spsp06"};
 use test04;
 select * from t1;
 id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
@@ -487,7 +487,7 @@ create account acc07 admin_name = 'test_account' identified by '111';
 drop snapshot if exists spsp07;
 create snapshot spsp07 for account acc07;
 drop account acc07;
-restore account acc07 from snapshot spsp07;
+restore account acc07{snapshot="spsp07"};
 show databases;
 Database
 information_schema

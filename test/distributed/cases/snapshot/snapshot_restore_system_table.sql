@@ -23,12 +23,12 @@ show snapshots;
 drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
@@ -74,12 +74,12 @@ DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
@@ -139,13 +139,13 @@ create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
 call test_if_hit_if();
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
@@ -185,7 +185,7 @@ create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 
@@ -193,7 +193,7 @@ select user_name from mo_catalog.mo_user order by user_name asc;
 -- @ignore:0,1
 select role_id,user_id from mo_catalog.mo_user_grant;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 
@@ -240,12 +240,12 @@ show snapshots;
 drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
@@ -291,12 +291,12 @@ DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
@@ -356,13 +356,13 @@ create snapshot snapshot2 for account acc01;
 -- @ignore:1
 show snapshots;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
 call test_if_hit_if();
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
@@ -396,13 +396,13 @@ create snapshot snapshot2 for account acc01;
 -- @ignore:1
 show snapshots;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 -- @ignore:1
 select user_name,authentication_string from mo_catalog.mo_user order by user_name asc;
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 -- @ignore:1
@@ -536,7 +536,7 @@ DROP STAGE my_ext_stage3;
 drop database if exists procedure_test;
 -- @session
 
-restore account acc01 from snapshot snapshot1 to account acc02;
+restore account acc01{snapshot="snapshot1"} to account acc02;
 -- @session:id=3&user=acc02:test_account&password=111
 -- udf
 select name, db from mo_catalog.mo_user_defined_function;
@@ -552,7 +552,7 @@ select name from mo_catalog.mo_stored_procedure;
 select user_name,authentication_string from mo_catalog.mo_user order by user_name asc;
 -- @session
 
-restore account acc01 from snapshot snapshot2 to account acc03;
+restore account acc01{snapshot="snapshot2"} to account acc03;
 -- @session:id=4&user=acc03:test_account&password=111
 -- udf
 select name, db from mo_catalog.mo_user_defined_function;
@@ -598,10 +598,10 @@ select * from cluster_table_2;
 
 create snapshot snapshot2 for account;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 select * from mo_catalog.cluster_table_1;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 select * from mo_catalog.cluster_table_2;
 
 drop snapshot snapshot1;

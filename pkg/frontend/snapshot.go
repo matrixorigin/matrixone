@@ -547,6 +547,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 
+	if len(stmt.AccountName) == 0 && stmt.Level != tree.RESTORELEVELCLUSTER {
+		stmt.AccountName = tree.Identifier(snapshot.accountName)
+	}
+
 	// check restore priv
 	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
 		return stats, err

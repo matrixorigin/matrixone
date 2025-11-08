@@ -207,7 +207,7 @@ show create table v01;
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
-restore account acc02 from snapshot spsp02;
+restore account acc02{snapshot="spsp02"};
 
 drop snapshot if exists spsp02;
 drop account if exists acc02;

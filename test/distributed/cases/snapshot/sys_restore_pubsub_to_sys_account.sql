@@ -21,7 +21,7 @@ show publications;
 select * from mo_catalog.mo_pubs;
 drop publication publication01;
 drop database republication01;
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 
 -- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
@@ -95,7 +95,7 @@ select * from pri01;
 select * from aff01;
 -- @session
 
-restore account sys from snapshot sp02;
+restore account sys{snapshot="sp02"};
 -- @ignore:5,6
 show publications;
 -- @ignore:0,4,8,9
@@ -155,7 +155,7 @@ use sub03;
 show tables;
 select * from rs02;
 select * from rs03;
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 -- @ignore:5,7
 show subscriptions;
 show databases;
@@ -203,7 +203,7 @@ show create table table01;
 select * from table02;
 -- @session
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -290,7 +290,7 @@ show create table index01;
 select * from index02;
 -- @session
 
-restore account acc01 from snapshot sp05;
+restore account acc01{snapshot="sp05"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,6
@@ -352,7 +352,7 @@ select * from tm2;
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111
-restore account acc01 from snapshot sp11;
+restore account acc01{snapshot="sp11"};
 -- @ignore:5,6
 show publications;
 show databases;
@@ -399,14 +399,14 @@ use sub07;
 select sum(a) from test01;
 -- @session
 
-restore account sys from snapshot sp100;
+restore account sys{snapshot="sp100"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
 use sub07;
 -- @session
 
-restore account sys from snapshot sp101;
+restore account sys{snapshot="sp101"};
 -- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 
@@ -456,7 +456,7 @@ use sub07;
 select * from t1;
 -- @session
 
-restore account acc01 from snapshot sp102;
+restore account acc01{snapshot="sp102"};
 
 -- @session:id=2&user=acc02:test_account&password=111
 show databases;
@@ -464,7 +464,7 @@ use sub07;
 select * from t1;
 -- @session
 
-restore account acc01 from snapshot sp103;
+restore account acc01{snapshot="sp103"};
 
 -- @session:id=2&user=acc02:test_account&password=111
 show databases;
@@ -520,7 +520,7 @@ use sub08;
 select * from t1;
 -- @session
 
-restore account acc01 from snapshot sp104 to account acc03;
+restore account acc01{snapshot="sp104"} to account acc03;
 
 -- @session:id=3&user=acc03:test_account&password=111
 show databases;
@@ -583,7 +583,7 @@ use sub09;
 select * from t1;
 -- @session
 
-restore account acc02 from snapshot sp105 to account acc03;
+restore account acc02{snapshot="sp105"} to account acc03;
 -- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 

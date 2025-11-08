@@ -2647,20 +2647,32 @@ var (
 			output: "create table t1 as select * from t2{as of timestamp 2019-01-01 00:00:00}",
 		},
 		{
-			input: "restore cluster from snapshot snapshot_01",
+			input:  `restore cluster{snapshot="snapshot_01"}`,
+			output: "restore cluster{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 from snapshot snapshot_01",
+			input:  "restore account account_01{snapshot=\"snapshot_01\"}",
+			output: "restore account account_01{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 database db1 from snapshot snapshot_01",
+			input:  "restore database account_01.db1{snapshot='snapshot_01'}",
+			output: "restore database account_01.db1{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
+			input:  "restore database account_01.db1{snapshot=\"snapshot_01\"}",
+			output: "restore database account_01.db1{snapshot=snapshot_01}",
 		},
 		{
-			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
-			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
+			input:  "restore database account_01.db1{snapshot=\"snapshot_01\"} to account account_02",
+			output: "restore database account_01.db1{snapshot=snapshot_01} to account account_02",
+		},
+		{
+			input:  "restore table account_01.db1.t1{snapshot=\"snapshot_01\"}",
+			output: "restore table account_01.db1.t1{snapshot=snapshot_01}",
+		},
+		{
+			input:  "restore account account_01{snapshot=\"snapshot_01\"} to account account_02",
+			output: "restore account account_01{snapshot=snapshot_01} to account account_02",
 		},
 		{
 			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0'}`,
