@@ -20,6 +20,11 @@ result sets into typed data classes.  Each manager only requires a connected
 MatrixOne client (or session) and takes care of building the appropriate SQL
 statements.
 
+Both helpers are reused by the ``mo-diag`` tooling to provide CDC management in
+interactive shells (``cdc_task``, ``cdc_create`` and friends) as well as the
+non-interactive ``mo-diag cdc`` command family.  Updating the helpers therefore
+automatically benefits the CLI experience and vice versa.
+
 Typical usage::
 
     from matrixone import Client
@@ -444,42 +449,46 @@ class BaseCDCManager:
 class CDCManager(BaseCDCManager):
     """Synchronous helper for managing MatrixOne CDC tasks.
 
-    Parameters
-    ----------
-    client:
-        A connected :class:`~matrixone.client.Client` (or session) used to
-        execute CDC SQL statements. The manager does **not** open or close
-        connections on your behalf.
-    executor:
-        Optional alternative executor object. When provided the executor must
-        expose an ``execute(sql: str)`` method. This is primarily used by the
-        SQLAlchemy integration where a session object is supplied.
+        Parameters
+        ----------
+        client:
+            A connected :class:`~matrixone.client.Client` (or session) used to
+            execute CDC SQL statements. The manager does **not** open or close
+            connections on your behalf.
+        executor:
+            Optional alternative executor object. When provided the executor must
+            expose an ``execute(sql: str)`` method. This is primarily used by the
+            SQLAlchemy integration where a session object is supplied.
 
-    Notes
-    -----
-    All methods in :class:`CDCManager` return Python data classes or ``None``
-    and never attempt to parse or coerce complex result sets. For advanced
-    scenarios where raw cursor access is required, call
-    :meth:`matrixone.client.Client.execute` directly.
+        Notes
+        -----
+        All methods in :class:`CDCManager` return Python data classes or ``None``
+        and never attempt to parse or coerce complex result sets. For advanced
+        scenarios where raw cursor access is required, call
+        :meth:`matrixone.client.Client.execute` directly.
 
-    Examples
-    --------
-    >>> from matrixone import Client
-    >>> from matrixone.cdc import CDCManager
-    >>> client = Client()
-    >>> client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
-    >>> cdc = CDCManager(client)
-    >>> task = cdc.create_table_task(
-    ...     task_name="orders_sync",
-    ...     source_uri="mysql://sys#root:111@127.0.0.1:6001",
-    ...     sink_type="matrixone",
-    ...     sink_uri="mysql://sys#root:111@127.0.0.1:6001",
-    ...     table_mappings=[("sales", "orders", "backup", "orders")],
-    ...     options={"Frequency": "1h"},
-    ... )
-    >>> cdc.pause(task.task_name)
-    >>> cdc.resume(task.task_name)
-    >>> cdc.drop(task.task_name)
+    The helper also powers the CDC commands exposed by ``mo-diag`` (interactive
+    ``cdc_*`` commands and the ``mo-diag cdc`` sub-commands), keeping scripted and
+    manual workflows consistent.
+
+        Examples
+        --------
+        >>> from matrixone import Client
+        >>> from matrixone.cdc import CDCManager
+        >>> client = Client()
+        >>> client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+        >>> cdc = CDCManager(client)
+        >>> task = cdc.create_table_task(
+        ...     task_name="orders_sync",
+        ...     source_uri="mysql://sys#root:111@127.0.0.1:6001",
+        ...     sink_type="matrixone",
+        ...     sink_uri="mysql://sys#root:111@127.0.0.1:6001",
+        ...     table_mappings=[("sales", "orders", "backup", "orders")],
+        ...     options={"Frequency": "1h"},
+        ... )
+        >>> cdc.pause(task.task_name)
+        >>> cdc.resume(task.task_name)
+        >>> cdc.drop(task.task_name)
     """
 
     def __init__(self, client, executor=None):
@@ -583,6 +592,11 @@ class CDCManager(BaseCDCManager):
             Additional ``CREATE CDC`` options. The ``Level`` option is enforced
             to ``"database"``.
 
+        Notes
+        -----
+        This helper is invoked by the interactive ``cdc_create`` command and by
+        ``mo-diag cdc create`` when database-level replication is selected.
+
         Returns
         -------
         CDCTaskInfo
@@ -634,6 +648,12 @@ class CDCManager(BaseCDCManager):
             Additional ``CREATE CDC`` options. ``Level`` is enforced to
             ``"table"``.
 
+        Notes
+        -----
+        This routine backs the ``cdc_create`` interactive helper and the
+        ``mo-diag cdc create`` entry point when table-level replication is
+        selected.
+
         Returns
         -------
         CDCTaskInfo
@@ -652,7 +672,12 @@ class CDCManager(BaseCDCManager):
         )
 
     def drop(self, task_name: str) -> None:
-        """Drop a single CDC task."""
+        """Drop a single CDC task.
+
+        Issues ``DROP CDC TASK`` for the supplied task name. The interactive
+        ``cdc_drop`` command and the ``mo-diag cdc drop`` entry point use this
+        helper and layer user confirmations on top.
+        """
         sql = self._build_drop_sql(task_name=task_name)
         self._get_executor().execute(sql)
 
@@ -893,10 +918,12 @@ class AsyncCDCManager(BaseCDCManager):
         )
 
     async def drop(self, task_name: str) -> None:
+        """Asynchronous variant of :meth:`CDCManager.drop`."""
         sql = self._build_drop_sql(task_name=task_name)
         await self._get_executor().execute(sql)
 
     async def drop_all(self) -> None:
+        """Asynchronous variant of :meth:`CDCManager.drop_all`."""
         sql = self._build_drop_sql(all_tasks=True)
         await self._get_executor().execute(sql)
 

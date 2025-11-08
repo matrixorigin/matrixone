@@ -664,6 +664,26 @@ mo-diag -d test -c "sql SELECT COUNT(*) FROM my_table"
 mo-diag -d test -c "flush_table my_table"
 ```
 
+#### CDC Task Shortcuts
+
+CDC management is integrated with the CLI. The interactive commands (`cdc_tasks`,
+`cdc_task`, `cdc_create`, `cdc_drop`) now have non-interactive equivalents
+under `mo-diag cdc`, making automation straightforward.
+
+```bash
+# Summaries (mirrors cdc_tasks)
+mo-diag cdc show
+
+# Inspect a task and tighten watermark thresholds
+mo-diag cdc show nightly_sync --details --threshold=5m
+
+# Start the guided creator in table mode
+mo-diag cdc create --table-level
+
+# Drop a task without interactive prompts
+mo-diag cdc drop nightly_sync --force
+```
+
 ### Available Commands
 
 #### Index Management

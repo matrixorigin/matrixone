@@ -824,6 +824,26 @@ mo-diag -d test -c "sql SELECT COUNT(*) FROM my_table"
 mo-diag -d test -c "flush_table my_table"
 ```
 
+#### CDC Task Shortcuts
+
+Manage Change Data Capture directly from the shell or scripts. The interactive
+commands (`cdc_tasks`, `cdc_task`, `cdc_create`, `cdc_drop`) now have matching
+non-interactive helpers via `mo-diag cdc`.
+
+```bash
+# Summaries (same as running cdc_tasks inside the shell)
+mo-diag cdc show
+
+# Inspect a task with watermark threshold control
+mo-diag cdc show nightly_sync --details --threshold=5m
+
+# Launch the guided creator with a forced mode
+mo-diag cdc create --table-level
+
+# Drop a task with explicit confirmation override
+mo-diag cdc drop nightly_sync --force
+```
+
 ### Available Commands
 
 #### Index Management

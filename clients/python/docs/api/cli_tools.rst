@@ -126,6 +126,9 @@ Helper Functions
         --command COMMAND     Execute single command and exit
         -c COMMAND            Short form of --command
 
+      Sub-commands:
+        cdc                   Manage CDC tasks (show/create/drop helpers)
+
    **Examples:**
 
    .. code-block:: bash
@@ -136,6 +139,12 @@ Helper Functions
       # Non-interactive mode - execute single command
       mo-diag -d test -c "show_ivf_status"
       mo-diag -d test -c "show_table_stats my_table -a"
+
+      # CDC management helpers
+      mo-diag cdc show
+      mo-diag cdc show nightly_sync --details --threshold=5m
+      mo-diag cdc create --table-level
+      mo-diag cdc drop nightly_sync --force
 
 Utility Functions
 -----------------

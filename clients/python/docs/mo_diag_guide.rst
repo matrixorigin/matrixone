@@ -11,6 +11,7 @@ MO-DIAG (MatrixOne Diagnostic Tool) provides:
 * **Index Inspection**: View and analyze all types of indexes (IVF, HNSW, Fulltext, and regular)
 * **Health Monitoring**: Check index health across all tables in a database
 * **CDC Health Checks**: Evaluate CDC task status, errors, and watermark lag
+* **CDC Task Management**: Guided creation, inspection, and safe deletion workflows
 * **Row Count Verification**: Verify consistency between main tables and index tables
 * **IVF Status Monitoring**: Monitor IVF vector index centroid distribution and balance
 * **Table Statistics**: Detailed table and index statistics using metadata scan
@@ -21,7 +22,7 @@ Features
 ~~~~~~~~
 
 * 🎯 **Interactive Mode**: Full-featured shell with tab completion and history
-* 🚀 **Non-Interactive Mode**: Execute single commands for scripting
+* 🚀 **Non-Interactive Mode**: Execute single commands for scripting (including ``mo-diag cdc`` helpers)
 * 📊 **Comprehensive Diagnostics**: Inspect all aspects of tables and indexes
 * 🩺 **CDC Monitoring**: Run CDC health checks to surface lagging or errored tasks
 * 🔍 **Smart Completion**: Auto-complete table names, database names, and commands
@@ -409,6 +410,77 @@ Run CDC task health diagnostics to spot errors, stuck tasks, and delayed waterma
      • nightly_sync.analytics.payments (watermark: 2025-11-07 14:55:42)
 
    Healthy tasks (no reported issues): 2
+
+CDC Task Management
+-------------------
+
+cdc_tasks
+~~~~~~~~~
+
+List CDC tasks with a concise summary (state, sink type, mapping preview) and optional detail output.
+
+.. code-block:: text
+
+   Usage: cdc_tasks [--details]
+   
+   Example:
+       cdc_tasks
+       cdc_tasks --details
+
+With ``--details`` the command includes connection URIs, task options, and checkpoint metadata for each task.
+
+cdc_task
+~~~~~~~~
+
+Inspect or control an individual CDC task. Watermarks are displayed with human friendly timestamps (UTC) and delay calculations.
+
+.. code-block:: text
+
+   Usage: cdc_task <task_name> [--details] [--no-watermarks] [--watermarks-only]
+                        [--table=<name>] [--threshold=<duration>] [--strict]
+                        [--pause|--resume|--restart]
+   
+   Example:
+       cdc_task nightly_sync --details
+       cdc_task nightly_sync --threshold=5m --strict
+       cdc_task nightly_sync --pause
+
+``--threshold`` accepts values such as ``30s``, ``5m`` or ``1h``. ``--strict`` is a shorthand for zero tolerance.
+
+cdc_create
+~~~~~~~~~~
+
+Launch the interactive wizard to create a CDC task. The flow now prints a JSON preview of the final configuration and asks
+for confirmation before submitting ``CREATE CDC``.
+
+.. code-block:: text
+
+   Usage: cdc_create [--database-level|--table-level]
+
+For table-level replication you will be prompted for one or more table mappings in ``source_db.table[:sink_db.table]`` form.
+
+cdc_drop
+~~~~~~~~
+
+Drop a CDC task. Two confirmation prompts guard against accidental removal; use ``--force`` in scripted scenarios to skip prompts.
+
+.. code-block:: text
+
+   Usage: cdc_drop <task_name> [--force]
+
+Non-interactive automation
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``mo-diag`` entry point mirrors the interactive commands through ``mo-diag cdc``. This is ideal for automation pipelines:
+
+.. code-block:: bash
+
+   mo-diag cdc show                # Summary of all tasks (same as cdc_tasks)
+   mo-diag cdc show nightly_sync --details --threshold=5m
+   mo-diag cdc create --table-level
+   mo-diag cdc drop nightly_sync --force
+
+All validations and previews are shared with the interactive counterparts because both routes reuse the same CDC helpers.
 
 Table Statistics Commands
 -------------------------
