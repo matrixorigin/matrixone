@@ -16,9 +16,13 @@ package frontend
 
 import (
 	"context"
+	"fmt"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -89,12 +93,17 @@ func handleUpdateCDCTaskRequest(
 		conds     = make([]taskservice.Condition, 0)
 	)
 
+	var (
+		operation string
+	)
+
 	switch updateReq := req.(type) {
 	case *tree.DropCDC:
 		if updateReq.Option == nil {
 			return moerr.NewInternalError(ctx, "invalid drop cdc option")
 		}
 		targetTaskStatus = task.TaskStatus_CancelRequested
+		operation = "drop"
 		conds = append(
 			conds,
 			taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -112,6 +121,7 @@ func handleUpdateCDCTaskRequest(
 			return moerr.NewInternalError(ctx, "invalid pause cdc option")
 		}
 		targetTaskStatus = task.TaskStatus_PauseRequested
+		operation = "pause"
 		conds = append(
 			conds,
 			taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -126,6 +136,7 @@ func handleUpdateCDCTaskRequest(
 		}
 	case *tree.ResumeCDC:
 		targetTaskStatus = task.TaskStatus_ResumeRequested
+		operation = "resume"
 		taskName = updateReq.TaskName.String()
 		if len(taskName) == 0 {
 			return moerr.NewInternalError(ctx, "invalid resume cdc task name")
@@ -138,6 +149,7 @@ func handleUpdateCDCTaskRequest(
 		)
 	case *tree.RestartCDC:
 		targetTaskStatus = task.TaskStatus_RestartRequested
+		operation = "restart"
 		taskName = updateReq.TaskName.String()
 		if len(taskName) == 0 {
 			return moerr.NewInternalError(ctx, "invalid restart cdc task name")
@@ -155,6 +167,16 @@ func handleUpdateCDCTaskRequest(
 			req.String(),
 		)
 	}
+
+	logutil.Info(
+		"cdc.task.request",
+		zap.String("statement-type", fmt.Sprintf("%T", req)),
+		zap.String("operation", operation),
+		zap.String("target-status", targetTaskStatus.String()),
+		zap.String("task-name", taskName),
+		zap.Uint32("account-id", accountId),
+	)
+
 	return doUpdateCDCTask(
 		ctx,
 		targetTaskStatus,

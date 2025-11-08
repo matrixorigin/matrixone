@@ -569,10 +569,13 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
 	u.Unlock()
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
-	defer cancel()
-	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+	if commitSql != "" {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
+		defer cancel()
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+	}
+
 	u.Lock()
 	defer u.Unlock()
 
@@ -640,6 +643,9 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 			escapeSQLString(wm.ToString()),
 		)
 		i++
+	}
+	if i == 0 {
+		return ""
 	}
 	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkSQL(values)
 	return
