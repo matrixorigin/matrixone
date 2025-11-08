@@ -450,15 +450,15 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
-		return nil, nil
-	})
-	defer stubOpenDbConn.Reset()
-
 	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(user, password string, ip string, port int, timeout string) (*sql.DB, error) {
+		return nil, nil
+	})
+	defer stubOpenDbConn.Reset()
 
 	tests := []struct {
 		name    string
@@ -498,6 +498,11 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
+		return nil, nil
+	})
+	defer stubOpenDbConn.Reset()
 
 	create := &tree.CreateCDC{
 		IfNotExists: false,
@@ -1016,6 +1021,9 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	}
 
 	attacher := func(ctx context.Context, tid uint64, ar taskservice.ActiveRoutine) error {
+		if exec, ok := ar.(*CDCTaskExecutor); ok {
+			exec.holdCh <- 1
+		}
 		return nil
 	}
 
