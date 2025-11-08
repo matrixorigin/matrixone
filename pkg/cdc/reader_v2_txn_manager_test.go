@@ -126,6 +126,14 @@ func (m *mockWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key *Wat
 	return nil
 }
 
+func (m *mockWatermarkUpdater) IsCircuitBreakerOpen(key *WatermarkKey) bool {
+	return false
+}
+
+func (m *mockWatermarkUpdater) GetCommitFailureCount(key *WatermarkKey) uint32 {
+	return 0
+}
+
 func (m *mockWatermarkUpdater) keyString(key *WatermarkKey) string {
 	return key.TaskId + ":" + key.DBName + ":" + key.TableName
 }

@@ -33,6 +33,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
 
 // Reader lifecycle constants
@@ -54,6 +55,8 @@ type WatermarkUpdater interface {
 	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
 	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
 	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
+	IsCircuitBreakerOpen(key *WatermarkKey) bool
+	GetCommitFailureCount(key *WatermarkKey) uint32
 }
 
 const (
@@ -350,7 +353,10 @@ func (bat *AtomicBatch) RowCount() int {
 	}
 
 	if c != bat.Rows.Len() {
-		logutil.Errorf("inconsistent row count, sum rows of batches: %d, rows of btree: %d\n", c, bat.Rows.Len())
+		logutil.Error("cdc.atomic_batch.row_count_mismatch",
+			zap.Int("batch-rows", c),
+			zap.Int("btree-rows", bat.Rows.Len()),
+		)
 	}
 	return c
 }

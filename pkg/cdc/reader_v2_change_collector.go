@@ -144,7 +144,7 @@ func NewChangeCollector(
 func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
 	if cc.closed {
 		logutil.Warn(
-			"CDC-ChangeCollector-NextAfterClose",
+			"cdc.change_collector.next_after_close",
 			zap.String("task-id", cc.taskId),
 			zap.Uint64("account-id", cc.accountId),
 			zap.String("db", cc.dbName),
@@ -157,7 +157,7 @@ func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
 	insertBatch, deleteBatch, hint, err := cc.changesHandle.Next(ctx, cc.mp)
 	if err != nil {
 		logutil.Error(
-			"CDC-ChangeCollector-NextFailed",
+			"cdc.change_collector.next_failed",
 			zap.String("task-id", cc.taskId),
 			zap.Uint64("account-id", cc.accountId),
 			zap.String("db", cc.dbName),
@@ -181,7 +181,7 @@ func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
 			changeType = ChangeTypeTailDone
 		default:
 			logutil.Warn(
-				"CDC-ChangeCollector-UnknownHint",
+				"cdc.change_collector.unknown_hint",
 				zap.String("task-id", cc.taskId),
 				zap.Uint64("account-id", cc.accountId),
 				zap.String("db", cc.dbName),
@@ -193,7 +193,7 @@ func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
 	}
 
 	logutil.Debug(
-		"CDC-ChangeCollector-Next",
+		"cdc.change_collector.next",
 		zap.String("task-id", cc.taskId),
 		zap.Uint64("account-id", cc.accountId),
 		zap.String("db", cc.dbName),
@@ -222,7 +222,7 @@ func (cc *ChangeCollector) Close() error {
 	if cc.changesHandle != nil {
 		if err := cc.changesHandle.Close(); err != nil {
 			logutil.Error(
-				"CDC-ChangeCollector-CloseFailed",
+				"cdc.change_collector.close_failed",
 				zap.String("task-id", cc.taskId),
 				zap.Uint64("account-id", cc.accountId),
 				zap.String("db", cc.dbName),
@@ -234,7 +234,7 @@ func (cc *ChangeCollector) Close() error {
 	}
 
 	logutil.Debug(
-		"CDC-ChangeCollector-Closed",
+		"cdc.change_collector.closed",
 		zap.String("task-id", cc.taskId),
 		zap.Uint64("account-id", cc.accountId),
 		zap.String("db", cc.dbName),

@@ -90,13 +90,17 @@ func NewConsoleSinker(
 func (s *consoleSinker) Run(_ context.Context, _ *ActiveRoutine) {}
 
 func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) {
-	logutil.Info("====console sinker====")
+	tableName := ""
+	if s.dbTblInfo != nil {
+		tableName = s.dbTblInfo.String()
+	}
+	logutil.Info("cdc.sinker.console", zap.String("table", tableName))
 
-	logutil.Infof("output type %s", data.outputTyp)
+	logutil.Info("cdc.sinker.console.output_type", zap.String("type", data.outputTyp.String()))
 	switch data.outputTyp {
 	case OutputTypeSnapshot:
 		if data.checkpointBat != nil && data.checkpointBat.RowCount() > 0 {
-			logutil.Info("checkpoint")
+			logutil.Info("cdc.sinker.console.checkpoint")
 			//logutil.Info(data.checkpointBat.String())
 		}
 	case OutputTypeTail:
@@ -111,7 +115,9 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) {
 			iter := data.insertAtmBatch.GetRowIterator()
 			for iter.Next() {
 				_ = iter.Row(ctx, row)
-				logutil.Infof("insert %v", row)
+				logutil.Info("cdc.sinker.console.insert_row",
+					zap.Any("row", row),
+				)
 			}
 			iter.Close()
 		}
@@ -210,7 +216,7 @@ func (s *mysqlSink) infoRecordedTxnSQLs(err error) {
 			buf.WriteString("; ")
 		}
 
-		logutil.Info("CDC-RECORDED-TXN",
+		logutil.Info("cdc.mysql_sink.recorded_txn",
 			zap.Error(err),
 			zap.String("details", buf.String()))
 	}
@@ -246,7 +252,10 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 
 			s.infoRecordedTxnSQLs(err)
 
-			logutil.Errorf("CDC-MySQLSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
+			logutil.Error("cdc.mysql_sink.send_failed",
+				zap.Error(err),
+				zap.String("sql", string(sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])),
+			)
 			//logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:])
 		}
 		//logutil.Infof("cdc mysqlSink Send success, sql: %s", sqlBuf[sqlBufReserved:])
@@ -316,12 +325,12 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() error, retryTimes i
 			return
 		}
 
-		logutil.Errorf("CDC-MySQLSink retry failed, err: %v", err)
+		logutil.Error("cdc.mysql_sink.retry_failed", zap.Error(err))
 		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(dur)
 		dur *= 2
 	}
-	return moerr.NewInternalError(ctx, "CDC-MySQLSink retry exceed retryTimes or retryDuration")
+	return moerr.NewInternalError(ctx, "cdc mysql sink retry exceed retryTimes or retryDuration")
 }
 
 //type matrixoneSink struct {

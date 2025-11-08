@@ -172,7 +172,7 @@ func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
 
 	// Always log summary
 	logutil.Info(
-		"CDC-State-Summary",
+		"cdc.table_detector.state_summary",
 		zap.Int("total-runners", totalRunners),
 		zap.Int("active-runners", activeRunners),
 		zap.Int("completed-runners", completedRunners),
@@ -183,7 +183,7 @@ func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
 	// Log slow runners details if any
 	if slowRunners > 0 {
 		logutil.Warn(
-			"CDC-State-SlowRunners",
+			"cdc.table_detector.slow_runners",
 			zap.Int("count", slowRunners),
 			zap.String("details", slowRunnersDetails),
 		)
@@ -249,7 +249,7 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 	}
 	s.Callbacks[id] = cb
 	logutil.Info(
-		"CDC-TableDetector-Register",
+		"cdc.table_detector.register",
 		zap.String("task-id", id),
 		zap.Uint32("account-id", accountId),
 	)
@@ -306,14 +306,14 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	logutil.Info(
-		"CDC-TableDetector-UnRegister",
+		"cdc.table_detector.unregister",
 		zap.String("task-id", id),
 	)
 }
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
-	logutil.Info("CDC-TableDetector-Scan-Start")
-	defer logutil.Info("CDC-TableDetector-Scan-End")
+	logutil.Info("cdc.table_detector.scan_start")
+	defer logutil.Info("cdc.table_detector.scan_end")
 
 	var tickerDuration, retryTickerDuration time.Duration
 	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
@@ -365,12 +365,12 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	// Defensive: ensure scanTableFn is set (for testing scenarios)
 	if s.scanTableFn == nil {
-		logutil.Warn("CDC-TableDetector-Scan-Skipped", zap.String("reason", "scanTableFn is nil"))
+		logutil.Warn("cdc.table_detector.scan_skipped", zap.String("reason", "scanTableFn is nil"))
 		return
 	}
 
 	if err := s.scanTableFn(); err != nil {
-		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
+		logutil.Error("cdc.table_detector.scan_error", zap.Error(err))
 		return
 	}
 
@@ -396,9 +396,9 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	defer s.mu.Unlock()
 
 	if err != nil {
-		logutil.Warn("CDC-TableDetector-Callback-Failed", zap.Error(err))
+		logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
 	} else {
-		logutil.Info("CDC-TableDetector-Callback-Success")
+		logutil.Info("cdc.table_detector.callback_success")
 		s.lastMp = nil
 	}
 

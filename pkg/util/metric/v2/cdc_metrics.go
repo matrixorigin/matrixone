@@ -159,6 +159,33 @@ var (
 			Name:      "watermark_cache_size",
 			Help:      "Number of watermarks in each cache tier",
 		}, []string{"tier"}) // tier: uncommitted, committing, committed
+
+	// CdcWatermarkCommitErrorCounter tracks commit failures by reason
+	CdcWatermarkCommitErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "watermark_commit_error_total",
+			Help:      "Total number of watermark commit errors grouped by reason",
+		}, []string{"reason"}) // reason: sql, circuit_skip
+
+	// CdcWatermarkCircuitEventCounter tracks circuit breaker events
+	CdcWatermarkCircuitEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "watermark_circuit_event_total",
+			Help:      "Total number of watermark circuit breaker events grouped by type",
+		}, []string{"event"}) // event: opened, reset, skip
+
+	// CdcWatermarkCircuitOpenGauge tracks the number of open circuits
+	CdcWatermarkCircuitOpenGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "watermark_circuit_open_total",
+			Help:      "Current number of watermark circuit breakers that are open",
+		})
 )
 
 // CDC Sinker Metrics
@@ -279,6 +306,9 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcWatermarkLagRatio)
 	registry.MustRegister(CdcWatermarkCommitDuration)
 	registry.MustRegister(CdcWatermarkCacheGauge)
+	registry.MustRegister(CdcWatermarkCommitErrorCounter)
+	registry.MustRegister(CdcWatermarkCircuitEventCounter)
+	registry.MustRegister(CdcWatermarkCircuitOpenGauge)
 
 	// Sinker metrics
 	registry.MustRegister(CdcSinkerTransactionCounter)

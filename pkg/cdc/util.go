@@ -566,7 +566,7 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 //}
 
 var OpenDbConn = func(user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
-	logutil.Infof("openDbConn timeout = %s", timeout)
+	logutil.Info("cdc.util.open_db_conn", zap.String("timeout", timeout))
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=%s&timeout=%s&writeTimeout=%s&multiStatements=true",
 		user, password, ip, port, timeout, timeout, timeout)
 	for i := 0; i < 3; i++ {
@@ -577,7 +577,7 @@ var OpenDbConn = func(user, password string, ip string, port int, timeout string
 		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	logutil.Error("cdc task OpenDbConn failed")
+	logutil.Error("cdc.util.open_db_conn_failed", zap.Error(err))
 	return
 }
 

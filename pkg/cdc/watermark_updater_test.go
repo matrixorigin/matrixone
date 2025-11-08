@@ -188,6 +188,7 @@ func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {
 	openedAt, opened := updater.commitCircuitOpen[key]
 	require.True(t, opened)
 	require.True(t, time.Since(openedAt) < watermarkCircuitBreakPeriod)
+	require.True(t, updater.IsCircuitBreakerOpen(&key))
 
 	prevCalls := exec.execCalls
 	job := NewCommittingWMJob(ctx)
@@ -213,6 +214,7 @@ func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {
 	require.False(t, ok)
 	_, ok = updater.commitFailureCount[key]
 	require.False(t, ok)
+	require.False(t, updater.IsCircuitBreakerOpen(&key))
 }
 
 func TestWatermarkUpdater_ForceFlushRetryIntegration(t *testing.T) {
@@ -315,6 +317,50 @@ func TestWatermarkUpdater_ForceFlushCircuitBreakerIntegration(t *testing.T) {
 	_, exists := updater.commitFailureCount[key]
 	require.False(t, exists)
 	require.Greater(t, exec.execCalls, prevCalls)
+}
+
+func TestWatermarkUpdater_CircuitBreakerHelpers(t *testing.T) {
+	exec := &retryableMockExecutor{failRemaining: watermarkCommitMaxRetries}
+	var syncOption UpdateOption = func(u *CDCWatermarkUpdater) {
+		u.customized.scheduleJob = func(job *UpdaterJob) error {
+			u.onJobs(job)
+			return nil
+		}
+		u.customized.cronJob = func(ctx context.Context) {}
+	}
+	updater := NewCDCWatermarkUpdater("helper-circuit", exec, syncOption)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 8,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	ts := types.BuildTS(90, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+
+	for i := 0; i < watermarkCommitMaxRetries; i++ {
+		err := updater.ForceFlush(ctx)
+		require.Error(t, err)
+	}
+
+	require.True(t, updater.IsCircuitBreakerOpen(&key))
+	require.Equal(t, uint32(watermarkCommitMaxRetries), updater.GetCommitFailureCount(&key))
+
+	updater.Lock()
+	updater.commitCircuitOpen[key] = time.Now().Add(-watermarkCircuitBreakPeriod * 2)
+	updater.Unlock()
+
+	require.False(t, updater.IsCircuitBreakerOpen(&key))
+	require.Equal(t, uint32(watermarkCommitMaxRetries), updater.GetCommitFailureCount(&key))
+
+	exec.failRemaining = 0
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+	require.False(t, updater.IsCircuitBreakerOpen(&key))
+	require.Equal(t, uint32(0), updater.GetCommitFailureCount(&key))
 }
 
 func TestWatermarkUpdater_NoWatermarkRegressionOnRetry(t *testing.T) {

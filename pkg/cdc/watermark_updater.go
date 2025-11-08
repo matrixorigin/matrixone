@@ -410,7 +410,7 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 		u.resetJobs(err)
 		if err != nil {
 			logutil.Error(
-				"CDC-Watermark-Read-Error",
+				"cdc.watermark.read_error",
 				zap.Error(err),
 				zap.String("err-msg", errMsg),
 			)
@@ -442,7 +442,7 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 			u.Unlock()
 			logutil.Info(
-				"CDC-Remove-Cached-WM-Success",
+				"cdc.watermark.remove_cached_success",
 				zap.String("key", job.Key.String()),
 			)
 		default:
@@ -566,17 +566,22 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		if openedAt, ok := u.commitCircuitOpen[key]; ok {
 			if time.Since(openedAt) < watermarkCircuitBreakPeriod {
 				logutil.Debug(
-					"CDC-WatermarkCommit-CircuitOpenSkip",
+					"cdc.watermark.commit.circuit_skip",
 					zap.String("key", key.String()),
 					zap.Time("opened-at", openedAt),
 				)
+				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("skip").Inc()
 				skippedDueToCircuit = true
 				continue
+			}
+			if _, existed := u.commitCircuitOpen[key]; existed {
+				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+				v2.CdcWatermarkCircuitOpenGauge.Dec()
 			}
 			delete(u.commitCircuitOpen, key)
 			delete(u.commitFailureCount, key)
 			logutil.Info(
-				"CDC-WatermarkCommit-CircuitReset",
+				"cdc.watermark.commit.circuit_reset",
 				zap.String("key", key.String()),
 			)
 		}
@@ -602,11 +607,14 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	defer u.Unlock()
 
 	if err != nil {
+		reason := "sql"
 		if commitSql != "" {
 			errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
 		} else {
 			errMsg = err.Error()
+			reason = "circuit_skip"
 		}
+		v2.CdcWatermarkCommitErrorCounter.WithLabelValues(reason).Inc()
 		now := time.Now()
 		for key, watermark := range u.cacheCommitting {
 			if existing, ok := u.cacheUncommitted[key]; ok && existing.GT(&watermark) {
@@ -619,8 +627,10 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 			if retry >= watermarkCommitMaxRetries {
 				if _, opened := u.commitCircuitOpen[key]; !opened {
 					u.commitCircuitOpen[key] = now
+					v2.CdcWatermarkCircuitEventCounter.WithLabelValues("opened").Inc()
+					v2.CdcWatermarkCircuitOpenGauge.Inc()
 					logutil.Error(
-						"CDC-WatermarkCommit-CircuitOpen",
+						"cdc.watermark.commit.circuit_open",
 						zap.String("key", key.String()),
 						zap.Uint32("retry-count", retry),
 					)
@@ -631,6 +641,10 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		// commit watermarks from committing to committed
 		for key, watermark := range u.cacheCommitting {
 			u.cacheCommitted[key] = watermark
+			if _, existed := u.commitCircuitOpen[key]; existed {
+				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+				v2.CdcWatermarkCircuitOpenGauge.Dec()
+			}
 			delete(u.commitFailureCount, key)
 			delete(u.commitCircuitOpen, key)
 		}
@@ -910,7 +924,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	// 3. Filter control signals (pause/cancel) - don't persist
 	if isPauseOrCancel {
 		logutil.Info(
-			"CDC-UpdateWatermarkErrMsg-SkipControlSignal",
+			"cdc.watermark.update_errmsg_skip_control_signal",
 			zap.String("key", key.String()),
 			zap.String("signal", errMsg),
 		)
@@ -940,7 +954,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	// 6. Check if exceeded max retry count
 	if newMetadata.IsRetryable && newMetadata.RetryCount > MaxRetryCount {
 		logutil.Warn(
-			"CDC-UpdateWatermarkErrMsg-ExceededMaxRetry",
+			"cdc.watermark.update_errmsg_exceeded_retry",
 			zap.String("key", key.String()),
 			zap.Int("retry-count", newMetadata.RetryCount),
 			zap.String("error", newMetadata.Message),
@@ -959,7 +973,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	// 8. Format and persist (async via job queue)
 	formattedMsg := FormatErrorMetadata(newMetadata)
 	logutil.Info(
-		"CDC-UpdateWatermarkErrMsg-Persist",
+		"cdc.watermark.update_errmsg_persist",
 		zap.String("key", key.String()),
 		zap.Bool("retryable", newMetadata.IsRetryable),
 		zap.Int("retry-count", newMetadata.RetryCount),
@@ -974,8 +988,12 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	err = job.GetResult().Err
 	if err == nil {
 		u.Lock()
+		if _, existed := u.commitCircuitOpen[*key]; existed {
+			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+			v2.CdcWatermarkCircuitOpenGauge.Dec()
+			delete(u.commitCircuitOpen, *key)
+		}
 		delete(u.commitFailureCount, *key)
-		delete(u.commitCircuitOpen, *key)
 		u.Unlock()
 	}
 	return
@@ -1011,7 +1029,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 
 	// Log watermark updates for better observability
 	logutil.Debug(
-		"CDC-WatermarkUpdater-BufferUpdate",
+		"cdc.watermark.buffer_update",
 		zap.String("key", key.String()),
 		zap.String("old-watermark", oldWatermark.ToString()),
 		zap.String("new-watermark", watermark.ToString()),
@@ -1030,7 +1048,7 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 ) (err error) {
 	if err = u.ForceFlush(ctx); err != nil {
 		logutil.Error(
-			"CDCWatermarkUpdater-RemoveCachedWM-ForceFlushFailed",
+			"cdc.watermark.remove.force_flush_failed",
 			zap.String("key", key.String()),
 			zap.Error(err),
 		)
@@ -1053,6 +1071,32 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	job.WaitDone()
 	err = job.GetResult().Err
 	return
+}
+
+// IsCircuitBreakerOpen returns true if the circuit breaker is currently open for the given key.
+func (u *CDCWatermarkUpdater) IsCircuitBreakerOpen(key *WatermarkKey) bool {
+	if key == nil {
+		return false
+	}
+	u.RLock()
+	defer u.RUnlock()
+	if openedAt, ok := u.commitCircuitOpen[*key]; ok {
+		return time.Since(openedAt) < watermarkCircuitBreakPeriod
+	}
+	return false
+}
+
+// GetCommitFailureCount returns the number of consecutive commit failures for the given key.
+func (u *CDCWatermarkUpdater) GetCommitFailureCount(key *WatermarkKey) uint32 {
+	if key == nil {
+		return 0
+	}
+	u.RLock()
+	defer u.RUnlock()
+	if count, ok := u.commitFailureCount[*key]; ok {
+		return count
+	}
+	return 0
 }
 
 // GetOrAddCommitted retrieves the persisted watermark from database, or adds it if not exists.
@@ -1130,7 +1174,7 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			u.RUnlock()
 
 			logutil.Info(
-				"CDC-WatermarkUpdater-Stats",
+				"cdc.watermark.stats",
 				zap.Uint64("run-times", u.stats.runTimes.Load()),
 				zap.Uint64("skip-times", u.stats.skipTimes.Load()),
 				zap.Uint64("error-times", u.stats.errorTimes.Load()),

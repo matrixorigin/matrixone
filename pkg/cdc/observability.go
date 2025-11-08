@@ -107,7 +107,7 @@ func (pt *ProgressTracker) SetState(state string) {
 		pt.stateChangeCount.Add(1)
 
 		logutil.Debug(
-			"CDC-ProgressTracker-StateChange",
+			"cdc.progress_tracker.state_change",
 			zap.String("table", pt.tableKey()),
 			zap.String("new-state", state),
 			zap.Uint64("state-changes", pt.stateChangeCount.Load()),
@@ -135,7 +135,7 @@ func (pt *ProgressTracker) StartRound(fromTs, toTs types.TS) {
 	pt.totalRounds.Add(1)
 
 	logutil.Debug(
-		"CDC-ProgressTracker-RoundStart",
+		"cdc.progress_tracker.round_start",
 		zap.String("table", pt.tableKey()),
 		zap.String("from-ts", fromTs.ToString()),
 		zap.String("to-ts", toTs.ToString()),
@@ -180,7 +180,7 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 	currentRoundBatches := pt.currentRoundBatches.Load()
 
 	logutil.Debug(
-		"CDC-ProgressTracker-RoundEnd",
+		"cdc.progress_tracker.round_end",
 		zap.String("table", pt.tableKey()),
 		zap.Bool("success", success),
 		zap.Duration("duration", duration),
@@ -231,7 +231,7 @@ func (pt *ProgressTracker) UpdateWatermark(newWatermark types.TS) {
 	pt.watermarkUpdateCount.Add(1)
 
 	logutil.Debug(
-		"CDC-ProgressTracker-WatermarkUpdate",
+		"cdc.progress_tracker.watermark_update",
 		zap.String("table", pt.tableKey()),
 		zap.String("old-watermark", oldWatermark.ToString()),
 		zap.String("new-watermark", newWatermark.ToString()),
@@ -257,7 +257,7 @@ func (pt *ProgressTracker) RecordError(err error) {
 	pt.errorCount.Add(1)
 
 	logutil.Error(
-		"CDC-ProgressTracker-Error",
+		"cdc.progress_tracker.error",
 		zap.String("table", pt.tableKey()),
 		zap.Error(err),
 		zap.Uint64("error-count", pt.errorCount.Load()),
@@ -290,7 +290,7 @@ func (pt *ProgressTracker) logProgressLocked() {
 	state, stateAge := pt.state, time.Since(pt.lastStateChange)
 
 	logutil.Info(
-		"CDC-ProgressTracker-Progress",
+		"cdc.progress_tracker.progress",
 		zap.String("table", pt.tableKey()),
 		zap.String("state", state),
 		zap.Duration("state-age", stateAge),
@@ -412,7 +412,7 @@ func (pm *ProgressMonitor) Register(tracker *ProgressTracker) {
 	tracker.logInterval = pm.logInterval
 
 	logutil.Info(
-		"CDC-ProgressMonitor-Register",
+		"cdc.progress_monitor.register",
 		zap.String("table", key),
 		zap.Int("total-trackers", len(pm.trackers)),
 	)
@@ -427,7 +427,7 @@ func (pm *ProgressMonitor) Unregister(tracker *ProgressTracker) {
 	delete(pm.trackers, key)
 
 	logutil.Info(
-		"CDC-ProgressMonitor-Unregister",
+		"cdc.progress_monitor.unregister",
 		zap.String("table", key),
 		zap.Int("total-trackers", len(pm.trackers)),
 	)
@@ -438,7 +438,7 @@ func (pm *ProgressMonitor) Start() {
 	pm.wg.Add(1)
 	go pm.monitorLoop()
 
-	logutil.Info("CDC-ProgressMonitor-Started")
+	logutil.Info("cdc.progress_monitor.started")
 }
 
 // Stop stops the monitoring goroutine
@@ -446,7 +446,7 @@ func (pm *ProgressMonitor) Stop() {
 	pm.cancel()
 	pm.wg.Wait()
 
-	logutil.Info("CDC-ProgressMonitor-Stopped")
+	logutil.Info("cdc.progress_monitor.stopped")
 }
 
 // monitorLoop is the main monitoring loop
@@ -482,7 +482,7 @@ func (pm *ProgressMonitor) checkAllTrackers() {
 			state, stateAge := tracker.GetState()
 
 			logutil.Warn(
-				"CDC-ProgressMonitor-StuckDetected",
+				"cdc.progress_monitor.stuck_detected",
 				zap.String("table", tracker.tableKey()),
 				zap.String("reason", reason),
 				zap.String("state", state),
@@ -496,7 +496,7 @@ func (pm *ProgressMonitor) checkAllTrackers() {
 
 	if stuckCount > 0 || len(trackers) > 0 {
 		logutil.Info(
-			"CDC-ProgressMonitor-Summary",
+			"cdc.progress_monitor.summary",
 			zap.Int("total-tables", len(trackers)),
 			zap.Int("stuck-tables", stuckCount),
 		)

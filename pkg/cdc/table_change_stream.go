@@ -206,7 +206,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	// 1. Check for duplicate readers
 	if _, loaded := s.runningReaders.LoadOrStore(s.runningReaderKey, s); loaded {
 		logutil.Warn(
-			"CDC-TableChangeStream-DuplicateRunning",
+			"cdc.table_stream.duplicate_running",
 			zap.String("table", s.tableInfo.String()),
 			zap.String("task-id", s.taskId),
 			zap.Uint64("account-id", s.accountId),
@@ -216,7 +216,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	}
 
 	logutil.Info(
-		"CDC-TableChangeStream-Start",
+		"cdc.table_stream.start",
 		zap.String("table", s.tableInfo.String()),
 		zap.Uint64("account-id", s.accountId),
 		zap.String("task-id", s.taskId),
@@ -246,7 +246,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	// 5. Calculate initial delay based on last sync time
 	if err := s.calculateInitialDelay(ctx); err != nil {
 		logutil.Error(
-			"CDC-TableChangeStream-CalculateInitialDelayFailed",
+			"cdc.table_stream.calculate_initial_delay_failed",
 			zap.String("table", s.tableInfo.String()),
 			zap.Error(err),
 		)
@@ -282,7 +282,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			s.progressTracker.EndRound(false, err)
 
 			logutil.Error(
-				"CDC-TableChangeStream-ProcessFailed",
+				"cdc.table_stream.process_failed",
 				zap.String("table", s.tableInfo.String()),
 				zap.Bool("retryable", s.retryable),
 				zap.Duration("round-duration", time.Since(roundStart)),
@@ -305,7 +305,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	// Remove watermark cache
 	if err := s.watermarkUpdater.RemoveCachedWM(ctx, s.watermarkKey); err != nil {
 		logutil.Error(
-			"CDC-TableChangeStream-RemoveCachedWMFailed",
+			"cdc.table_stream.remove_cached_watermark_failed",
 			zap.String("table", s.tableInfo.String()),
 			zap.Error(err),
 		)
@@ -320,7 +320,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 
 		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, s.lastError.Error(), errorCtx); err != nil {
 			logutil.Error(
-				"CDC-TableChangeStream-UpdateWatermarkErrMsgFailed",
+				"cdc.table_stream.update_watermark_errmsg_failed",
 				zap.String("table", s.tableInfo.String()),
 				zap.Error(err),
 			)
@@ -336,7 +336,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	}
 
 	logutil.Info(
-		"CDC-TableChangeStream-End",
+		"cdc.table_stream.end",
 		zap.String("table", s.tableInfo.String()),
 		zap.Uint64("account-id", s.accountId),
 		zap.String("task-id", s.taskId),
@@ -348,7 +348,7 @@ func (s *TableChangeStream) calculateInitialDelay(ctx context.Context) error {
 	lastSync, err := s.getLastSyncTime(ctx)
 	if err != nil {
 		logutil.Warn(
-			"CDC-TableChangeStream-GetLastSyncTimeFailed",
+			"cdc.table_stream.get_last_sync_time_failed",
 			zap.String("table", s.tableInfo.String()),
 			zap.Error(err),
 		)
@@ -389,7 +389,7 @@ func (s *TableChangeStream) getLastSyncTime(ctx context.Context) (time.Time, err
 // forceNextInterval forces the next tick interval
 func (s *TableChangeStream) forceNextInterval(wait time.Duration) {
 	logutil.Info(
-		"CDC-TableChangeStream-ForceNextInterval",
+		"cdc.table_stream.force_next_interval",
 		zap.String("table", s.tableInfo.String()),
 		zap.Duration("wait", wait),
 	)
@@ -439,7 +439,7 @@ func (s *TableChangeStream) clearErrorOnFirstSuccess(ctx context.Context) {
 	if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, "", nil); err != nil {
 		s.hasSucceeded.Store(false)
 		logutil.Warn(
-			"CDC-TableChangeStream-ClearErrorOnSuccessFailed",
+			"cdc.table_stream.clear_error_failed",
 			zap.String("table", s.tableInfo.String()),
 			zap.Error(err),
 		)
@@ -472,7 +472,7 @@ func (s *TableChangeStream) processWithTxn(
 	// Check if reached end time
 	if !s.endTs.IsEmpty() && fromTs.GE(&s.endTs) {
 		logutil.Info(
-			"CDC-TableChangeStream-ReachedEndTs",
+			"cdc.table_stream.reached_end_ts",
 			zap.String("table", s.tableInfo.String()),
 			zap.String("from-ts", fromTs.ToString()),
 			zap.String("end-ts", s.endTs.ToString()),
@@ -508,7 +508,7 @@ func (s *TableChangeStream) processWithTxn(
 	}
 
 	logutil.Debug(
-		"CDC-TableChangeStream-CollectChanges",
+		"cdc.table_stream.collect_changes",
 		zap.String("table", s.tableInfo.String()),
 		zap.String("from-ts", fromTs.ToString()),
 		zap.String("to-ts", toTs.ToString()),
@@ -537,7 +537,7 @@ func (s *TableChangeStream) processWithTxn(
 		if err != nil || ctx.Err() != nil {
 			if cleanupErr := s.txnManager.EnsureCleanup(ctx); cleanupErr != nil {
 				logutil.Error(
-					"CDC-TableChangeStream-EnsureCleanupFailed",
+					"cdc.table_stream.ensure_cleanup_failed",
 					zap.String("table", s.tableInfo.String()),
 					zap.Error(cleanupErr),
 				)
@@ -599,7 +599,7 @@ func (s *TableChangeStream) processWithTxn(
 
 			if batchCount%10 == 0 {
 				logutil.Info(
-					"CDC-TableChangeStream-ProcessingProgress",
+					"cdc.table_stream.processing_progress",
 					zap.String("table", s.tableInfo.String()),
 					zap.Uint64("batches-processed", batchCount),
 					zap.Uint64("total-rows", s.progressTracker.totalRowsProcessed.Load()),
@@ -620,13 +620,21 @@ func (s *TableChangeStream) processWithTxn(
 			s.progressTracker.RecordTransaction()
 
 			logutil.Debug(
-				"CDC-TableChangeStream-RoundComplete",
+				"cdc.table_stream.round_complete",
 				zap.String("table", s.tableInfo.String()),
 				zap.Uint64("batches-processed", batchCount),
 				zap.Uint64("round-rows", s.progressTracker.currentRoundRows.Load()),
 				zap.String("from-ts", fromTs.ToString()),
 				zap.String("to-ts", toTs.ToString()),
 			)
+			if s.watermarkUpdater.IsCircuitBreakerOpen(s.watermarkKey) {
+				failures := s.watermarkUpdater.GetCommitFailureCount(s.watermarkKey)
+				logutil.Warn(
+					"cdc.table_stream.watermark_circuit_open",
+					zap.String("table", s.tableInfo.String()),
+					zap.Uint32("failure-count", failures),
+				)
+			}
 
 			return nil
 		}
@@ -658,7 +666,7 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 	// Update watermark
 	if err := s.watermarkUpdater.UpdateWatermarkOnly(ctx, s.watermarkKey, &watermark); err != nil {
 		logutil.Error(
-			"CDC-TableChangeStream-UpdateWatermarkOnlyFailed",
+			"cdc.table_stream.update_watermark_only_failed",
 			zap.String("table", s.tableInfo.String()),
 			zap.String("watermark", watermark.ToString()),
 			zap.Error(err),
@@ -666,7 +674,7 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 	}
 
 	logutil.Info(
-		"CDC-TableChangeStream-ResetWatermarkOnStaleRead",
+		"cdc.table_stream.reset_watermark_on_stale_read",
 		zap.String("table", s.tableInfo.String()),
 		zap.String("watermark", watermark.ToString()),
 	)

@@ -73,7 +73,7 @@ func NewTransactionManager(
 func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs types.TS) error {
 	if tm.tracker != nil && tm.tracker.NeedsRollback() {
 		logutil.Warn(
-			"CDC-TransactionManager-BeginWithUnfinished",
+			"cdc.txn_manager.begin_with_unfinished",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -94,7 +94,7 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 	// Check for errors
 	if err := tm.sinker.Error(); err != nil {
 		logutil.Error(
-			"CDC-TransactionManager-SendBeginFailed",
+			"cdc.txn_manager.send_begin_failed",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -108,7 +108,7 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 	tm.tracker.MarkBegin()
 
 	logutil.Debug(
-		"CDC-TransactionManager-BeginSuccess",
+		"cdc.txn_manager.begin_success",
 		zap.String("task-id", tm.taskId),
 		zap.Uint64("account-id", tm.accountId),
 		zap.String("db", tm.dbName),
@@ -128,7 +128,7 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 	if tm.tracker == nil {
 		logutil.Warn(
-			"CDC-TransactionManager-CommitWithoutTracker",
+			"cdc.txn_manager.commit_without_tracker",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -139,7 +139,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 
 	if !tm.tracker.hasBegin {
 		logutil.Warn(
-			"CDC-TransactionManager-CommitWithoutBegin",
+			"cdc.txn_manager.commit_without_begin",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -151,7 +151,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 	toTs := tm.tracker.GetToTs()
 
 	logutil.Debug(
-		"CDC-TransactionManager-CommitTransaction-Start",
+		"cdc.txn_manager.commit_start",
 		zap.String("task-id", tm.taskId),
 		zap.String("db", tm.dbName),
 		zap.String("table", tm.tableName),
@@ -167,7 +167,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 	// Check for errors
 	if err := tm.sinker.Error(); err != nil {
 		logutil.Error(
-			"CDC-TransactionManager-SendCommitFailed",
+			"cdc.txn_manager.send_commit_failed",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -186,7 +186,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 		&toTs,
 	); err != nil {
 		logutil.Error(
-			"CDC-TransactionManager-UpdateWatermarkFailed",
+			"cdc.txn_manager.update_watermark_failed",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -203,7 +203,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 	tm.tracker.MarkWatermarkUpdated()
 
 	logutil.Debug(
-		"CDC-TransactionManager-CommitSuccess",
+		"cdc.txn_manager.commit_success",
 		zap.String("task-id", tm.taskId),
 		zap.Uint64("account-id", tm.accountId),
 		zap.String("db", tm.dbName),
@@ -218,7 +218,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 	if tm.tracker == nil {
 		logutil.Warn(
-			"CDC-TransactionManager-RollbackWithoutTracker",
+			"cdc.txn_manager.rollback_without_tracker",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -229,7 +229,7 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 
 	if !tm.tracker.hasBegin {
 		logutil.Debug(
-			"CDC-TransactionManager-RollbackWithoutBegin",
+			"cdc.txn_manager.rollback_without_begin",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -240,7 +240,7 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 
 	if tm.tracker.hasRolledBack {
 		logutil.Debug(
-			"CDC-TransactionManager-AlreadyRolledBack",
+			"cdc.txn_manager.already_rolled_back",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -260,7 +260,7 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 	// Check for errors
 	if err := tm.sinker.Error(); err != nil {
 		logutil.Error(
-			"CDC-TransactionManager-SendRollbackFailed",
+			"cdc.txn_manager.send_rollback_failed",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -277,7 +277,7 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 	tm.tracker.MarkRollback()
 
 	logutil.Debug(
-		"CDC-TransactionManager-RollbackSuccess",
+		"cdc.txn_manager.rollback_success",
 		zap.String("task-id", tm.taskId),
 		zap.Uint64("account-id", tm.accountId),
 		zap.String("db", tm.dbName),
@@ -299,7 +299,7 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 	// Layer 1: Check explicit transaction state
 	if tm.tracker.NeedsRollback() {
 		logutil.Warn(
-			"CDC-TransactionManager-EnsureCleanup-TrackerNeedsRollback",
+			"cdc.txn_manager.ensure_cleanup_tracker_needs_rollback",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -315,7 +315,7 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 	if err != nil {
 		// Even if GetFromCache fails, use tracker state
 		logutil.Warn(
-			"CDC-TransactionManager-EnsureCleanup-GetFromCacheFailed",
+			"cdc.txn_manager.ensure_cleanup_get_from_cache_failed",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),
@@ -332,7 +332,7 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 	// Final guard: Even if tracker says committed, but watermark not updated
 	if !current.Equal(&toTs) && tm.tracker.hasBegin {
 		logutil.Error(
-			"CDC-TransactionManager-EnsureCleanup-WatermarkMismatch",
+			"cdc.txn_manager.ensure_cleanup_watermark_mismatch",
 			zap.String("task-id", tm.taskId),
 			zap.Uint64("account-id", tm.accountId),
 			zap.String("db", tm.dbName),

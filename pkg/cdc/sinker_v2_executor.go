@@ -277,7 +277,7 @@ func (e *Executor) retryWithBackoff(
 
 		// Log retry attempt
 		logutil.Error(
-			"CDC-Executor-RetryFailed",
+			"cdc.executor.retry_failed",
 			zap.Int("attempt", attempt+1),
 			zap.Error(err),
 		)
@@ -317,7 +317,7 @@ func (e *Executor) resetRecordedTxn() {
 func (e *Executor) logFailedSQL(err error, sqlBuf []byte) {
 	maxLen := min(len(sqlBuf), v2SQLPrintLen+v2SQLBufReserved)
 	logutil.Error(
-		"CDC-Executor-SQLFailed",
+		"cdc.executor.sql_failed",
 		zap.Error(err),
 		zap.String("sql", string(sqlBuf[v2SQLBufReserved:maxLen])),
 	)
@@ -325,8 +325,8 @@ func (e *Executor) logFailedSQL(err error, sqlBuf []byte) {
 	// Log full transaction if recording is enabled
 	if e.debugTxnRecorder.doRecord && len(e.debugTxnRecorder.txnSQL) > 0 {
 		logutil.Error(
-			"CDC-Executor-TransactionHistory",
-			zap.Strings("txnSQL", e.debugTxnRecorder.txnSQL),
+			"cdc.executor.transaction_history",
+			zap.Strings("txn_sql", e.debugTxnRecorder.txnSQL),
 		)
 	}
 }

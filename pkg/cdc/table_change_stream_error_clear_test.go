@@ -120,6 +120,14 @@ func (m *mockWatermarkUpdaterWithTracking) reset() {
 	m.errorCalls = make([]errorCall, 0)
 }
 
+func (m *mockWatermarkUpdaterWithTracking) IsCircuitBreakerOpen(key *WatermarkKey) bool {
+	return false
+}
+
+func (m *mockWatermarkUpdaterWithTracking) GetCommitFailureCount(key *WatermarkKey) uint32 {
+	return 0
+}
+
 // TestClearErrorOnFirstSuccess verifies error clearing behavior on first successful data processing
 func TestClearErrorOnFirstSuccess(t *testing.T) {
 	t.Run("FirstSuccessClearsError", func(t *testing.T) {

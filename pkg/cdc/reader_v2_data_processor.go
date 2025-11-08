@@ -114,7 +114,7 @@ func (dp *DataProcessor) ProcessChange(ctx context.Context, data *ChangeData) er
 	// Check sinker error from last round
 	if err := dp.sinker.Error(); err != nil {
 		logutil.Error(
-			"CDC-DataProcessor-SinkerError",
+			"cdc.data_processor.sinker_error",
 			zap.String("task-id", dp.taskId),
 			zap.Uint64("account-id", dp.accountId),
 			zap.String("db", dp.dbName),
@@ -135,7 +135,7 @@ func (dp *DataProcessor) ProcessChange(ctx context.Context, data *ChangeData) er
 		return dp.processNoMoreData(ctx)
 	default:
 		logutil.Warn(
-			"CDC-DataProcessor-UnknownChangeType",
+			"cdc.data_processor.unknown_change_type",
 			zap.String("task-id", dp.taskId),
 			zap.Uint64("account-id", dp.accountId),
 			zap.String("db", dp.dbName),
@@ -154,7 +154,7 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 	}
 
 	logutil.Debug(
-		"CDC-DataProcessor-ProcessSnapshot-Start",
+		"cdc.data_processor.process_snapshot_start",
 		zap.String("task-id", dp.taskId),
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
@@ -167,7 +167,7 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 	// Skip if no data (empty table snapshot)
 	if rows == 0 {
 		logutil.Debug(
-			"CDC-DataProcessor-ProcessSnapshot-SkipEmpty",
+			"cdc.data_processor.process_snapshot_skip_empty",
 			zap.String("task-id", dp.taskId),
 			zap.String("db", dp.dbName),
 			zap.String("table", dp.tableName),
@@ -181,7 +181,7 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		if !dp.initSnapshotSplitTxn {
 			if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
 				logutil.Error(
-					"CDC-DataProcessor-BeginTransaction-Failed",
+					"cdc.data_processor.begin_transaction_failed",
 					zap.String("task-id", dp.taskId),
 					zap.String("db", dp.dbName),
 					zap.String("table", dp.tableName),
@@ -207,7 +207,7 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 	// Watermark should only be updated when ALL snapshot data is processed (in processNoMoreData)
 
 	logutil.Debug(
-		"CDC-DataProcessor-ProcessSnapshot-Complete",
+		"cdc.data_processor.process_snapshot_complete",
 		zap.String("task-id", dp.taskId),
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
@@ -229,7 +229,7 @@ func (dp *DataProcessor) processTailWip(ctx context.Context, data *ChangeData) e
 	}
 
 	logutil.Debug(
-		"CDC-DataProcessor-ProcessTailWip",
+		"cdc.data_processor.process_tail_wip",
 		zap.String("task-id", dp.taskId),
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
@@ -255,7 +255,7 @@ func (dp *DataProcessor) processTailWip(ctx context.Context, data *ChangeData) e
 	dp.deleteAtmBatch.Append(packer, data.DeleteBatch, dp.delTsColIdx, dp.delCompositedPkColIdx)
 
 	logutil.Debug(
-		"CDC-DataProcessor-ProcessTailWip",
+		"cdc.data_processor.process_tail_wip",
 		zap.String("task-id", dp.taskId),
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
@@ -310,7 +310,7 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 	})
 
 	logutil.Debug(
-		"CDC-DataProcessor-ProcessTailDone",
+		"cdc.data_processor.process_tail_done",
 		zap.String("task-id", dp.taskId),
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
@@ -344,7 +344,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 	// Check for errors
 	if err := dp.sinker.Error(); err != nil {
 		logutil.Error(
-			"CDC-DataProcessor-NoMoreData-SinkerError",
+			"cdc.data_processor.no_more_data_sinker_error",
 			zap.String("task-id", dp.taskId),
 			zap.Uint64("account-id", dp.accountId),
 			zap.String("db", dp.dbName),
@@ -360,7 +360,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 		tracker.UpdateToTs(dp.toTs)
 		if err := dp.txnManager.CommitTransaction(ctx); err != nil {
 			logutil.Error(
-				"CDC-DataProcessor-NoMoreData-CommitFailed",
+				"cdc.data_processor.no_more_data_commit_failed",
 				zap.String("task-id", dp.taskId),
 				zap.Uint64("account-id", dp.accountId),
 				zap.String("db", dp.dbName),
@@ -379,7 +379,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 		v2.CdcHeartbeatCounter.WithLabelValues(tableLabel).Inc()
 
 		logutil.Debug(
-			"CDC-DataProcessor-NoMoreData-HeartbeatUpdate",
+			"cdc.data_processor.no_more_data_heartbeat_update",
 			zap.String("task-id", dp.taskId),
 			zap.String("db", dp.dbName),
 			zap.String("table", dp.tableName),
@@ -393,7 +393,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 			&dp.toTs,
 		); err != nil {
 			logutil.Error(
-				"CDC-DataProcessor-NoMoreData-UpdateWatermarkFailed",
+				"cdc.data_processor.no_more_data_update_watermark_failed",
 				zap.String("task-id", dp.taskId),
 				zap.Uint64("account-id", dp.accountId),
 				zap.String("db", dp.dbName),
@@ -406,7 +406,7 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 	}
 
 	logutil.Debug(
-		"CDC-DataProcessor-ProcessNoMoreData",
+		"cdc.data_processor.process_no_more_data",
 		zap.String("task-id", dp.taskId),
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
@@ -429,7 +429,7 @@ func (dp *DataProcessor) Cleanup() {
 	}
 
 	logutil.Debug(
-		"CDC-DataProcessor-Cleanup",
+		"cdc.data_processor.cleanup",
 		zap.String("task-id", dp.taskId),
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),

@@ -227,7 +227,7 @@ var CreateMysqlSinker2 = func(
 	// This maintains compatibility with the old mysqlSinker pattern
 
 	logutil.Info(
-		"CDC-CreateMysqlSinker2-Success",
+		"cdc.mysql_sinker2.create_success",
 		zap.String("db", dbTblInfo.SinkDbName),
 		zap.String("table", dbTblInfo.SinkTblName),
 		zap.String("task-id", taskId),
@@ -280,11 +280,11 @@ func NewMysqlSinker2(
 // - Context is cancelled
 // - ActiveRoutine signals pause/cancel
 func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
-	logutil.Info("CDC-MySQLSinker2-Run-Start",
+	logutil.Info("cdc.mysql_sinker2.run_start",
 		zap.String("table", s.dbTblInfo.String()))
 
 	defer func() {
-		logutil.Info("CDC-MySQLSinker2-Run-End",
+		logutil.Info("cdc.mysql_sinker2.run_end",
 			zap.String("table", s.dbTblInfo.String()))
 	}()
 
@@ -317,7 +317,7 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 
 	// Validate command
 	if err := cmd.Validate(); err != nil {
-		logutil.Error("CDC-MySQLSinker2-InvalidCommand",
+		logutil.Error("cdc.mysql_sinker2.invalid_command",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("command", cmd.String()),
 			zap.Error(err))
@@ -349,7 +349,7 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 
 	// Set error if handler failed
 	if err != nil {
-		logutil.Error("CDC-MySQLSinker2-CommandFailed",
+		logutil.Error("cdc.mysql_sinker2.command_failed",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("command", cmd.String()),
 			zap.Error(err))
@@ -373,7 +373,7 @@ func (s *mysqlSinker2) handleBegin(ctx context.Context) error {
 	// Update state
 	s.txnState.Store(v2TxnStateActive)
 
-	logutil.Debug("CDC-MySQLSinker2-BeginTxn",
+	logutil.Debug("cdc.mysql_sinker2.begin_txn",
 		zap.String("table", s.dbTblInfo.String()))
 
 	return nil
@@ -385,7 +385,7 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateActive {
 		// Not an error - idempotent behavior
-		logutil.Debug("CDC-MySQLSinker2-CommitTxn-NoActiveTxn",
+		logutil.Debug("cdc.mysql_sinker2.commit_no_active_txn",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Int32("state", currentState))
 		return nil
@@ -397,7 +397,7 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 		// Even on error, transition to ROLLED_BACK (tx is cleaned up in executor)
 		s.txnState.Store(v2TxnStateRolledBack)
 
-		logutil.Error("CDC-MySQLSinker2-CommitTxn-Failed",
+		logutil.Error("cdc.mysql_sinker2.commit_failed",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
@@ -410,7 +410,7 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	// Transition back to IDLE
 	s.txnState.Store(v2TxnStateIdle)
 
-	logutil.Info("CDC-MySQLSinker2-CommitTxn-Success",
+	logutil.Info("cdc.mysql_sinker2.commit_success",
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Duration("commit-duration", time.Since(start)))
 
@@ -423,7 +423,7 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateActive {
 		// Not an error - idempotent behavior
-		logutil.Debug("CDC-MySQLSinker2-RollbackTxn-NoActiveTxn",
+		logutil.Debug("cdc.mysql_sinker2.rollback_no_active_txn",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Int32("state", currentState))
 		return nil
@@ -443,7 +443,7 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 	// Transition back to IDLE
 	s.txnState.Store(v2TxnStateIdle)
 
-	logutil.Debug("CDC-MySQLSinker2-RollbackTxn",
+	logutil.Debug("cdc.mysql_sinker2.rollback_txn",
 		zap.String("table", s.dbTblInfo.String()))
 
 	return nil
@@ -460,14 +460,14 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 	// Build INSERT SQL statements
 	sqls, err := s.builder.BuildInsertSQL(ctx, cmd.InsertBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
 	if err != nil {
-		logutil.Error("CDC-MySQLSinker2-BuildInsertSQL-Failed",
+		logutil.Error("cdc.mysql_sinker2.build_insert_sql_failed",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Int("rows", rows),
 			zap.Error(err))
 		return err
 	}
 
-	logutil.Info("CDC-MySQLSinker2-InsertBatch-Start",
+	logutil.Info("cdc.mysql_sinker2.insert_batch_start",
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Int("rows", rows),
 		zap.Int("sql-count", len(sqls)),
@@ -478,7 +478,7 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 	for i, sql := range sqls {
 		sqlStart := time.Now()
 		if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
-			logutil.Error("CDC-MySQLSinker2-ExecInsertSQL-Failed",
+			logutil.Error("cdc.mysql_sinker2.exec_insert_sql_failed",
 				zap.String("table", s.dbTblInfo.String()),
 				zap.Int("sql-index", i),
 				zap.Int("total-sqls", len(sqls)),
@@ -488,14 +488,14 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 		}
 
 		if time.Since(sqlStart) > time.Second {
-			logutil.Warn("CDC-MySQLSinker2-ExecInsertSQL-Slow",
+			logutil.Warn("cdc.mysql_sinker2.exec_insert_sql_slow",
 				zap.String("table", s.dbTblInfo.String()),
 				zap.Int("sql-index", i),
 				zap.Duration("duration", time.Since(sqlStart)))
 		}
 	}
 
-	logutil.Info("CDC-MySQLSinker2-InsertBatch-Complete",
+	logutil.Info("cdc.mysql_sinker2.insert_batch_complete",
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Int("rows", rows),
 		zap.Int("sql-count", len(sqls)),
@@ -517,7 +517,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 		deleteRows = cmd.DeleteAtmBatch.RowCount()
 	}
 
-	logutil.Info("CDC-MySQLSinker2-InsertDeleteBatch-Start",
+	logutil.Info("cdc.mysql_sinker2.insert_delete_batch_start",
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Int("insert-rows", insertRows),
 		zap.Int("delete-rows", deleteRows),
@@ -534,7 +534,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 
 			sqls, err := s.builder.BuildInsertSQL(ctx, srcBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
 			if err != nil {
-				logutil.Error("CDC-MySQLSinker2-BuildInsertSQL-Failed",
+				logutil.Error("cdc.mysql_sinker2.build_insert_sql_failed",
 					zap.String("table", s.dbTblInfo.String()),
 					zap.Int("rows", srcBatch.RowCount()),
 					zap.Error(err))
@@ -544,7 +544,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 			for i, sql := range sqls {
 				sqlStart := time.Now()
 				if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
-					logutil.Error("CDC-MySQLSinker2-ExecInsertSQL-Failed",
+					logutil.Error("cdc.mysql_sinker2.exec_insert_sql_failed",
 						zap.String("table", s.dbTblInfo.String()),
 						zap.Int("sql-index", i),
 						zap.Int("total-sqls", len(sqls)),
@@ -554,7 +554,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 				}
 
 				if time.Since(sqlStart) > time.Second {
-					logutil.Warn("CDC-MySQLSinker2-ExecInsertSQL-Slow",
+					logutil.Warn("cdc.mysql_sinker2.exec_insert_sql_slow",
 						zap.String("table", s.dbTblInfo.String()),
 						zap.Int("sql-index", i),
 						zap.Duration("duration", time.Since(sqlStart)))
@@ -567,7 +567,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 	if cmd.DeleteAtmBatch != nil && cmd.DeleteAtmBatch.RowCount() > 0 {
 		sqls, err := s.builder.BuildDeleteSQL(ctx, cmd.DeleteAtmBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
 		if err != nil {
-			logutil.Error("CDC-MySQLSinker2-BuildDeleteSQL-Failed",
+			logutil.Error("cdc.mysql_sinker2.build_delete_sql_failed",
 				zap.String("table", s.dbTblInfo.String()),
 				zap.Int("rows", deleteRows),
 				zap.Error(err))
@@ -577,7 +577,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 		for i, sql := range sqls {
 			sqlStart := time.Now()
 			if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
-				logutil.Error("CDC-MySQLSinker2-ExecDeleteSQL-Failed",
+				logutil.Error("cdc.mysql_sinker2.exec_delete_sql_failed",
 					zap.String("table", s.dbTblInfo.String()),
 					zap.Int("sql-index", i),
 					zap.Int("total-sqls", len(sqls)),
@@ -587,7 +587,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 			}
 
 			if time.Since(sqlStart) > time.Second {
-				logutil.Warn("CDC-MySQLSinker2-ExecDeleteSQL-Slow",
+				logutil.Warn("cdc.mysql_sinker2.exec_delete_sql_slow",
 					zap.String("table", s.dbTblInfo.String()),
 					zap.Int("sql-index", i),
 					zap.Duration("duration", time.Since(sqlStart)))
@@ -595,7 +595,7 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 		}
 	}
 
-	logutil.Info("CDC-MySQLSinker2-InsertDeleteBatch-Complete",
+	logutil.Info("cdc.mysql_sinker2.insert_delete_batch_complete",
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Int("insert-rows", insertRows),
 		zap.Int("delete-rows", deleteRows),
@@ -618,7 +618,7 @@ func (s *mysqlSinker2) handleFlush(ctx context.Context, cmd *Command) error {
 	// SQL is constructed and sent immediately in handleInsertBatch/handleInsertDeleteBatch
 	// So FLUSH is essentially a no-op
 
-	logutil.Debug("CDC-MySQLSinker2-Flush",
+	logutil.Debug("cdc.mysql_sinker2.flush",
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Bool("noMoreData", cmd.Meta.NoMoreData))
 
@@ -648,7 +648,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 
 	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
 	if err != nil {
-		logutil.Error("CDC-MySQLSinker2-GetWatermarkFailed",
+		logutil.Error("cdc.mysql_sinker2.get_watermark_failed",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("key", key.String()),
 			zap.Error(err))
@@ -657,7 +657,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	}
 
 	if data.toTs.LE(&watermark) {
-		logutil.Error("CDC-MySQLSinker2-UnexpectedWatermark",
+		logutil.Error("cdc.mysql_sinker2.unexpected_watermark",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("toTs", data.toTs.ToString()),
 			zap.String("watermark", watermark.ToString()))
@@ -681,7 +681,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	} else if data.outputTyp == OutputTypeTail {
 		cmd = NewInsertDeleteBatchCommand(data.insertAtmBatch, data.deleteAtmBatch, data.fromTs, data.toTs)
 	} else {
-		logutil.Error("CDC-MySQLSinker2-UnknownOutputType",
+		logutil.Error("cdc.mysql_sinker2.unknown_output_type",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("outputType", data.outputTyp.String()))
 		return
@@ -770,7 +770,7 @@ func (s *mysqlSinker2) Reset() {
 	// If there's an active transaction, roll it back
 	if s.txnState.Load() == v2TxnStateActive {
 		if err := s.executor.RollbackTx(context.Background()); err != nil {
-			logutil.Error("CDC-MySQLSinker2-Reset-RollbackFailed",
+			logutil.Error("cdc.mysql_sinker2.reset_rollback_failed",
 				zap.String("table", s.dbTblInfo.String()),
 				zap.Error(err))
 		}
@@ -780,7 +780,7 @@ func (s *mysqlSinker2) Reset() {
 	s.txnState.Store(v2TxnStateIdle)
 	s.ClearError()
 
-	logutil.Info("CDC-MySQLSinker2-Reset",
+	logutil.Info("cdc.mysql_sinker2.reset",
 		zap.String("table", s.dbTblInfo.String()))
 }
 
@@ -802,13 +802,13 @@ func (s *mysqlSinker2) Close() {
 		// Close executor (rolls back any active transaction)
 		if s.executor != nil {
 			if err := s.executor.Close(); err != nil {
-				logutil.Error("CDC-MySQLSinker2-Close-ExecutorCloseFailed",
+				logutil.Error("cdc.mysql_sinker2.close_executor_failed",
 					zap.String("table", s.dbTblInfo.String()),
 					zap.Error(err))
 			}
 		}
 
-		logutil.Info("CDC-MySQLSinker2-Closed",
+		logutil.Info("cdc.mysql_sinker2.closed",
 			zap.String("table", s.dbTblInfo.String()))
 	})
 }
