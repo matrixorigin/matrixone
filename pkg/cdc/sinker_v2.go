@@ -746,14 +746,7 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	s.senderWG.Add(1)
 	s.closeMutex.RUnlock()
 
-	defer func() {
-		s.senderWG.Done()
-		if r := recover(); r != nil {
-			logutil.Warn("cdc.mysql_sinker2.send_after_close",
-				zap.String("table", s.dbTblInfo.String()),
-				zap.Any("recover", r))
-		}
-	}()
+	defer s.senderWG.Done()
 
 	select {
 	case cmdCh <- cmd:
