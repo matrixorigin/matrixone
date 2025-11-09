@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // ReaderState represents the state of a table reader
@@ -216,13 +215,6 @@ type ReadContext struct {
 
 	// Current transaction tracker
 	tracker *TransactionTracker
-
-	// Change collection
-	changes engine.ChangesHandle
-	rel     engine.Relation
-
-	// Error handling
-	err error
 }
 
 // NewReadContext creates a new read context

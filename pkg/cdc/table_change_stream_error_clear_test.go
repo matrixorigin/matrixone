@@ -114,12 +114,6 @@ func (m *mockWatermarkUpdaterWithTracking) getClearErrorCallCount() int {
 	return count
 }
 
-func (m *mockWatermarkUpdaterWithTracking) reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.errorCalls = make([]errorCall, 0)
-}
-
 func (m *mockWatermarkUpdaterWithTracking) IsCircuitBreakerOpen(key *WatermarkKey) bool {
 	return false
 }

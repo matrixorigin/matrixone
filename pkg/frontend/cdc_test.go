@@ -3142,12 +3142,6 @@ func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
 	return stubs
 }
 
-type mockReader struct{}
-
-func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
-
-func (m mockReader) Close() {}
-
 type mockChangeReader struct {
 	info *cdc.DbTableInfo
 	wg   *sync.WaitGroup
