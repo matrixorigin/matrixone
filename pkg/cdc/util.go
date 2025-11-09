@@ -645,7 +645,7 @@ var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
 }
 
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
+	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
 var EnterRunSql = func(txnOp client.TxnOperator) {
