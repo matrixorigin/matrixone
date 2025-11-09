@@ -17,10 +17,8 @@ package frontend
 import (
 	"context"
 	"math/rand"
-	"reflect"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,12 +33,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func setLazyThresholdForTest(t *testing.T, cache *logtail.StorageUsageCache, d time.Duration) {
-	t.Helper()
-	field := reflect.ValueOf(cache).Elem().FieldByName("lazyThreshold")
-	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(d))
-}
 
 func Test_getSqlForAccountInfo(t *testing.T) {
 	type arg struct {
@@ -138,7 +130,7 @@ func Test_updateStorageUsageCache(t *testing.T) {
 func Test_checkStorageUsageCache_V2(t *testing.T) {
 	origCache := cnUsageCache
 	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
-	setLazyThresholdForTest(t, cnUsageCache, 5*time.Millisecond)
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	t.Cleanup(func() {
 		cnUsageCache = origCache
 	})
@@ -164,13 +156,13 @@ func Test_checkStorageUsageCache_V2(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
 		return !ok
-	}, time.Second, 5*time.Millisecond)
+	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
 }
 
 func Test_checkStorageUsageCache(t *testing.T) {
 	origCache := cnUsageCache
 	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
-	setLazyThresholdForTest(t, cnUsageCache, 5*time.Millisecond)
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	t.Cleanup(func() {
 		cnUsageCache = origCache
 	})
@@ -198,7 +190,7 @@ func Test_checkStorageUsageCache(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
 		return !ok
-	}, time.Second, 5*time.Millisecond)
+	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
 }
 
 func Test_GetObjectCount_V2(t *testing.T) {
