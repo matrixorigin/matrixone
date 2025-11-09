@@ -33,7 +33,31 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
+
+// Reader lifecycle constants
+const (
+	DefaultFrequency     = 200 * time.Millisecond
+	RetryableErrorPrefix = "retryable error:"
+)
+
+// ErrorContext provides context for error message updates
+type ErrorContext struct {
+	IsRetryable     bool // Whether the error is retryable
+	IsPauseOrCancel bool // Whether this is a pause/cancel control signal (optional, auto-detected if not set)
+}
+
+// WatermarkUpdater manages CDC watermarks
+type WatermarkUpdater interface {
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) (err error)
+	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
+	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
+	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
+	IsCircuitBreakerOpen(key *WatermarkKey) bool
+	GetCommitFailureCount(key *WatermarkKey) uint32
+}
 
 const (
 	CDCSourceUriPrefix = "mysql://"
@@ -119,16 +143,23 @@ func NewTaskId() TaskId {
 // 	return uuid.Parse(s)
 // }
 
-type Reader interface {
+// ChangeReader represents a CDC change data capture reader
+// It monitors table changes and streams them to a downstream sinker
+type ChangeReader interface {
+	// Run starts the change reader in blocking mode
+	// It should be called in a goroutine
 	Run(ctx context.Context, ar *ActiveRoutine)
-	Close()
-}
 
-type TableReader interface {
-	Run(ctx context.Context, ar *ActiveRoutine)
+	// Close closes the reader and releases resources
 	Close()
-	Info() *DbTableInfo
-	GetWg() *sync.WaitGroup
+
+	// Wait blocks until the reader goroutine completes
+	// This is used for graceful shutdown and testing
+	Wait()
+
+	// GetTableInfo returns the source table information
+	// This is used to identify the reader and check for table ID changes
+	GetTableInfo() *DbTableInfo
 }
 
 // Sinker manages and drains the sql parts
@@ -322,7 +353,10 @@ func (bat *AtomicBatch) RowCount() int {
 	}
 
 	if c != bat.Rows.Len() {
-		logutil.Errorf("inconsistent row count, sum rows of batches: %d, rows of btree: %d\n", c, bat.Rows.Len())
+		logutil.Error("cdc.atomic_batch.row_count_mismatch",
+			zap.Int("batch-rows", c),
+			zap.Int("btree-rows", bat.Rows.Len()),
+		)
 	}
 	return c
 }
