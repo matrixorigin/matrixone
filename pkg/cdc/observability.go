@@ -27,6 +27,20 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	initialSyncStateNotStarted uint32 = iota
+	initialSyncStateRunning
+	initialSyncStateSuccess
+	initialSyncStateFailed
+)
+
+const (
+	initialSyncStatusNotStartedValue = 0
+	initialSyncStatusRunningValue    = 1
+	initialSyncStatusSuccessValue    = 2
+	initialSyncStatusFailedValue     = 3
+)
+
 // ProgressTracker tracks the progress of CDC processing for a single table
 // This provides detailed observability into what's happening at each stage
 type ProgressTracker struct {
@@ -56,6 +70,7 @@ type ProgressTracker struct {
 	totalBatchesProcessed atomic.Uint64 // Total batches processed
 	totalTransactions     atomic.Uint64 // Total transactions committed
 	totalRetries          atomic.Uint64 // Total retry attempts
+	totalSQLExecuted      atomic.Uint64 // Total SQL statements executed
 
 	// Timing metrics
 	lastRoundStartTime  time.Time
@@ -76,6 +91,17 @@ type ProgressTracker struct {
 	lastErrorTime time.Time
 	errorCount    atomic.Uint64
 
+	// Initial sync tracking
+	initialSyncState   atomic.Uint32
+	initialSyncStart   time.Time
+	initialSyncEnd     time.Time
+	initialSyncRows    atomic.Uint64
+	initialSyncBytes   atomic.Uint64
+	initialSyncBatches atomic.Uint64
+	initialSyncSQL     atomic.Uint64
+	initialSyncFromTs  types.TS
+	initialSyncToTs    types.TS
+
 	// Lock for non-atomic fields
 	mu sync.RWMutex
 
@@ -86,7 +112,7 @@ type ProgressTracker struct {
 
 // NewProgressTracker creates a new progress tracker
 func NewProgressTracker(accountId uint64, taskId, dbName, tableName string) *ProgressTracker {
-	return &ProgressTracker{
+	pt := &ProgressTracker{
 		accountId:       accountId,
 		taskId:          taskId,
 		dbName:          dbName,
@@ -95,6 +121,9 @@ func NewProgressTracker(accountId uint64, taskId, dbName, tableName string) *Pro
 		lastStateChange: time.Now(),
 		logInterval:     30 * time.Second, // Log progress every 30 seconds by default
 	}
+	pt.initialSyncState.Store(initialSyncStateNotStarted)
+	v2.CdcInitialSyncStatusGauge.WithLabelValues(pt.tableKey()).Set(initialSyncStatusNotStartedValue)
+	return pt
 }
 
 // SetState updates the current state
@@ -128,6 +157,14 @@ func (pt *ProgressTracker) StartRound(fromTs, toTs types.TS) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
+	pt.ensureInitialSyncLocked(fromTs, toTs)
+	if pt.initialSyncState.Load() == initialSyncStateRunning {
+		if pt.initialSyncFromTs.IsEmpty() {
+			pt.initialSyncFromTs = fromTs
+		}
+		pt.initialSyncToTs = toTs
+	}
+
 	pt.currentRoundStartTime = time.Now()
 	pt.currentRoundFromTs = fromTs
 	pt.currentRoundToTs = toTs
@@ -142,6 +179,39 @@ func (pt *ProgressTracker) StartRound(fromTs, toTs types.TS) {
 		zap.String("to-ts", toTs.ToString()),
 		zap.Uint64("round", pt.totalRounds.Load()),
 		zap.String("state", pt.state),
+	)
+}
+
+func (pt *ProgressTracker) ensureInitialSyncLocked(fromTs, toTs types.TS) {
+	state := pt.initialSyncState.Load()
+	if state == initialSyncStateRunning || state == initialSyncStateSuccess {
+		return
+	}
+
+	pt.initialSyncState.Store(initialSyncStateRunning)
+	pt.initialSyncStart = time.Now()
+	pt.initialSyncEnd = time.Time{}
+	pt.initialSyncRows.Store(0)
+	pt.initialSyncBytes.Store(0)
+	pt.initialSyncBatches.Store(0)
+	pt.initialSyncSQL.Store(0)
+	pt.initialSyncFromTs = fromTs
+	pt.initialSyncToTs = toTs
+
+	tableLabel := pt.tableKey()
+	v2.CdcInitialSyncStatusGauge.WithLabelValues(tableLabel).Set(initialSyncStatusRunningValue)
+	v2.CdcInitialSyncStartTimestamp.WithLabelValues(tableLabel).Set(float64(pt.initialSyncStart.Unix()))
+	v2.CdcInitialSyncEndTimestamp.WithLabelValues(tableLabel).Set(0)
+	v2.CdcInitialSyncRowsGauge.WithLabelValues(tableLabel).Set(0)
+	v2.CdcInitialSyncBytesGauge.WithLabelValues(tableLabel).Set(0)
+	v2.CdcInitialSyncSQLGauge.WithLabelValues(tableLabel).Set(0)
+
+	logutil.Info(
+		"cdc.progress_tracker.initial_sync_start",
+		zap.String("table", tableLabel),
+		zap.String("from-ts", fromTs.ToString()),
+		zap.String("to-ts", toTs.ToString()),
+		zap.Bool("restart", state == initialSyncStateFailed),
 	)
 }
 
@@ -216,8 +286,65 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 		v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
 	}
 
+	pt.handleInitialSyncRoundLocked(success, err)
+
 	// Reset current round
 	pt.currentRoundStartTime = time.Time{}
+}
+
+func (pt *ProgressTracker) handleInitialSyncRoundLocked(success bool, err error) {
+	if pt.initialSyncState.Load() != initialSyncStateRunning {
+		return
+	}
+
+	tableLabel := pt.tableKey()
+	pt.initialSyncEnd = time.Now()
+	rows := pt.initialSyncRows.Load()
+	bytes := pt.initialSyncBytes.Load()
+	batches := pt.initialSyncBatches.Load()
+	sqlCount := pt.initialSyncSQL.Load()
+	duration := pt.initialSyncEnd.Sub(pt.initialSyncStart)
+	if duration > 0 {
+		v2.CdcInitialSyncDurationHistogram.WithLabelValues(tableLabel).Observe(duration.Seconds())
+	}
+	v2.CdcInitialSyncRowsGauge.WithLabelValues(tableLabel).Set(float64(rows))
+	v2.CdcInitialSyncBytesGauge.WithLabelValues(tableLabel).Set(float64(bytes))
+	v2.CdcInitialSyncSQLGauge.WithLabelValues(tableLabel).Set(float64(sqlCount))
+
+	if success {
+		pt.initialSyncState.Store(initialSyncStateSuccess)
+		v2.CdcInitialSyncStatusGauge.WithLabelValues(tableLabel).Set(initialSyncStatusSuccessValue)
+		v2.CdcInitialSyncEndTimestamp.WithLabelValues(tableLabel).Set(float64(pt.initialSyncEnd.Unix()))
+
+		logutil.Info(
+			"cdc.progress_tracker.initial_sync_complete",
+			zap.String("table", tableLabel),
+			zap.Duration("duration", duration),
+			zap.Uint64("rows", rows),
+			zap.Uint64("batches", batches),
+			zap.Uint64("sql-count", sqlCount),
+			zap.Uint64("bytes-estimate", bytes),
+			zap.String("initial-from-ts", pt.initialSyncFromTs.ToString()),
+			zap.String("initial-to-ts", pt.initialSyncToTs.ToString()),
+		)
+		return
+	}
+
+	pt.initialSyncState.Store(initialSyncStateFailed)
+	v2.CdcInitialSyncStatusGauge.WithLabelValues(tableLabel).Set(initialSyncStatusFailedValue)
+	v2.CdcInitialSyncEndTimestamp.WithLabelValues(tableLabel).Set(float64(pt.initialSyncEnd.Unix()))
+
+	logutil.Warn(
+		"cdc.progress_tracker.initial_sync_failed",
+		zap.String("table", tableLabel),
+		zap.Error(err),
+		zap.Uint64("rows", rows),
+		zap.Uint64("batches", batches),
+		zap.Uint64("sql-count", sqlCount),
+		zap.Uint64("bytes-estimate", bytes),
+		zap.String("initial-from-ts", pt.initialSyncFromTs.ToString()),
+		zap.String("initial-to-ts", pt.initialSyncToTs.ToString()),
+	)
 }
 
 // RecordBatch records processing of a batch
@@ -227,6 +354,12 @@ func (pt *ProgressTracker) RecordBatch(rows, bytes uint64) {
 	pt.totalRowsProcessed.Add(rows)
 	pt.totalBytesProcessed.Add(bytes)
 	pt.totalBatchesProcessed.Add(1)
+
+	if pt.initialSyncState.Load() == initialSyncStateRunning {
+		pt.initialSyncRows.Add(rows)
+		pt.initialSyncBytes.Add(bytes)
+		pt.initialSyncBatches.Add(1)
+	}
 
 	// Log progress periodically
 	pt.maybeLogProgress()
@@ -240,6 +373,14 @@ func (pt *ProgressTracker) RecordTransaction() {
 // RecordRetry records a retry attempt
 func (pt *ProgressTracker) RecordRetry() {
 	pt.totalRetries.Add(1)
+}
+
+// RecordSQL records execution of SQL statements by the sinker
+func (pt *ProgressTracker) RecordSQL(count uint64) {
+	pt.totalSQLExecuted.Add(count)
+	if pt.initialSyncState.Load() == initialSyncStateRunning {
+		pt.initialSyncSQL.Add(count)
+	}
 }
 
 // UpdateWatermark records a watermark update
@@ -326,11 +467,16 @@ func (pt *ProgressTracker) logProgressLocked() {
 		zap.Uint64("total-rows", pt.totalRowsProcessed.Load()),
 		zap.Uint64("total-batches", pt.totalBatchesProcessed.Load()),
 		zap.Uint64("total-txns", pt.totalTransactions.Load()),
+		zap.Uint64("total-sql", pt.totalSQLExecuted.Load()),
 		zap.Duration("avg-round-duration", pt.avgRoundDuration),
 		zap.Duration("max-round-duration", pt.maxRoundDuration),
 		zap.Duration("last-round-duration", pt.lastRoundDuration),
 		zap.Uint64("current-round-rows", pt.currentRoundRows.Load()),
 		zap.Uint64("current-round-batches", pt.currentRoundBatches.Load()),
+		zap.Uint64("initial-sync-rows", pt.initialSyncRows.Load()),
+		zap.Uint64("initial-sync-batches", pt.initialSyncBatches.Load()),
+		zap.Uint64("initial-sync-sql", pt.initialSyncSQL.Load()),
+		zap.Uint32("initial-sync-state", pt.initialSyncState.Load()),
 	)
 }
 
@@ -338,6 +484,21 @@ func (pt *ProgressTracker) logProgressLocked() {
 func (pt *ProgressTracker) GetStats() map[string]interface{} {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
+
+	initialStart := pt.initialSyncStart
+	initialEnd := pt.initialSyncEnd
+	initialDuration := 0.0
+	if !initialStart.IsZero() && !initialEnd.IsZero() && initialEnd.After(initialStart) {
+		initialDuration = initialEnd.Sub(initialStart).Seconds()
+	}
+	initialStartUnix := int64(0)
+	if !initialStart.IsZero() {
+		initialStartUnix = initialStart.Unix()
+	}
+	initialEndUnix := int64(0)
+	if !initialEnd.IsZero() {
+		initialEndUnix = initialEnd.Unix()
+	}
 
 	return map[string]interface{}{
 		"table":                       pt.tableKey(),
@@ -355,10 +516,21 @@ func (pt *ProgressTracker) GetStats() map[string]interface{} {
 		"total_batches_processed":     pt.totalBatchesProcessed.Load(),
 		"total_transactions":          pt.totalTransactions.Load(),
 		"total_retries":               pt.totalRetries.Load(),
+		"total_sql_executed":          pt.totalSQLExecuted.Load(),
 		"avg_round_duration_seconds":  pt.avgRoundDuration.Seconds(),
 		"max_round_duration_seconds":  pt.maxRoundDuration.Seconds(),
 		"last_round_duration_seconds": pt.lastRoundDuration.Seconds(),
 		"error_count":                 pt.errorCount.Load(),
+		"initial_sync_state":          pt.initialSyncState.Load(),
+		"initial_sync_rows":           pt.initialSyncRows.Load(),
+		"initial_sync_bytes":          pt.initialSyncBytes.Load(),
+		"initial_sync_batches":        pt.initialSyncBatches.Load(),
+		"initial_sync_sql":            pt.initialSyncSQL.Load(),
+		"initial_sync_start_unix":     initialStartUnix,
+		"initial_sync_end_unix":       initialEndUnix,
+		"initial_sync_duration_sec":   initialDuration,
+		"initial_sync_from_ts":        pt.initialSyncFromTs.ToString(),
+		"initial_sync_to_ts":          pt.initialSyncToTs.ToString(),
 	}
 }
 

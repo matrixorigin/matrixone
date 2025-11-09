@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -67,6 +68,7 @@ type mysqlSinker2 struct {
 	// Dependencies
 	watermarkUpdater *CDCWatermarkUpdater
 	ar               *ActiveRoutine
+	progressTracker  *ProgressTracker
 
 	// Command channel for async communication
 	cmdCh chan *Command
@@ -269,6 +271,11 @@ func NewMysqlSinker2(
 	return s
 }
 
+// AttachProgressTracker attaches a progress tracker for observability updates.
+func (s *mysqlSinker2) AttachProgressTracker(pt *ProgressTracker) {
+	s.progressTracker = pt
+}
+
 // Run is the consumer goroutine that processes commands from the channel
 //
 // Process Flow:
@@ -458,6 +465,19 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 	return nil
 }
 
+func (s *mysqlSinker2) recordSQLSuccess(sqlType string, duration time.Duration) {
+	v2.CdcSinkerSQLCounter.WithLabelValues(sqlType, "success").Inc()
+	v2.CdcSinkerSQLDuration.WithLabelValues(sqlType).Observe(duration.Seconds())
+	if s.progressTracker != nil {
+		s.progressTracker.RecordSQL(1)
+	}
+}
+
+func (s *mysqlSinker2) recordSQLFailure(sqlType string, duration time.Duration) {
+	v2.CdcSinkerSQLCounter.WithLabelValues(sqlType, "error").Inc()
+	v2.CdcSinkerSQLDuration.WithLabelValues(sqlType).Observe(duration.Seconds())
+}
+
 // handleInsertBatch handles INSERT batch command (snapshot data)
 func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) error {
 	start := time.Now()
@@ -486,21 +506,26 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 	// Execute each SQL statement
 	for i, sql := range sqls {
 		sqlStart := time.Now()
-		if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
+		err := s.executor.ExecSQL(ctx, s.ar, sql, true)
+		duration := time.Since(sqlStart)
+		if err != nil {
+			s.recordSQLFailure("insert", duration)
 			logutil.Error("cdc.mysql_sinker2.exec_insert_sql_failed",
 				zap.String("table", s.dbTblInfo.String()),
 				zap.Int("sql-index", i),
 				zap.Int("total-sqls", len(sqls)),
-				zap.Duration("duration", time.Since(sqlStart)),
+				zap.Duration("duration", duration),
 				zap.Error(err))
 			return err
 		}
 
-		if time.Since(sqlStart) > time.Second {
+		s.recordSQLSuccess("insert", duration)
+
+		if duration > time.Second {
 			logutil.Warn("cdc.mysql_sinker2.exec_insert_sql_slow",
 				zap.String("table", s.dbTblInfo.String()),
 				zap.Int("sql-index", i),
-				zap.Duration("duration", time.Since(sqlStart)))
+				zap.Duration("duration", duration))
 		}
 	}
 
@@ -552,21 +577,26 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 
 			for i, sql := range sqls {
 				sqlStart := time.Now()
-				if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
+				err := s.executor.ExecSQL(ctx, s.ar, sql, true)
+				duration := time.Since(sqlStart)
+				if err != nil {
+					s.recordSQLFailure("insert", duration)
 					logutil.Error("cdc.mysql_sinker2.exec_insert_sql_failed",
 						zap.String("table", s.dbTblInfo.String()),
 						zap.Int("sql-index", i),
 						zap.Int("total-sqls", len(sqls)),
-						zap.Duration("duration", time.Since(sqlStart)),
+						zap.Duration("duration", duration),
 						zap.Error(err))
 					return err
 				}
 
-				if time.Since(sqlStart) > time.Second {
+				s.recordSQLSuccess("insert", duration)
+
+				if duration > time.Second {
 					logutil.Warn("cdc.mysql_sinker2.exec_insert_sql_slow",
 						zap.String("table", s.dbTblInfo.String()),
 						zap.Int("sql-index", i),
-						zap.Duration("duration", time.Since(sqlStart)))
+						zap.Duration("duration", duration))
 				}
 			}
 		}
@@ -585,21 +615,26 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 
 		for i, sql := range sqls {
 			sqlStart := time.Now()
-			if err := s.executor.ExecSQL(ctx, s.ar, sql, true); err != nil {
+			err := s.executor.ExecSQL(ctx, s.ar, sql, true)
+			duration := time.Since(sqlStart)
+			if err != nil {
+				s.recordSQLFailure("delete", duration)
 				logutil.Error("cdc.mysql_sinker2.exec_delete_sql_failed",
 					zap.String("table", s.dbTblInfo.String()),
 					zap.Int("sql-index", i),
 					zap.Int("total-sqls", len(sqls)),
-					zap.Duration("duration", time.Since(sqlStart)),
+					zap.Duration("duration", duration),
 					zap.Error(err))
 				return err
 			}
 
-			if time.Since(sqlStart) > time.Second {
+			s.recordSQLSuccess("delete", duration)
+
+			if duration > time.Second {
 				logutil.Warn("cdc.mysql_sinker2.exec_delete_sql_slow",
 					zap.String("table", s.dbTblInfo.String()),
 					zap.Int("sql-index", i),
-					zap.Duration("duration", time.Since(sqlStart)))
+					zap.Duration("duration", duration))
 			}
 		}
 	}

@@ -267,6 +267,73 @@ var (
 		}, []string{"table"})
 )
 
+// CDC Initial Sync Metrics
+var (
+	// CdcInitialSyncStatusGauge tracks initial sync status per table
+	CdcInitialSyncStatusGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_status",
+			Help:      "Initial synchronization status per table (0=not started, 1=running, 2=success, 3=failed)",
+		}, []string{"table"})
+
+	// CdcInitialSyncStartTimestamp records initial sync start time
+	CdcInitialSyncStartTimestamp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_start_timestamp",
+			Help:      "Unix timestamp when initial synchronization started",
+		}, []string{"table"})
+
+	// CdcInitialSyncEndTimestamp records initial sync end time
+	CdcInitialSyncEndTimestamp = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_end_timestamp",
+			Help:      "Unix timestamp when initial synchronization finished (success or failure)",
+		}, []string{"table"})
+
+	// CdcInitialSyncDurationHistogram tracks initial sync duration
+	CdcInitialSyncDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_duration_seconds",
+			Help:      "Duration of CDC initial synchronization for a table",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 20), // 1s to ~2^19 s (~6 days)
+		}, []string{"table"})
+
+	// CdcInitialSyncRowsGauge tracks number of rows processed during initial sync
+	CdcInitialSyncRowsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_rows",
+			Help:      "Total rows processed during initial synchronization",
+		}, []string{"table"})
+
+	// CdcInitialSyncBytesGauge tracks estimated bytes processed during initial sync
+	CdcInitialSyncBytesGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_bytes",
+			Help:      "Estimated bytes processed during initial synchronization",
+		}, []string{"table"})
+
+	// CdcInitialSyncSQLGauge tracks SQL statements executed during initial sync
+	CdcInitialSyncSQLGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "initial_sync_sql_total",
+			Help:      "Number of SQL statements executed during initial synchronization",
+		}, []string{"table"})
+)
+
 // CDC Performance Metrics
 var (
 	// CdcThroughputRowsPerSecond tracks current throughput
@@ -330,6 +397,15 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcHeartbeatCounter)
 	registry.MustRegister(CdcTableStuckGauge)
 	registry.MustRegister(CdcTableLastActivityTimestamp)
+
+	// Initial sync metrics
+	registry.MustRegister(CdcInitialSyncStatusGauge)
+	registry.MustRegister(CdcInitialSyncStartTimestamp)
+	registry.MustRegister(CdcInitialSyncEndTimestamp)
+	registry.MustRegister(CdcInitialSyncDurationHistogram)
+	registry.MustRegister(CdcInitialSyncRowsGauge)
+	registry.MustRegister(CdcInitialSyncBytesGauge)
+	registry.MustRegister(CdcInitialSyncSQLGauge)
 
 	// Performance metrics
 	registry.MustRegister(CdcThroughputRowsPerSecond)

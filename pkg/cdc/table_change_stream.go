@@ -173,6 +173,10 @@ var NewTableChangeStream = func(
 		tableInfo.SourceTblName,
 	)
 
+	if attachable, ok := sinker.(interface{ AttachProgressTracker(*ProgressTracker) }); ok {
+		attachable.AttachProgressTracker(progressTracker)
+	}
+
 	return &TableChangeStream{
 		txnManager:            txnManager,
 		dataProcessor:         dataProcessor,
