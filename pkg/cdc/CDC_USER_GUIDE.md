@@ -589,21 +589,29 @@ Require manual intervention:
 
 ### Debugging with Logs
 
-CDC components emit structured logs with the `CDC-` prefix. Combine logs with metrics to triage issues quickly.
+CDC components emit structured logs with consistent keys using the pattern `cdc.<component>.<event>`. Combine logs with metrics to triage issues quickly.
 
 **Where to find logs**:
 
 ```bash
-tail -f log/system.log | grep "CDC-"
+tail -f log/system.log | grep "cdc."
 ```
 
 **Common prefixes**:
 
-- `CDC-Task-*`: Task lifecycle (start, pause, cancel, fail)
-- `CDC-DataProcessor-*`: Snapshot/tail batches, heartbeat loops, transaction commits
-- `CDC-WatermarkUpdater-*`: Cache updates, persistence, lag details
-- `CDC-TableChangeStream-*`: Per-table polling rounds, errors, duplicate readers
-- `CDC-Sinker-*`: SQL execution, transaction begin/commit/rollback, retries
+- `cdc.frontend.task.*`: Task lifecycle (create/start/pause/resume/restart failures)
+- `cdc.table_stream.*`: Per-table polling rounds, pause/cancel signals, cleanup
+- `cdc.progress_tracker.*`: Round summaries, initial sync start/complete/fail events
+- `cdc.data_processor.*`: Snapshot/tail batch handling and sinker coordination
+- `cdc.watermark_updater.*`: Cache updates, commit errors, circuit breaker events
+- `cdc.mysql_sinker2.*`: SQL execution, retries, transaction begin/commit/rollback
+- `cdc.executor.*`: Detailed retry decisions and circuit breaker state for sinker SQL
+
+**Notable events**:
+
+- `cdc.progress_tracker.initial_sync_start` / `initial_sync_complete` / `initial_sync_failed`: initial snapshot progress, with rows/SQL counts and time window
+- `cdc.mysql_sinker2.exec_*_sql_failed` and `cdc.executor.retry_*`: downstream error diagnosis
+- `cdc.table_stream.force_next_interval` / `round_end`: identifying polling cadence issues
 
 **Enable verbose logging**: Production defaults to `info`. For deep dives, temporarily raise the log level in `etc/mo-service.toml` and restart the CN node:
 
@@ -874,7 +882,7 @@ histogram_quantile(0.99, mo_cdc_table_stream_round_duration_seconds_bucket)
 | `mo_cdc_sinker_transaction_total` | Counter | `operation`, `status` | Count of transaction operations |
 | `mo_cdc_sinker_sql_total` | Counter | `sql_type`, `status` | Count of SQL executions |
 | `mo_cdc_sinker_sql_duration_seconds` | Histogram | `sql_type` | SQL execution duration |
-| `mo_cdc_sinker_retry_total` | Counter | `reason` | Count of retry attempts |
+| `mo_cdc_sinker_retry_total` | Counter | `sink`, `reason`, `result` | Count of retry attempts grouped by sink label, classification, and retry outcome (`failed`, `success`, `circuit_open`, `blocked`) |
 
 **Labels**:
 - `operation`: `begin`, `commit`, `rollback`
@@ -894,6 +902,36 @@ histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket{sql_type="ins
 
 # Total retries
 sum(mo_cdc_sinker_retry_total)
+
+# Retries that escalated to circuit-open
+sum(rate(mo_cdc_sinker_retry_total{result="circuit_open"}[5m]))
+```
+
+#### Initial Synchronization Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `mo_cdc_initial_sync_status` | Gauge | `table` | Initial sync status per table (0=not started, 1=running, 2=success, 3=failed) |
+| `mo_cdc_initial_sync_start_timestamp` | Gauge | `table` | Unix timestamp when initial sync began |
+| `mo_cdc_initial_sync_end_timestamp` | Gauge | `table` | Unix timestamp when initial sync finished (success or failure) |
+| `mo_cdc_initial_sync_duration_seconds` | Histogram | `table` | Duration of initial sync rounds (records once per completion) |
+| `mo_cdc_initial_sync_rows` | Gauge | `table` | Rows processed during initial sync window |
+| `mo_cdc_initial_sync_bytes` | Gauge | `table` | Estimated bytes processed during initial sync |
+| `mo_cdc_initial_sync_sql_total` | Gauge | `table` | Number of SQL statements executed during initial sync |
+
+**Example Queries**:
+```promql
+# Initial syncs still running
+mo_cdc_initial_sync_status == 1
+
+# Initial syncs that failed and need attention
+mo_cdc_initial_sync_status == 3
+
+# Duration distribution (P95) for completed initial syncs
+histogram_quantile(0.95, mo_cdc_initial_sync_duration_seconds_bucket)
+
+# Top tables by initial sync row volume
+topk(5, mo_cdc_initial_sync_rows)
 ```
 
 ### Monitoring Dashboard Queries
