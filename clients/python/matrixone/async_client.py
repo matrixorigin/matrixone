@@ -41,6 +41,7 @@ from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .load_data import AsyncLoadDataManager
 from .stage import AsyncStageManager
+from .cdc import AsyncCDCManager
 from .exceptions import (
     ConnectionError,
     MoCtlError,
@@ -602,6 +603,7 @@ class AsyncClient(BaseMatrixOneClient):
         self._metadata = None
         self._load_data = None
         self._stage = None
+        self._cdc = None
 
     async def connect(
         self,
@@ -2494,3 +2496,10 @@ class AsyncClient(BaseMatrixOneClient):
         if self._stage is None:
             self._stage = AsyncStageManager(self)
         return self._stage
+
+    @property
+    def cdc(self) -> Optional["AsyncCDCManager"]:
+        """Get async CDC manager for change data capture operations."""
+        if self._cdc is None:
+            self._cdc = AsyncCDCManager(self)
+        return self._cdc
