@@ -212,7 +212,7 @@ func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo) *TableChangeStrea
 
 // Test Run() integration with mocked dependencies
 func TestTableChangeStream_Run_Integration(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	mp := mpool.MustNewZero()
@@ -326,6 +326,10 @@ func TestTableChangeStream_Run_Integration(t *testing.T) {
 
 	// Run in background
 	go stream.Run(ctx, NewCdcActiveRoutine())
+
+	// Ensure the stream goroutine is running, then cancel immediately
+	stream.start.Wait()
+	cancel()
 
 	// Wait for completion
 	stream.Wait()
