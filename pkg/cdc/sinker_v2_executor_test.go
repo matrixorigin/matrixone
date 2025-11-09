@@ -17,9 +17,13 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -228,6 +232,114 @@ func TestExecutor_RollbackTx(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Nil(t, executor.tx)
 	})
+}
+
+func TestExecutor_execWithRetry_RetryableError(t *testing.T) {
+	executor := &Executor{
+		retryTimes:    2,
+		retryDuration: 5 * time.Second,
+	}
+	executor.initRetryPolicy()
+
+	attempts := 0
+	err := executor.execWithRetry(context.Background(), nil, func() error {
+		attempts++
+		if attempts < 3 {
+			return driver.ErrBadConn
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 3, attempts)
+}
+
+func TestExecutor_execWithRetry_NonRetryableError(t *testing.T) {
+	executor := &Executor{
+		retryTimes:    5,
+		retryDuration: time.Second,
+	}
+	executor.initRetryPolicy()
+
+	attempts := 0
+	expectedErr := moerr.NewInternalErrorNoCtx("permanent failure")
+
+	err := executor.execWithRetry(context.Background(), nil, func() error {
+		attempts++
+		return expectedErr
+	})
+
+	require.ErrorIs(t, err, expectedErr)
+	require.Equal(t, 1, attempts)
+}
+
+func TestExecutor_execWithRetry_DurationLimit(t *testing.T) {
+	executor := &Executor{
+		retryTimes:    -1,
+		retryDuration: 10 * time.Millisecond,
+	}
+	executor.initRetryPolicy()
+
+	attempts := 0
+	err := executor.execWithRetry(context.Background(), nil, func() error {
+		attempts++
+		time.Sleep(5 * time.Millisecond)
+		return driver.ErrBadConn
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "retry limit exceeded")
+	require.GreaterOrEqual(t, attempts, 1)
+}
+
+func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
+	executor := &Executor{
+		retryTimes:    5,
+		retryDuration: time.Second,
+		sinkLabel:     "mysql",
+	}
+	executor.initRetryPolicy()
+	executor.circuitBreaker.maxFailures = 1
+	executor.circuitBreaker.coolDown = 50 * time.Millisecond
+
+	v2.CdcSinkerRetryCounter.Reset()
+	v2.CdcSinkerCircuitStateGauge.Reset()
+
+	attempts := 0
+	err := executor.execWithRetry(context.Background(), nil, func() error {
+		attempts++
+		return driver.ErrBadConn
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "circuit breaker open")
+	require.Equal(t, 1, attempts)
+
+	require.True(t, executor.circuitBreaker.open)
+
+	// Circuit should block immediate retries
+	err = executor.execWithRetry(context.Background(), nil, func() error {
+		t.Helper()
+		t.Fatalf("operation should not execute when circuit is open")
+		return nil
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "circuit breaker open")
+
+	// After cooldown, circuit should half-open and allow attempts
+	time.Sleep(60 * time.Millisecond)
+	require.False(t, executor.circuitBreaker.IsOpen())
+	executor.circuitBreaker.maxFailures = 2
+	attempts = 0
+	err = executor.execWithRetry(context.Background(), nil, func() error {
+		attempts++
+		if attempts < 2 {
+			return driver.ErrBadConn
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
+	require.False(t, executor.circuitBreaker.IsOpen())
 }
 
 func TestExecutor_ExecSQL(t *testing.T) {

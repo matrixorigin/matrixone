@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -178,6 +179,7 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 
 	currentRoundRows := pt.currentRoundRows.Load()
 	currentRoundBatches := pt.currentRoundBatches.Load()
+	tableLabel := pt.tableKey()
 
 	logutil.Debug(
 		"cdc.progress_tracker.round_end",
@@ -193,6 +195,26 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 		zap.Uint64("failed-rounds", pt.failedRounds.Load()),
 		zap.Error(err),
 	)
+
+	if success {
+		if duration > 0 {
+			throughput := float64(currentRoundRows) / duration.Seconds()
+			v2.CdcThroughputRowsPerSecond.WithLabelValues(tableLabel).Set(throughput)
+		} else {
+			v2.CdcThroughputRowsPerSecond.WithLabelValues(tableLabel).Set(0)
+		}
+		if !pt.currentRoundToTs.IsEmpty() {
+			ts := pt.currentRoundToTs.ToTimestamp()
+			if !ts.IsEmpty() {
+				lag := time.Since(ts.ToStdTime()).Seconds()
+				if lag < 0 {
+					lag = 0
+				}
+				v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lag)
+			}
+		}
+		v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
+	}
 
 	// Reset current round
 	pt.currentRoundStartTime = time.Time{}

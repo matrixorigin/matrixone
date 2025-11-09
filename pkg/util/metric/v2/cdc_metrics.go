@@ -218,14 +218,23 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 15),
 		}, []string{"sql_type"})
 
-	// CdcSinkerRetryCounter tracks retry attempts
+	// CdcSinkerRetryCounter tracks retry attempts and outcomes
 	CdcSinkerRetryCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "cdc",
 			Name:      "sinker_retry_total",
-			Help:      "Total number of sinker retry attempts",
-		}, []string{"reason"})
+			Help:      "Total number of sinker retry attempts grouped by sink type, reason and result",
+		}, []string{"sink", "reason", "result"})
+
+	// CdcSinkerCircuitStateGauge tracks circuit breaker state per sink
+	CdcSinkerCircuitStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "sinker_circuit_state",
+			Help:      "Circuit breaker state for sinkers (0=closed, 1=open)",
+		}, []string{"sink"})
 )
 
 // CDC Health Metrics
@@ -315,6 +324,7 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcSinkerSQLCounter)
 	registry.MustRegister(CdcSinkerSQLDuration)
 	registry.MustRegister(CdcSinkerRetryCounter)
+	registry.MustRegister(CdcSinkerCircuitStateGauge)
 
 	// Health metrics
 	registry.MustRegister(CdcHeartbeatCounter)

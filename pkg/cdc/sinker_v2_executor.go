@@ -17,8 +17,16 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"math"
+	"net"
+	"strconv"
+	"sync"
+	"syscall"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -38,7 +46,88 @@ const (
 	// v2FakeSql is a placeholder SQL used with mysql.ReuseQueryBuf
 	// The actual SQL is passed via the named argument
 	v2FakeSql = "fakeSql"
+
+	defaultCircuitBreakerFailures = 5
+	defaultCircuitBreakerCooldown = 30 * time.Second
 )
+
+type circuitBreaker struct {
+	sinkLabel    string
+	maxFailures  int
+	coolDown     time.Duration
+	failureCount int
+	open         bool
+	openedAt     time.Time
+	mu           sync.Mutex
+}
+
+func newCircuitBreaker(sink string, maxFailures int, coolDown time.Duration) *circuitBreaker {
+	if maxFailures <= 0 {
+		maxFailures = defaultCircuitBreakerFailures
+	}
+	if coolDown <= 0 {
+		coolDown = defaultCircuitBreakerCooldown
+	}
+	cb := &circuitBreaker{
+		sinkLabel:   sink,
+		maxFailures: maxFailures,
+		coolDown:    coolDown,
+	}
+	v2.CdcSinkerCircuitStateGauge.WithLabelValues(sink).Set(0)
+	return cb
+}
+
+func (cb *circuitBreaker) IsOpen() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if !cb.open {
+		return false
+	}
+
+	if time.Since(cb.openedAt) >= cb.coolDown {
+		cb.open = false
+		cb.failureCount = 0
+		cb.openedAt = time.Time{}
+		v2.CdcSinkerCircuitStateGauge.WithLabelValues(cb.sinkLabel).Set(0)
+		logutil.Info("cdc.executor.retry_circuit_half_open",
+			zap.String("sink", cb.sinkLabel))
+		return false
+	}
+	return true
+}
+
+func (cb *circuitBreaker) OnFailure() (opened bool, justOpened bool) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failureCount++
+	if cb.failureCount >= cb.maxFailures {
+		if !cb.open {
+			cb.open = true
+			cb.openedAt = time.Now()
+			v2.CdcSinkerCircuitStateGauge.WithLabelValues(cb.sinkLabel).Set(1)
+			return true, true
+		}
+		cb.openedAt = time.Now()
+		return true, false
+	}
+	return cb.open, false
+}
+
+func (cb *circuitBreaker) OnSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failureCount = 0
+	if cb.open {
+		cb.open = false
+		cb.openedAt = time.Time{}
+		v2.CdcSinkerCircuitStateGauge.WithLabelValues(cb.sinkLabel).Set(0)
+		logutil.Info("cdc.executor.retry_circuit_closed",
+			zap.String("sink", cb.sinkLabel))
+	}
+}
 
 // Executor manages database connection, transaction lifecycle, and SQL execution.
 //
@@ -65,6 +154,12 @@ type Executor struct {
 	// Retry configuration
 	retryTimes    int           // -1 for infinite retry
 	retryDuration time.Duration // Max total retry duration
+
+	retryPolicy     retry.Policy
+	retryClassifier retry.ErrorClassifier
+
+	sinkLabel      string
+	circuitBreaker *circuitBreaker
 
 	// Debug transaction recording
 	debugTxnRecorder struct {
@@ -98,6 +193,8 @@ func NewExecutor(
 	if err := e.Connect(); err != nil {
 		return nil, err
 	}
+
+	e.initRetryPolicy()
 
 	return e, nil
 }
@@ -198,6 +295,10 @@ func (e *Executor) ExecSQL(
 	e.recordTxnSQL(sqlBuf)
 
 	execFunc := func() error {
+		if err := e.ensureConnection(ctx); err != nil {
+			return err
+		}
+
 		var err error
 		if e.tx != nil {
 			_, err = e.tx.Exec(v2FakeSql, reuseQueryArg)
@@ -211,11 +312,222 @@ func (e *Executor) ExecSQL(
 		return err
 	}
 
+	start := time.Now()
 	if !needRetry {
-		return execFunc()
+		err := execFunc()
+		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
+		return err
 	}
 
-	return e.retryWithBackoff(ctx, ar, execFunc)
+	return e.execWithRetry(ctx, ar, execFunc)
+}
+
+func (e *Executor) execWithRetry(
+	ctx context.Context,
+	ar *ActiveRoutine,
+	fn func() error,
+) error {
+	sinkLabel := e.sinkLabel
+	if sinkLabel == "" {
+		sinkLabel = "mysql"
+	}
+
+	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
+		logutil.Warn(
+			"cdc.executor.retry_circuit_blocked",
+			zap.String("sink", sinkLabel),
+		)
+		v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, "circuit_open", "blocked").Inc()
+		return moerr.NewInternalError(ctx, "sinker circuit breaker open")
+	}
+
+	policy := e.retryPolicy
+	policy.MaxAttempts = e.calculateMaxAttempts()
+	if policy.MaxAttempts < 1 {
+		policy.MaxAttempts = 1
+	}
+	policy.Classifier = e.retryClassifier
+
+	start := time.Now()
+	attempt := 0
+	var lastErr error
+
+	err := policy.Do(ctx, func() error {
+		attempt++
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if ar != nil {
+			select {
+			case <-ar.Pause:
+				return moerr.NewInternalError(ctx, "task paused")
+			case <-ar.Cancel:
+				return moerr.NewInternalError(ctx, "task cancelled")
+			default:
+			}
+		}
+
+		if e.retryDuration > 0 && attempt > 1 && time.Since(start) >= e.retryDuration {
+			return retry.ErrNonRetryable
+		}
+
+		begin := time.Now()
+		err := fn()
+		v2.CdcSendSqlDurationHistogram.Observe(time.Since(begin).Seconds())
+		if err == nil {
+			if e.circuitBreaker != nil {
+				e.circuitBreaker.OnSuccess()
+			}
+			lastErr = nil
+			return nil
+		}
+
+		reason := classifyRetryReason(err)
+		lastErr = err
+
+		logutil.Error(
+			"cdc.executor.retry_failed",
+			zap.Int("attempt", attempt),
+			zap.Error(err),
+			zap.String("reason", reason),
+		)
+		v2.CdcMysqlSinkErrorCounter.Inc()
+		v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, reason, "failed").Inc()
+
+		if e.circuitBreaker != nil {
+			if opened, justOpened := e.circuitBreaker.OnFailure(); opened {
+				if justOpened {
+					logutil.Warn("cdc.executor.retry_circuit_opened",
+						zap.String("sink", sinkLabel),
+						zap.Int("attempt", attempt),
+						zap.String("reason", reason),
+					)
+				}
+				v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, reason, "circuit_open").Inc()
+				return retry.ErrCircuitOpen
+			}
+		}
+
+		return err
+	})
+
+	if err == nil {
+		if attempt > 1 && lastErr != nil {
+			reason := classifyRetryReason(lastErr)
+			logutil.Info(
+				"cdc.executor.retry_success",
+				zap.Int("attempts", attempt),
+				zap.Duration("total-duration", time.Since(start)),
+				zap.String("reason", reason),
+			)
+			v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, reason, "success").Inc()
+		}
+		return nil
+	}
+
+	if errors.Is(err, retry.ErrCircuitOpen) {
+		return moerr.NewInternalError(ctx, "sinker circuit breaker open")
+	}
+
+	if errors.Is(err, retry.ErrNonRetryable) {
+		reason := "duration_limit"
+		if lastErr != nil {
+			reason = classifyRetryReason(lastErr)
+		}
+		logutil.Error(
+			"cdc.executor.retry_exhausted",
+			zap.Int("attempts", attempt),
+			zap.Duration("total-duration", time.Since(start)),
+			zap.String("reason", reason),
+			zap.Error(lastErr),
+		)
+		v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, reason, "exhausted").Inc()
+		return moerr.NewInternalError(ctx, "retry limit exceeded")
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return err
+}
+
+func (e *Executor) initRetryPolicy() {
+	classifier := retry.MultiClassifier{
+		retry.DefaultClassifier{},
+		retry.MySQLErrorClassifier{},
+	}
+
+	e.retryClassifier = classifier
+	e.retryPolicy = retry.Policy{
+		MaxAttempts: e.calculateMaxAttempts(),
+		Backoff: retry.ExponentialBackoff{
+			Base:   200 * time.Millisecond,
+			Factor: 2,
+			Max:    30 * time.Second,
+			Jitter: 200 * time.Millisecond,
+		},
+		Classifier: classifier,
+	}
+	if e.sinkLabel == "" {
+		e.sinkLabel = "mysql"
+	}
+	e.circuitBreaker = newCircuitBreaker(e.sinkLabel, defaultCircuitBreakerFailures, defaultCircuitBreakerCooldown)
+}
+
+func (e *Executor) calculateMaxAttempts() int {
+	if e.retryTimes < 0 {
+		return math.MaxInt32
+	}
+	attempts := e.retryTimes + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	return attempts
+}
+
+func classifyRetryReason(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "context_deadline"
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return "bad_conn"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "conn_reset"
+	}
+	if errors.Is(err, syscall.EPIPE) {
+		return "broken_pipe"
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return "net_timeout"
+		}
+		type temporary interface {
+			Temporary() bool
+		}
+		if tmp, ok := netErr.(temporary); ok && tmp.Temporary() {
+			return "net_temporary"
+		}
+		return "net_error"
+	}
+
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return "mysql_" + strconv.FormatUint(uint64(mysqlErr.Number), 10)
+	}
+
+	return "unknown"
 }
 
 // HasActiveTx returns true if there's an active transaction
@@ -243,62 +555,6 @@ func (e *Executor) Close() error {
 }
 
 // retryWithBackoff retries a function with exponential backoff
-func (e *Executor) retryWithBackoff(
-	ctx context.Context,
-	ar *ActiveRoutine,
-	fn func() error,
-) error {
-	shouldContinue := func(attempt int, startTime time.Time) bool {
-		// retryTimes == -1 means retry forever
-		if e.retryTimes == -1 {
-			return time.Since(startTime) < e.retryDuration
-		}
-		// Always execute at least once (when attempt == 0)
-		// Then retry up to retryTimes more times
-		return attempt <= e.retryTimes && time.Since(startTime) < e.retryDuration
-	}
-
-	backoff := time.Second
-	startTime := time.Now()
-
-	for attempt := 0; shouldContinue(attempt, startTime); attempt++ {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ar.Pause:
-			return moerr.NewInternalError(ctx, "task paused")
-		case <-ar.Cancel:
-			return moerr.NewInternalError(ctx, "task cancelled")
-		default:
-		}
-
-		// Execute function
-		start := time.Now()
-		err := fn()
-		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
-
-		// Success
-		if err == nil {
-			return nil
-		}
-
-		// Log retry attempt
-		logutil.Error(
-			"cdc.executor.retry_failed",
-			zap.Int("attempt", attempt+1),
-			zap.Error(err),
-		)
-		v2.CdcMysqlSinkErrorCounter.Inc()
-
-		// Wait with backoff
-		time.Sleep(backoff)
-		backoff = min(backoff*2, 30*time.Second) // Cap at 30 seconds
-	}
-
-	return moerr.NewInternalError(ctx, "retry limit exceeded")
-}
-
 // ensureConnection makes sure executor has an active DB connection.
 func (e *Executor) ensureConnection(ctx context.Context) error {
 	if e.conn != nil {

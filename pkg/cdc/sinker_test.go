@@ -16,12 +16,10 @@ package cdc
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -284,100 +282,6 @@ func Test_consoleSinker_Sink(t *testing.T) {
 	}
 }
 
-func TestNewMysqlSink(t *testing.T) {
-	type args struct {
-		user          string
-		password      string
-		ip            string
-		port          int
-		retryTimes    int
-		retryDuration time.Duration
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    Sink
-		wantErr assert.ErrorAssertionFunc
-	}{
-		{
-			args: args{
-				user:          "root",
-				password:      "123456",
-				ip:            "127.0.0.1",
-				port:          3306,
-				retryTimes:    3,
-				retryDuration: 3 * time.Second,
-			},
-			want: &mysqlSink{
-				user:          "root",
-				password:      "123456",
-				ip:            "127.0.0.1",
-				port:          3306,
-				retryTimes:    3,
-				retryDuration: 3 * time.Second,
-				timeout:       CDCDefaultSendSqlTimeout,
-			},
-			wantErr: assert.NoError,
-		},
-	}
-
-	stub := gostub.Stub(&OpenDbConn, func(_, _, _ string, _ int, _ string) (_ *sql.DB, _ error) {
-		return nil, nil
-	})
-	defer stub.Reset()
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, CDCDefaultSendSqlTimeout, false)
-			if !tt.wantErr(t, err, fmt.Sprintf("NewMysqlSink(%v, %v, %v, %v, %v, %v)", tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "NewMysqlSink(%v, %v, %v, %v, %v, %v)", tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)
-		})
-	}
-}
-
-func Test_mysqlSink_Close(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-	mock.ExpectClose()
-
-	sink := &mysqlSink{
-		user:          "root",
-		password:      "123456",
-		ip:            "127.0.0.1",
-		port:          3306,
-		retryTimes:    3,
-		retryDuration: 3 * time.Second,
-		conn:          db,
-	}
-	sink.Close()
-	assert.Nil(t, sink.conn)
-}
-
-func Test_mysqlSink_Send(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sink := &mysqlSink{
-		user:          "root",
-		password:      "123456",
-		ip:            "127.0.0.1",
-		port:          3306,
-		retryTimes:    CDCDefaultRetryTimes,
-		retryDuration: CDCDefaultRetryDuration,
-		conn:          db,
-	}
-	ar := NewCdcActiveRoutine()
-	err = sink.Send(context.Background(), ar, []byte("sql"), true)
-	assert.NoError(t, err)
-
-	close(ar.Pause)
-	err = sink.Send(context.Background(), ar, []byte("sql"), true)
-	assert.NoError(t, err)
-}
-
 func Test_consoleSinker_Close(t *testing.T) {
 	type fields struct {
 		dbTblInfo        *DbTableInfo
@@ -428,34 +332,6 @@ func TestRecordTxn(t *testing.T) {
 
 	ok, _ = objectio.CDCRecordTxnInjected("tpcc", "bmsql_stock")
 	assert.True(t, ok)
-
-	{
-		s := &mysqlSink{}
-
-		sql1 := make([]byte, sqlBufReserved)
-		sql1 = append(sql1, []byte("select count(*) from testdb.t1")...)
-
-		s.recordTxnSQL(sql1)
-		s.infoRecordedTxnSQLs(nil)
-		s.infoRecordedTxnSQLs(nil)
-	}
-
-	{
-		s := &mysqlSink{}
-		s.debugTxnRecorder.doRecord = true
-
-		sql1 := make([]byte, sqlBufReserved)
-		sql1 = append(sql1, []byte("select count(*) from testdb.t1")...)
-
-		sql2 := make([]byte, sqlBufReserved)
-		sql2 = append(sql2, []byte("select count(*) from tpcc.bmsql_stock")...)
-
-		s.recordTxnSQL(sql1)
-		s.recordTxnSQL(sql2)
-
-		s.infoRecordedTxnSQLs(nil)
-		s.infoRecordedTxnSQLs(nil)
-	}
 
 	_ = moerr.NewInvalidStateNoCtxf("for test coverage")
 }
