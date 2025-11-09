@@ -70,6 +70,7 @@ type TableChangeStream struct {
 	runningReaders   *sync.Map
 	runningReaderKey string
 	wg               sync.WaitGroup
+	start            sync.WaitGroup
 	runCancel        context.CancelFunc
 	cancelOnce       sync.Once
 
@@ -177,7 +178,7 @@ var NewTableChangeStream = func(
 		attachable.AttachProgressTracker(progressTracker)
 	}
 
-	return &TableChangeStream{
+	stream := &TableChangeStream{
 		txnManager:            txnManager,
 		dataProcessor:         dataProcessor,
 		cnTxnClient:           cnTxnClient,
@@ -205,12 +206,18 @@ var NewTableChangeStream = func(
 		delCompositedPkColIdx: delCompositedPkColIdx,
 		progressTracker:       progressTracker,
 	}
+
+	stream.start.Add(1)
+	return stream
 }
 
 // Run starts the change stream
 func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	s.runCancel = cancel
+
+	s.wg.Add(1)
+	s.start.Done()
 
 	// 1. Check for duplicate readers
 	if _, loaded := s.runningReaders.LoadOrStore(s.runningReaderKey, s); loaded {
@@ -220,6 +227,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			zap.String("task-id", s.taskId),
 			zap.Uint64("account-id", s.accountId),
 		)
+		s.wg.Done()
 		s.Close()
 		return
 	}
@@ -246,7 +254,6 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	defer obsManager.UnregisterTableStream(s)
 
 	// 4. Setup lifecycle
-	s.wg.Add(1)
 	defer s.cleanup(ctx)
 
 	// 5. Initialize progress tracker
@@ -768,6 +775,7 @@ func (s *TableChangeStream) Close() {
 // Info returns the table information
 // Wait blocks until the reader goroutine completes
 func (s *TableChangeStream) Wait() {
+	s.start.Wait()
 	s.wg.Wait()
 }
 
