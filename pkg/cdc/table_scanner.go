@@ -39,8 +39,8 @@ import (
 const (
 	defaultSlowThreshold          = 10 * time.Minute
 	defaultPrintInterval          = 5 * time.Minute
-	defaultWatermarkCleanupPeriod = 10 * time.Minute
-	defaultCleanupWarnThreshold   = 5 * time.Second
+	defaultWatermarkCleanupPeriod = 2 * time.Second
+	defaultCleanupWarnThreshold   = 1 * time.Microsecond
 )
 
 type TableDetectorOptions struct {
@@ -374,10 +374,6 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	delete(s.Callbacks, id)
-	if len(s.Callbacks) == 0 && s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
-	}
 
 	logutil.Debug(
 		"cdc.table_detector.unregister",
@@ -485,31 +481,14 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 }
 
 func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
-	s.Lock()
-	if len(s.SubscribedAccountIds) == 0 {
-		s.Unlock()
-		return
-	}
-	accountIDs := make([]uint32, 0, len(s.SubscribedAccountIds))
-	for accountID := range s.SubscribedAccountIds {
-		accountIDs = append(accountIDs, accountID)
-	}
-
-	if len(accountIDs) == 0 {
-		s.Unlock()
-		return
-	}
-
-	sql := CDCSQLBuilder.DeleteOrphanWatermarkSQL(accountIDs)
-	s.Unlock()
-
-	if sql == "" {
-		return
-	}
-
+	sql := CDCSQLBuilder.DeleteOrphanWatermarkSQL()
 	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	logutil.Info(
+		"cdc.table_detector.cleanup_watermark_execute",
+		zap.String("sql", sql),
+	)
 	start := time.Now()
 	res, err := s.exec.Exec(
 		cleanupCtx,
@@ -543,7 +522,7 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 				fields...,
 			)
 		} else {
-			logutil.Debug(
+			logutil.Info(
 				"cdc.table_detector.cleanup_watermark_done",
 				fields...,
 			)

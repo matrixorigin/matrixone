@@ -16,8 +16,6 @@ package cdc
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -711,22 +709,11 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 	)
 }
 
-func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL(
-	accountIds []uint32,
-) string {
-	if len(accountIds) == 0 {
-		return ""
-	}
-
-	idParts := make([]string, len(accountIds))
-	for i, id := range accountIds {
-		idParts[i] = strconv.FormatUint(uint64(id), 10)
-	}
-
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCDeleteOrphanWatermarkSqlTemplate_Idx].SQL,
-		strings.Join(idParts, ","),
-	)
+func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL() string {
+	return "DELETE w FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
+		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"WHERE t.task_id IS NULL"
 }
 
 func (b cdcSQLBuilder) GetWatermarkSQL(

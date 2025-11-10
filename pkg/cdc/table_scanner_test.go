@@ -80,7 +80,10 @@ func TestTableScanner1(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil)
 
-	td := newTableDetector(mockSqlExecutor)
+	td := newTableDetector(
+		mockSqlExecutor,
+		WithTableDetectorCleanupPeriod(time.Hour),
+	)
 	defer td.Close()
 
 	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
@@ -158,7 +161,10 @@ func TestScanAndProcess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	td := newTableDetector(nil)
+	td := newTableDetector(
+		nil,
+		WithTableDetectorCleanupPeriod(time.Hour),
+	)
 	defer td.Close()
 
 	tables := map[uint32]TblMap{
@@ -201,7 +207,10 @@ func TestProcessCallBack(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	td := newTableDetector(nil)
+	td := newTableDetector(
+		nil,
+		WithTableDetectorCleanupPeriod(time.Hour),
+	)
 	td.lastMp = make(map[uint32]TblMap)
 	defer td.Close()
 
@@ -264,10 +273,20 @@ func TestTableDetectorCleanupWatermarksNoAccounts(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockExec := mock_executor.NewMockSQLExecutor(ctrl)
-	td := newTableDetector(mockExec)
+	td := newTableDetector(
+		mockExec,
+		WithTableDetectorCleanupPeriod(time.Hour),
+	)
 	defer td.Close()
 
-	mockExec.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockExec.EXPECT().
+		Exec(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+			assert.Contains(t, sql, "DELETE w FROM")
+			assert.NotContains(t, sql, "WHERE w.account_id IN")
+			return executor.Result{AffectedRows: 0}, nil
+		}).
+		Times(1)
 
 	td.cleanupOrphanWatermarks(context.Background())
 }
@@ -316,7 +335,10 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		gomock.Any(),
 	).Return(res2, nil)
 
-	td := newTableDetector(mockSqlExecutor)
+	td := newTableDetector(
+		mockSqlExecutor,
+		WithTableDetectorCleanupPeriod(time.Hour),
+	)
 	defer td.Close()
 	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
 		return nil
