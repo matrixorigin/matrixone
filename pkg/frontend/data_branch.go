@@ -239,26 +239,6 @@ type tablePair struct {
 	baseSnapshot *plan.Snapshot
 }
 
-//type diffExtra struct {
-//	inputArgs struct {
-//		bh BackgroundExec
-//
-//		dagInfo branchMetaInfo
-//		tarRel  engine.Relation
-//		baseRel engine.Relation
-//
-//		tarSnapshot  *plan.Snapshot
-//		baseSnapshot *plan.Snapshot
-//	}
-//
-//	outputArgs struct {
-//		rows       [][]any
-//		pkKind     int
-//		pkColIdxes []int
-//		colTypes   []types.Type
-//	}
-//}
-
 func handleDataBranch(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -292,7 +272,7 @@ func diffOnBase(
 	rows1 [][]any,
 	rows2 [][]any,
 	colTypes []types.Type,
-	pkColIdxes []int,
+	expandedPKColIdxes []int,
 	mrs *MysqlResultSet,
 	lcaType int,
 	srcRel engine.Relation,
@@ -305,6 +285,7 @@ func diffOnBase(
 		dagInfo  branchMetaInfo
 		colIdxes []int
 		pkKind   int
+		pkColIdx int
 
 		tarHandle  []engine.ChangesHandle
 		baseHandle []engine.ChangesHandle
@@ -323,8 +304,8 @@ func diffOnBase(
 
 	defer func() {
 		closeHandle()
-		rows1 = sortDiffResultRows(rows1, pkColIdxes, colTypes)
-		rows2 = sortDiffResultRows(rows2, pkColIdxes, colTypes)
+		rows1 = sortDiffResultRows(rows1, expandedPKColIdxes, colTypes)
+		rows2 = sortDiffResultRows(rows2, expandedPKColIdxes, colTypes)
 	}()
 
 	if tables, err = getPairedRelations(
@@ -342,7 +323,7 @@ func diffOnBase(
 		return
 	}
 
-	if mrs, colIdxes, colTypes, pkKind, pkColIdxes, err = buildShowDiffSchema(
+	if mrs, colIdxes, colTypes, pkKind, pkColIdx, expandedPKColIdxes, err = buildShowDiffSchema(
 		ctx, ses, tables.tarRel.GetTableDef(ctx), tables.baseRel.CopyTableDef(ctx),
 	); err != nil {
 		return
@@ -352,14 +333,14 @@ func diffOnBase(
 		// has no lca
 		lcaType = lcaEmpty
 		if tarHandle, baseHandle, err = constructChangeHandle(
-			ctx, ses, bh, tables, dagInfo,
+			ctx, ses, bh, tables, &dagInfo,
 		); err != nil {
 			return
 		}
 
 		if rows1, err = hashDiff(
 			ctx, ses, tables.tarRel, tables.baseRel, tarHandle, baseHandle, dagInfo,
-			colTypes, colIdxes, pkKind, pkColIdxes,
+			colTypes, colIdxes, pkKind, expandedPKColIdxes, pkColIdx,
 		); err != nil {
 			return
 		}
@@ -410,16 +391,6 @@ func diffOnBase(
 		}
 	}
 
-	//extra1.inputArgs.bh = bh
-	//extra1.inputArgs.tarRel = tables.tarRel
-	//extra1.inputArgs.baseRel = lcaRel
-	//extra1.inputArgs.tarSnapshot = tables.tarSnapshot
-	//extra1.inputArgs.baseSnapshot = lcaSnapshot
-
-	//tables.tarRel = tables.tarRel
-	//tables.baseRel = lcaRel
-	//tables.tarSnapshot = tables.tarSnapshot
-	//tables.baseSnapshot = lcaSnapshot
 	tmpPair := tablePair{
 		tarRel:       tables.tarRel,
 		baseRel:      lcaRel,
@@ -438,29 +409,19 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tmpPair, dagInfo,
+		ctx, ses, bh, tmpPair, &dagInfo,
 	); err != nil {
 		return
 	}
 
 	if rows1, err = hashDiff(
 		ctx, ses, tmpPair.tarRel, lcaRel, tarHandle, baseHandle, dagInfo,
-		colTypes, colIdxes, pkKind, pkColIdxes,
+		colTypes, colIdxes, pkKind, expandedPKColIdxes, pkColIdx,
 	); err != nil {
 		return
 	}
 
 	closeHandle()
-
-	//extra2.inputArgs.bh = bh
-	//extra2.inputArgs.tarRel = tables.baseRel
-	//extra2.inputArgs.baseRel = lcaRel
-	//extra2.inputArgs.tarSnapshot = tables.baseSnapshot
-	//extra2.inputArgs.baseSnapshot = lcaSnapshot
-	//tables.tarRel = tables.baseRel
-	//tables.baseRel = lcaRel
-	//tables.tarSnapshot = tables.baseSnapshot
-	//tables.baseSnapshot = lcaSnapshot
 
 	tmpPair = tablePair{
 		tarRel:       tables.baseRel,
@@ -480,14 +441,14 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tmpPair, dagInfo,
+		ctx, ses, bh, tmpPair, &dagInfo,
 	); err != nil {
 		return
 	}
 
 	if rows2, err = hashDiff(
 		ctx, ses, tmpPair.tarRel, lcaRel, tarHandle, baseHandle, dagInfo,
-		colTypes, colIdxes, pkKind, pkColIdxes,
+		colTypes, colIdxes, pkKind, expandedPKColIdxes, pkColIdx,
 	); err != nil {
 		return
 	}
@@ -1135,7 +1096,8 @@ func hashDiff(
 	colTypes []types.Type,
 	colIdxes []int,
 	pkKind int,
-	pkColIdxes []int,
+	expandedPKColIdxes []int,
+	pkColIdx int,
 ) (
 	rows [][]any,
 	err error,
@@ -1146,6 +1108,9 @@ func hashDiff(
 
 		baseDataHashmap      databranchutils.BranchHashmap
 		baseTombstoneHashmap databranchutils.BranchHashmap
+
+		tarDataHashmap      databranchutils.BranchHashmap
+		tarTombstoneHashmap databranchutils.BranchHashmap
 
 		tarTblDef  = tarRel.GetTableDef(ctx)
 		baseTblDef = baseRel.GetTableDef(ctx)
@@ -1175,20 +1140,31 @@ func hashDiff(
 		if baseTombstoneHashmap != nil {
 			baseTombstoneHashmap.Close()
 		}
+		if tarDataHashmap != nil {
+			tarDataHashmap.Close()
+		}
+		if tarTombstoneHashmap != nil {
+			tarTombstoneHashmap.Close()
+		}
 	}()
 
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
-		ctx, mp, dagInfo.lcaTableId, pkColIdxes, baseHandle,
+		ctx, mp, dagInfo.lcaTableId, pkColIdx, baseHandle,
+	); err != nil {
+		return
+	}
+
+	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTarTable(
+		ctx, mp, tarTblDef, pkColIdx, tarHandle,
 	); err != nil {
 		return
 	}
 
 	var (
-		pkVecs   []*vector.Vector
-		checkRet []databranchutils.GetResult
+		tarTuple  types.Tuple
+		baseTuple types.Tuple
 
-		dataBat      *batch.Batch
-		tombstoneBat *batch.Batch
+		checkRet databranchutils.GetResult
 
 		tarDelsOnLCA  *vector.Vector
 		baseDelsOnLCA *vector.Vector
@@ -1209,7 +1185,7 @@ func hashDiff(
 				taskCtx, ses, taskVec, isTar,
 				tarTblDef, baseTblDef,
 				snap, dagInfo.lcaTableId,
-				pkColIdxes,
+				expandedPKColIdxes,
 				colTypes,
 			)
 			if err != nil {
@@ -1226,12 +1202,6 @@ func hashDiff(
 	}
 
 	defer func() {
-		if dataBat != nil {
-			dataBat.Clean(mp)
-		}
-		if tombstoneBat != nil {
-			tombstoneBat.Clean(mp)
-		}
 		if tarDelsOnLCA != nil {
 			tarDelsOnLCA.Free(mp)
 		}
@@ -1240,123 +1210,102 @@ func hashDiff(
 		}
 	}()
 
-	// check existence
-	for _, handle := range tarHandle {
-		for {
-			if dataBat, tombstoneBat, _, err = handle.Next(
-				ctx, mp,
-			); err != nil {
-				return
-			} else if dataBat == nil && tombstoneBat == nil {
-				// out of data
-				break
+	if err = tarDataHashmap.ForEach(func(tarKey []byte, tarValues [][]byte) error {
+
+		if checkRet, err = baseDataHashmap.PopByEncodedKey(tarKey, false); err != nil {
+			return err
+		}
+
+		// not exists, should be tar INSERT
+		if !checkRet.Exists {
+			row := make([]any, len(colIdxes)+2)
+			row[0] = tarTblDef.Name
+			row[1] = diffAddedLine
+
+			if tarTuple, _, err = baseDataHashmap.DecodeRow(tarValues[0]); err != nil {
+				return err
 			}
 
-			if dagInfo.lcaTableId == 0 && tombstoneBat != nil {
-				// if there has no LCA, the tombstones are not expected
-				err = moerr.NewInternalErrorNoCtx("tombstone are not expected from target table with no LCA")
-				return
+			for x, idx := range colIdxes {
+				row[idx+2] = tarTuple[x]
 			}
 
-			if dataBat != nil {
-				pkVecs = pkVecs[:0]
-				for _, idx := range pkColIdxes {
-					pkVecs = append(pkVecs, dataBat.Vecs[idx])
+			collector.addRow(row)
+		} else {
+			// exists in the base table, we should compare the left columns
+			if pkKind == fakeKind {
+				// already compared, do nothing here
+			} else {
+				if tarTuple, _, err = tarDataHashmap.DecodeRow(tarValues[0]); err != nil {
+					return err
 				}
-				if checkRet, err = baseDataHashmap.PopByVectors(pkVecs, false); err != nil {
-					return
+
+				if baseTuple, _, err = baseDataHashmap.DecodeRow(checkRet.Rows[0]); err != nil {
+					return err
 				}
 
-				for i := range checkRet {
-					// not exists in the base table
-					if !checkRet[i].Exists {
-						row := make([]any, len(colIdxes)+2)
-						row[0] = tarTblDef.Name
-						row[1] = diffAddedLine
-
-						for x, idx := range colIdxes {
-							row[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), colTypes[x].Oid)
+				for _, idx1 := range colIdxes {
+					// if not equal, both INSERTED a different row with the same PK
+					if types.CompareValues(tarTuple[idx1], baseTuple[idx1], colTypes[idx1].Oid) != 0 {
+						row1 := make([]any, len(colIdxes)+2)
+						row2 := make([]any, len(colIdxes)+2)
+						row1[0], row1[1] = baseTblDef.Name, diffAddedLine
+						row2[0], row2[1] = tarTblDef.Name, diffAddedLine
+						for _, idx2 := range colIdxes {
+							row1[idx2+2] = baseTuple[idx2]
+							row2[idx2+2] = tarTuple[idx2]
 						}
-						collector.addRow(row)
-					} else {
-						// exists in the base table, we should compare the left columns
-						if pkKind == fakeKind {
-							// already compared, do nothing here
-						} else {
-							var (
-								allEqual = true
-								tuple    types.Tuple
-							)
+						collector.addRows([][]any{row1, row2})
 
-							if tuple, _, err = baseDataHashmap.DecodeRow(checkRet[i].Rows[0]); err != nil {
-								return
-							}
-
-							for _, idx := range colIdxes {
-								// skip the keys, already compared
-								if slices.Index(pkColIdxes, idx) != -1 {
-									continue
-								}
-
-								left := types.EncodeValue(tuple[idx], dataBat.Vecs[idx].GetType().Oid)
-								if !bytes.Equal(left, dataBat.Vecs[idx].GetRawBytesAt(i)) {
-									allEqual = false
-									break
-								}
-							}
-
-							if !allEqual { // the diff comes from the update operations
-								row1 := make([]any, len(colIdxes)+2)
-								row2 := make([]any, len(colIdxes)+2)
-								row1[0], row1[1] = baseTblDef.Name, diffAddedLine
-								row2[0], row2[1] = tarTblDef.Name, diffAddedLine
-								for x, idx := range colIdxes {
-									row1[idx+2] = tuple[idx]
-									row2[idx+2] = types.DecodeValue(dataBat.Vecs[idx].GetRawBytesAt(i), colTypes[x].Oid)
-								}
-								collector.addRows([][]any{row1, row2})
-							}
-						}
+						break
 					}
 				}
-
-				dataBat.Clean(mp)
-			}
-
-			if tombstoneBat != nil {
-				pkVecs = pkVecs[:0]
-				pkVecs = append(pkVecs, tombstoneBat.Vecs[0])
-				if checkRet, err = baseTombstoneHashmap.PopByVectors(pkVecs, true); err != nil {
-					return
-				}
-
-				for i := range checkRet {
-					// target table delete on the LCA, but base table not
-					if !checkRet[i].Exists {
-						if tarDelsOnLCA == nil {
-							tarDelsOnLCA = vector.NewVec(*tombstoneBat.Vecs[0].GetType())
-						}
-
-						if err = tarDelsOnLCA.UnionOne(tombstoneBat.Vecs[0], int64(i), mp); err != nil {
-							return
-						}
-
-						if tarDelsOnLCA.Length() >= batchCnt || tarDelsOnLCA.Size() >= mpool.GB {
-							if err = enqueueHandleDels(
-								tarDelsOnLCA, true, dagInfo.tarBranchTS.ToTimestamp(),
-							); err != nil {
-								return
-							}
-							tarDelsOnLCA = nil
-						}
-
-					} //else {
-					// both delete on the LCA
-					// do nothing
-					//}
-				}
+				// all columns are the same, INSERTED a same row.
 			}
 		}
+
+		return nil
+
+	}); err != nil {
+		return
+	}
+
+	if err = tarTombstoneHashmap.ForEach(func(tarKey []byte, _ [][]byte) error {
+		if checkRet, err = baseTombstoneHashmap.PopByEncodedKey(tarKey, true); err != nil {
+			return err
+		}
+
+		var (
+			typs []types.Type
+		)
+		// if not exists should be the tar DELETE on the LCA
+		if !checkRet.Exists {
+			if tarTuple, typs, err = tarTombstoneHashmap.DecodeRow(tarKey); err != nil {
+				return err
+			}
+
+			if tarDelsOnLCA == nil {
+				tarDelsOnLCA = vector.NewVec(typs[0])
+			}
+
+			if err = vector.AppendAny(tarDelsOnLCA, tarTuple[0], false, mp); err != nil {
+				return err
+			}
+
+			if tarDelsOnLCA.Length() >= batchCnt || tarDelsOnLCA.Size() >= mpool.GB {
+				if err = enqueueHandleDels(
+					tarDelsOnLCA, true, dagInfo.tarBranchTS.ToTimestamp(),
+				); err != nil {
+					return err
+				}
+				tarDelsOnLCA = nil
+			}
+		}
+		// else, tar and base both delete on the LCA, do nothing
+
+		return nil
+	}); err != nil {
+		return
 	}
 
 	// iterate the left base table data
@@ -1684,7 +1633,8 @@ func buildShowDiffSchema(
 	neededColIdxes []int,
 	neededColTypes []types.Type,
 	pkKind int,
-	pkColIdxes []int,
+	pkColIdx int,
+	expandedPKColIdxes []int,
 	err error,
 ) {
 
@@ -1697,7 +1647,7 @@ func buildShowDiffSchema(
 		pkKind = fakeKind
 		for i, col := range baseTblDef.Cols {
 			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				pkColIdxes = append(pkColIdxes, i)
+				expandedPKColIdxes = append(expandedPKColIdxes, i)
 			}
 		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -1706,15 +1656,17 @@ func buildShowDiffSchema(
 		pkNames := baseTblDef.Pkey.Names
 		for _, name := range pkNames {
 			idx := int(baseTblDef.Name2ColIndex[name])
-			pkColIdxes = append(pkColIdxes, idx)
+			expandedPKColIdxes = append(expandedPKColIdxes, idx)
 		}
 	} else {
 		// normal pk
 		pkKind = normalKind
 		pkName := baseTblDef.Pkey.PkeyColName
 		idx := int(baseTblDef.Name2ColIndex[pkName])
-		pkColIdxes = append(pkColIdxes, idx)
+		expandedPKColIdxes = append(expandedPKColIdxes, idx)
 	}
+
+	pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
 
 	//  -----------------------------------------
 	// |  tar_table_name  | flag |  columns data |
@@ -1754,11 +1706,107 @@ func buildShowDiffSchema(
 	return
 }
 
+func buildHashmapForTarTable(
+	ctx context.Context,
+	mp *mpool.MPool,
+	tarTblDef *plan.TableDef,
+	pkColIdx int,
+	tarHandle []engine.ChangesHandle,
+) (
+	dataHashmap databranchutils.BranchHashmap,
+	tombstoneHashmap databranchutils.BranchHashmap,
+	err error,
+) {
+
+	var (
+		dataBat      *batch.Batch
+		tombstoneBat *batch.Batch
+	)
+
+	// we need use the real pk col to merge inserts and deletes
+	//if tarTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	//	pkIdxes = []int{int(tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName])}
+	//} else if tarTblDef.Pkey.CompPkeyCol != nil {
+	//	pkIdxes = []int{int(tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName])}
+	//}
+
+	defer func() {
+		if dataBat != nil {
+			dataBat.Clean(mp)
+		}
+
+		if tombstoneBat != nil {
+			tombstoneBat.Clean(mp)
+		}
+	}()
+
+	if dataHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+		return
+	}
+
+	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+		return
+	}
+
+	var (
+		insRow types.Tuple
+		sels   = make([]int64, 0, 10)
+		result []databranchutils.GetResult
+	)
+
+	for _, handle := range tarHandle {
+		for {
+			if dataBat, tombstoneBat, _, err = handle.Next(
+				ctx, mp,
+			); err != nil {
+				return
+			} else if dataBat == nil && tombstoneBat == nil {
+				// out of data
+				break
+			}
+
+			if dataBat != nil {
+				if err = dataHashmap.PutByVectors(dataBat.Vecs, []int{pkColIdx}); err != nil {
+					return
+				}
+				dataBat.Clean(mp)
+			}
+
+			if tombstoneBat != nil {
+				sels = sels[:0]
+				if result, err = dataHashmap.GetByVectors([]*vector.Vector{tombstoneBat.Vecs[0]}); err != nil {
+					return
+				}
+
+				for i := range result {
+					if result[i].Exists {
+						// insert -> delete (we should skip this situation)
+						// delete -> insert
+						if insRow, _, err = dataHashmap.DecodeRow(result[i].Rows[0]); err != nil {
+							return
+						}
+					}
+					sels = append(sels, int64(i))
+				}
+				tombstoneBat.Shrink(sels, false)
+
+				if err = tombstoneHashmap.PutByVectors(tombstoneBat.Vecs, []int{0}); err != nil {
+					return
+				}
+
+				tombstoneBat.Clean(mp)
+			}
+		}
+	}
+
+	return
+}
+
 func buildHashmapForBaseTable(
 	ctx context.Context,
 	mp *mpool.MPool,
 	lcaTableID uint64,
-	pkIdxes []int,
+	pkColIdx int,
 	baseHandle []engine.ChangesHandle,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
@@ -1807,7 +1855,7 @@ func buildHashmapForBaseTable(
 			}
 
 			if dataBat != nil {
-				if err = dataHashmap.PutByVectors(dataBat.Vecs, pkIdxes); err != nil {
+				if err = dataHashmap.PutByVectors(dataBat.Vecs, []int{pkColIdx}); err != nil {
 					return
 				}
 				dataBat.Clean(mp)
@@ -1942,7 +1990,7 @@ func constructChangeHandle(
 	ses *Session,
 	bh BackgroundExec,
 	tables tablePair,
-	branchInfo branchMetaInfo,
+	branchInfo *branchMetaInfo,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -1996,7 +2044,7 @@ func decideCollectRange(
 	ses *Session,
 	bh BackgroundExec,
 	tables tablePair,
-	dagInfo branchMetaInfo,
+	dagInfo *branchMetaInfo,
 ) (
 	tarCollectRange collectRange,
 	baseCollectRange collectRange,
@@ -2055,29 +2103,36 @@ func decideCollectRange(
 	//
 	// case 0: special cases:
 	//	i. tar = base
-	//	 same table ==> same branch TS ==> same from ts
-	//	 data branch diff t1{sp1} against t1{sp2}
-	//	 t1: -----from ts-------sp1-----------sp2----->
-	//
-	//	diff t1.[fromTS, sp1] against t1.[fromTS, sp2]
-	//
-	//	 minEnd = mix(sp1,sp2)
-	//	 ==> t1.[minEnd, sp1] against t1.[minEnd, sp2]
+	//   -|------------|-------------|----
+	//   cts          sp1           sp2
+	//	diff t(sp1) against t(sp2)
+	// 		diff empty against (sp1, sp2]
+	//	diff t(sp2) against t(sp2)
+	//		diff (sp1, sp2] against empty
 	if tarTableID == baseTableID {
-		minSp := tarSp
-		if minSp.GT(&baseSp) {
-			minSp = baseSp
+		if tarSp.LE(&baseSp) {
+			// tar collect nothing
+			baseCollectRange = collectRange{
+				from: []types.TS{tarSp.Next()},
+				end:  []types.TS{baseSp},
+				rel:  []engine.Relation{tables.baseRel},
+			}
+			dagInfo.tarBranchTS = tarSp
+			dagInfo.baseBranchTS = tarSp
+		} else {
+			tarCollectRange = collectRange{
+				from: []types.TS{baseSp.Next()},
+				end:  []types.TS{tarSp},
+				rel:  []engine.Relation{tables.tarRel},
+			}
+
+			dagInfo.tarBranchTS = baseSp
+			dagInfo.baseBranchTS = baseSp
+			// base collect nothing
 		}
-		tarCollectRange = collectRange{
-			from: []types.TS{minSp.Next()},
-			end:  []types.TS{tarSp},
-			rel:  []engine.Relation{tables.tarRel},
-		}
-		baseCollectRange = collectRange{
-			from: []types.TS{minSp.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
+
+		dagInfo.lcaTableId = baseTableID
+
 		return
 	}
 
