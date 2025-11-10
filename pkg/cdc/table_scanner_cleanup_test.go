@@ -16,13 +16,13 @@ package cdc
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -38,7 +38,7 @@ func (s *stubSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Op
 }
 
 func (s *stubSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
-	return errors.New("ExecTxn not implemented in test executor")
+	return moerr.NewNotSupportedNoCtx("ExecTxn not implemented in test executor")
 }
 
 type fakeClock struct {
@@ -87,7 +87,7 @@ func TestCleanupOrphanWatermarksExecError(t *testing.T) {
 		execFn: func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
 			execCalled = true
 			capturedCtx = ctx
-			return executor.Result{}, errors.New("boom")
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("boom")
 		},
 	}
 	td := newTestDetector(exec)
