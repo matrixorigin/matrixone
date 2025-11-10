@@ -25,6 +25,8 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -47,6 +49,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -1594,6 +1597,111 @@ func TestPartitionChangesHandle(t *testing.T) {
 		assert.NoError(t, handle.Close())
 	}
 }
+
+func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
+	catalog.SetupDefines("")
+
+	ctx := context.Background()
+	start := types.BuildTS(1, 0)
+	end := types.BuildTS(2, 0)
+
+	dataAppendable := newObjectEntryForCheckpointTest(t, 1, true, false, types.BuildTS(3, 0), types.TS{})
+	dataCN := newObjectEntryForCheckpointTest(t, 2, false, true, types.BuildTS(4, 0), types.TS{})
+	tombstoneAppendable := newObjectEntryForCheckpointTest(t, 3, true, false, types.BuildTS(5, 0), types.BuildTS(6, 0))
+	tombstoneCN := newObjectEntryForCheckpointTest(t, 4, false, true, types.BuildTS(7, 0), types.BuildTS(8, 0))
+
+	fakeReaders := []*checkpointReaderStub{
+		{
+			objects: []checkpointObject{
+				{entry: dataAppendable, isTombstone: false},
+				{entry: dataCN, isTombstone: false},
+				{entry: tombstoneAppendable, isTombstone: true},
+				{entry: tombstoneCN, isTombstone: true},
+			},
+		},
+		{
+			objects: []checkpointObject{
+				{entry: dataAppendable, isTombstone: false},
+				{entry: tombstoneAppendable, isTombstone: true},
+			},
+		},
+	}
+
+	readerIdx := 0
+	restore := logtailreplay.SetCheckpointReaderFactoryForTest(func(uint32, objectio.Location, uint64, *mpool.MPool, fileservice.FileService) logtailreplay.CheckpointEntryReader {
+		r := fakeReaders[readerIdx]
+		readerIdx++
+		return r
+	})
+	defer restore()
+
+	entry1 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+	entry2 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+
+	dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointEntries(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry1, entry2}, nil, nil)
+	require.NoError(t, err)
+
+	require.Len(t, dataAobjs, 1)
+	require.Equal(t, dataAppendable.ObjectShortName().ShortString(), dataAobjs[0].ObjectShortName().ShortString())
+
+	require.Len(t, dataCNObjs, 1)
+	require.Equal(t, dataCN.ObjectShortName().ShortString(), dataCNObjs[0].ObjectShortName().ShortString())
+
+	require.Len(t, tombstoneAobjs, 1)
+	require.Equal(t, tombstoneAppendable.ObjectShortName().ShortString(), tombstoneAobjs[0].ObjectShortName().ShortString())
+
+	require.Len(t, tombstoneCNObjs, 1)
+	require.Equal(t, tombstoneCN.ObjectShortName().ShortString(), tombstoneCNObjs[0].ObjectShortName().ShortString())
+}
+
+type checkpointObject struct {
+	entry       objectio.ObjectEntry
+	isTombstone bool
+}
+
+type checkpointReaderStub struct {
+	objects []checkpointObject
+}
+
+func (f *checkpointReaderStub) ReadMeta(context.Context) error {
+	return nil
+}
+
+func (f *checkpointReaderStub) PrefetchData(string) {}
+
+func (f *checkpointReaderStub) ConsumeCheckpointWithTableID(ctx context.Context, fn func(context.Context, objectio.ObjectEntry, bool) error) error {
+	for _, obj := range f.objects {
+		if err := fn(ctx, obj.entry, obj.isTombstone); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newObjectEntryForCheckpointTest(t *testing.T, id byte, appendable bool, cnCreated bool, create types.TS, delete types.TS) objectio.ObjectEntry {
+	t.Helper()
+
+	var uuid types.Uuid
+	uuid[15] = id
+	seg := objectio.Segmentid(uuid)
+	name := objectio.BuildObjectName(&seg, uint16(id))
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	if appendable {
+		objectio.WithAppendable()(stats)
+	}
+	if cnCreated {
+		objectio.WithCNCreated()(stats)
+	}
+
+	return objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  create,
+		DeleteTime:  delete,
+	}
+}
+
 func TestISCPExecutor1(t *testing.T) {
 	catalog.SetupDefines("")
 
