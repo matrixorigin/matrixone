@@ -141,7 +141,9 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
-	state, err := h.tbl.getPartitionState(ctx)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	state, err := h.tbl.getPartitionState(ctxWithTimeout)
 	if err != nil {
 		return
 	}
@@ -187,7 +189,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 
 	logutil.Info("ChangesHandle-Split request snapshot read",
-		zap.String("from", nextFrom.ToString()), //1762519148968452999-1
+		zap.String("from", nextFrom.ToString()),
 	)
 	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
