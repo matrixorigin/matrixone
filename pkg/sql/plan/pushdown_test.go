@@ -185,7 +185,7 @@ func TestLeftJoinOrFilterWithAndKeepsLeftJoin(t *testing.T) {
 
 	leftEquals11, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
 		DeepCopyExpr(leftSpaceCol),
-		&plan.Expr{
+		{
 			Typ: leftIDCol.Typ,
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
@@ -204,7 +204,7 @@ func TestLeftJoinOrFilterWithAndKeepsLeftJoin(t *testing.T) {
 
 	leftEquals12, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
 		DeepCopyExpr(leftSpaceCol),
-		&plan.Expr{
+		{
 			Typ: leftIDCol.Typ,
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
