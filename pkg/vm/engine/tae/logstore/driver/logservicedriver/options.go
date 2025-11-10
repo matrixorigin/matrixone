@@ -40,6 +40,10 @@ type Config struct {
 
 	MaxTimeout time.Duration
 
+	ClientRetryTimes    int
+	ClientRetryInterval time.Duration
+	ClientRetryDuration time.Duration
+
 	ClientFactory LogServiceClientFactory
 	IsMockBackend bool
 }
@@ -144,6 +148,15 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.ClientMaxEntryCount <= 0 {
 		cfg.ClientMaxEntryCount = DefaultClientMaxEntryCount
+	}
+	if cfg.ClientRetryTimes <= 0 {
+		cfg.ClientRetryTimes = DefaultRetryTimes
+	}
+	if cfg.ClientRetryInterval <= 0 {
+		cfg.ClientRetryInterval = DefaultRetryInterval
+	}
+	if cfg.ClientRetryDuration <= 0 {
+		cfg.ClientRetryDuration = DefaultRetryDuration
 	}
 }
 
