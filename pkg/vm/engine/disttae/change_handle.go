@@ -141,7 +141,9 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
-	state, err := h.tbl.getPartitionState(ctx)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	state, err := h.tbl.getPartitionState(ctxWithTimeout)
 	if err != nil {
 		return
 	}
@@ -152,7 +154,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		nextFrom = h.currentPSTo.Next()
 	}
 	stateStart := state.GetStart()
-	if stateStart.LT(&nextFrom) {
+	if stateStart.LE(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
 		if h.handleIdx != 0 {
@@ -203,6 +205,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 		entries := resp.Entries
 		for _, entry := range entries {
+			logutil.Infof("ChangesHandle-Split get checkpoint entry: %v", entry.String())
 			start := types.TimestampToTS(*entry.Start)
 			end := types.TimestampToTS(*entry.End)
 			if start.LT(&minTS) {
@@ -218,6 +221,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
+		logutil.Infof("ChangesHandle-Split nextFrom is not in the checkpoint entry range: %s-%s", minTS.ToString(), maxTS.ToString())
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
 	h.currentPSFrom = nextFrom

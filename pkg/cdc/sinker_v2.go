@@ -294,7 +294,17 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Info("cdc.mysql_sinker2.run_start",
 		zap.String("table", s.dbTblInfo.String()))
 
+	// Check if already closed before incrementing wait group
+	// This prevents data race with Close() calling wg.Wait()
+	s.closeMutex.RLock()
+	if s.closed {
+		s.closeMutex.RUnlock()
+		logutil.Info("cdc.mysql_sinker2.run_already_closed",
+			zap.String("table", s.dbTblInfo.String()))
+		return
+	}
 	s.wg.Add(1)
+	s.closeMutex.RUnlock()
 	defer s.wg.Done()
 
 	defer func() {
