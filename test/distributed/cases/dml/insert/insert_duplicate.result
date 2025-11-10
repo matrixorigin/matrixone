@@ -1,393 +1,1547 @@
-CREATE TABLE IF NOT EXISTS indup_00(
+DROP TABLE IF EXISTS indup_00;
+CREATE TABLE indup_00(
 `id` INT UNSIGNED,
 `act_name` VARCHAR(20) NOT NULL,
 `spu_id` VARCHAR(30) NOT NULL,
 `uv`  BIGINT NOT NULL,
-`update_time` date default '2020-10-10' COMMENT 'lastest time',
-unique key idx_act_name_spu_id (act_name,spu_id)
+`update_time` DATE DEFAULT '2020-10-10' COMMENT 'latest time',
+UNIQUE KEY idx_act_name_spu_id_0 (act_name, spu_id)
 );
-insert into indup_00 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
-select * from indup_00;
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_act_name_spu_id_0'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_00 VALUES
+(1,'beijing','001',1,'2021-01-03'),
+(2,'shanghai','002',2,'2022-09-23'),
+(3,'guangzhou','003',3,'2022-09-23');
+SELECT * FROM indup_00;
 id    act_name    spu_id    uv    update_time
 1    beijing    001    1    2021-01-03
-3    guangzhou    003    3    2022-09-23
 2    shanghai    002    2    2022-09-23
-insert into indup_00 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
-internal error: do not support update primary key/unique key for on duplicate key update
-select * from indup_00;
-id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-5    beijing    010    5    2022-10-23
 3    guangzhou    003    3    2022-09-23
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_00 VALUES (100,'beijing','001',999,'2023-01-01')
+ON DUPLICATE KEY UPDATE `id`=VALUES(`id`), `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
+SELECT * FROM indup_00;
+id    act_name    spu_id    uv    update_time
 2    shanghai    002    2    2022-09-23
-4    shenzheng    004    4    2021-05-28
-insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
-select * from indup_00;
+3    guangzhou    003    3    2022-09-23
+100    beijing    001    999    2023-01-01
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_00 VALUES
+(200,'shanghai','002',888,'2023-02-01'),
+(4,'shenzhen','004',4,'2023-02-01')
+ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
+SELECT * FROM indup_00;
 id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-5    beijing    010    5    2022-10-23
-3    guangzhou    003    31    2022-09-23
-2    shanghai    002    21    2022-09-23
-4    shenzheng    004    4    2021-05-28
-insert into indup_00 values (8,'shanghai','002',21,'1999-09-23') on duplicate key update `act_name`=NULL;
-constraint violation: Column 'act_name' cannot be null
-select * from indup_00;
+3    guangzhou    003    3    2022-09-23
+100    beijing    001    999    2023-01-01
+2    shanghai    002    888    2023-02-01
+4    shenzhen    004    4    2023-02-01
+EXECUTE check_idx;
+COUNT(*)
+4
+INSERT INTO indup_00 VALUES (999,'guangzhou','003',100,'2023-03-01')
+ON DUPLICATE KEY UPDATE `uv`=`uv`+100, `id`=`id`+1000;
+SELECT * FROM indup_00;
 id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-5    beijing    010    5    2022-10-23
-3    guangzhou    003    31    2022-09-23
-2    shanghai    002    21    2022-09-23
-4    shenzheng    004    4    2021-05-28
-insert into indup_00 values (9,'shanxi','005',4,'2022-10-08'),(10,'shandong','006',6,'2022-11-22') on duplicate key update `act_name`='Hongkong';
-select * from indup_00;
+100    beijing    001    999    2023-01-01
+2    shanghai    002    888    2023-02-01
+4    shenzhen    004    4    2023-02-01
+1003    guangzhou    003    103    2022-09-23
+EXECUTE check_idx;
+COUNT(*)
+4
+INSERT INTO indup_00 VALUES (999,'beijing','001',999,'2023-04-01')
+ON DUPLICATE KEY UPDATE `update_time`=NULL;
+SELECT * FROM indup_00;
 id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-5    beijing    010    5    2022-10-23
-3    guangzhou    003    31    2022-09-23
-10    shandong    006    6    2022-11-22
-2    shanghai    002    21    2022-09-23
-9    shanxi    005    4    2022-10-08
-4    shenzheng    004    4    2021-05-28
-insert into indup_00 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
-select * from indup_00;
+2    shanghai    002    888    2023-02-01
+4    shenzhen    004    4    2023-02-01
+1003    guangzhou    003    103    2022-09-23
+100    beijing    001    999    null
+EXECUTE check_idx;
+COUNT(*)
+4
+INSERT INTO indup_00 VALUES
+(5,'chengdu','005',5,'2023-05-01'),
+(6,'xian','006',6,'2023-05-02')
+ON DUPLICATE KEY UPDATE `id`=999;
+SELECT * FROM indup_00;
 id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-5    beijing    010    5    2022-10-23
-3    guangzhou    003    31    2022-09-23
-11    hainan    009    8    null
-10    shandong    006    6    2022-11-22
-2    shanghai    002    21    2022-09-23
-9    shanxi    005    4    2022-10-08
-4    shenzheng    004    4    2021-05-28
-10    xinjiang    008    7    null
-CREATE TABLE IF NOT EXISTS indup_01(
+2    shanghai    002    888    2023-02-01
+4    shenzhen    004    4    2023-02-01
+1003    guangzhou    003    103    2022-09-23
+100    beijing    001    999    null
+5    chengdu    005    5    2023-05-01
+6    xian    006    6    2023-05-02
+EXECUTE check_idx;
+COUNT(*)
+6
+DROP TABLE IF EXISTS indup_01;
+CREATE TABLE indup_01(
 `id` INT UNSIGNED,
 `act_name` VARCHAR(20) NOT NULL,
 `spu_id` VARCHAR(30) NOT NULL,
 `uv`  BIGINT NOT NULL,
-`update_time` date default '2020-10-10' COMMENT 'lastest time',
-PRIMARY KEY ( `id` ),
-unique key idx_act_name_spu_id (act_name,spu_id)
+`update_time` DATE DEFAULT '2020-10-10' COMMENT 'latest time',
+PRIMARY KEY (`id`),
+UNIQUE KEY idx_act_name_spu_id_1 (act_name, spu_id)
 );
-insert into indup_01 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
-select * from indup_01;
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_act_name_spu_id_1'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_01 VALUES
+(1,'beijing','001',1,'2021-01-03'),
+(2,'shanghai','002',2,'2022-09-23'),
+(3,'guangzhou','003',3,'2022-09-23');
+SELECT * FROM indup_01;
 id    act_name    spu_id    uv    update_time
 1    beijing    001    1    2021-01-03
 2    shanghai    002    2    2022-09-23
 3    guangzhou    003    3    2022-09-23
-insert into indup_01 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
-internal error: do not support update primary key/unique key for on duplicate key update
-select * from indup_01;
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_01 VALUES (1,'newcity','999',999,'2023-01-01')
+ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
+SELECT * FROM indup_01;
 id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
 2    shanghai    002    2    2022-09-23
 3    guangzhou    003    3    2022-09-23
-4    shenzheng    004    4    2021-05-28
-5    beijing    010    5    2022-10-23
-insert into indup_01 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
-select * from indup_01;
+1    beijing    001    999    2023-01-01
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_01 VALUES (100,'beijing','001',888,'2023-02-01')
+ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
+Duplicate entry '\(beijing,001\)' for key '(.*)'
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_01 VALUES
+(4,'shenzhen','004',4,'2023-03-01'),
+(2,'anyname','anyid',777,'2023-03-02')
+ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`);
+SELECT * FROM indup_01;
 id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
-5    beijing    010    5    2022-10-23
-insert into indup_01 values (8,'shanghai','002',21,'1999-09-23') on duplicate key update `act_name`=NULL;
-constraint violation: Column 'act_name' cannot be null
-select * from indup_01;
-id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
-5    beijing    010    5    2022-10-23
-insert into indup_01 values (9,'shanxi','005',4,'2022-10-08'),(10,'shandong','006',6,'2022-11-22') on duplicate key update `act_name`='Hongkong';
-select * from indup_01;
-id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
-5    beijing    010    5    2022-10-23
-9    shanxi    005    4    2022-10-08
-10    shandong    006    6    2022-11-22
-insert into indup_01 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
-select * from indup_01;
-id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-4    shenzheng    004    4    2021-05-28
-5    beijing    010    5    2022-10-23
-9    shanxi    005    4    2022-10-08
-10    Hongkong    006    6    2022-11-22
-11    hainan    009    8    null
-CREATE TABLE IF NOT EXISTS indup_02(
-col1 INT ,
+3    guangzhou    003    3    2022-09-23
+1    beijing    001    999    2023-01-01
+2    shanghai    002    777    2022-09-23
+4    shenzhen    004    4    2023-03-01
+EXECUTE check_idx;
+COUNT(*)
+4
+DROP TABLE IF EXISTS indup_04;
+CREATE TABLE indup_04(
+id INT,
+col1 VARCHAR(20) NOT NULL,
 col2 VARCHAR(20) NOT NULL,
-col3 VARCHAR(30) NOT NULL,
-col4  BIGINT default 30,
-PRIMARY KEY ( col1 )
+value INT,
+UNIQUE KEY uk_col1_col2_3 (col1, col2)
 );
-insert into indup_02 values (1,'apple','left',NULL),(2,'bear','right',1000);
-select * from indup_02;
-col1    col2    col3    col4
-1    apple    left    null
-2    bear    right    1000
-insert into indup_02 select 1,'banana','lower',NULL on duplicate key update col1=col1*10;
-internal error: do not support update primary key/unique key for on duplicate key update
-select * from indup_02;
-col1    col2    col3    col4
-2    bear    right    1000
-10    apple    left    null
-insert into indup_02(col1,col2,col3) values(2,'wechat','tower'),(3,'paper','up') on duplicate key update col1=col1+20,col3=values(col3);
-select * from indup_02;
-col1    col2    col3    col4
-3    paper    up    30
-10    apple    left    null
-22    bear    tower    1000
-insert into indup_02 values(3,'aaa','bbb',30) on duplicate key update col1=col1+7;
-Duplicate entry '10' for key 'col1'
-select * from indup_02;
-col1    col2    col3    col4
-3    paper    up    30
-10    apple    left    null
-22    bear    tower    1000
-insert into indup_02 values(3,'aaa','bbb',30),(30,'abc','abc',10),(11,'a1','b1',300) on duplicate key update col1=col1*10,col4=0;
-select * from indup_02;
-col1    col2    col3    col4
-10    apple    left    null
-11    a1    b1    300
-22    bear    tower    1000
-300    paper    up    0
-create table indup_tmp(col1 int,col2 varchar(20),col3 varchar(20));
-insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(10,'wine','down'),(300,'box','high');
-insert into indup_02(col1,col2,col3) select col1,col2,col3 from  indup_tmp on duplicate key update indup_02.col3=left(indup_02.col3,2),col2='wow';
-select * from indup_02;
-col1    col2    col3    col4
-22    bear    tower    1000
-11    a1    b1    300
-1    apple    left    30
-2    bear    right    30
-3    paper    up    30
-10    wow    le    null
-300    wow    up    0
-delete from indup_02;
-select * from indup_02;
-col1    col2    col3    col4
-insert into indup_02(col1,col2,col3) values(6,'app','uper'),(7,'light','') on duplicate key update col2='';
-select * from indup_02;
-col1    col2    col3    col4
-6    app    uper    30
-7    light        30
-CREATE TABLE IF NOT EXISTS indup_03(
-col1 varchar(25) ,
-col2 VARCHAR(20) NOT NULL,
-col3 VARCHAR(30) ,
-col4  BIGINT default 30,
-PRIMARY KEY (col1)
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_col1_col2_3'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_04 VALUES
+(1,'a','b',100),
+(2,'c','d',200),
+(3,'e','f',300);
+SELECT * FROM indup_04;
+id    col1    col2    value
+1    a    b    100
+2    c    d    200
+3    e    f    300
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_04 VALUES (999,'a','b',999)
+ON DUPLICATE KEY UPDATE id=VALUES(id), value=VALUES(value);
+SELECT * FROM indup_04;
+id    col1    col2    value
+2    c    d    200
+3    e    f    300
+999    a    b    999
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_04 VALUES (4,'a','x',400);
+SELECT * FROM indup_04;
+id    col1    col2    value
+2    c    d    200
+3    e    f    300
+999    a    b    999
+4    a    x    400
+EXECUTE check_idx;
+COUNT(*)
+4
+INSERT INTO indup_04 VALUES
+(888,'c','d',888),
+(777,'e','f',777)
+ON DUPLICATE KEY UPDATE value=value+VALUES(value);
+SELECT * FROM indup_04;
+id    col1    col2    value
+999    a    b    999
+4    a    x    400
+2    c    d    1088
+3    e    f    1077
+EXECUTE check_idx;
+COUNT(*)
+4
+DROP TABLE IF EXISTS indup_idx_01;
+CREATE TABLE indup_idx_01(a INT, b INT, c INT, PRIMARY KEY(a, b), KEY idx_c_4 (c));
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_c_4'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_idx_01 VALUES (1,1,1);
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_idx_01 VALUES (1,1,2), (2,2,2) ON DUPLICATE KEY UPDATE c=c+10;
+SELECT * FROM indup_idx_01 ORDER BY a, b;
+a    b    c
+1    1    11
+2    2    2
+EXECUTE check_idx;
+COUNT(*)
+2
+DELETE FROM indup_idx_01;
+INSERT INTO indup_idx_01 VALUES (1,1,1);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_c_4'), "`");
+PREPARE check_idx FROM @idxsql;
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_idx_01 VALUES (1,1,2), (2,2,2) ON DUPLICATE KEY UPDATE c=VALUES(c)+10;
+SELECT * FROM indup_idx_01 ORDER BY a, b;
+a    b    c
+1    1    12
+2    2    2
+EXECUTE check_idx;
+COUNT(*)
+2
+DROP TABLE indup_idx_01;
+CREATE TABLE indup_idx_01(a INT, b INT, c INT, PRIMARY KEY(a, b), KEY idx_bc_4 (b, c));
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_bc_4'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_idx_01 VALUES (1,1,1);
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_idx_01 VALUES (1,1,2), (2,2,2), (2,2,3) ON DUPLICATE KEY UPDATE c=c+10;
+SELECT * FROM indup_idx_01 ORDER BY a, b;
+a    b    c
+1    1    11
+2    2    12
+EXECUTE check_idx;
+COUNT(*)
+2
+DELETE FROM indup_idx_01;
+INSERT INTO indup_idx_01 VALUES (1,1,1);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_bc_4'), "`");
+PREPARE check_idx FROM @idxsql;
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_idx_01 VALUES (1,1,2), (2,2,2), (2,2,3) ON DUPLICATE KEY UPDATE c=VALUES(c)+10;
+SELECT * FROM indup_idx_01 ORDER BY a, b;
+a    b    c
+1    1    12
+2    2    13
+EXECUTE check_idx;
+COUNT(*)
+2
+DROP TABLE indup_idx_01;
+DROP TABLE IF EXISTS indup_idx_mix_01;
+CREATE TABLE indup_idx_mix_01(
+id INT,
+email VARCHAR(50) NOT NULL,
+name VARCHAR(50),
+age INT,
+status VARCHAR(20),
+UNIQUE KEY uk_email_4 (email),
+KEY idx_name_4 (name),
+KEY idx_age_status_4 (age, status)
 );
-insert into indup_03 values ('1','apple','left',NULL),('2','bear','right',1000);
-insert into indup_03(col1,col2,col3) values(3,'paper','up'),('2','bear','right',1000),('1','sofa','high',NULL) on duplicate key update col2=values(col2),col3=values(col3);
-Column count doesn't match value count at row 2
-select * from indup_03;
-col1    col2    col3    col4
-1    apple    left    null
-2    bear    right    1000
-insert into indup_03(col1,col2,col3) values(4,NULL,NULL) on duplicate key update col2=values(col2),col3=values(col3);
-constraint violation: Column 'col2' cannot be null
-insert into indup_03(col1,col2,col3) values(3,NULL,NULL) on duplicate key update col2=values(col2),col3=values(col3);
-constraint violation: Column 'col2' cannot be null
-select * from indup_03;
-col1    col2    col3    col4
-1    apple    left    null
-2    bear    right    1000
-insert into indup_03(col1,col2,col3) values(2,'bear','left') on duplicate key update col1=1;
-internal error: do not support update primary key/unique key for on duplicate key update
-insert into indup_03(col1,col2,col3) values(1,'apple','') on duplicate key update col3='constant';
-select * from indup_03;
-col1    col2    col3    col4
-1    apple    constant    null
-2    bear    right    1000
-insert into indup_03(col1,col2,col3) values(1,'apple','uuuu') on duplicate key update col3=NULL;
-select * from indup_03;
-col1    col2    col3    col4
-1    apple    null    null
-2    bear    right    1000
-insert into indup_03(col1,col2,col3) values(1,'apple','uuuu') on duplicate key update col3='';
-select * from indup_03;
-col1    col2    col3    col4
-1    apple        null
-2    bear    right    1000
-insert into indup_03(col1,col2,col3) values(1,'apple','uuuu') on duplicate key update col1=2+3;
-select * from indup_03;
-col1    col2    col3    col4
-2    bear    right    1000
-5    apple        null
-CREATE TABLE IF NOT EXISTS indup_04(
-`id` INT,
-`act_name` VARCHAR(20) NOT NULL,
-`spu_id` VARCHAR(30) NOT NULL,
-`uv`  BIGINT NOT NULL,
-`update_time` date default '2020-10-10' COMMENT 'lastest time',
-PRIMARY KEY ( `id`, `act_name`)
+SET @uk_idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_email_4'), "`");
+PREPARE check_uk_idx FROM @uk_idxsql;
+SET @idx_name_sql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_name_4'), "`");
+PREPARE check_idx_name FROM @idx_name_sql;
+SET @idx_age_sql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_age_status_4'), "`");
+PREPARE check_idx_age FROM @idx_age_sql;
+INSERT INTO indup_idx_mix_01 VALUES
+(1, 'alice@example.com', 'Alice', 25, 'active'),
+(2, 'bob@example.com', 'Bob', 30, 'active'),
+(3, 'charlie@example.com', 'Charlie', 28, 'inactive');
+SELECT * FROM indup_idx_mix_01;
+id    email    name    age    status
+1    alice@example.com    Alice    25    active
+2    bob@example.com    Bob    30    active
+3    charlie@example.com    Charlie    28    inactive
+EXECUTE check_uk_idx;
+COUNT(*)
+3
+EXECUTE check_idx_name;
+COUNT(*)
+3
+EXECUTE check_idx_age;
+COUNT(*)
+3
+INSERT INTO indup_idx_mix_01 VALUES (100, 'alice@example.com', 'Alice Updated', 26, 'inactive')
+ON DUPLICATE KEY UPDATE
+name = VALUES(name),  -- 更新普通索引列
+age = VALUES(age),    -- 更新复合普通索引列
+status = VALUES(status);  -- 更新复合普通索引列
+SELECT * FROM indup_idx_mix_01;
+id    email    name    age    status
+2    bob@example.com    Bob    30    active
+3    charlie@example.com    Charlie    28    inactive
+1    alice@example.com    Alice Updated    26    inactive
+EXECUTE check_uk_idx;
+COUNT(*)
+3
+EXECUTE check_idx_name;
+COUNT(*)
+3
+EXECUTE check_idx_age;
+COUNT(*)
+3
+INSERT INTO indup_idx_mix_01 VALUES (200, 'bob@example.com', 'Bob New', 35, 'inactive')
+ON DUPLICATE KEY UPDATE
+name = VALUES(name),  -- 更新 name（有普通索引）
+id = VALUES(id);      -- 更新 id（无索引）
+SELECT * FROM indup_idx_mix_01;
+id    email    name    age    status
+3    charlie@example.com    Charlie    28    inactive
+1    alice@example.com    Alice Updated    26    inactive
+200    bob@example.com    Bob New    30    active
+EXECUTE check_uk_idx;
+COUNT(*)
+3
+EXECUTE check_idx_name;
+COUNT(*)
+3
+EXECUTE check_idx_age;
+COUNT(*)
+3
+INSERT INTO indup_idx_mix_01 VALUES (300, 'charlie@example.com', 'Charlie New', 40, 'active')
+ON DUPLICATE KEY UPDATE
+id = VALUES(id);  -- 只更新无索引的列
+SELECT * FROM indup_idx_mix_01;
+id    email    name    age    status
+1    alice@example.com    Alice Updated    26    inactive
+200    bob@example.com    Bob New    30    active
+300    charlie@example.com    Charlie    28    inactive
+EXECUTE check_uk_idx;
+COUNT(*)
+3
+EXECUTE check_idx_name;
+COUNT(*)
+3
+EXECUTE check_idx_age;
+COUNT(*)
+3
+INSERT INTO indup_idx_mix_01 VALUES
+(400, 'alice@example.com', 'Alice Final', 27, 'active'),
+(4, 'david@example.com', 'David', 32, 'active')
+ON DUPLICATE KEY UPDATE
+name = VALUES(name),
+age = age + 1,
+id = VALUES(id);
+SELECT * FROM indup_idx_mix_01 ORDER BY id;
+id    email    name    age    status
+4    david@example.com    David    32    active
+200    bob@example.com    Bob New    30    active
+300    charlie@example.com    Charlie    28    inactive
+400    alice@example.com    Alice Final    27    inactive
+EXECUTE check_uk_idx;
+COUNT(*)
+4
+EXECUTE check_idx_name;
+COUNT(*)
+4
+EXECUTE check_idx_age;
+COUNT(*)
+4
+DROP TABLE indup_idx_mix_01;
+DROP TABLE IF EXISTS indup_idx_complex;
+CREATE TABLE indup_idx_complex(
+id INT PRIMARY KEY,
+email VARCHAR(50),
+username VARCHAR(50),
+phone VARCHAR(20),
+address VARCHAR(100),
+city VARCHAR(50),
+score INT,
+UNIQUE KEY uk_email_4 (email),
+UNIQUE KEY uk_username_4 (username),
+KEY idx_phone_4 (phone),
+KEY idx_city_score_4 (city, score)
 );
-insert into indup_04 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
-select * from indup_04;
-id    act_name    spu_id    uv    update_time
-1    beijing    001    1    2021-01-03
-2    shanghai    002    2    2022-09-23
-3    guangzhou    003    3    2022-09-23
-insert into indup_04 values (4,'shenzheng','004',4,'2021-05-28'),(1,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
-internal error: do not support update primary key/unique key for on duplicate key update
-select * from indup_04;
-id    act_name    spu_id    uv    update_time
-2    shanghai    002    2    2022-09-23
-3    guangzhou    003    3    2022-09-23
-4    shenzheng    004    4    2021-05-28
-1    beijing    010    5    2021-01-03
-insert into indup_04 values (2,'shanghai','002',21,'1999-09-23'),(3,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
-select * from indup_04;
-id    act_name    spu_id    uv    update_time
-4    shenzheng    004    4    2021-05-28
-1    beijing    010    5    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-insert into indup_04 values (2,'shanghai','002',21,'1999-09-23') on duplicate key update `act_name`=NULL;
-constraint violation: Column 'act_name' cannot be null
-select * from indup_04;
-id    act_name    spu_id    uv    update_time
-4    shenzheng    004    4    2021-05-28
-1    beijing    010    5    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-insert into indup_04 values (5,'shanxi','005',4,'2022-10-08'),(6,'shandong','006',6,'2022-11-22') on duplicate key update `act_name`='Hongkong';
-select * from indup_04;
-id    act_name    spu_id    uv    update_time
-4    shenzheng    004    4    2021-05-28
-1    beijing    010    5    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-5    shanxi    005    4    2022-10-08
-6    shandong    006    6    2022-11-22
-insert into indup_04 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
-select * from indup_04;
-id    act_name    spu_id    uv    update_time
-4    shenzheng    004    4    2021-05-28
-1    beijing    010    5    2021-01-03
-2    shanghai    002    21    2022-09-23
-3    guangzhou    003    31    2022-09-23
-5    shanxi    005    4    2022-10-08
-6    shandong    006    6    2022-11-22
-10    xinjiang    008    7    null
-11    hainan    009    8    null
-create table indup_fk1(col1 int primary key,col2 varchar(25),col3 tinyint);
-create table indup_fk2(col1 int,col2 varchar(25),col3 tinyint primary key,constraint ck foreign key(col1) REFERENCES indup_fk1(col1) on delete RESTRICT on update RESTRICT);
-insert into indup_fk1 values (2,'yellow',20),(10,'apple',50),(11,'opppo',51);
-insert into indup_fk2 values(2,'score',1),(2,'student',4),(10,'goods',2);
-insert into indup_fk2 values(10,'food',1)on duplicate key update col1=50;
-internal error: Cannot add or update a child row: a foreign key constraint fails
-insert into indup_fk2 values(50,'food',1)on duplicate key update col1=values(col1);
-internal error: Cannot add or update a child row: a foreign key constraint fails
-select * from indup_fk1;
+SET @uk_email_sql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_email_4'), "`");
+PREPARE check_uk_email FROM @uk_email_sql;
+SET @uk_username_sql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_username_4'), "`");
+PREPARE check_uk_username FROM @uk_username_sql;
+SET @idx_phone_sql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_phone_4'), "`");
+PREPARE check_idx_phone FROM @idx_phone_sql;
+SET @idx_city_sql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_city_score_4'), "`");
+PREPARE check_idx_city FROM @idx_city_sql;
+INSERT INTO indup_idx_complex VALUES
+(1, 'user1@test.com', 'user1', '1234567890', 'Address 1', 'Beijing', 100),
+(2, 'user2@test.com', 'user2', '1234567891', 'Address 2', 'Shanghai', 200);
+SELECT * FROM indup_idx_complex;
+id    email    username    phone    address    city    score
+1    user1@test.com    user1    1234567890    Address 1    Beijing    100
+2    user2@test.com    user2    1234567891    Address 2    Shanghai    200
+EXECUTE check_uk_email;
+COUNT(*)
+2
+EXECUTE check_uk_username;
+COUNT(*)
+2
+EXECUTE check_idx_phone;
+COUNT(*)
+2
+EXECUTE check_idx_city;
+COUNT(*)
+2
+INSERT INTO indup_idx_complex VALUES
+(1, 'new1@test.com', 'newuser1', '9999999999', 'New Address 1', 'Guangzhou', 150)
+ON DUPLICATE KEY UPDATE
+phone = VALUES(phone),      -- 更新普通索引列
+city = VALUES(city),        -- 更新复合普通索引列
+score = VALUES(score),      -- 更新复合普通索引列
+address = VALUES(address);  -- 更新普通列
+SELECT * FROM indup_idx_complex;
+id    email    username    phone    address    city    score
+2    user2@test.com    user2    1234567891    Address 2    Shanghai    200
+1    user1@test.com    user1    9999999999    New Address 1    Guangzhou    150
+EXECUTE check_uk_email;
+COUNT(*)
+2
+EXECUTE check_uk_username;
+COUNT(*)
+2
+EXECUTE check_idx_phone;
+COUNT(*)
+2
+EXECUTE check_idx_city;
+COUNT(*)
+2
+INSERT INTO indup_idx_complex VALUES
+(2, 'new2@test.com', 'newuser2', '8888888888', 'New Address 2', 'Shenzhen', 250)
+ON DUPLICATE KEY UPDATE
+phone = VALUES(phone),   -- 更新普通索引列
+address = VALUES(address);  -- 更新普通列
+SELECT * FROM indup_idx_complex;
+id    email    username    phone    address    city    score
+1    user1@test.com    user1    9999999999    New Address 1    Guangzhou    150
+2    user2@test.com    user2    8888888888    New Address 2    Shanghai    200
+EXECUTE check_uk_email;
+COUNT(*)
+2
+EXECUTE check_uk_username;
+COUNT(*)
+2
+EXECUTE check_idx_phone;
+COUNT(*)
+2
+EXECUTE check_idx_city;
+COUNT(*)
+2
+INSERT INTO indup_idx_complex VALUES
+(1, 'expr@test.com', 'expruser', '0000000000', 'Expr Address', 'Chengdu', 999)
+ON DUPLICATE KEY UPDATE
+phone = CONCAT(phone, '-ext'),  -- 表达式更新普通索引列
+city = UPPER(city),              -- 表达式更新复合普通索引列
+score = score + 50,              -- 表达式更新复合普通索引列
+address = CONCAT(address, ' (Updated)');
+SELECT * FROM indup_idx_complex;
+id    email    username    phone    address    city    score
+2    user2@test.com    user2    8888888888    New Address 2    Shanghai    200
+1    user1@test.com    user1    9999999999-ext    New Address 1 (Updated)    GUANGZHOU    200
+EXECUTE check_uk_email;
+COUNT(*)
+2
+EXECUTE check_uk_username;
+COUNT(*)
+2
+EXECUTE check_idx_phone;
+COUNT(*)
+2
+EXECUTE check_idx_city;
+COUNT(*)
+2
+INSERT INTO indup_idx_complex VALUES
+(1, 'batch1@test.com', 'batch1', '1111111111', 'Batch 1', 'City1', 300),
+(3, 'batch3@test.com', 'batch3', '3333333333', 'Batch 3', 'City3', 300)
+ON DUPLICATE KEY UPDATE
+phone = VALUES(phone),
+score = score + VALUES(score);
+SELECT * FROM indup_idx_complex ORDER BY id;
+id    email    username    phone    address    city    score
+1    user1@test.com    user1    1111111111    New Address 1 (Updated)    GUANGZHOU    500
+2    user2@test.com    user2    8888888888    New Address 2    Shanghai    200
+3    batch3@test.com    batch3    3333333333    Batch 3    City3    300
+EXECUTE check_uk_email;
+COUNT(*)
+3
+EXECUTE check_uk_username;
+COUNT(*)
+3
+EXECUTE check_idx_phone;
+COUNT(*)
+3
+EXECUTE check_idx_city;
+COUNT(*)
+3
+DROP TABLE indup_idx_complex;
+DROP TABLE IF EXISTS indup_09;
+CREATE TABLE indup_09(
+id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+biz_type BIGINT,
+namespace VARCHAR(64),
+sn BIGINT DEFAULT NULL,
+PRIMARY KEY (id),
+UNIQUE KEY uk_biz_ns_5 (biz_type, namespace)
+);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_biz_ns_5'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_09 (biz_type, namespace, sn) VALUES
+(1, 'ns1', 1),
+(2, 'ns2', 1),
+(3, 'ns3', 1);
+SELECT * FROM indup_09;
+id    biz_type    namespace    sn
+1    1    ns1    1
+2    2    ns2    1
+3    3    ns3    1
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999)
+ON DUPLICATE KEY UPDATE sn = sn + 1;
+Duplicate entry '\(1,ns1\)' for key '.*'
+INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999)
+ON DUPLICATE KEY UPDATE sn = sn + 1;
+Duplicate entry '\(1,ns1\)' for key '.*'
+INSERT INTO indup_09 (id, biz_type, namespace, sn) VALUES (1, 999, 'ns999', 999)
+ON DUPLICATE KEY UPDATE sn = sn + 1;
+SELECT * FROM indup_09 WHERE id = 1;
+id    biz_type    namespace    sn
+1    1    ns1    2
+EXECUTE check_idx;
+COUNT(*)
+3
+INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (100, 'ns100', 1)
+ON DUPLICATE KEY UPDATE sn = sn + 1;
+SELECT * FROM indup_09 WHERE biz_type = 100;
+id    biz_type    namespace    sn
+6    100    ns100    1
+EXECUTE check_idx;
+COUNT(*)
+4
+DROP TABLE IF EXISTS indup_fk2;
+DROP TABLE IF EXISTS indup_fk1;
+CREATE TABLE indup_fk1(
+col1 INT PRIMARY KEY,
+col2 VARCHAR(25),
+col3 TINYINT
+);
+CREATE TABLE indup_fk2(
+col1 INT,
+col2 VARCHAR(25),
+col3 TINYINT PRIMARY KEY,
+CONSTRAINT ck FOREIGN KEY(col1) REFERENCES indup_fk1(col1)
+ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+INSERT INTO indup_fk1 VALUES (2,'yellow',20),(10,'apple',50),(11,'oppo',51);
+INSERT INTO indup_fk2 VALUES (2,'score',1),(2,'student',4),(10,'goods',2);
+SELECT * FROM indup_fk1;
 col1    col2    col3
 2    yellow    20
 10    apple    50
-11    opppo    51
-select * from indup_fk2;
+11    oppo    51
+SELECT * FROM indup_fk2;
 col1    col2    col3
 2    score    1
-10    goods    2
 2    student    4
-drop table indup_fk2;
-drop table indup_fk1;
-CREATE TABLE IF NOT EXISTS indup_05(
-col1 INT ,
+10    goods    2
+INSERT INTO indup_fk2 VALUES (99,'food',1)
+ON DUPLICATE KEY UPDATE col1=11, col2=VALUES(col2);
+SELECT * FROM indup_fk2;
+col1    col2    col3
+2    student    4
+10    goods    2
+11    food    1
+INSERT INTO indup_fk2 VALUES (99,'updated_food',1)
+ON DUPLICATE KEY UPDATE col2=VALUES(col2);
+SELECT * FROM indup_fk2;
+col1    col2    col3
+2    student    4
+10    goods    2
+11    updated_food    1
+DROP TABLE indup_fk2;
+DROP TABLE indup_fk1;
+DROP TABLE IF EXISTS indup_02;
+CREATE TABLE indup_02(
+col1 INT,
 col2 VARCHAR(20) NOT NULL,
 col3 VARCHAR(30) NOT NULL,
-col4 BIGINT default 30
+col4 BIGINT DEFAULT 30,
+PRIMARY KEY (col1)
 );
-insert into indup_05 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
-insert into indup_05 values(22,'78','30',99) on duplicate key update col1=col1/2;
-select * from indup_05;
+INSERT INTO indup_02 VALUES (1,'apple','left',NULL),(2,'bear','right',1000);
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+1    apple    left    null
+2    bear    right    1000
+INSERT INTO indup_02 VALUES (1,'banana','lower',999)
+ON DUPLICATE KEY UPDATE col2=VALUES(col2), col3=VALUES(col3), col4=col4*2;
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+2    bear    right    1000
+1    banana    lower    null
+INSERT INTO indup_02(col1,col2,col3,col4) VALUES
+(2,'wechat','tower',500),
+(3,'paper','up',100)
+ON DUPLICATE KEY UPDATE col3=VALUES(col3), col4=col4+VALUES(col4);
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+1    banana    lower    null
+2    bear    tower    1500
+3    paper    up    100
+DROP TABLE IF EXISTS indup_tmp;
+CREATE TABLE indup_tmp(col1 INT, col2 VARCHAR(20), col3 VARCHAR(20));
+INSERT INTO indup_tmp VALUES
+(1,'new_apple','new_left'),
+(2,'new_bear','new_right'),
+(10,'wine','down');
+INSERT INTO indup_02(col1,col2,col3)
+SELECT col1, col2, col3 FROM indup_tmp
+ON DUPLICATE KEY UPDATE col2='updated_from_select', col3=VALUES(col3);
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+3    paper    up    100
+1    updated_from_select    new_left    null
+2    bear    new_right    1500
+10    wine    down    30
+INSERT INTO indup_02 VALUES(10,'test','test',999)
+ON DUPLICATE KEY UPDATE col2='constant_value', col4=12345;
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+3    paper    up    100
+1    updated_from_select    new_left    null
+2    bear    new_right    1500
+10    constant_value    down    12345
+INSERT INTO indup_02 VALUES(10,'test','test',999)
+ON DUPLICATE KEY UPDATE col3='', col4=NULL;
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+3    paper    up    100
+1    updated_from_select    new_left    null
+2    bear    new_right    1500
+10    constant_value        null
+INSERT INTO indup_02 VALUES(3,'test','test',999)
+ON DUPLICATE KEY UPDATE col3=CONCAT(col3, '_suffix'), col2=UPPER(col2);
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+1    updated_from_select    new_left    null
+2    bear    new_right    1500
+10    constant_value        null
+3    PAPER    up_suffix    100
+DELETE FROM indup_02;
+INSERT INTO indup_02(col1,col2,col3) VALUES
+(100,'app','upper'),
+(200,'light','lower')
+ON DUPLICATE KEY UPDATE col2='should_not_update';
+SELECT * FROM indup_02;
+col1    col2    col3    col4
+100    app    upper    30
+200    light    lower    30
+DROP TABLE IF EXISTS indup_03;
+CREATE TABLE indup_03(
+`id` INT,
+`act_name` VARCHAR(20) NOT NULL,
+`spu_id` VARCHAR(30) NOT NULL,
+`uv` BIGINT NOT NULL,
+`update_time` DATE DEFAULT '2020-10-10' COMMENT 'latest time',
+PRIMARY KEY (`id`, `act_name`)
+);
+INSERT INTO indup_03 VALUES
+(1,'beijing','001',1,'2021-01-03'),
+(2,'shanghai','002',2,'2022-09-23'),
+(3,'guangzhou','003',3,'2022-09-23');
+SELECT * FROM indup_03;
+id    act_name    spu_id    uv    update_time
+1    beijing    001    1    2021-01-03
+2    shanghai    002    2    2022-09-23
+3    guangzhou    003    3    2022-09-23
+INSERT INTO indup_03 VALUES (1,'shanghai','999',999,'2023-01-01');
+SELECT * FROM indup_03;
+id    act_name    spu_id    uv    update_time
+1    beijing    001    1    2021-01-03
+2    shanghai    002    2    2022-09-23
+3    guangzhou    003    3    2022-09-23
+1    shanghai    999    999    2023-01-01
+INSERT INTO indup_03 VALUES (1,'beijing','newid',888,'2023-02-01')
+ON DUPLICATE KEY UPDATE `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+SELECT * FROM indup_03;
+id    act_name    spu_id    uv    update_time
+2    shanghai    002    2    2022-09-23
+3    guangzhou    003    3    2022-09-23
+1    shanghai    999    999    2023-01-01
+1    beijing    newid    888    2021-01-03
+INSERT INTO indup_03 VALUES
+(2,'shanghai','updated',777,'2023-03-01'),
+(4,'shenzhen','004',4,'2023-03-01')
+ON DUPLICATE KEY UPDATE `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+SELECT * FROM indup_03;
+id    act_name    spu_id    uv    update_time
+3    guangzhou    003    3    2022-09-23
+1    shanghai    999    999    2023-01-01
+1    beijing    newid    888    2021-01-03
+2    shanghai    updated    777    2022-09-23
+4    shenzhen    004    4    2023-03-01
+INSERT INTO indup_03 VALUES (4,'shenzhen','test',999,'2023-04-01')
+ON DUPLICATE KEY UPDATE `uv`=`uv`*2, `spu_id`=CONCAT(`spu_id`, '_v2');
+SELECT * FROM indup_03;
+id    act_name    spu_id    uv    update_time
+3    guangzhou    003    3    2022-09-23
+1    shanghai    999    999    2023-01-01
+1    beijing    newid    888    2021-01-03
+2    shanghai    updated    777    2022-09-23
+4    shenzhen    004_v2    8    2023-03-01
+DROP TABLE IF EXISTS indup_05;
+CREATE TABLE indup_05(
+col1 INT,
+col2 VARCHAR(20) NOT NULL,
+col3 VARCHAR(30) NOT NULL,
+col4 BIGINT DEFAULT 30
+);
+INSERT INTO indup_05 VALUES
+(22,'11','33',1),
+(23,'22','55',2),
+(22,'11','33',1)
+ON DUPLICATE KEY UPDATE col1=col1+100;
+SELECT * FROM indup_05;
 col1    col2    col3    col4
 22    11    33    1
 23    22    55    2
-24    66    77    1
-25    99    88    1
 22    11    33    1
-22    78    30    99
-create table indup_06(col1 int primary key,col2 int);
-insert into indup_06 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(20,20);
-insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
-internal error: do not support update primary key/unique key for on duplicate key update
-truncate table  indup_06;
-insert into indup_06 values(1,1);
-insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
-insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1,col2=col2*10;
-insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1,col2=col2/10;
-constraint violation: Duplicate entry for key 'col1'
-CREATE TABLE IF NOT EXISTS indup_07(
-col1 INT primary key,
-col2 VARCHAR(20) NOT NULL,
-col3 VARCHAR(30) NOT NULL,
-col4 BIGINT default 30
+DROP TABLE IF EXISTS indup_06;
+CREATE TABLE indup_06(
+id INT PRIMARY KEY,
+name VARCHAR(20),
+value INT
 );
-insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+INSERT INTO indup_06 VALUES (1,'first',100),(2,'second',200);
+SELECT * FROM indup_06;
+id    name    value
+1    first    100
+2    second    200
+PREPARE stmt1 FROM "INSERT INTO indup_06 VALUES(?, ?, ?) ON DUPLICATE KEY UPDATE name=?, value=value*2";
+SET @id = 1;
+SET @name = 'updated_first';
+SET @value = 999;
+EXECUTE stmt1 USING @id, @name, @value, @name;
+SELECT * FROM indup_06;
+id    name    value
+2    second    200
+1    updated_first    200
+SET @id = 10;
+SET @name = 'tenth';
+SET @value = 1000;
+EXECUTE stmt1 USING @id, @name, @value, @name;
+SELECT * FROM indup_06;
+id    name    value
+2    second    200
+1    updated_first    200
+10    tenth    1000
+DEALLOCATE PREPARE stmt1;
+DROP TABLE IF EXISTS indup_07;
+CREATE TABLE indup_07(
+id INT PRIMARY KEY,
+name VARCHAR(100)
+);
+INSERT INTO indup_07 VALUES (1, 'matrixone product');
+INSERT INTO indup_07 VALUES (1, 'duplicate')
+ON DUPLICATE KEY UPDATE name=CONCAT(name, ' - updated');
+SELECT * FROM indup_07;
+id    name
+1    matrixone product - updated
+DROP TABLE IF EXISTS indup_08;
+CREATE TABLE indup_08(
+a VARCHAR(100),
+b VARCHAR(100),
+value INT,
+PRIMARY KEY (a, b)
+);
+INSERT INTO indup_08 VALUES ('matrixone\'', 'mo-tester\'', 1);
+INSERT INTO indup_08 VALUES ('matrixone\'', 'mo-tester\'', 2)
+ON DUPLICATE KEY UPDATE value=value+1;
+SELECT * FROM indup_08;
+a    b    value
+matrixone'    mo-tester'    2
+DROP TABLE IF EXISTS indup_10;
+CREATE TABLE indup_10(
+id INT PRIMARY KEY,
+col_tinyint TINYINT,
+col_smallint SMALLINT,
+col_bigint BIGINT,
+col_float FLOAT,
+col_double DOUBLE,
+col_decimal DECIMAL(10,2),
+col_date DATE,
+col_datetime DATETIME,
+col_char CHAR(10),
+col_varchar VARCHAR(50),
+col_text TEXT
+);
+INSERT INTO indup_10 VALUES (
+1, 10, 100, 1000, 1.5, 2.5, 100.50,
+'2023-01-01', '2023-01-01 10:00:00',
+'char_val', 'varchar_val', 'text_value'
+);
+SELECT * FROM indup_10;
+id    col_tinyint    col_smallint    col_bigint    col_float    col_double    col_decimal    col_date    col_datetime    col_char    col_varchar    col_text
+1    10    100    1000    1.5    2.5    100.50    2023-01-01    2023-01-01 10:00:00    char_val    varchar_val    text_value
+INSERT INTO indup_10 VALUES (
+1, 20, 200, 2000, 3.5, 4.5, 200.50,
+'2023-02-01', '2023-02-01 10:00:00',
+'new_char', 'new_varchar', 'new_text'
+) ON DUPLICATE KEY UPDATE
+col_tinyint=VALUES(col_tinyint),
+col_bigint=VALUES(col_bigint),
+col_decimal=VALUES(col_decimal);
+SELECT * FROM indup_10;
+id    col_tinyint    col_smallint    col_bigint    col_float    col_double    col_decimal    col_date    col_datetime    col_char    col_varchar    col_text
+1    20    100    2000    1.5    2.5    200.50    2023-01-01    2023-01-01 10:00:00    char_val    varchar_val    text_value
+INSERT INTO indup_10 VALUES (
+1, 99, 99, 99, 99.9, 99.9, 99.99,
+'2024-12-31', '2024-12-31 23:59:59',
+'x', 'x', 'x'
+) ON DUPLICATE KEY UPDATE
+col_date=VALUES(col_date),
+col_datetime=VALUES(col_datetime);
+SELECT * FROM indup_10;
+id    col_tinyint    col_smallint    col_bigint    col_float    col_double    col_decimal    col_date    col_datetime    col_char    col_varchar    col_text
+1    20    100    2000    1.5    2.5    200.50    2024-12-31    2024-12-31 23:59:59    char_val    varchar_val    text_value
+INSERT INTO indup_10 VALUES (
+1, 99, 99, 99, 99.9, 99.9, 99.99,
+'2025-01-01', '2025-01-01 00:00:00',
+'updated', 'updated_vc', 'updated_text'
+) ON DUPLICATE KEY UPDATE
+col_char=VALUES(col_char),
+col_varchar=VALUES(col_varchar),
+col_text=VALUES(col_text);
+SELECT * FROM indup_10;
+id    col_tinyint    col_smallint    col_bigint    col_float    col_double    col_decimal    col_date    col_datetime    col_char    col_varchar    col_text
+1    20    100    2000    1.5    2.5    200.50    2024-12-31    2024-12-31 23:59:59    updated    updated_vc    updated_text
+INSERT INTO indup_10 VALUES (
+1, 99, 99, 99, 99, 99, 99,
+'2025-01-01', '2025-01-01 00:00:00',
+'x', 'x', 'x'
+) ON DUPLICATE KEY UPDATE
+col_tinyint=col_tinyint*2,
+col_bigint=col_bigint+1000,
+col_float=col_float+10.5;
+SELECT * FROM indup_10;
+id    col_tinyint    col_smallint    col_bigint    col_float    col_double    col_decimal    col_date    col_datetime    col_char    col_varchar    col_text
+1    40    100    3000    12.0    2.5    200.50    2024-12-31    2024-12-31 23:59:59    updated    updated_vc    updated_text
+DROP TABLE IF EXISTS indup_part_01;
+CREATE TABLE indup_part_01(a INT PRIMARY KEY, b INT) PARTITION BY KEY(a) PARTITIONS 2;
+INSERT INTO indup_part_01 VALUES (1,1),(2,2);
+SELECT * FROM indup_part_01 ORDER BY a;
+a    b
+1    1
+2    2
+INSERT INTO indup_part_01 VALUES (1,1),(3,3) ON DUPLICATE KEY UPDATE b = 10;
+SELECT * FROM indup_part_01 ORDER BY a;
+a    b
+1    10
+2    2
+3    3
+DROP TABLE indup_part_01;
+CREATE TABLE indup_part_01(a INT, b INT, c INT, PRIMARY KEY(a,b))
+PARTITION BY KEY(a,b) PARTITIONS 2;
+INSERT INTO indup_part_01 VALUES (1,1,1),(2,2,2);
+SELECT * FROM indup_part_01 ORDER BY a, b;
+a    b    c
+1    1    1
+2    2    2
+INSERT INTO indup_part_01 VALUES (1,1,1),(3,3,3) ON DUPLICATE KEY UPDATE c = 10;
+SELECT * FROM indup_part_01 ORDER BY a, b;
+a    b    c
+1    1    10
+2    2    2
+3    3    3
+DROP TABLE indup_part_01;
+CREATE TABLE indup_part_01(a INT PRIMARY KEY, b INT, c INT)
+PARTITION BY KEY(a) PARTITIONS 3;
+INSERT INTO indup_part_01 VALUES (1,10,100),(2,20,200),(3,30,300);
+SELECT * FROM indup_part_01 ORDER BY a;
+a    b    c
+1    10    100
+2    20    200
+3    30    300
+INSERT INTO indup_part_01 VALUES (1,1,1),(2,2,2),(4,40,400)
+ON DUPLICATE KEY UPDATE b=b+VALUES(b), c=c+VALUES(c);
+SELECT * FROM indup_part_01 ORDER BY a;
+a    b    c
+1    11    101
+2    22    202
+3    30    300
+4    40    400
+DROP TABLE indup_part_01;
+DROP TABLE IF EXISTS indup_null_01;
+CREATE TABLE indup_null_01(
+id INT PRIMARY KEY,
+col1 VARCHAR(50),
+col2 INT,
+col3 VARCHAR(50) DEFAULT 'default_value'
+);
+INSERT INTO indup_null_01 VALUES (1, 'first', 100, 'initial');
+SELECT * FROM indup_null_01;
+id    col1    col2    col3
+1    first    100    initial
+INSERT INTO indup_null_01 VALUES (1, 'updated', 200, 'test')
+ON DUPLICATE KEY UPDATE col1 = NULL, col2 = VALUES(col2);
+SELECT * FROM indup_null_01;
+id    col1    col2    col3
+1    null    200    initial
+INSERT INTO indup_null_01 VALUES (1, NULL, NULL, 'test2')
+ON DUPLICATE KEY UPDATE col1 = VALUES(col1), col2 = VALUES(col2);
+SELECT * FROM indup_null_01;
+id    col1    col2    col3
+1    null    null    initial
+INSERT INTO indup_null_01 VALUES (2, NULL, 50, NULL);
+INSERT INTO indup_null_01 VALUES (2, 'not_null', 100, 'not_null')
+ON DUPLICATE KEY UPDATE
+col1 = COALESCE(VALUES(col1), col1),
+col2 = VALUES(col2);
+SELECT * FROM indup_null_01 ORDER BY id;
+id    col1    col2    col3
+1    null    null    initial
+2    not_null    100    null
+DROP TABLE indup_null_01;
+DROP TABLE IF EXISTS indup_def_01;
+CREATE TABLE indup_def_01(
+id INT PRIMARY KEY,
+name VARCHAR(50) NOT NULL,
+status VARCHAR(20) DEFAULT 'active',
+counter INT DEFAULT 0,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO indup_def_01 (id, name) VALUES (1, 'user1');
+SELECT id, name, status, counter FROM indup_def_01;
+id    name    status    counter
+1    user1    active    0
+INSERT INTO indup_def_01 (id, name, status, counter) VALUES (1, 'user1_updated', 'inactive', 5)
+ON DUPLICATE KEY UPDATE
+status = VALUES(status),
+counter = counter + VALUES(counter);
+SELECT id, name, status, counter FROM indup_def_01;
+id    name    status    counter
+1    user1    inactive    5
+INSERT INTO indup_def_01 (id, name) VALUES (2, 'user2'), (3, 'user3');
+INSERT INTO indup_def_01 (id, name, counter) VALUES (2, 'user2', 10)
+ON DUPLICATE KEY UPDATE counter = counter + VALUES(counter);
+SELECT id, name, status, counter FROM indup_def_01 ORDER BY id;
+id    name    status    counter
+1    user1    inactive    5
+2    user2    active    10
+3    user3    active    0
+DROP TABLE indup_def_01;
+DROP TABLE IF EXISTS indup_tx_01;
+CREATE TABLE indup_tx_01(
+id INT PRIMARY KEY,
+value INT,
+description VARCHAR(100)
+);
+START TRANSACTION;
+INSERT INTO indup_tx_01 VALUES (1, 100, 'initial');
+INSERT INTO indup_tx_01 VALUES (2, 200, 'second');
+SELECT * FROM indup_tx_01 ORDER BY id;
+id    value    description
+1    100    initial
+2    200    second
+INSERT INTO indup_tx_01 VALUES (1, 150, 'updated')
+ON DUPLICATE KEY UPDATE value = VALUES(value), description = VALUES(description);
+SELECT * FROM indup_tx_01 ORDER BY id;
+id    value    description
+1    150    updated
+2    200    second
+COMMIT;
+SELECT * FROM indup_tx_01 ORDER BY id;
+id    value    description
+1    150    updated
+2    200    second
+START TRANSACTION;
+INSERT INTO indup_tx_01 VALUES (3, 300, 'third');
+INSERT INTO indup_tx_01 VALUES (1, 999, 'should_rollback')
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_tx_01 ORDER BY id;
+id    value    description
+1    999    updated
+2    200    second
+3    300    third
+ROLLBACK;
+SELECT * FROM indup_tx_01 ORDER BY id;
+id    value    description
+1    150    updated
+2    200    second
+START TRANSACTION;
+INSERT INTO indup_tx_01 VALUES (4, 400, 'fourth');
+INSERT INTO indup_tx_01 VALUES (2, 250, 'updated_second')
+ON DUPLICATE KEY UPDATE value = value + 50;
+UPDATE indup_tx_01 SET description = 'modified' WHERE id = 4;
+COMMIT;
+SELECT * FROM indup_tx_01 ORDER BY id;
+id    value    description
+1    150    updated
+2    250    second
+4    400    modified
+DROP TABLE indup_tx_01;
+DROP TABLE IF EXISTS indup_subq_01;
+DROP TABLE IF EXISTS indup_subq_02;
+CREATE TABLE indup_subq_01(
+id INT PRIMARY KEY,
+name VARCHAR(50),
+score INT
+);
+CREATE TABLE indup_subq_02(
+uid INT,
+uname VARCHAR(50),
+points INT
+);
+INSERT INTO indup_subq_01 VALUES (1, 'Alice', 100), (2, 'Bob', 200), (3, 'Charlie', 150);
+INSERT INTO indup_subq_02 VALUES (1, 'Alice', 50), (4, 'David', 300), (2, 'Bob', 80);
+INSERT INTO indup_subq_01 (id, name, score)
+SELECT uid, uname, points FROM indup_subq_02
+ON DUPLICATE KEY UPDATE score = score + VALUES(score);
+SELECT * FROM indup_subq_01 ORDER BY id;
+id    name    score
+1    Alice    150
+2    Bob    280
+3    Charlie    150
+4    David    300
+DELETE FROM indup_subq_01 WHERE id > 3;
+INSERT INTO indup_subq_01 (id, name, score)
+SELECT uid, uname, points * 2 FROM indup_subq_02 WHERE points > 50
+ON DUPLICATE KEY UPDATE score = VALUES(score);
+SELECT * FROM indup_subq_01 ORDER BY id;
+id    name    score
+1    Alice    150
+2    Bob    160
+3    Charlie    150
+4    David    600
+DROP TABLE indup_subq_01;
+DROP TABLE indup_subq_02;
+DROP TABLE IF EXISTS indup_expr_01;
+CREATE TABLE indup_expr_01(
+id INT PRIMARY KEY,
+val1 INT,
+val2 INT,
+val3 VARCHAR(50)
+);
+INSERT INTO indup_expr_01 VALUES (1, 10, 20, 'initial');
+SELECT * FROM indup_expr_01;
+id    val1    val2    val3
+1    10    20    initial
+INSERT INTO indup_expr_01 VALUES (1, 5, 8, 'updated')
+ON DUPLICATE KEY UPDATE
+val1 = val1 + VALUES(val1),
+val2 = val2 * 2,
+val3 = CONCAT(val3, '-', VALUES(val3));
+SELECT * FROM indup_expr_01;
+id    val1    val2    val3
+1    15    40    initial-updated
+INSERT INTO indup_expr_01 VALUES (1, 100, 200, 'test')
+ON DUPLICATE KEY UPDATE
+val1 = IF(val1 > VALUES(val1), val1, VALUES(val1)),  -- 模拟 GREATEST
+val2 = IF(val2 < VALUES(val2), val2, VALUES(val2)),  -- 模拟 LEAST
+val3 = IF(val1 > 50, 'high', 'low');
+SELECT * FROM indup_expr_01;
+id    val1    val2    val3
+1    100    40    low
+DROP TABLE indup_expr_01;
+DROP TABLE IF EXISTS indup_char_01;
+CREATE TABLE indup_char_01(
+id INT PRIMARY KEY,
+name VARCHAR(100),
+description TEXT
+);
+INSERT INTO indup_char_01 VALUES (1, '中文测试', 'Chinese characters: 你好世界');
+SELECT * FROM indup_char_01;
+id    name    description
+1    中文测试    Chinese characters: 你好世界
+INSERT INTO indup_char_01 VALUES (1, '更新后的中文', 'Updated: 测试更新')
+ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description);
+SELECT * FROM indup_char_01;
+id    name    description
+1    更新后的中文    Updated: 测试更新
+INSERT INTO indup_char_01 VALUES (2, 'Mix混合', 'English and 中文 mixed');
+INSERT INTO indup_char_01 VALUES (2, 'Updated Mix', 'New mixed content')
+ON DUPLICATE KEY UPDATE description = CONCAT(description, ' | ', VALUES(description));
+SELECT * FROM indup_char_01 ORDER BY id;
+id    name    description
+1    更新后的中文    Updated: 测试更新
+2    Mix混合    English and 中文 mixed | New mixed content
+INSERT INTO indup_char_01 VALUES (3, 'Special !@#$%', 'Symbols: ~`!@#$%^&*()');
+INSERT INTO indup_char_01 VALUES (3, 'Updated', 'New symbols')
+ON DUPLICATE KEY UPDATE description = VALUES(description);
+SELECT * FROM indup_char_01 ORDER BY id;
+id    name    description
+1    更新后的中文    Updated: 测试更新
+2    Mix混合    English and 中文 mixed | New mixed content
+3    Special !@#$%    New symbols
+DROP TABLE indup_char_01;
+DROP TABLE IF EXISTS indup_batch_01;
+CREATE TABLE indup_batch_01(
+id INT PRIMARY KEY,
+val BIGINT,
+txt VARCHAR(255)
+);
+INSERT INTO indup_batch_01 VALUES (1, 100, 'first'), (2, 200, 'second'), (3, 300, 'third');
+INSERT INTO indup_batch_01 VALUES
+(1, 111, 'update1'),
+(4, 400, 'new1'),
+(2, 222, 'update2'),
+(5, 500, 'new2'),
+(3, 333, 'update3'),
+(6, 600, 'new3')
+ON DUPLICATE KEY UPDATE val = VALUES(val), txt = VALUES(txt);
+SELECT * FROM indup_batch_01 ORDER BY id;
+id    val    txt
+1    111    update1
+2    222    update2
+3    333    update3
+4    400    new1
+5    500    new2
+6    600    new3
+DELETE FROM indup_batch_01;
+INSERT INTO indup_batch_01 VALUES (1, 9223372036854775807, 'max_bigint');
+INSERT INTO indup_batch_01 VALUES (1, 1000, 'test')
+ON DUPLICATE KEY UPDATE val = val - 1000;
+SELECT * FROM indup_batch_01;
+id    val    txt
+1    9223372036854774807    max_bigint
+INSERT INTO indup_batch_01 VALUES (2, 100, '');
+INSERT INTO indup_batch_01 VALUES (2, 200, REPEAT('A', 255))
+ON DUPLICATE KEY UPDATE txt = VALUES(txt);
+SELECT id, val, LENGTH(txt) AS txt_length FROM indup_batch_01 ORDER BY id;
+id    val    txt_length
+1    9223372036854774807    10
+2    100    255
+DROP TABLE indup_batch_01;
+DROP TABLE IF EXISTS indup_dup_01;
+CREATE TABLE indup_dup_01(a INT PRIMARY KEY, b INT);
+INSERT INTO indup_dup_01 VALUES (1,1);
+SELECT * FROM indup_dup_01;
+a    b
+1    1
+INSERT INTO indup_dup_01 VALUES (1,2), (1,22) ON DUPLICATE KEY UPDATE b=b+10;
+SELECT * FROM indup_dup_01;
+a    b
+1    21
+DELETE FROM indup_dup_01;
+INSERT INTO indup_dup_01 VALUES (1,1),(3,3);
+INSERT INTO indup_dup_01 VALUES (1,2),(2,22),(3,33) ON DUPLICATE KEY UPDATE b=b+100;
+SELECT * FROM indup_dup_01 ORDER BY a;
+a    b
+1    101
+2    22
+3    103
+INSERT INTO indup_dup_01 VALUES (1, 1), (2, 2), (3, 3)
+ON DUPLICATE KEY UPDATE b = b * 10;
+SELECT * FROM indup_dup_01 ORDER BY a;
+a    b
+1    1010
+2    220
+3    1030
+INSERT INTO indup_dup_01 VALUES (10, 10), (20, 20), (30, 30)
+ON DUPLICATE KEY UPDATE b = 999;
+SELECT * FROM indup_dup_01 ORDER BY a;
+a    b
+1    1010
+2    220
+3    1030
+10    10
+20    20
+30    30
+DROP TABLE indup_dup_01;
+DROP TABLE IF EXISTS user_stats;
+CREATE TABLE user_stats(
+user_id INT PRIMARY KEY,
+username VARCHAR(50),
+visit_count INT DEFAULT 0,
+last_visit DATETIME,
+total_time INT DEFAULT 0
+);
+INSERT INTO user_stats (user_id, username, visit_count, last_visit, total_time)
+VALUES (1, 'user1', 1, '2024-01-01 10:00:00', 300)
+ON DUPLICATE KEY UPDATE
+visit_count = visit_count + 1,
+last_visit = VALUES(last_visit),
+total_time = total_time + VALUES(total_time);
+SELECT * FROM user_stats;
+user_id    username    visit_count    last_visit    total_time
+1    user1    1    2024-01-01 10:00:00    300
+INSERT INTO user_stats (user_id, username, visit_count, last_visit, total_time)
+VALUES (1, 'user1', 1, '2024-01-02 15:30:00', 450)
+ON DUPLICATE KEY UPDATE
+visit_count = visit_count + 1,
+last_visit = VALUES(last_visit),
+total_time = total_time + VALUES(total_time);
+SELECT * FROM user_stats;
+user_id    username    visit_count    last_visit    total_time
+1    user1    2    2024-01-02 15:30:00    750
+INSERT INTO user_stats (user_id, username, visit_count, last_visit, total_time)
+VALUES
+(1, 'user1', 1, '2024-01-03 09:00:00', 200),
+(2, 'user2', 1, '2024-01-03 10:00:00', 350),
+(3, 'user3', 1, '2024-01-03 11:00:00', 400)
+ON DUPLICATE KEY UPDATE
+visit_count = visit_count + 1,
+last_visit = VALUES(last_visit),
+total_time = total_time + VALUES(total_time);
+SELECT * FROM user_stats ORDER BY user_id;
+user_id    username    visit_count    last_visit    total_time
+1    user1    3    2024-01-03 09:00:00    950
+2    user2    1    2024-01-03 10:00:00    350
+3    user3    1    2024-01-03 11:00:00    400
+DROP TABLE user_stats;
+DROP TABLE IF EXISTS inventory;
+CREATE TABLE inventory(
+product_id INT PRIMARY KEY,
+product_name VARCHAR(100),
+quantity INT DEFAULT 0,
+reserved INT DEFAULT 0,
+last_updated DATETIME
+);
+INSERT INTO inventory (product_id, product_name, quantity, last_updated)
+VALUES (101, 'Product A', 100, '2024-01-01 08:00:00');
+SELECT * FROM inventory;
+product_id    product_name    quantity    reserved    last_updated
+101    Product A    100    0    2024-01-01 08:00:00
+INSERT INTO inventory (product_id, product_name, quantity, last_updated)
+VALUES (101, 'Product A', 50, '2024-01-02 10:00:00')
+ON DUPLICATE KEY UPDATE
+quantity = quantity + VALUES(quantity),
+last_updated = VALUES(last_updated);
+SELECT * FROM inventory;
+product_id    product_name    quantity    reserved    last_updated
+101    Product A    150    0    2024-01-02 10:00:00
+INSERT INTO inventory (product_id, product_name, quantity, reserved, last_updated)
+VALUES (101, 'Product A', 0, 20, '2024-01-03 14:00:00')
+ON DUPLICATE KEY UPDATE
+reserved = reserved + VALUES(reserved),
+last_updated = VALUES(last_updated);
+SELECT * FROM inventory;
+product_id    product_name    quantity    reserved    last_updated
+101    Product A    150    20    2024-01-03 14:00:00
+INSERT INTO inventory (product_id, product_name, quantity, last_updated)
+VALUES
+(101, 'Product A', 30, '2024-01-04 09:00:00'),
+(102, 'Product B', 80, '2024-01-04 09:00:00'),
+(103, 'Product C', 120, '2024-01-04 09:00:00')
+ON DUPLICATE KEY UPDATE
+quantity = quantity + VALUES(quantity),
+last_updated = VALUES(last_updated);
+SELECT * FROM inventory ORDER BY product_id;
+product_id    product_name    quantity    reserved    last_updated
+101    Product A    180    20    2024-01-04 09:00:00
+102    Product B    80    0    2024-01-04 09:00:00
+103    Product C    120    0    2024-01-04 09:00:00
+DROP TABLE inventory;
+DROP TABLE IF EXISTS users;
+CREATE TABLE users (
+id INT PRIMARY KEY AUTO_INCREMENT,
+counter INT,
+create_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+update_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+INSERT INTO users (id, counter) VALUES (112, 1);
+SELECT id, counter, create_at = update_at AS timestamps_equal FROM users;
+id    counter    timestamps_equal
+112    1    true
+SELECT SLEEP(1);
+SLEEP(1)
+0
+INSERT INTO users (id, counter) VALUES (112, 2)
+ON DUPLICATE KEY UPDATE
+counter = counter + VALUES(counter),
+create_at = CURRENT_TIMESTAMP();
+SELECT id, counter, create_at = update_at AS timestamps_equal FROM users;
+id    counter    timestamps_equal
+112    3    true
+DROP TABLE users;
+DROP TABLE IF EXISTS auto_test;
+CREATE TABLE auto_test (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50)
+);
+INSERT INTO auto_test (id, name) VALUES (1, 'first'), (2, 'second');
+SELECT * FROM auto_test ORDER BY id;
+id    name
+1    first
+2    second
+INSERT INTO auto_test (id, name) VALUES (1, 'updated_first')
+ON DUPLICATE KEY UPDATE name = VALUES(name);
+SELECT * FROM auto_test ORDER BY id;
+id    name
+1    updated_first
+2    second
+INSERT INTO auto_test (name) VALUES ('third');
+SELECT * FROM auto_test ORDER BY id;
+id    name
+1    updated_first
+2    second
+3    third
+DROP TABLE auto_test;
+DROP TABLE IF EXISTS indup_11;
+CREATE TABLE indup_11(
+id INT PRIMARY KEY,
+name VARCHAR(100),
+value INT
+);
+INSERT INTO indup_11 (id, name, value)
+SELECT result, CONCAT('name_', result), result
+FROM generate_series(1, 100000) g;
+INSERT INTO indup_11 (id, name, value)
+SELECT result, CONCAT('updated_', result), result * 2
+FROM generate_series(1, 1000) g
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT COUNT(*) FROM indup_11;
+COUNT(*)
+100000
+SELECT * FROM indup_11 WHERE id <= 10;
+id    name    value
+1    name_1    2
+2    name_2    4
+3    name_3    6
+4    name_4    8
+5    name_5    10
+6    name_6    12
+7    name_7    14
+8    name_8    16
+9    name_9    18
+10    name_10    20
+DROP TABLE IF EXISTS indup_overflow;
+CREATE TABLE indup_overflow(
+id INT PRIMARY KEY,
+tiny TINYINT,
+small SMALLINT,
+big BIGINT,
+flt FLOAT,
+dbl DOUBLE
+);
+INSERT INTO indup_overflow VALUES (1, 100, 30000, 9223372036854775807, 3.14, 2.718281828);
+SELECT * FROM indup_overflow;
+id    tiny    small    big    flt    dbl
+1    100    30000    9223372036854775807    3.14    2.718281828
+INSERT INTO indup_overflow VALUES (1, 50, 1000, 500, 2.0, 3.0)
+ON DUPLICATE KEY UPDATE
+tiny = tiny + VALUES(tiny),  -- 100 + 50 = 150，溢出为 -106
+small = small - VALUES(small),
+flt = flt * VALUES(flt),
+dbl = dbl / VALUES(dbl);
+SELECT * FROM indup_overflow;
+id    tiny    small    big    flt    dbl
+1    -106    29000    9223372036854775807    6.28    0.9060939426666667
+DROP TABLE indup_overflow;
+DROP TABLE IF EXISTS indup_err_uk_01;
+CREATE TABLE indup_err_uk_01(
+id INT PRIMARY KEY,
+email VARCHAR(50),
+name VARCHAR(20),
+UNIQUE KEY uk_email_25 (email)
+);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_email_25'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_err_uk_01 VALUES (1, 'user@example.com', 'user1');
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_uk_01 VALUES (2, 'user@example.com', 'user2')
+ON DUPLICATE KEY UPDATE name = VALUES(name);
+Duplicate entry 'user@example.com' for key '(.*)'
+EXECUTE check_idx;
+COUNT(*)
+1
+DROP TABLE IF EXISTS indup_err_uk_02;
+CREATE TABLE indup_err_uk_02(
+id INT PRIMARY KEY,
+col1 VARCHAR(20),
+col2 VARCHAR(20),
+value INT,
+UNIQUE KEY uk_cols_25 (col1, col2)
+);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_cols_25'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_err_uk_02 VALUES (1, 'a', 'b', 100);
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_uk_02 VALUES (2, 'a', 'b', 200)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+Duplicate entry '\(a,b\)' for key '(.*)'
+EXECUTE check_idx;
+COUNT(*)
+1
+DROP TABLE IF EXISTS indup_err_01;
+CREATE TABLE indup_err_01(
+id INT PRIMARY KEY,
+name VARCHAR(20),
+value INT
+);
+INSERT INTO indup_err_01 VALUES (1, 'first', 100);
+INSERT INTO indup_err_01 VALUES (1, 'updated', 200)
+ON DUPLICATE KEY UPDATE id = id + 10, name = VALUES(name);
 internal error: do not support update primary key/unique key for on duplicate key update
-select * from indup_07;
-col1    col2    col3    col4
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
-insert into indup_07 values(24,'1','1',100) on duplicate key update col1=2147483649;
-Data truncation: data out of range: data type int32, value '2147483649'
-prepare stmt1 from "insert into indup_07 values(?, '11', '33', 1)on duplicate key update col1=col1*10";
-set @a_var = 1;
-execute stmt1 using @a_var;
-select * from indup_07;
-col1    col2    col3    col4
-1    11    33    1
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
-set @a_var = 23;
-execute stmt1 using @a_var;
-select * from indup_07;
-col1    col2    col3    col4
-1    11    33    1
-24    66    77    1
-25    99    88    1
-33    11    33    1
-230    22    55    2
-deallocate prepare stmt1;
-drop table if exists indup_08;
-create table indup_08(a varchar, primary key (a));
-insert into indup_08 values ('matrixone\''), ('matrixone\'');
-Duplicate entry 'matrixone'' for key 'a'
-drop table if exists indup_09;
-create table indup_09(a varchar, b varchar, primary key (a, b));
-insert into indup_09 values ('matrixone\'', 'mo-tester\''), ('matrixone\'', 'mo-tester\'');
-Duplicate entry '(matrixone',mo-tester')' for key '(a,b)'
-drop table if exists indup_10;
-create table indup_10(a varchar(256), b int);
-insert into indup_10 (a, b) select  "matrixone " || " some space " || result, 1 from generate_series (1, 500000)g;
-drop table indup_10;
-CREATE TABLE `serial_numbers` (
-`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-`biz_type` BIGINT DEFAULT NULL,
-`namespace` VARCHAR(64) DEFAULT NULL,
-`sn` BIGINT DEFAULT NULL,
-PRIMARY KEY (`id`),
-UNIQUE KEY `unq_biz_ns` (`biz_type`,`namespace`));
-insert into `serial_numbers` (`biz_type`, `namespace`, `sn`) select result,result||"lijofw;ok",result from generate_series(1,100000) g;
-INSERT INTO `serial_numbers` (`biz_type`, `namespace`, `sn`) VALUES (4, '2024091117', 1) ON DUPLICATE KEY UPDATE `sn` = `sn` + 1;
-SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 ;
-id    biz_type    namespace    sn
-100001    4    2024091117    1
-4    4    4lijofw;ok    4
-SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 and `namespace` = '2024091117';
-id    biz_type    namespace    sn
-100001    4    2024091117    1
+INSERT INTO indup_err_01 VALUES (1, 'updated', 300)
+ON DUPLICATE KEY UPDATE id = VALUES(id);
+internal error: do not support update primary key/unique key for on duplicate key update
+DROP TABLE IF EXISTS indup_err_02;
+CREATE TABLE indup_err_02(
+id INT,
+email VARCHAR(50),
+name VARCHAR(20),
+UNIQUE KEY uk_email_27 (email)
+);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_email_27'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_err_02 VALUES (1, 'user@example.com', 'user1');
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_02 VALUES (2, 'user@example.com', 'user2')
+ON DUPLICATE KEY UPDATE email = 'newemail@example.com', name = VALUES(name);
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_02 VALUES (3, 'user@example.com', 'user3')
+ON DUPLICATE KEY UPDATE email = VALUES(email);
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+DROP TABLE IF EXISTS indup_err_03;
+CREATE TABLE indup_err_03(
+col1 INT,
+col2 INT,
+col3 VARCHAR(20),
+PRIMARY KEY (col1, col2)
+);
+INSERT INTO indup_err_03 VALUES (1, 2, 'test');
+INSERT INTO indup_err_03 VALUES (1, 2, 'updated')
+ON DUPLICATE KEY UPDATE col1 = col1 + 1, col3 = VALUES(col3);
+internal error: do not support update primary key/unique key for on duplicate key update
+INSERT INTO indup_err_03 VALUES (1, 2, 'updated')
+ON DUPLICATE KEY UPDATE col2 = col2 + 1, col3 = VALUES(col3);
+internal error: do not support update primary key/unique key for on duplicate key update
+INSERT INTO indup_err_03 VALUES (1, 2, 'updated')
+ON DUPLICATE KEY UPDATE col1 = VALUES(col1), col2 = VALUES(col2);
+internal error: do not support update primary key/unique key for on duplicate key update
+DROP TABLE IF EXISTS indup_err_04;
+CREATE TABLE indup_err_04(
+id INT,
+col1 VARCHAR(20),
+col2 VARCHAR(20),
+value INT,
+UNIQUE KEY uk_cols_29 (col1, col2)
+);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_cols_29'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_err_04 VALUES (1, 'a', 'b', 100);
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_04 VALUES (2, 'a', 'b', 200)
+ON DUPLICATE KEY UPDATE col1 = 'updated', value = VALUES(value);
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_04 VALUES (3, 'a', 'b', 300)
+ON DUPLICATE KEY UPDATE col2 = 'updated', value = VALUES(value);
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_04 VALUES (4, 'a', 'b', 400)
+ON DUPLICATE KEY UPDATE col1 = VALUES(col1), col2 = VALUES(col2);
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+DROP TABLE IF EXISTS indup_err_05;
+CREATE TABLE indup_err_05(
+id INT PRIMARY KEY,
+email VARCHAR(50),
+name VARCHAR(20),
+value INT,
+UNIQUE KEY uk_email_30 (email)
+);
+SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'uk_email_30'), "`");
+PREPARE check_idx FROM @idxsql;
+INSERT INTO indup_err_05 VALUES (1, 'user@example.com', 'user1', 100);
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_05 VALUES (1, 'other@example.com', 'user2', 200)
+ON DUPLICATE KEY UPDATE id = id + 10;
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_05 VALUES (2, 'user@example.com', 'user3', 300)
+ON DUPLICATE KEY UPDATE email = 'new@example.com';
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+INSERT INTO indup_err_05 VALUES (1, 'test@example.com', 'user4', 400)
+ON DUPLICATE KEY UPDATE id = id + 10, email = VALUES(email);
+internal error: do not support update primary key/unique key for on duplicate key update
+EXECUTE check_idx;
+COUNT(*)
+1
+DROP TABLE IF EXISTS indup_00;
+DROP TABLE IF EXISTS indup_01;
+DROP TABLE IF EXISTS indup_02;
+DROP TABLE IF EXISTS indup_tmp;
+DROP TABLE IF EXISTS indup_03;
+DROP TABLE IF EXISTS indup_04;
+DROP TABLE IF EXISTS indup_05;
+DROP TABLE IF EXISTS indup_06;
+DROP TABLE IF EXISTS indup_07;
+DROP TABLE IF EXISTS indup_08;
+DROP TABLE IF EXISTS indup_09;
+DROP TABLE IF EXISTS indup_10;
+DROP TABLE IF EXISTS indup_11;
+DROP TABLE IF EXISTS indup_idx_01;
+DROP TABLE IF EXISTS indup_part_01;
+DROP TABLE IF EXISTS indup_null_01;
+DROP TABLE IF EXISTS indup_def_01;
+DROP TABLE IF EXISTS indup_tx_01;
+DROP TABLE IF EXISTS indup_subq_01;
+DROP TABLE IF EXISTS indup_subq_02;
+DROP TABLE IF EXISTS indup_expr_01;
+DROP TABLE IF EXISTS indup_char_01;
+DROP TABLE IF EXISTS indup_batch_01;
+DROP TABLE IF EXISTS indup_dup_01;
+DROP TABLE IF EXISTS indup_overflow;
+DROP TABLE IF EXISTS user_stats;
+DROP TABLE IF EXISTS inventory;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS auto_test;
+DROP TABLE IF EXISTS indup_err_uk_01;
+DROP TABLE IF EXISTS indup_err_uk_02;
+DROP TABLE IF EXISTS indup_err_01;
+DROP TABLE IF EXISTS indup_err_02;
+DROP TABLE IF EXISTS indup_err_03;
+DROP TABLE IF EXISTS indup_err_04;
+DROP TABLE IF EXISTS indup_err_05;

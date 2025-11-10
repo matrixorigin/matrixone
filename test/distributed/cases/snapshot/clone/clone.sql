@@ -26,7 +26,6 @@ create unique index mail_method_idx on aerr(email,lmethod);
 alter table aerr add primary key (uid);
 select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
 set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
-prepare err1 from @novar;
 prepare s1 from @idxsql;
 execute s1;
 drop snapshot if exists sp01;
