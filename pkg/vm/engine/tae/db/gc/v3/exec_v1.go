@@ -428,10 +428,7 @@ func MakeSnapshotAndPitrFineFilter(
 								// This table is in a CDC database
 								// For CNCreated or Appendable objects, check if we should protect them
 								if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
-									if entry.dropTS.IsEmpty() {
-										continue
-									}
-									if entry.dropTS.LT(&cdcTS) ||
+									if (!entry.dropTS.IsEmpty() && entry.dropTS.LT(&cdcTS)) ||
 										entry.createTS.GT(&cdcTS) {
 										// Protect this object
 										continue
@@ -467,10 +464,7 @@ func MakeSnapshotAndPitrFineFilter(
 						// This table is in a CDC database
 						// For CNCreated or Appendable objects, check if we should protect them
 						if stats.GetCNCreated() || stats.GetAppendable() {
-							if deleteTS.IsEmpty() {
-								continue
-							}
-							if deleteTS.LT(&cdcTS) ||
+							if (!deleteTS.IsEmpty() && deleteTS.LT(&cdcTS)) ||
 								createTS.GT(&cdcTS) {
 								// Protect this object
 								continue
