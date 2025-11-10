@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -1481,21 +1480,25 @@ func handleDelsOnLCA(
 ) (rows [][]any, err error) {
 
 	var (
-		sql         string
-		flag        = diffRemovedLine
-		tableName   = tarTblDef.Name
-		lcaTblDef   *plan.TableDef
-		prepareSqls []string
-		cleanSqls   []string
-		mots        = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
+		sql       string
+		sqlRet    executor.Result
+		flag      = diffRemovedLine
+		tableName = tarTblDef.Name
+		lcaTblDef *plan.TableDef
+		mots      = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
+
+		sqlBuf  = acquireBuffer()
+		valsBuf = acquireBuffer()
 	)
+
+	defer func() {
+		releaseBuffer(sqlBuf)
+		releaseBuffer(valsBuf)
+	}()
 
 	if !isTarDels {
 		tableName = baseTblDef.Name
 	}
-
-	buf := acquireBuffer()
-	defer releaseBuffer(buf)
 
 	if lcaTableId == 0 {
 		return nil, moerr.NewInternalErrorNoCtxf(
@@ -1516,15 +1519,13 @@ func handleDelsOnLCA(
 		}
 	}
 
+	pkNames := lcaTblDef.Pkey.Names
+
 	// composite pk
 	if baseTblDef.Pkey.CompPkeyCol != nil {
 		var (
-			tuple   types.Tuple
-			pkNames = lcaTblDef.Pkey.Names
+			tuple types.Tuple
 		)
-
-		bufVals := acquireBuffer()
-		defer releaseBuffer(bufVals)
 
 		cols, area := vector.MustVarlenaRawData(dels)
 		for i := range cols {
@@ -1533,136 +1534,107 @@ func handleDelsOnLCA(
 				return nil, err
 			}
 
-			bufVals.WriteString("row(")
-			//bufVals.WriteString("(")
+			valsBuf.WriteString("row(")
 
 			for j := range tuple {
-				formatValIntoString(ses, tuple[j], colTypes[pkIdxes[j]], bufVals)
+				formatValIntoString(ses, tuple[j], colTypes[pkIdxes[j]], valsBuf)
 				if j != len(tuple)-1 {
-					bufVals.WriteString(", ")
+					valsBuf.WriteString(", ")
 				}
 			}
 
-			bufVals.WriteString(")")
+			valsBuf.WriteString(")")
 
 			if i != len(cols)-1 {
-				bufVals.WriteString(", ")
+				valsBuf.WriteString(", ")
 			}
 		}
-
-		buf.Reset()
-		buf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
-		buf.WriteString(fmt.Sprintf("join (values %s) as pks(%s) on ", bufVals.String(), strings.Join(pkNames, ",")))
-		for i := range pkNames {
-			buf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
-			switch typ := colTypes[pkIdxes[i]]; typ.Oid {
-			case types.T_int32:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
-			case types.T_int64:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
-			case types.T_uint32:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
-			case types.T_uint64:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
-			case types.T_float32:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
-			case types.T_float64:
-				buf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
-			default:
-				buf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
-			}
-			if i != len(pkNames)-1 {
-				buf.WriteString(" AND ")
-			}
-		}
-
-		sql = buf.String()
 
 		// fake pk
 	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		buf.Reset()
+
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
-		for i, pk := range pks {
-			buf.WriteString(strconv.FormatUint(pk, 10))
+		for i := range pks {
+			valsBuf.WriteString(fmt.Sprintf("row(%d)", pks[i]))
 			if i != len(pks)-1 {
-				buf.WriteString(",")
+				valsBuf.WriteString(", ")
 			}
 		}
 
-		sql = fmt.Sprintf(
-			"select * from %s.%s %s where `__mo_fake_pk_col` in (%s) ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots, buf.String(),
-		)
-
 		// real pk
 	} else {
-		buf.Reset()
+		valsBuf.Reset()
 		for i := range dels.Length() {
+			valsBuf.WriteString("row(")
 			b := dels.GetRawBytesAt(i)
 			val := types.DecodeValue(b, dels.GetType().Oid)
 			switch x := val.(type) {
 			case []byte:
-				buf.WriteString("'")
-				buf.WriteString(string(x))
-				buf.WriteString("'")
+				valsBuf.WriteString("'")
+				valsBuf.WriteString(string(x))
+				valsBuf.WriteString("'")
+			case string:
+				valsBuf.WriteString("'")
+				valsBuf.WriteString(string(x))
+				valsBuf.WriteString("'")
 			default:
-				buf.WriteString(fmt.Sprintf("%v", x))
+				valsBuf.WriteString(fmt.Sprintf("%v", x))
 			}
+			valsBuf.WriteString(")")
 
 			if i != dels.Length()-1 {
-				buf.WriteString(",")
+				valsBuf.WriteString(",")
 			}
 		}
-
-		sql = fmt.Sprintf(
-			"select * from %s.%s %s where %s in (%s) ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots, lcaTblDef.Pkey.PkeyColName, buf.String(),
-		)
 	}
 
-	// why runTxn here?
-	// we need to ensure the temporary created table should be clear if some err happened.
-	// the left sqls are read only,
-	if err = sqlexec.RunTxn(sqlexec.NewSqlProcess(ses.proc), func(txnExecutor executor.TxnExecutor) error {
-		var (
-			sqlRet executor.Result
-		)
-
-		for _, s := range prepareSqls {
-			if sqlRet, err = txnExecutor.Exec(s, executor.StatementOption{}); err != nil {
-				return err
-			}
-			sqlRet.Close()
+	sqlBuf.Reset()
+	sqlBuf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
+	sqlBuf.WriteString(fmt.Sprintf("join (values %s) as pks(%s) on ", valsBuf.String(), strings.Join(pkNames, ",")))
+	for i := range pkNames {
+		sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
+		switch typ := colTypes[pkIdxes[i]]; typ.Oid {
+		case types.T_int32:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
+		case types.T_int64:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
+		case types.T_uint32:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
+		case types.T_uint64:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
+		case types.T_float32:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
+		case types.T_float64:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
+		case types.T_varchar:
+			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as VARCHAR)", pkNames[i]))
+		default:
+			sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
 		}
-
-		if sqlRet, err = txnExecutor.Exec(sql, executor.StatementOption{}); err != nil {
-			return err
+		if i != len(pkNames)-1 {
+			sqlBuf.WriteString(" AND ")
 		}
-		defer sqlRet.Close()
-
-		sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
-			for i := range rowCnt {
-				row := make([]any, len(cols)+2)
-				row[0] = tableName
-				row[1] = flag
-				for j := range cols {
-					row[j+2] = types.DecodeValue(cols[j].GetRawBytesAt(i), colTypes[j].Oid)
-				}
-				rows = append(rows, row)
-			}
-			return true
-		})
-
-		for _, s := range cleanSqls {
-			if sqlRet, err = txnExecutor.Exec(s, executor.StatementOption{}); err != nil {
-				return err
-			}
-			sqlRet.Close()
-		}
-		return err
-	}); err != nil {
-		return nil, err
 	}
+
+	sql = sqlBuf.String()
+	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), sql); err != nil {
+		return
+	}
+
+	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+		for i := range rowCnt {
+			row := make([]any, len(cols)+2)
+			row[0] = tableName
+			row[1] = flag
+			for j := range cols {
+				row[j+2] = types.DecodeValue(cols[j].GetRawBytesAt(i), colTypes[j].Oid)
+			}
+			rows = append(rows, row)
+		}
+		return true
+	})
+
+	sqlRet.Close()
 
 	return
 }
