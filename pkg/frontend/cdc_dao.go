@@ -410,7 +410,7 @@ func (t *CDCDao) DeleteTaskAndWatermark(
 	)
 
 	_, isTxn := executor.(*sql.Tx)
-	res.LocalTxnOpened = !isTxn
+	res.LocalTxnOpened = false
 
 	logutil.Debug(
 		"cdc.dao.delete_task_and_watermark.begin",
@@ -418,38 +418,7 @@ func (t *CDCDao) DeleteTaskAndWatermark(
 		zap.String("task-name", taskName),
 		zap.Int("key-count", len(keys)),
 		zap.Bool("executor-is-tx", isTxn),
-		zap.Bool("local-tx-opened", res.LocalTxnOpened),
 	)
-
-	if res.LocalTxnOpened {
-		if _, err = executor.ExecContext(ctx, "BEGIN"); err != nil {
-			logutil.Error(
-				"cdc.dao.delete_task_and_watermark.begin_failed",
-				zap.Uint64("account-id", accountId),
-				zap.String("task-name", taskName),
-				zap.Error(err),
-			)
-			return
-		}
-		defer func() {
-			finalSQL := "COMMIT"
-			if err != nil {
-				finalSQL = "ROLLBACK"
-			}
-			if _, e := executor.ExecContext(ctx, finalSQL); e != nil {
-				logutil.Error(
-					"cdc.dao.delete_task_and_watermark.finalize_failed",
-					zap.Uint64("account-id", accountId),
-					zap.String("task-name", taskName),
-					zap.String("sql", finalSQL),
-					zap.Error(e),
-				)
-				if err == nil {
-					err = e
-				}
-			}
-		}()
-	}
 
 	if res.TaskRows, err = t.DeleteTaskByName(ctx, accountId, taskName); err != nil {
 		return
@@ -466,7 +435,6 @@ func (t *CDCDao) DeleteTaskAndWatermark(
 		zap.Int64("task-rows", res.TaskRows),
 		zap.Int64("watermark-rows", res.WatermarkRows),
 		zap.Bool("executor-is-tx", isTxn),
-		zap.Bool("local-tx-opened", res.LocalTxnOpened),
 	)
 
 	return
