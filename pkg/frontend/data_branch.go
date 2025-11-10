@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1104,34 +1103,14 @@ func hashDiff(
 ) {
 
 	var (
-		mp = ses.proc.Mp()
+		collector rowsCollector
 
 		baseDataHashmap      databranchutils.BranchHashmap
 		baseTombstoneHashmap databranchutils.BranchHashmap
 
 		tarDataHashmap      databranchutils.BranchHashmap
 		tarTombstoneHashmap databranchutils.BranchHashmap
-
-		tarTblDef  = tarRel.GetTableDef(ctx)
-		baseTblDef = baseRel.GetTableDef(ctx)
 	)
-
-	collector := &rowsCollector{}
-	delsRunner, runnerErr := newAsyncSQLExecutor(runtime.NumCPU(), ctx)
-	if runnerErr != nil {
-		err = runnerErr
-		return
-	}
-
-	var delsWaited bool
-	defer func() {
-		if !delsWaited {
-			if waitErr := delsRunner.Wait(); err == nil {
-				err = waitErr
-			}
-		}
-		delsRunner.Close()
-	}()
 
 	defer func() {
 		if baseDataHashmap != nil {
@@ -1148,67 +1127,246 @@ func hashDiff(
 		}
 	}()
 
-	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForBaseTable(
-		ctx, mp, dagInfo.lcaTableId, pkColIdx, baseHandle,
+	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
+		ctx, ses.proc.Mp(), pkColIdx, baseHandle,
 	); err != nil {
 		return
 	}
 
-	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTarTable(
-		ctx, mp, tarTblDef, pkColIdx, tarHandle,
+	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
+		ctx, ses.proc.Mp(), pkColIdx, tarHandle,
 	); err != nil {
 		return
 	}
+
+	hashmap := []databranchutils.BranchHashmap{
+		tarDataHashmap, tarTombstoneHashmap,
+		baseDataHashmap, baseTombstoneHashmap,
+	}
+
+	if dagInfo.lcaTableId == 0 {
+		if err = hashDiffIfNoLCA(
+			ctx, tarRel, baseRel, hashmap, colTypes,
+			colIdxes, pkKind, &collector,
+		); err != nil {
+			return
+		}
+	} else {
+		if err = hashDiffIfHasLCA(
+			ctx, ses, dagInfo, tarRel, baseRel,
+			hashmap, colTypes, colIdxes, pkKind,
+			expandedPKColIdxes, &collector,
+		); err != nil {
+			return
+		}
+	}
+
+	rows = collector.rows
+	return
+}
+
+func hashDiffIfHasLCA(
+	ctx context.Context,
+	ses *Session,
+	dagInfo branchMetaInfo,
+	tarRel engine.Relation,
+	baseRel engine.Relation,
+	hashmap []databranchutils.BranchHashmap,
+	colTypes []types.Type,
+	colIdxes []int,
+	pkKind int,
+	expandedPKColIdxes []int,
+	collector *rowsCollector,
+) (err error) {
+
+	var (
+		tarDelsOnLCA  *vector.Vector
+		baseDelsOnLCA *vector.Vector
+
+		tarTuple types.Tuple
+		checkRet databranchutils.GetResult
+
+		typs    []types.Type
+		tmpRows [][]any
+
+		tarTblDef  = tarRel.GetTableDef(ctx)
+		baseTblDef = baseRel.GetTableDef(ctx)
+	)
+
+	defer func() {
+		if tarDelsOnLCA != nil {
+			tarDelsOnLCA.Free(ses.proc.Mp())
+		}
+		if baseDelsOnLCA != nil {
+			baseDelsOnLCA.Free(ses.proc.Mp())
+		}
+	}()
+
+	handleTarDelsOnLCA := func(force bool) (err2 error) {
+		if force || tarDelsOnLCA.Length() >= batchCnt || tarDelsOnLCA.Size() >= mpool.GB {
+			if tmpRows, err2 = handleDelsOnLCA(
+				ctx, ses, tarDelsOnLCA, true,
+				tarTblDef, baseTblDef,
+				dagInfo.tarBranchTS.ToTimestamp(),
+				expandedPKColIdxes,
+				colTypes,
+			); err2 != nil {
+				return err2
+			}
+			collector.addRows(tmpRows)
+
+			if tarDelsOnLCA.Length() > 0 {
+				if _, err2 = hashmap[0].PopByVectors(
+					[]*vector.Vector{tarDelsOnLCA}, false,
+				); err2 != nil {
+					return err2
+				}
+				tarDelsOnLCA.CleanOnlyData()
+			}
+		}
+		return
+	}
+
+	handleBaseDelsOnLCA := func(force bool) (err2 error) {
+		if force || baseDelsOnLCA.Length() >= batchCnt || baseDelsOnLCA.Size() >= mpool.GB {
+			if tmpRows, err2 = handleDelsOnLCA(
+				ctx, ses, baseDelsOnLCA, false,
+				tarTblDef, baseTblDef,
+				dagInfo.baseBranchTS.ToTimestamp(),
+				expandedPKColIdxes,
+				colTypes,
+			); err2 != nil {
+				return err2
+			}
+			collector.addRows(tmpRows)
+			baseDelsOnLCA.CleanOnlyData()
+		}
+		return
+	}
+
+	if err = hashmap[1].ForEach(func(tarKey []byte, _ [][]byte) (err2 error) {
+		if checkRet, err2 = hashmap[3].PopByEncodedKey(tarKey, true); err2 != nil {
+			return err2
+		}
+
+		// if not exists should be the tar DELETE on the LCA
+		if !checkRet.Exists {
+			if tarTuple, typs, err2 = hashmap[1].DecodeRow(tarKey); err2 != nil {
+				return err2
+			}
+
+			if tarDelsOnLCA == nil {
+				tarDelsOnLCA = vector.NewVec(typs[0])
+			}
+
+			if err2 = vector.AppendAny(tarDelsOnLCA, tarTuple[0], false, ses.proc.Mp()); err2 != nil {
+				return err2
+			}
+
+			if err2 = handleTarDelsOnLCA(false); err2 != nil {
+				return err2
+			}
+		}
+		// else, tar and base both delete on the LCA, do nothing
+
+		return nil
+	}); err != nil {
+		return
+	}
+
+	// iterate the left base table tombstones on the LCA
+	if err = hashmap[3].ForEach(func(key []byte, _ [][]byte) error {
+		if tuple, valTypes, err2 := hashmap[3].DecodeRow(key); err2 != nil {
+			return err2
+		} else {
+			if baseDelsOnLCA == nil {
+				baseDelsOnLCA = vector.NewVec(valTypes[0])
+			}
+
+			if err2 = vector.AppendAny(baseDelsOnLCA, tuple[0], false, ses.proc.Mp()); err2 != nil {
+				return err2
+			}
+
+			if err2 = handleTarDelsOnLCA(false); err2 != nil {
+				return err2
+			}
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	if tarDelsOnLCA != nil && tarDelsOnLCA.Length() > 0 {
+		if err = handleTarDelsOnLCA(true); err != nil {
+			return err
+		}
+	}
+
+	if baseDelsOnLCA != nil && baseDelsOnLCA.Length() > 0 {
+		if err = handleBaseDelsOnLCA(true); err != nil {
+			return err
+		}
+	}
+
+	return diffDataHelper(
+		colTypes, colIdxes, collector, pkKind,
+		tarTblDef, baseTblDef,
+		hashmap[0], hashmap[2],
+	)
+}
+
+func hashDiffIfNoLCA(
+	ctx context.Context,
+	tarRel engine.Relation,
+	baseRel engine.Relation,
+	hashmap []databranchutils.BranchHashmap,
+	colTypes []types.Type,
+	colIdxes []int,
+	pkKind int,
+	collector *rowsCollector,
+) (err error) {
+
+	if err = hashmap[1].ForEach(func(key []byte, rows [][]byte) error {
+		if _, err2 := hashmap[0].PopByEncodedKey(key, true); err2 != nil {
+			return err2
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	if err = hashmap[3].ForEach(func(key []byte, rows [][]byte) error {
+		if _, err2 := hashmap[2].PopByEncodedKey(key, true); err2 != nil {
+			return err2
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	return diffDataHelper(
+		colTypes, colIdxes, collector, pkKind,
+		tarRel.GetTableDef(ctx), baseRel.CopyTableDef(ctx),
+		hashmap[0], hashmap[2],
+	)
+}
+
+func diffDataHelper(
+	colTypes []types.Type,
+	colIdxes []int,
+	collector *rowsCollector,
+	pkKind int,
+	tarTblDef *plan.TableDef,
+	baseTblDef *plan.TableDef,
+	tarDataHashmap databranchutils.BranchHashmap,
+	baseDataHashmap databranchutils.BranchHashmap,
+) (err error) {
 
 	var (
 		tarTuple  types.Tuple
 		baseTuple types.Tuple
-
-		checkRet databranchutils.GetResult
-
-		tarDelsOnLCA  *vector.Vector
-		baseDelsOnLCA *vector.Vector
+		checkRet  databranchutils.GetResult
 	)
-
-	enqueueHandleDels := func(vec *vector.Vector, isTar bool, snap timestamp.Timestamp) error {
-		if vec == nil || vec.Length() == 0 {
-			return nil
-		}
-		taskVec := vec
-		if err := delsRunner.Submit(func(taskCtx context.Context) error {
-			defer taskVec.Free(mp)
-			if taskCtx.Err() != nil {
-				return taskCtx.Err()
-			}
-
-			tmpRows, err := handleDelsOnLCA(
-				taskCtx, ses, taskVec, isTar,
-				tarTblDef, baseTblDef,
-				snap, dagInfo.lcaTableId,
-				expandedPKColIdxes,
-				colTypes,
-			)
-			if err != nil {
-				return err
-			}
-			collector.addRows(tmpRows)
-			return nil
-		}); err != nil {
-			taskVec.Free(mp)
-			return err
-		}
-
-		return nil
-	}
-
-	defer func() {
-		if tarDelsOnLCA != nil {
-			tarDelsOnLCA.Free(mp)
-		}
-		if baseDelsOnLCA != nil {
-			baseDelsOnLCA.Free(mp)
-		}
-	}()
 
 	if err = tarDataHashmap.ForEach(func(tarKey []byte, tarValues [][]byte) error {
 
@@ -1263,46 +1421,6 @@ func hashDiff(
 				// all columns are the same, INSERTED a same row.
 			}
 		}
-
-		return nil
-
-	}); err != nil {
-		return
-	}
-
-	if err = tarTombstoneHashmap.ForEach(func(tarKey []byte, _ [][]byte) error {
-		if checkRet, err = baseTombstoneHashmap.PopByEncodedKey(tarKey, true); err != nil {
-			return err
-		}
-
-		var (
-			typs []types.Type
-		)
-		// if not exists should be the tar DELETE on the LCA
-		if !checkRet.Exists {
-			if tarTuple, typs, err = tarTombstoneHashmap.DecodeRow(tarKey); err != nil {
-				return err
-			}
-
-			if tarDelsOnLCA == nil {
-				tarDelsOnLCA = vector.NewVec(typs[0])
-			}
-
-			if err = vector.AppendAny(tarDelsOnLCA, tarTuple[0], false, mp); err != nil {
-				return err
-			}
-
-			if tarDelsOnLCA.Length() >= batchCnt || tarDelsOnLCA.Size() >= mpool.GB {
-				if err = enqueueHandleDels(
-					tarDelsOnLCA, true, dagInfo.tarBranchTS.ToTimestamp(),
-				); err != nil {
-					return err
-				}
-				tarDelsOnLCA = nil
-			}
-		}
-		// else, tar and base both delete on the LCA, do nothing
-
 		return nil
 	}); err != nil {
 		return
@@ -1312,8 +1430,8 @@ func hashDiff(
 	if err = baseDataHashmap.ForEach(func(_ []byte, data [][]byte) error {
 		for _, r := range data {
 			row := append([]interface{}{}, baseTblDef.Name, diffAddedLine)
-			if tuple, _, err := baseDataHashmap.DecodeRow(r); err != nil {
-				return err
+			if tuple, _, err2 := baseDataHashmap.DecodeRow(r); err2 != nil {
+				return err2
 			} else {
 				for i := range tuple {
 					row = append(row, tuple[i])
@@ -1326,58 +1444,7 @@ func hashDiff(
 		return
 	}
 
-	// iterate the left base table tombstones on the LCA
-	if err = baseTombstoneHashmap.ForEach(func(key []byte, _ [][]byte) error {
-		if tuple, valTypes, err := baseTombstoneHashmap.DecodeRow(key); err != nil {
-			return err
-		} else {
-			if baseDelsOnLCA == nil {
-				baseDelsOnLCA = vector.NewVec(valTypes[0])
-			}
-
-			if err = vector.AppendAny(baseDelsOnLCA, tuple[0], false, mp); err != nil {
-				return err
-			}
-
-			if baseDelsOnLCA.Length() >= batchCnt || baseDelsOnLCA.Size() >= mpool.GB {
-				if err = enqueueHandleDels(
-					baseDelsOnLCA, false, dagInfo.baseBranchTS.ToTimestamp(),
-				); err != nil {
-					return err
-				}
-				baseDelsOnLCA = nil
-			}
-		}
-		return nil
-	}); err != nil {
-		return
-	}
-
-	if tarDelsOnLCA != nil && tarDelsOnLCA.Length() > 0 {
-		if err = enqueueHandleDels(
-			tarDelsOnLCA, true, dagInfo.tarBranchTS.ToTimestamp(),
-		); err != nil {
-			return
-		}
-		tarDelsOnLCA = nil
-	}
-
-	if baseDelsOnLCA != nil && baseDelsOnLCA.Length() > 0 {
-		if err = enqueueHandleDels(
-			baseDelsOnLCA, false, dagInfo.baseBranchTS.ToTimestamp(),
-		); err != nil {
-			return
-		}
-		baseDelsOnLCA = nil
-	}
-
-	if waitErr := delsRunner.Wait(); waitErr != nil {
-		err = waitErr
-		return
-	}
-	delsWaited = true
-	rows = collector.rows
-	return
+	return nil
 }
 
 func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
@@ -1423,8 +1490,7 @@ func handleDelsOnLCA(
 	tarTblDef *plan.TableDef,
 	baseTblDef *plan.TableDef,
 	snapshot timestamp.Timestamp,
-	lcaTableId uint64,
-	pkIdxes []int,
+	expandedPkIdxes []int,
 	colTypes []types.Type,
 ) (rows [][]any, err error) {
 
@@ -1449,24 +1515,7 @@ func handleDelsOnLCA(
 		tableName = baseTblDef.Name
 	}
 
-	if lcaTableId == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"%s.%s and %s.%s should have LCA", tarTblDef.DbName, tarTblDef.Name, baseTblDef.DbName, baseTblDef.Name,
-		)
-	} else if lcaTableId == baseTblDef.TblId {
-		// base is the LCA
-		lcaTblDef = baseTblDef
-	} else if lcaTableId == tarTblDef.TblId {
-		// tar is the LCA
-		lcaTblDef = tarTblDef
-	} else {
-		if _, lcaTblDef, err = ses.GetTxnCompileCtx().ResolveById(lcaTableId, &plan2.Snapshot{
-			Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-			TS:     &snapshot,
-		}); err != nil {
-			return nil, err
-		}
-	}
+	lcaTblDef = baseTblDef
 
 	pkNames := lcaTblDef.Pkey.Names
 
@@ -1483,10 +1532,10 @@ func handleDelsOnLCA(
 				return nil, err
 			}
 
-			valsBuf.WriteString("row(")
+			valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 
 			for j := range tuple {
-				formatValIntoString(ses, tuple[j], colTypes[pkIdxes[j]], valsBuf)
+				formatValIntoString(ses, tuple[j], colTypes[expandedPkIdxes[j]], valsBuf)
 				if j != len(tuple)-1 {
 					valsBuf.WriteString(", ")
 				}
@@ -1504,7 +1553,7 @@ func handleDelsOnLCA(
 
 		pks := vector.MustFixedColNoTypeCheck[uint64](dels)
 		for i := range pks {
-			valsBuf.WriteString(fmt.Sprintf("row(%d)", pks[i]))
+			valsBuf.WriteString(fmt.Sprintf("row(%d,%d)", i, pks[i]))
 			if i != len(pks)-1 {
 				valsBuf.WriteString(", ")
 			}
@@ -1514,7 +1563,7 @@ func handleDelsOnLCA(
 	} else {
 		valsBuf.Reset()
 		for i := range dels.Length() {
-			valsBuf.WriteString("row(")
+			valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 			b := dels.GetRawBytesAt(i)
 			val := types.DecodeValue(b, dels.GetType().Oid)
 			switch x := val.(type) {
@@ -1538,11 +1587,11 @@ func handleDelsOnLCA(
 	}
 
 	sqlBuf.Reset()
-	sqlBuf.WriteString(fmt.Sprintf("select lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
-	sqlBuf.WriteString(fmt.Sprintf("join (values %s) as pks(%s) on ", valsBuf.String(), strings.Join(pkNames, ",")))
+	sqlBuf.WriteString(fmt.Sprintf("select pks.__idx_, lca.* from %s.%s%s as lca ", lcaTblDef.DbName, lcaTblDef.Name, mots))
+	sqlBuf.WriteString(fmt.Sprintf("right join (values %s) as pks(__idx_,%s) on ", valsBuf.String(), strings.Join(pkNames, ",")))
 	for i := range pkNames {
 		sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
-		switch typ := colTypes[pkIdxes[i]]; typ.Oid {
+		switch typ := colTypes[expandedPkIdxes[i]]; typ.Oid {
 		case types.T_int32:
 			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
 		case types.T_int64:
@@ -1565,18 +1614,38 @@ func handleDelsOnLCA(
 		}
 	}
 
+	sqlBuf.WriteString(" order by pks.__idx_")
+
 	sql = sqlBuf.String()
 	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), sql); err != nil {
 		return
 	}
 
+	notExist := func(cols []*vector.Vector, r int) bool {
+		exist := false
+		for _, col := range cols {
+			if !col.GetNulls().Contains(uint64(r)) {
+				exist = true
+				break
+			}
+		}
+		return !exist
+	}
+
+	sels := make([]int64, 0, 100)
 	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
 		for i := range rowCnt {
-			row := make([]any, len(cols)+2)
+			if notExist(cols[1:], i) {
+				idx := vector.GetFixedAtNoTypeCheck[int64](cols[0], i)
+				sels = append(sels, int64(idx))
+				continue
+			}
+
+			row := make([]any, len(colTypes)+2)
 			row[0] = tableName
 			row[1] = flag
-			for j := range cols {
-				row[j+2] = types.DecodeValue(cols[j].GetRawBytesAt(i), colTypes[j].Oid)
+			for j := range len(colTypes) {
+				row[j+2] = types.DecodeValue(cols[j+1].GetRawBytesAt(i), colTypes[j].Oid)
 			}
 			rows = append(rows, row)
 		}
@@ -1584,6 +1653,12 @@ func handleDelsOnLCA(
 	})
 
 	sqlRet.Close()
+
+	if len(sels) == 0 {
+		dels.CleanOnlyData()
+	} else {
+		dels.Shrink(sels, false)
+	}
 
 	return
 }
@@ -1706,108 +1781,11 @@ func buildShowDiffSchema(
 	return
 }
 
-func buildHashmapForTarTable(
+func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,
-	tarTblDef *plan.TableDef,
 	pkColIdx int,
-	tarHandle []engine.ChangesHandle,
-) (
-	dataHashmap databranchutils.BranchHashmap,
-	tombstoneHashmap databranchutils.BranchHashmap,
-	err error,
-) {
-
-	var (
-		dataBat      *batch.Batch
-		tombstoneBat *batch.Batch
-	)
-
-	// we need use the real pk col to merge inserts and deletes
-	//if tarTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-	//	pkIdxes = []int{int(tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName])}
-	//} else if tarTblDef.Pkey.CompPkeyCol != nil {
-	//	pkIdxes = []int{int(tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName])}
-	//}
-
-	defer func() {
-		if dataBat != nil {
-			dataBat.Clean(mp)
-		}
-
-		if tombstoneBat != nil {
-			tombstoneBat.Clean(mp)
-		}
-	}()
-
-	if dataHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
-		return
-	}
-
-	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
-		return
-	}
-
-	var (
-		insRow types.Tuple
-		sels   = make([]int64, 0, 10)
-		result []databranchutils.GetResult
-	)
-
-	for _, handle := range tarHandle {
-		for {
-			if dataBat, tombstoneBat, _, err = handle.Next(
-				ctx, mp,
-			); err != nil {
-				return
-			} else if dataBat == nil && tombstoneBat == nil {
-				// out of data
-				break
-			}
-
-			if dataBat != nil {
-				if err = dataHashmap.PutByVectors(dataBat.Vecs, []int{pkColIdx}); err != nil {
-					return
-				}
-				dataBat.Clean(mp)
-			}
-
-			if tombstoneBat != nil {
-				sels = sels[:0]
-				if result, err = dataHashmap.GetByVectors([]*vector.Vector{tombstoneBat.Vecs[0]}); err != nil {
-					return
-				}
-
-				for i := range result {
-					if result[i].Exists {
-						// insert -> delete (we should skip this situation)
-						// delete -> insert
-						if insRow, _, err = dataHashmap.DecodeRow(result[i].Rows[0]); err != nil {
-							return
-						}
-					}
-					sels = append(sels, int64(i))
-				}
-				tombstoneBat.Shrink(sels, false)
-
-				if err = tombstoneHashmap.PutByVectors(tombstoneBat.Vecs, []int{0}); err != nil {
-					return
-				}
-
-				tombstoneBat.Clean(mp)
-			}
-		}
-	}
-
-	return
-}
-
-func buildHashmapForBaseTable(
-	ctx context.Context,
-	mp *mpool.MPool,
-	lcaTableID uint64,
-	pkColIdx int,
-	baseHandle []engine.ChangesHandle,
+	handles []engine.ChangesHandle,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
 	tombstoneHashmap databranchutils.BranchHashmap,
@@ -1837,7 +1815,7 @@ func buildHashmapForBaseTable(
 		return
 	}
 
-	for _, handle := range baseHandle {
+	for _, handle := range handles {
 		for {
 			if dataBat, tombstoneBat, _, err = handle.Next(
 				ctx, mp,
@@ -1846,12 +1824,6 @@ func buildHashmapForBaseTable(
 			} else if dataBat == nil && tombstoneBat == nil {
 				// out of data
 				break
-			}
-
-			if lcaTableID == 0 && tombstoneBat != nil {
-				// if there has no LCA, the tombstones are not expected
-				err = moerr.NewInternalErrorNoCtx("tombstone are not expected from base table with no LCA")
-				return
 			}
 
 			if dataBat != nil {
