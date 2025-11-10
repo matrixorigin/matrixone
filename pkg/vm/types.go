@@ -356,6 +356,10 @@ func (op OpType) String() string {
 		return "Apply"
 	case PostDml:
 		return "PostDml"
+	case DedupJoin:
+		return "DedupJoin"
+	case RightDedupJoin:
+		return "RightDedupJoin"
 	default:
 		return "Unknown"
 	}
