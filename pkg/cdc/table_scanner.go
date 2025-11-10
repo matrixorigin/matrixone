@@ -39,8 +39,8 @@ import (
 const (
 	defaultSlowThreshold          = 10 * time.Minute
 	defaultPrintInterval          = 5 * time.Minute
-	defaultWatermarkCleanupPeriod = 2 * time.Second
-	defaultCleanupWarnThreshold   = 1 * time.Microsecond
+	defaultWatermarkCleanupPeriod = 5 * time.Minute
+	defaultCleanupWarnThreshold   = 5 * time.Second
 )
 
 type TableDetectorOptions struct {
