@@ -163,7 +163,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 
 	logutil.Info("ChangesHandle-Split request snapshot read",
-		zap.String("from", nextFrom.ToString()), //1762519148968452999-1
+		zap.String("from", nextFrom.ToString()),
 	)
 	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
