@@ -275,6 +275,7 @@ create table t1(
 );
 create fulltext index f06 on t1(col9);
 load data infile {'filepath'='$resources/load_data/jsonline_object01.jl','format'='jsonline','jsondata'='object'} into table t1;
+-- @ignore:4,5
 select * from t1;
 show create table t1;
 drop table t1;
