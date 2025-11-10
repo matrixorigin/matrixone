@@ -68,6 +68,7 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			cdcStateManager:      NewCDCStateManager(),
 			cleanupPeriod:        DefaultWatermarkCleanupPeriod,
 			cleanupWarn:          DefaultCleanupWarnThreshold,
+			nowFn:                time.Now,
 		}
 		detector.scanTableFn = detector.scanTable
 	})
@@ -224,6 +225,7 @@ type TableDetector struct {
 	cdcStateManager *CDCStateManager
 	cleanupPeriod   time.Duration
 	cleanupWarn     time.Duration
+	nowFn           func() time.Time
 }
 
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
@@ -444,7 +446,7 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 		"cdc.table_detector.cleanup_watermark_execute",
 		zap.String("sql", sql),
 	)
-	start := time.Now()
+	start := s.now()
 	res, err := s.exec.Exec(
 		cleanupCtx,
 		sql,
@@ -459,13 +461,13 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 		logutil.Error(
 			"cdc.table_detector.cleanup_watermark_failed",
 			zap.Error(err),
-			zap.Duration("duration", time.Since(start)),
+			zap.Duration("duration", s.now().Sub(start)),
 		)
 		return
 	}
 
 	if res.AffectedRows > 0 {
-		duration := time.Since(start)
+		duration := s.now().Sub(start)
 		fields := []zap.Field{
 			zap.Uint64("deleted-rows", res.AffectedRows),
 			zap.Duration("duration", duration),
@@ -483,6 +485,13 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 			)
 		}
 	}
+}
+
+func (s *TableDetector) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
 }
 
 func (s *TableDetector) Close() {
