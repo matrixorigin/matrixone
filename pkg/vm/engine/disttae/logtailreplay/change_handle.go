@@ -831,17 +831,21 @@ func getObjectsFromCheckpointEntries(
 			ctx,
 			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if obj.GetAppendable() {
-					if isTombstone {
-						tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
-					} else {
-						dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
+					if obj.CreateTime.GE(&start) {
+						if isTombstone {
+							tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						} else {
+							dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						}
 					}
 				}
 				if obj.GetCNCreated() {
-					if isTombstone {
-						tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
-					} else {
-						dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+					if obj.CreateTime.GE(&start) {
+						if isTombstone {
+							tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						} else {
+							dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						}
 					}
 				}
 				return
