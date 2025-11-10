@@ -72,6 +72,43 @@ type IndexUpdateTaskInfo struct {
 	LastUpdateAt types.Timestamp
 }
 
+// The optimal number of LISTS is estimated the the formula below:
+// For datasets with less than one million rows, use lists = rows / 1000.
+// For datasets with more than one million rows, use lists = sqrt(rows).
+//
+// Faiss guidelines suggest using between 30 * nlist and 256 * nlist vectors for training, ideally from a representative sample of your data.
+//
+// Case 1: ivf_train_percent * dsize < 30 * nlist, always re-index
+// Case 2: 30 * nlist < ivf_train_percent * dsize < 256 * nlist, re-index every week
+// Case 3:  dsize > 256 * nlist, re-index every 1 week and ivf_train_percent = (256 * nlist) / dsize
+func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, ivf_train_percent float64, nlist int64) (ok bool, err error) {
+
+	lower := float64(30 * nlist)
+	upper := float64(256 * nlist)
+
+	if t.Metadata == nil {
+		return true, nil
+	}
+
+	nsample := float64(dsize) * (ivf_train_percent / 100)
+
+	if nsample < lower {
+		return true, nil
+	} else if nsample < upper {
+		// reindex every week
+
+	} else {
+		// reindex every week and limit nsample to upper bound
+		ratio := (upper / float64(dsize)) * 100
+		err = t.Metadata.Modify("kmeans_train_percent", ratio)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
 type IndexUpdateTaskExecutor struct {
 	ctx         context.Context
 	cancelFunc  context.CancelFunc

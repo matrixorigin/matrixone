@@ -59,13 +59,13 @@ type IndexTableConfig struct {
 	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
-	EntriesTable       string `json:"entries"`
-	DataSize           int64  `json:"datasize"`
-	Nprobe             uint   `json:"nprobe"`
-	PKeyType           int32  `json:"pktype"`
-	KeyPartType        int32  `json:"parttype"`
-	KmeansTrainPercent int64  `json:"kmeans_train_percent"`
-	KmeansMaxIteration int64  `json:"kmeans_max_iteration"`
+	EntriesTable       string  `json:"entries"`
+	DataSize           int64   `json:"datasize"`
+	Nprobe             uint    `json:"nprobe"`
+	PKeyType           int32   `json:"pktype"`
+	KeyPartType        int32   `json:"parttype"`
+	KmeansTrainPercent float64 `json:"kmeans_train_percent"`
+	KmeansMaxIteration int64   `json:"kmeans_max_iteration"`
 }
 
 // HNSW specified parameters

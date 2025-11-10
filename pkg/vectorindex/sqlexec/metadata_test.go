@@ -23,7 +23,7 @@ import (
 )
 
 func TestResolveVariableFunc(t *testing.T) {
-	jstr := `{"cfg":{"kmeans_train_percent":{"t":"I", "v":10}, 
+	jstr := `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}, 
 	"kmeans_max_iteration":{"t":"I", "v":4}, 
 	"ivf_threads_build":{"t":"I", "v":23},
 	"action":{"t":"S", "v":"action string"},
@@ -37,7 +37,7 @@ func TestResolveVariableFunc(t *testing.T) {
 
 	v1, err := f("kmeans_train_percent", false, false)
 	require.Nil(t, err)
-	require.Equal(t, v1, any(int64(10)))
+	require.Equal(t, v1, any(float64(10)))
 
 	v2, err := f("kmeans_max_iteration", false, false)
 	require.Nil(t, err)
@@ -59,7 +59,7 @@ func TestResolveVariableFunc(t *testing.T) {
 func TestMetadataWriter(t *testing.T) {
 
 	writer := NewMetadataWriter()
-	writer.AddInt("kmeans_train_percent", 10)
+	writer.AddFloat("kmeans_train_percent", 10)
 	writer.AddInt("kmeans_max_iteration", 20)
 	writer.AddString("string_param", "hello")
 	writer.AddFloat("float_param", 44.56)
@@ -82,7 +82,7 @@ func TestMetadataWriter(t *testing.T) {
 
 	v1, err := f("kmeans_train_percent", false, false)
 	require.Nil(t, err)
-	require.Equal(t, v1, any(int64(10)))
+	require.Equal(t, v1, any(float64(10)))
 
 	v2, err := f("kmeans_max_iteration", false, false)
 	require.Nil(t, err)
@@ -95,5 +95,12 @@ func TestMetadataWriter(t *testing.T) {
 	v5, err := f("string_param", false, false)
 	require.Nil(t, err)
 	require.Equal(t, v5, any("hello"))
+
+	err = m.Modify("kmeans_train_percent", 0.2)
+	require.Nil(t, err)
+
+	v6, err := m.ResolveVariableFunc("kmeans_train_percent", false, false)
+	require.Nil(t, err)
+	require.Equal(t, any(float64(0.2)), v6)
 
 }

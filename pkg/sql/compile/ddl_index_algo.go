@@ -300,7 +300,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		if err != nil {
 			return err
 		}
-		cfg.KmeansTrainPercent = val.(int64)
+		cfg.KmeansTrainPercent = val.(float64)
 
 		val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
 		if err != nil {

@@ -125,6 +125,49 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 	return nil, moerr.NewInternalErrorNoCtx("invalid configuration type")
 }
 
+func (m *Metadata) Modify(varName string, v any) error {
+
+	if m.bj.IsNull() {
+		return moerr.NewInternalErrorNoCtx("bytejson is null")
+	}
+
+	bj := m.bj
+
+	path, err := bytejson.ParseJsonPath(fmt.Sprintf("$.cfg.%s", varName))
+	if err != nil {
+		return err
+	}
+
+	var cfgvalue string
+	switch v.(type) {
+	case float32, float64:
+		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%f}`, Type_F64, v)
+	case int, int32, int64:
+		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%f}`, Type_I64, v)
+	case string:
+		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":"%s"}`, Type_String, v)
+	default:
+		return moerr.NewInternalErrorNoCtx("invalid value type")
+	}
+
+	val, err := bytejson.ParseFromString(cfgvalue)
+	if err != nil {
+		return err
+	}
+
+	bj, err = bj.Modify([]*bytejson.Path{&path}, []bytejson.ByteJson{val}, bytejson.JsonModifyReplace)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(cfgvalue)
+	fmt.Println(bj.String())
+
+	m.bj = bj
+
+	return nil
+}
+
 type ConfigValue struct {
 	T string `json:"t"`
 	V any    `json:"v"`

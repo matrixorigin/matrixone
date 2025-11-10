@@ -3583,8 +3583,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("kmeans_train_percent", 1, 100, false),
-		Default:           int64(10),
+		Type:              InitSystemVariableDoubleType("kmeans_train_percent", 0, 100),
+		Default:           float64(10),
 	},
 	"kmeans_max_iteration": {
 		Name:              "kmeans_max_iteration",
