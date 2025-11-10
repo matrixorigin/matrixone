@@ -1492,8 +1492,6 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 	bat.Vecs = append(bat.Vecs, commitTSVec)
 }
 
-
-
 // TestGetObjectsFromCheckpointEntries exposes getObjectsFromCheckpointEntries for tests in other packages.
 func TestGetObjectsFromCheckpointEntries(
 	ctx context.Context,
@@ -1521,7 +1519,6 @@ func SetCheckpointReaderFactoryForTest(factory func(uint32, objectio.Location, u
 		newCKPReaderWithTableID = old
 	}
 }
-
 
 type checkpointEntryReader interface {
 	ReadMeta(context.Context) error
