@@ -47,6 +47,11 @@ type BranchHashmap interface {
 	// encoded payloads that can be decoded via DecodeRow to recover the original
 	// column values.
 	PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error)
+	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
+	// from ForEach. It returns the same payloads PopByVectors would return for the
+	// provided key and removes either all matching rows or a single row depending
+	// on removeAll.
+	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
 	// ForEach iterates through all in-memory and spilled entries, invoking fn with
 	// the encoded key and all rows associated with that key.
 	ForEach(fn func(key []byte, rows [][]byte) error) error
@@ -381,6 +386,42 @@ func (bh *branchHashmap) GetByVectors(keyVecs []*vector.Vector) ([]GetResult, er
 
 func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error) {
 	return bh.lookupByVectors(keyVecs, &removeAll)
+}
+
+func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error) {
+	var result GetResult
+
+	bh.mu.Lock()
+	defer bh.mu.Unlock()
+
+	if bh.closed {
+		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	if len(bh.keyTypes) == 0 {
+		return result, nil
+	}
+
+	hash := bh.hashKey(encodedKey)
+	res := &result
+	res.Rows = res.Rows[:0]
+	plan := newRemovalPlan(removeAll)
+
+	res.Rows = bh.collectFromMemory(hash, encodedKey, res.Rows, plan)
+
+	if len(bh.spills) > 0 {
+		var spillBuf []byte
+		for _, part := range bh.spills {
+			if plan != nil && !plan.hasRemaining() {
+				break
+			}
+			if err := part.collect(hash, encodedKey, &res.Rows, &spillBuf, plan); err != nil {
+				return result, err
+			}
+		}
+	}
+
+	res.Exists = len(res.Rows) > 0
+	return result, nil
 }
 
 func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bool) ([]GetResult, error) {
@@ -1035,6 +1076,9 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
 		p.EncodeStringType(vec.GetBytesAt(row))
+	case types.T_TS:
+		v := vector.GetFixedAtNoTypeCheck[types.TS](vec, row)
+		p.EncodeStringType(v[:])
 	default:
 		raw := vec.GetRawBytesAt(row)
 		tmp := make([]byte, len(raw))
