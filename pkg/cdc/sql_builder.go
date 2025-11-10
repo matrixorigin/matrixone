@@ -164,6 +164,14 @@ const (
 		"db_name = '%s' AND " +
 		"table_name = '%s'"
 
+	CDCClearTaskTableErrorsSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET err_msg = '' " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"err_msg != ''"
+
 	CDCGetWatermarkWhereSqlTemplate = "SELECT " +
 		"%s " +
 		"FROM " +
@@ -309,18 +317,17 @@ const (
 	CDCGetWatermarkWhereSqlTemplate_Idx             = 17
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 18
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 19
+	CDCClearTaskTableErrorsSQL_Idx                  = 20
+	CDCInsertMOISCPLogSqlTemplate_Idx               = 21
+	CDCUpdateMOISCPLogSqlTemplate_Idx               = 22
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx         = 23
+	CDCDeleteMOISCPLogSqlTemplate_Idx               = 24
+	CDCSelectMOISCPLogSqlTemplate_Idx               = 25
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx        = 26
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx        = 27
+	CDCGetTableIDTemplate_Idx                       = 28
 
-	CDCInsertMOISCPLogSqlTemplate_Idx        = 20
-	CDCUpdateMOISCPLogSqlTemplate_Idx        = 21
-	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx  = 22
-	CDCDeleteMOISCPLogSqlTemplate_Idx        = 23
-	CDCSelectMOISCPLogSqlTemplate_Idx        = 24
-	CDCSelectMOISCPLogByTableSqlTemplate_Idx = 25
-	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx = 26
-
-	CDCGetTableIDTemplate_Idx = 27
-
-	CDCSqlTemplateCount = 28
+	CDCSqlTemplateCount = 29
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -419,15 +426,23 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"account_id",
 		},
 	},
-
+	CDCGetWatermarkWhereSqlTemplate_Idx: {
+		SQL: CDCGetWatermarkWhereSqlTemplate,
+	},
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx: {
+		SQL: CDCOnDuplicateUpdateWatermarkTemplate,
+	},
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
+		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
+	},
+	CDCClearTaskTableErrorsSQL_Idx: {
+		SQL: CDCClearTaskTableErrorsSqlTemplate,
+	},
 	CDCInsertMOISCPLogSqlTemplate_Idx: {
 		SQL: CDCInsertMOISCPLogSqlTemplate,
 	},
 	CDCUpdateMOISCPLogSqlTemplate_Idx: {
 		SQL: CDCUpdateMOISCPLogSqlTemplate,
-	},
-	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx: {
-		SQL: CDCUpdateMOISCPLogJobSpecSqlTemplate,
 	},
 	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx: {
 		SQL: CDCUpdateMOISCPLogDropAtSqlTemplate,
@@ -457,14 +472,8 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"job_id",
 		},
 	},
-	CDCGetWatermarkWhereSqlTemplate_Idx: {
-		SQL: CDCGetWatermarkWhereSqlTemplate,
-	},
-	CDCOnDuplicateUpdateWatermarkTemplate_Idx: {
-		SQL: CDCOnDuplicateUpdateWatermarkTemplate,
-	},
-	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
-		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogJobSpecSqlTemplate,
 	},
 	CDCGetTableIDTemplate_Idx: {
 		SQL: CDCGetTableIDTemplate,
@@ -631,6 +640,18 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 		)
 	}
 	return sql
+}
+
+// ClearTaskTableErrorsSQL generates SQL to clear error messages for all tables in a task
+func (b cdcSQLBuilder) ClearTaskTableErrorsSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCClearTaskTableErrorsSQL_Idx].SQL,
+		accountId,
+		escapeSQLString(taskId),
+	)
 }
 
 // ------------------------------------------------------------------------------------------------
