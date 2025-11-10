@@ -810,7 +810,9 @@ func getObjectsFromCheckpointEntries(
 	for _, entry := range checkpoint {
 		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
 		readers = append(readers, reader)
-		ioutil.Prefetch(sid, fs, entry.GetLocation())
+		if loc := entry.GetLocation(); !loc.IsEmpty() {
+			ioutil.Prefetch(sid, fs, loc)
+		}
 	}
 	for _, reader := range readers {
 		if err = reader.ReadMeta(ctx); err != nil {
