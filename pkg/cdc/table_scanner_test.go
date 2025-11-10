@@ -17,7 +17,6 @@ package cdc
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +41,25 @@ func TestGetTableScanner(t *testing.T) {
 	assert.NotNil(t, GetTableDetector("cnUUID"))
 }
 
+func TestApplyTableDetectorOptions(t *testing.T) {
+	opts := applyTableDetectorOptions(
+		WithTableDetectorSlowThreshold(time.Millisecond),
+		WithTableDetectorPrintInterval(2*time.Millisecond),
+		WithTableDetectorCleanupPeriod(3*time.Millisecond),
+		WithTableDetectorCleanupWarnThreshold(4*time.Millisecond),
+	)
+	assert.Equal(t, time.Millisecond, opts.SlowThreshold)
+	assert.Equal(t, 2*time.Millisecond, opts.PrintInterval)
+	assert.Equal(t, 3*time.Millisecond, opts.CleanupPeriod)
+	assert.Equal(t, 4*time.Millisecond, opts.CleanupWarnThreshold)
+
+	defaultOpts := applyTableDetectorOptions()
+	assert.Equal(t, defaultSlowThreshold, defaultOpts.SlowThreshold)
+	assert.Equal(t, defaultPrintInterval, defaultOpts.PrintInterval)
+	assert.Equal(t, defaultWatermarkCleanupPeriod, defaultOpts.CleanupPeriod)
+	assert.Equal(t, defaultCleanupWarnThreshold, defaultOpts.CleanupWarnThreshold)
+}
+
 func TestTableScanner1(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -62,18 +80,7 @@ func TestTableScanner1(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil)
 
-	td := &TableDetector{
-		Mutex:                sync.Mutex{},
-		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-		exec:                 mockSqlExecutor,
-	}
+	td := newTableDetector(mockSqlExecutor)
 	defer td.Close()
 
 	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
@@ -151,18 +158,7 @@ func TestScanAndProcess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	td := &TableDetector{
-		Mutex:                sync.Mutex{},
-		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-		exec:                 nil,
-	}
+	td := newTableDetector(nil)
 	defer td.Close()
 
 	tables := map[uint32]TblMap{
@@ -205,19 +201,8 @@ func TestProcessCallBack(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	td := &TableDetector{
-		Mutex:                sync.Mutex{},
-		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-		exec:                 nil,
-		lastMp:               make(map[uint32]TblMap),
-	}
+	td := newTableDetector(nil)
+	td.lastMp = make(map[uint32]TblMap)
 	defer td.Close()
 
 	tables := map[uint32]TblMap{
@@ -247,6 +232,44 @@ func TestProcessCallBack(t *testing.T) {
 
 	assert.NotNil(t, td.lastMp, "lastMp should not be cleared on error")
 	assert.Equal(t, tables, td.lastMp, "lastMp should remain unchanged")
+}
+
+func TestTableDetectorCleanupWatermarks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockExec := mock_executor.NewMockSQLExecutor(ctrl)
+	td := newTableDetector(
+		mockExec,
+		WithTableDetectorCleanupWarnThreshold(time.Millisecond),
+	)
+	defer td.Close()
+
+	td.SubscribedAccountIds[1] = []string{"task1"}
+
+	mockExec.EXPECT().
+		Exec(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+			assert.Contains(t, sql, "DELETE w FROM")
+			assert.Contains(t, sql, "account_id")
+			return executor.Result{AffectedRows: 5}, nil
+		}).
+		Times(1)
+
+	td.cleanupOrphanWatermarks(context.Background())
+}
+
+func TestTableDetectorCleanupWatermarksNoAccounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockExec := mock_executor.NewMockSQLExecutor(ctrl)
+	td := newTableDetector(mockExec)
+	defer td.Close()
+
+	mockExec.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	td.cleanupOrphanWatermarks(context.Background())
 }
 
 func TestTableScanner_UpdateTableInfo(t *testing.T) {
@@ -293,18 +316,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		gomock.Any(),
 	).Return(res2, nil)
 
-	td := &TableDetector{
-		Mutex:                sync.Mutex{},
-		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-		exec:                 mockSqlExecutor,
-	}
+	td := newTableDetector(mockSqlExecutor)
 	defer td.Close()
 	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
 		return nil

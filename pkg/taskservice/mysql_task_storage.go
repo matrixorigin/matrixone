@@ -1069,7 +1069,9 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	) (int, error),
 	condition ...Condition,
 ) (int, error) {
-	if taskFrameworkDisabled() || taskCollector == nil {
+	frameworkDisabled := taskFrameworkDisabled()
+
+	if taskCollector == nil {
 		return 0, nil
 	}
 	var affectedCdcRow, affectedTaskRow int
@@ -1100,7 +1102,28 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	}
 
 	if len(taskKeyMap) == 0 {
+		logutil.Debug("taskservice.update_cdc_task.no_keys",
+			zap.String("target-status", targetStatus.String()),
+			zap.Bool("framework-disabled", frameworkDisabled),
+		)
 		return 0, nil
+	}
+
+	logutil.Debug("taskservice.update_cdc_task.collector_done",
+		zap.String("target-status", targetStatus.String()),
+		zap.Int("affected-cdc-row", affectedCdcRow),
+		zap.Int("key-count", len(taskKeyMap)),
+		zap.Bool("framework-disabled", frameworkDisabled),
+	)
+
+	if frameworkDisabled {
+		logutil.Debug("taskservice.update_cdc_task.skip_daemon_update",
+			zap.String("target-status", targetStatus.String()),
+			zap.Int("affected-cdc-row", affectedCdcRow),
+			zap.Int("key-count", len(taskKeyMap)),
+		)
+		// Task framework disabled: only modify metadata, skip daemon task state updates.
+		return affectedCdcRow, nil
 	}
 
 	//step3: collect daemon task that we want to update
