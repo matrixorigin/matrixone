@@ -40,8 +40,6 @@ select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.c
 uid    lmethod    email
 user2    basic    xx@mo.cn
 set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
-prepare err1 from @novar;
-internal error: the user variable novar does not exist
 prepare s1 from @idxsql;
 execute s1;
 count(*)
@@ -276,8 +274,8 @@ count(*)
 6
 desc vector_test;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null    auto_increment
-vector    VECF32(3)    YES        null
+id    INT(32)    NO    PRI    null    auto_increment    
+vector    VECF32(3)    YES        null        
 use test03_new;
 select * from vector_index_01;
 a    b    c
@@ -297,7 +295,7 @@ blue
 green
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('red','blue','green')    YES        null
+col1    ENUM('red','blue','green')    YES        null        
 use test01;
 drop table src;
 use test02;
@@ -334,8 +332,8 @@ count(*)
 6
 desc vector_test;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null    auto_increment
-vector    VECF32(3)    YES        null
+id    INT(32)    NO    PRI    null    auto_increment    
+vector    VECF32(3)    YES        null        
 use test03_new;
 select * from vector_index_01;
 a    b    c
@@ -494,20 +492,20 @@ Table    Create Table
 t2    CREATE TABLE `t2` (\n  `id` int DEFAULT NULL,\n  `category` int NOT NULL DEFAULT 0,\n  `county` int NOT NULL DEFAULT 0,\n  `state` int NOT NULL DEFAULT 0,\n  `phones` int NOT NULL DEFAULT 0,\n  `nophones` int NOT NULL DEFAULT 0\n)
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES        null
-token    VARCHAR(100)    NO
-count    INT(32)    NO        0
-qty    INT(32)    YES        null
-phone    CHAR(1)    NO
-times    DATETIME(0)    NO        2000-01-01 00:00:00
+id    INT(32)    YES        null        
+token    VARCHAR(100)    NO                
+count    INT(32)    NO        0        
+qty    INT(32)    YES        null        
+phone    CHAR(1)    NO                
+times    DATETIME(0)    NO        2000-01-01 00:00:00        
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES        null
-category    INT(32)    NO        0
-county    INT(32)    NO        0
-state    INT(32)    NO        0
-phones    INT(32)    NO        0
-nophones    INT(32)    NO        0
+id    INT(32)    YES        null        
+category    INT(32)    NO        0        
+county    INT(32)    NO        0        
+state    INT(32)    NO        0        
+phones    INT(32)    NO        0        
+nophones    INT(32)    NO        0        
 use test06;
 show tables;
 Tables_in_test06
@@ -634,20 +632,20 @@ Table    Create Table
 t2    CREATE TABLE `t2` (\n  `id` int DEFAULT NULL,\n  `category` int NOT NULL DEFAULT 0,\n  `county` int NOT NULL DEFAULT 0,\n  `state` int NOT NULL DEFAULT 0,\n  `phones` int NOT NULL DEFAULT 0,\n  `nophones` int NOT NULL DEFAULT 0\n)
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES        null
-token    VARCHAR(100)    NO
-count    INT(32)    NO        0
-qty    INT(32)    YES        null
-phone    CHAR(1)    NO
-times    DATETIME(0)    NO        2000-01-01 00:00:00
+id    INT(32)    YES        null        
+token    VARCHAR(100)    NO                
+count    INT(32)    NO        0        
+qty    INT(32)    YES        null        
+phone    CHAR(1)    NO                
+times    DATETIME(0)    NO        2000-01-01 00:00:00        
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES        null
-category    INT(32)    NO        0
-county    INT(32)    NO        0
-state    INT(32)    NO        0
-phones    INT(32)    NO        0
-nophones    INT(32)    NO        0
+id    INT(32)    YES        null        
+category    INT(32)    NO        0        
+county    INT(32)    NO        0        
+state    INT(32)    NO        0        
+phones    INT(32)    NO        0        
+nophones    INT(32)    NO        0        
 use test06_new;
 use test07_new;
 select * from t1;
@@ -667,9 +665,9 @@ id    vecf64_3    vecf64_5
 4    [0.9260021, 0.26637346, 0.06567037]    [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
 desc vtab32;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null    auto_increment
-vecf32_3    VECF32(3)    YES        null
-vecf32_5    VECF32(5)    YES        null
+id    INT(32)    NO    PRI    null    auto_increment    
+vecf32_3    VECF32(3)    YES        null        
+vecf32_5    VECF32(5)    YES        null        
 show create table vtab64;
 Table    Create Table
 vtab64    CREATE TABLE `vtab64` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `vecf64_3` vecf64(3) DEFAULT NULL,\n  `vecf64_5` vecf64(5) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
@@ -701,9 +699,9 @@ create table t2(a int not null, b varchar(20), c char(20));
 create view v2 as select * from t2;
 desc v2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO        null
-b    VARCHAR(20)    YES        null
-c    CHAR(20)    YES        null
+a    INT(32)    NO        null        
+b    VARCHAR(20)    YES        null        
+c    CHAR(20)    YES        null        
 drop snapshot if exists sp09;
 create snapshot sp09 for account;
 drop database if exists test10;
@@ -825,9 +823,9 @@ employeenumber    lastname    firstname    extension    email    officecode    r
 1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null
-json1    JSON(0)    YES        null
-json2    JSON(0)    YES        null
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES        null        
+json2    JSON(0)    YES        null        
 select count(*) from vector_index_07;
 count(*)
 5
@@ -903,9 +901,9 @@ employeenumber    lastname    firstname    extension    email    officecode    r
 1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null
-json1    JSON(0)    YES        null
-json2    JSON(0)    YES        null
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES        null        
+json2    JSON(0)    YES        null        
 select count(*) from vector_index_07;
 count(*)
 5
@@ -980,9 +978,9 @@ employeenumber    lastname    firstname    extension    email    officecode    r
 1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null
-json1    JSON(0)    YES        null
-json2    JSON(0)    YES        null
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES        null        
+json2    JSON(0)    YES        null        
 select count(*) from vector_index_07;
 count(*)
 5
