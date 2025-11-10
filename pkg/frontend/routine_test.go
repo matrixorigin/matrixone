@@ -85,6 +85,7 @@ type result struct {
 	isSleepSql bool
 	seconds    int
 	resultX    atomic.Int32
+	startedCh  chan struct{}
 }
 
 var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
@@ -111,6 +112,13 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
+				if res.startedCh != nil {
+					select {
+					case res.startedCh <- struct{}{}:
+					default:
+					}
+				}
+				res.resultX.Store(0)
 				topCtx := proc.GetTopContext()
 				select {
 				case <-time.After(time.Duration(res.seconds) * time.Second):
@@ -220,7 +228,6 @@ func Test_ConnectionCount(t *testing.T) {
 	cCounter := metric.ConnectionCounter(sysAccountName)
 	cCounter.Set(0)
 
-	time.Sleep(time.Second * 2)
 	conn1, err = openDbConn(t, 6001)
 	require.NoError(t, err)
 
@@ -235,28 +242,27 @@ func Test_ConnectionCount(t *testing.T) {
 
 	registerConn(clientConn2)
 
-	time.Sleep(time.Second * 2)
 	conn2, err = openDbConn(t, 6001)
 	require.NoError(t, err)
 
-	time.Sleep(time.Second * 2)
+	waitForClientCount := func(expected int) {
+		require.Eventually(t, func() bool {
+			return rm.clientCount() == expected
+		}, time.Second, 10*time.Millisecond)
+	}
 
-	cc := rm.clientCount()
-	assert.GreaterOrEqual(t, cc, 2)
+	waitForGauge := func(expected float64) {
+		require.Eventually(t, func() bool {
+			var metric pcg.Metric
+			if err := cCounter.Write(&metric); err != nil {
+				return false
+			}
+			return metric.Gauge.GetValue() == expected
+		}, time.Second, 10*time.Millisecond)
+	}
 
-	x := &pcg.Metric{}
-	err = cCounter.Write(x)
-	assert.NoError(t, err)
-	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(2))
-
-	time.Sleep(time.Second * 2)
-
-	cc = rm.clientCount()
-	assert.GreaterOrEqual(t, cc, 0)
-
-	err = cCounter.Write(x)
-	assert.NoError(t, err)
-	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(0))
+	waitForClientCount(2)
+	waitForGauge(2)
 
 	time.Sleep(time.Millisecond * 10)
 
@@ -269,5 +275,9 @@ func Test_ConnectionCount(t *testing.T) {
 	serverConn.Close()
 	clientConn2.Close()
 	serverConn2.Close()
+
+	waitForClientCount(0)
+	waitForGauge(0)
+
 	wg.Wait()
 }

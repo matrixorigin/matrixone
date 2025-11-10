@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,8 +37,8 @@ import (
 )
 
 const (
-	DefaultSlowThreshold = 10 * time.Minute
-	DefaultPrintInterval = 5 * time.Minute
+	DefaultSlowThreshold = 5 * time.Minute // Reduced from 10 minutes for earlier detection
+	DefaultPrintInterval = 1 * time.Minute // Reduced from 5 minutes for more frequent updates
 )
 
 var (
@@ -66,6 +67,14 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 		}
 		detector.scanTableFn = detector.scanTable
 	})
+
+	// Defensive: Ensure scanTableFn is always set (for testing scenarios)
+	// In production, this should already be set by once.Do above
+	// In tests with mocks, this prevents nil pointer dereference
+	if detector != nil && detector.scanTableFn == nil {
+		detector.scanTableFn = detector.scanTable
+	}
+
 	return detector
 }
 
@@ -131,25 +140,54 @@ func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs 
 func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	slowRunners := ""
+
 	now := time.Now()
+	totalRunners := len(s.activeRunners)
+	activeRunners := 0
+	slowRunners := 0
+	completedRunners := 0
+	slowRunnersDetails := ""
+
 	for info, state := range s.activeRunners {
-		if state.EndAt.Equal(time.Time{}) && state.CreateAt.Before(now.Add(-slowThreshold)) {
-			slowRunners = fmt.Sprintf(
-				"%s, %v %v->%v %v",
-				slowRunners,
-				info,
-				state.FromTs.ToString(),
-				state.ToTs.ToString(),
-				time.Since(state.CreateAt),
-			)
+		// Count active vs completed runners
+		if state.EndAt.Equal(time.Time{}) {
+			activeRunners++
+
+			// Check if slow
+			if state.CreateAt.Before(now.Add(-slowThreshold)) {
+				slowRunners++
+				duration := time.Since(state.CreateAt)
+				slowRunnersDetails += fmt.Sprintf(
+					"\n  %s: from=%s to=%s duration=%v",
+					info,
+					state.FromTs.ToString(),
+					state.ToTs.ToString(),
+					duration,
+				)
+			}
+		} else {
+			completedRunners++
 		}
 	}
+
+	// Always log summary
 	logutil.Info(
-		"CDC-State",
-		zap.Any("active runner count", len(s.activeRunners)),
-		zap.Any("slow runners", slowRunners),
+		"cdc.table_detector.state_summary",
+		zap.Int("total-runners", totalRunners),
+		zap.Int("active-runners", activeRunners),
+		zap.Int("completed-runners", completedRunners),
+		zap.Int("slow-runners", slowRunners),
+		zap.Duration("slow-threshold", slowThreshold),
 	)
+
+	// Log slow runners details if any
+	if slowRunners > 0 {
+		logutil.Warn(
+			"cdc.table_detector.slow_runners",
+			zap.Int("count", slowRunners),
+			zap.String("details", slowRunnersDetails),
+		)
+	}
 }
 
 type TableDetector struct {
@@ -211,7 +249,7 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 	}
 	s.Callbacks[id] = cb
 	logutil.Info(
-		"CDC-TableDetector-Register",
+		"cdc.table_detector.register",
 		zap.String("task-id", id),
 		zap.Uint32("account-id", accountId),
 	)
@@ -262,20 +300,20 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	delete(s.Callbacks, id)
-	if len(s.Callbacks) == 0 {
+	if len(s.Callbacks) == 0 && s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
 	}
 
 	logutil.Info(
-		"CDC-TableDetector-UnRegister",
+		"cdc.table_detector.unregister",
 		zap.String("task-id", id),
 	)
 }
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
-	logutil.Info("CDC-TableDetector-Scan-Start")
-	defer logutil.Info("CDC-TableDetector-Scan-End")
+	logutil.Info("cdc.table_detector.scan_start")
+	defer logutil.Info("cdc.table_detector.scan_end")
 
 	var tickerDuration, retryTickerDuration time.Duration
 	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
@@ -325,8 +363,14 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 }
 
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
+	// Defensive: ensure scanTableFn is set (for testing scenarios)
+	if s.scanTableFn == nil {
+		logutil.Warn("cdc.table_detector.scan_skipped", zap.String("reason", "scanTableFn is nil"))
+		return
+	}
+
 	if err := s.scanTableFn(); err != nil {
-		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
+		logutil.Error("cdc.table_detector.scan_error", zap.Error(err))
 		return
 	}
 
@@ -352,9 +396,9 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	defer s.mu.Unlock()
 
 	if err != nil {
-		logutil.Warn("CDC-TableDetector-Callback-Failed", zap.Error(err))
+		logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
 	} else {
-		logutil.Info("CDC-TableDetector-Callback-Success")
+		logutil.Info("cdc.table_detector.callback_success")
 		s.lastMp = nil
 	}
 
@@ -368,7 +412,7 @@ func (s *TableDetector) Close() {
 }
 
 func (s *TableDetector) scanTable() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseTableDetectorScan)
 	defer cancel()
 	var (
 		accountIds string
