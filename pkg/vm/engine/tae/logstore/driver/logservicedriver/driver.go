@@ -93,7 +93,7 @@ type LogServiceDriver struct {
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	start = time.Now()
+	start := time.Now()
 	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
