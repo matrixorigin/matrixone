@@ -1765,7 +1765,7 @@ func TestPartitionChangesHandleStaleRead(t *testing.T) {
 
 		// Try to collect changes starting from a time that's been GC'd
 		// Since t1.Prev() < t2 (minTS of checkpoint entry), this should trigger the stale read error
-		handle, err := rel.CollectChanges(ctx, t1.Prev(), t3.Next(), true, mp)
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), t3.Next(), mp)
 
 		// We expect either:
 		// 1. An error during CollectChanges (stale read error)
