@@ -122,32 +122,33 @@ type wrappedClient struct {
 }
 
 func NewClient(
-	factory LogServiceClientFactory, bufSize int, retryTimes int, retryInterval, retryDuration time.Duration,
-) *wrappedClient {
+	factory LogServiceClientFactory,
+	bufSize int,
+	retryTimes int,
+	retryInterval time.Duration,
+	retryDuration time.Duration,
+) (client *wrappedClient, err error) {
+	client = new(wrappedClient)
 	var (
-		err    error
-		client BackendClient
+		startTime = time.Now()
+		wrapped   BackendClient
 	)
-	startTime := time.Now()
 	for i := 0; i < retryTimes; i++ {
-		if time.Since(startTime) > retryDuration {
+		if wrapped, err = factory(); err == nil {
 			break
 		}
-		client, err = factory()
-		if err == nil {
+		logutil.Errorf("WAL-Replay failed to create log service client: %v", err)
+		if time.Since(startTime) > retryDuration {
 			break
-		} else {
-			logutil.Errorf("WAL-Replay failed to create log service client: %v", err)
 		}
 		time.Sleep(retryInterval)
 	}
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return &wrappedClient{
-		wrapped: client,
-		buf:     client.GetLogRecord(bufSize),
-	}
+	client.wrapped = wrapped
+	client.buf = wrapped.GetLogRecord(bufSize)
+	return client, nil
 }
 
 func (c *wrappedClient) Close() {
@@ -254,8 +255,32 @@ func newClientPool(cfg *Config) *clientPool {
 		writeTokenController: newTokenController(uint64(maxPenddingWrites)),
 	}
 
+	type initResult struct {
+		idx    int
+		client *wrappedClient
+		err    error
+	}
+	results := make(chan initResult, cfg.ClientMaxCount)
+	var wg sync.WaitGroup
 	for i := 0; i < cfg.ClientMaxCount; i++ {
-		pool.clients[i] = NewClient(cfg.ClientFactory, cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			client, err := NewClient(cfg.ClientFactory, cfg.ClientBufSize, cfg.ClientRetryTimes, cfg.ClientRetryInterval, cfg.ClientRetryDuration)
+			results <- initResult{
+				idx:    idx,
+				client: client,
+				err:    err,
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	for res := range results {
+		if res.err != nil {
+			panic(res.err)
+		}
+		pool.clients[res.idx] = res.client
 	}
 	return pool
 }
@@ -288,8 +313,7 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	if c.closed {
 		return nil, ErrClientPoolClosed
 	}
-	client := NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, DefaultRetryTimes, DefaultRetryInterval, DefaultRetryDuration)
-	return client, nil
+	return NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
 }
 
 func (c *clientPool) Get() (client *wrappedClient, err error) {

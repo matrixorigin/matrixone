@@ -146,53 +146,183 @@ func RequestMultipleCn(ctx context.Context,
 	if handleValidResponse == nil {
 		return moerr.NewInternalError(ctx, "invalid response handle function")
 	}
-	nodesLeft := len(nodes)
-	responseChan := make(chan nodeResponse, nodesLeft)
+
+	// If the context is already canceled, return immediately
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Count valid nodes (non-empty addresses)
+	validNodes := 0
+	for _, node := range nodes {
+		if len(node) > 0 {
+			validNodes++
+		}
+	}
+
+	responseChan := make(chan nodeResponse, validNodes)
 
 	var retErr error
+	var successCount int
+	var failedNodes []string
+
+	// Track how many goroutines were actually started
+	var wg sync.WaitGroup
 
 	for _, node := range nodes {
 		// Invalid node address, ignore it.
 		if len(node) == 0 {
-			nodesLeft--
 			continue
 		}
 
+		wg.Add(1)
 		go func(addr string) {
+			defer wg.Done()
 			// gen request and send it
-			if genRequest != nil {
-				req := genRequest()
-				logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), node)
-				resp, err := qc.SendMessage(ctx, addr, req)
-				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-			}
+			// genRequest is guaranteed to be non-nil (checked at function entry)
+			req := genRequest()
+			logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), addr)
+			resp, err := qc.SendMessage(ctx, addr, req)
+			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
 		}(node)
 	}
 
 	// Wait for all responses.
-	for nodesLeft > 0 {
+	// Important: Always drain all responses to avoid goroutine leaks,
+	// even when context is canceled (goroutines may still write to channel)
+	responsesReceived := 0
+	for responsesReceived < validNodes {
 		select {
 		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*pb.Response)
-				if ok {
-					//save response
+			responsesReceived++
+			if res.err != nil {
+				// Record first error
+				if retErr == nil {
+					retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+				}
+				failedNodes = append(failedNodes, res.nodeAddr)
+				// Notify caller about invalid response (network error, etc.)
+				if handleInvalidResponse != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								logger.GetLogger("RequestMultipleCn").Errorf(
+									"[handler panic] %s handleInvalidResponse panicked for %s: %v",
+									qc.ServiceID(), res.nodeAddr, r,
+								)
+							}
+						}()
+						handleInvalidResponse(res.nodeAddr)
+					}()
+				}
+				continue
+			}
+
+			// Only process response when successful
+			queryResp, ok := res.response.(*pb.Response)
+			if ok {
+				//save response
+				// Protect against panic in user-provided handler
+				var handlerPanicked bool
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							handlerPanicked = true
+							logger.GetLogger("RequestMultipleCn").Errorf(
+								"[handler panic] %s handleValidResponse panicked for %s: %v",
+								qc.ServiceID(), res.nodeAddr, r,
+							)
+						}
+					}()
 					handleValidResponse(res.nodeAddr, queryResp)
-					if queryResp != nil {
-						qc.Release(queryResp)
+				}()
+				if queryResp != nil {
+					qc.Release(queryResp)
+				}
+
+				// If handler panicked, treat as failure
+				if handlerPanicked {
+					if retErr == nil {
+						retErr = moerr.NewInternalErrorf(ctx, "handleValidResponse panicked for %s", res.nodeAddr)
+					}
+					failedNodes = append(failedNodes, res.nodeAddr)
+					// Notify caller about invalid response (handler panic)
+					if handleInvalidResponse != nil {
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									logger.GetLogger("RequestMultipleCn").Errorf(
+										"[handler panic] %s handleInvalidResponse panicked for %s: %v",
+										qc.ServiceID(), res.nodeAddr, r,
+									)
+								}
+							}()
+							handleInvalidResponse(res.nodeAddr)
+						}()
 					}
 				} else {
-					if handleInvalidResponse != nil {
+					successCount++
+				}
+			} else {
+				// Response type assertion failed - this is an error condition
+				if retErr == nil {
+					retErr = moerr.NewInternalErrorf(ctx, "invalid response type from %s", res.nodeAddr)
+				}
+				failedNodes = append(failedNodes, res.nodeAddr)
+
+				if handleInvalidResponse != nil {
+					// Protect against panic in user-provided handler
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								logger.GetLogger("RequestMultipleCn").Errorf(
+									"[handler panic] %s handleInvalidResponse panicked for %s: %v",
+									qc.ServiceID(), res.nodeAddr, r,
+								)
+							}
+						}()
 						handleInvalidResponse(res.nodeAddr)
-					}
+					}()
 				}
 			}
 		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			// Record timeout error only if no previous error
+			if retErr == nil {
+				retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			}
+			// Don't add "context timeout" to failedNodes - keep it as real node addresses only
+			// Timeout info is already in retErr
+			// Continue receiving remaining responses to avoid goroutine leaks
+			// Don't break - continue the loop to drain channel
 		}
-		nodesLeft--
 	}
+
+	// Ensure all goroutines complete to avoid leaks
+	// Even if context is canceled, goroutines may still be executing SendMessage
+	// wg.Wait ensures we wait for all goroutines to finish writing to channel
+	// Channel has buffer capacity = validNodes, so all goroutines can write without blocking
+	//
+	// After wg.Wait() returns:
+	// - All goroutines have completed (wg.Done() called)
+	// - All responses have been written to channel (happens before wg.Done())
+	// - Main loop has received exactly validNodes responses (responsesReceived == validNodes)
+	// - Therefore, channel must be empty, no need to drain
+	wg.Wait()
+
+	// Log error summary if any node failed
+	// This provides aggregated view without repeating individual node errors
+	// which are already logged by lower-level morpc layer
+	if retErr != nil {
+		logger.GetLogger("RequestMultipleCn").Errorf(
+			"[request failed] %s distributed request to %d nodes: %d succeeded, %d failed, failed nodes: %v, error: %v",
+			qc.ServiceID(),
+			len(nodes),
+			successCount,
+			len(failedNodes),
+			failedNodes,
+			retErr,
+		)
+	}
+
 	return retErr
 }

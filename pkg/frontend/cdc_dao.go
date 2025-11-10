@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 const (
@@ -197,7 +198,10 @@ func (t *CDCDao) ShowTasks(
 
 	snapTS = txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 	startTS := types.TimestampToTS(txnOp.SnapshotTS())
-	logutil.Infof("XXX-DEBUG-21848-show-task-snap-ts: %s", startTS.ToString())
+	logutil.Debug(
+		"cdc.frontend.dao.show_tasks_snapshot",
+		zap.String("snapshot-ts", startTS.ToString()),
+	)
 	sql := cdc.CDCSQLBuilder.ShowTaskSQL(
 		uint64(t.ses.GetTenantInfo().GetTenantID()),
 		req.Option.All,
@@ -213,9 +217,15 @@ func (t *CDCDao) ShowTasks(
 		return
 	}
 
-	logutil.Infof("XXX-DEBUG-21848-show-task-result length %d", len(execResultSet))
+	logutil.Debug(
+		"cdc.frontend.dao.show_tasks_result_length",
+		zap.Int("result-set-length", len(execResultSet)),
+	)
 	for _, result := range execResultSet {
-		logutil.Infof("XXX-DEBUG-21848-show-task-result row count %d", result.GetRowCount())
+		logutil.Debug(
+			"cdc.frontend.dao.show_tasks_row_count",
+			zap.Int("row-count", int(result.GetRowCount())),
+		)
 		for rowIdx, rowCnt := uint64(0), result.GetRowCount(); rowIdx < rowCnt; rowIdx++ {
 			for colIdx, colName := range queryAttrs {
 				switch colName {

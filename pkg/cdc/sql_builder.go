@@ -163,6 +163,14 @@ const (
 		"db_name = '%s' AND " +
 		"table_name = '%s'"
 
+	CDCClearTaskTableErrorsSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET err_msg = '' " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"err_msg != ''"
+
 	CDCGetWatermarkWhereSqlTemplate = "SELECT " +
 		"%s " +
 		"FROM " +
@@ -245,8 +253,9 @@ const (
 	CDCGetWatermarkWhereSqlTemplate_Idx             = 17
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 18
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 19
+	CDCClearTaskTableErrorsSQL_Idx                  = 20
 
-	CDCSqlTemplateCount = 20
+	CDCSqlTemplateCount = 21
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -353,6 +362,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
 		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
+	},
+	CDCClearTaskTableErrorsSQL_Idx: {
+		SQL: CDCClearTaskTableErrorsSqlTemplate,
 	},
 }
 
@@ -514,6 +526,18 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 	return sql
 }
 
+// ClearTaskTableErrorsSQL generates SQL to clear error messages for all tables in a task
+func (b cdcSQLBuilder) ClearTaskTableErrorsSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCClearTaskTableErrorsSQL_Idx].SQL,
+		accountId,
+		escapeSQLString(taskId),
+	)
+}
+
 // ------------------------------------------------------------------------------------------------
 // Watermark SQL
 // ------------------------------------------------------------------------------------------------
@@ -557,6 +581,13 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 		accountId,
 		taskId,
 	)
+}
+
+func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL() string {
+	return "DELETE w FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
+		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"WHERE t.task_id IS NULL"
 }
 
 func (b cdcSQLBuilder) GetWatermarkSQL(
