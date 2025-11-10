@@ -125,6 +125,7 @@ make test USE_SOURCE=0
 - `example_22_unified_sql_builder.py` - SQL builder
 - `example_24_query_update.py` - Query and update operations
 - `example_25_metadata_operations.py` - Metadata operations
+- `example_31_cdc_operations.py` - CDC task lifecycle operations
 
 ## Prerequisites
 

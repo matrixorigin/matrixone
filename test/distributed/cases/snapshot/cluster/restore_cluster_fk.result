@@ -963,7 +963,7 @@ drop database if exists Company;
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null

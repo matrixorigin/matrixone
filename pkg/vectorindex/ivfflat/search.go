@@ -164,7 +164,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	sql := fmt.Sprintf(
-		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IS NOT NULL AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -172,7 +172,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		tblcfg.DbName, tblcfg.EntriesTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		idx.Version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		instr,
 		rt.Limit,
@@ -180,6 +179,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)
+	//os.Stderr.WriteString("\n")
 
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
@@ -199,6 +199,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	for _, bat := range res.Batches {
 		for i := 0; i < bat.RowCount(); i++ {
+			if bat.Vecs[1].IsNull(uint64(i)) {
+				continue
+			}
+
 			pk := vector.GetAny(bat.Vecs[0], i, true)
 			resid = append(resid, pk)
 

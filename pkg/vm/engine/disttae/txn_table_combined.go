@@ -94,6 +94,31 @@ func (t *combinedTxnTable) BuildReaders(
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
 	var readers []engine.Reader
+	if relData == nil {
+		tables, err := t.tablesFunc()
+		if err != nil {
+			return nil, err
+		}
+		for _, rel := range tables {
+			r, err := rel.BuildReaders(
+				ctx,
+				proc,
+				expr,
+				nil,
+				num,
+				txnOffset,
+				orderBy,
+				policy,
+				filterHint,
+			)
+			if err != nil {
+				return nil, err
+			}
+			readers = append(readers, r...)
+		}
+		return readers, nil
+	}
+
 	r := relData.(*CombinedRelData)
 	for idx, data := range r.tables {
 		rel := r.relations[idx]

@@ -37,7 +37,7 @@ create snapshot sp_lower_case_table_names for account a1;
 
 drop database test;
 
-restore account a1 from snapshot sp_lower_case_table_names;
+restore account a1{snapshot="sp_lower_case_table_names"};
 
 use test;
 show tables;
@@ -54,7 +54,7 @@ select * from tT;
 drop snapshot if exists sp_lower_case_table_a1;
 create snapshot sp_lower_case_table_a1 for account a1;
 
-restore account a1 from snapshot sp_lower_case_table_a1;
+restore account a1{snapshot="sp_lower_case_table_a1"};
 
 -- @session:id=3&user=a1:admin1&password=test123
 use test;

@@ -789,7 +789,7 @@ drop database if exists Projects;
 drop database if exists Company;
 -- @session
 
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 
 select * from Company.Departments;
 select * from Company.Employees;

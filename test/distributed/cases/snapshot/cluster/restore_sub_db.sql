@@ -44,7 +44,7 @@ show publications;
 drop database if exists db2;
 show databases like 'db2';
 
-restore account acc01 from snapshot snap1;
+restore account acc01{snapshot="snap1"};
 
 show databases like 'sub_db1';
 use sub_db1;
@@ -116,7 +116,7 @@ drop database if exists db2;
 show databases like 'db2';
 -- @session
 
-restore account acc01 from snapshot snap2;
+restore account acc01{snapshot="snap2"};
 
 -- @session:id=2&user=acc01:test_account&password=111
 show databases like 'sub_db1';

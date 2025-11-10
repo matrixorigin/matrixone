@@ -12,9 +12,9 @@ create snapshot snapshot_02 for account;
 INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), (9), (10), (11), (12),(13), (14), (15), (16), (17), (18), (19), (20),(21), (22), (23), (24), (25), (26), (27), (28), (29), (30),(31), (32), (33), (34), (35), (36), (37), (38), (39), (40);
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_02'};
-restore account sys database snapshot_read table test_snapshot_read from snapshot snapshot_01;
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_01"};
 select count(*) from snapshot_read.test_snapshot_read;
-restore account sys database snapshot_read table test_snapshot_read from snapshot snapshot_02;
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_02"};
 select count(*) from snapshot_read.test_snapshot_read;
 drop database snapshot_read;
 drop snapshot snapshot_01;
@@ -46,7 +46,7 @@ UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gm
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 
-restore account sys database snapshot_read table users from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 
@@ -86,7 +86,7 @@ drop snapshot if exists sp_01;
 create snapshot sp_01 for account;
 drop table users;
 select count(*) from snapshot_read.users;
-restore account sys database snapshot_read table users from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop database if exists snapshot_read;
@@ -110,7 +110,7 @@ drop snapshot if exists sp_01;
 create snapshot sp_01 for account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
-restore account sys database snapshot_read table users from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop database if exists snapshot_read;
@@ -133,9 +133,9 @@ create snapshot snapshot_02 for account test_account;
 INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), (9), (10), (11), (12),(13), (14), (15), (16), (17), (18), (19), (20),(21), (22), (23), (24), (25), (26), (27), (28), (29), (30),(31), (32), (33), (34), (35), (36), (37), (38), (39), (40);
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_02'};
-restore account test_account database snapshot_read table test_snapshot_read from snapshot snapshot_01;
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_01"};
 select count(*) from snapshot_read.test_snapshot_read;
-restore account test_account database snapshot_read table test_snapshot_read from snapshot snapshot_02;
+restore table snapshot_read.test_snapshot_read{snapshot="snapshot_02"};
 select count(*) from snapshot_read.test_snapshot_read;
 drop database snapshot_read;
 drop snapshot snapshot_01;
@@ -167,7 +167,7 @@ UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gm
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 
-restore account test_account database snapshot_read table users from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 
@@ -207,7 +207,7 @@ drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop table users;
 select count(*) from snapshot_read.users;
-restore account test_account database snapshot_read table users from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop database if exists snapshot_read;
@@ -231,7 +231,7 @@ drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
-restore account test_account database snapshot_read table users from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
 select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop database if exists snapshot_read;
@@ -267,8 +267,8 @@ DELETE FROM snapshot_read.users;
 select count(*) from snapshot_read.users;
 -- @session
 
-restore account test_account database snapshot_read table users from snapshot sp_01;
-restore account test_account from snapshot sp_01;
+restore table snapshot_read.users{snapshot="sp_01"};
+restore account test_account{snapshot="sp_01"};
 
 -- @session:id=5&user=test_account:test_user&password=111
 select count(*) from snapshot_read.users;
@@ -301,7 +301,7 @@ create snapshot sp_01 for account;
 delete from test_snapshot_read where a <= 50;
 select count(*) from snapshot_read.test_snapshot_read;
 
-restore account sys database snapshot_read table test_snapshot_read from snapshot sp_01;
+restore table snapshot_read.test_snapshot_read{snapshot="sp_01"};
 select count(*) from snapshot_read.test_snapshot_read;
 
 drop database snapshot_read;
@@ -339,7 +339,7 @@ select count(*) from snapshot_read.users;
 -- @session
 
 create account test_account_2 admin_name = 'test_user' identified by '111';
-restore account test_account from snapshot sp_01 to account test_account_2;
+restore account test_account{snapshot="sp_01"} to account test_account_2;
 
 -- @session:id=8&user=test_account_2:test_user&password=111
 select count(*) from snapshot_read.users;
@@ -350,4 +350,3 @@ drop account test_account;
 drop account test_account_2;
 -- @ignore:1
 show snapshots;
-

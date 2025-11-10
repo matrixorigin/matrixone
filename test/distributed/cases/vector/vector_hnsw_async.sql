@@ -62,6 +62,9 @@ drop table t2;
 
 -- end t2
 
+-- @bvt:issue#22794
+-- check load data infile with parallel 'true' will make hnsw indx inconsistent and increase the limit to see more results
+
 -- t3
 create table t3(a bigint primary key, b vecf32(128));
 
@@ -91,6 +94,8 @@ select * from t3 order by L2_DISTANCE(b, "[0, 0, 0, 0, 0, 101, 82, 4, 2, 0, 0, 0
 drop table t3;
 
 -- end t3
+
+-- @bvt:issue
 
 drop database hnsw_cdc;
 
