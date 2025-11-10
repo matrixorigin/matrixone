@@ -152,7 +152,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		nextFrom = h.currentPSTo.Next()
 	}
 	stateStart := state.GetStart()
-	if stateStart.LT(&nextFrom) {
+	if stateStart.LE(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
 		if h.handleIdx != 0 {
