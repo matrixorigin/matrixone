@@ -12,11 +12,55 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package cdc implements watermark management for Change Data Capture with eventual consistency.
+//
+// # Watermark Consistency Design
+//
+// The watermark system follows a "lag-acceptable, advance-forbidden" consistency model:
+//   - Watermarks MAY lag behind actual data progress (causes duplicate processing, which is acceptable)
+//   - Watermarks MUST NEVER advance ahead of persisted data (would cause data loss, which is forbidden)
+//
+// This design choice enables:
+//  1. Async batching for better performance (updates buffered and persisted in batches every 3s)
+//  2. Simplified error handling (UpdateWatermarkOnly never fails, always returns nil)
+//  3. Crash resilience (watermark lag on crash is acceptable, prevents data loss)
+//
+// # Three-Tier Cache Architecture
+//
+// Watermarks flow through three cache levels before reaching the database:
+//
+//	cacheUncommitted -> cacheCommitting -> cacheCommitted <-> Database
+//
+//	- cacheUncommitted: Immediate write buffer, updated synchronously on UpdateWatermarkOnly()
+//	- cacheCommitting: Transition state during async batch persistence to database
+//	- cacheCommitted: Synchronized with database, represents durable watermark state
+//
+// Reads prioritize newer caches (uncommitted > committing > committed) to get latest watermark.
+//
+// # Failure Scenarios and Guarantees
+//
+// 1. System Crash Before CronJob Persists:
+//   - Watermarks in cacheUncommitted are lost
+//   - Next run reads old watermark from database
+//   - Result: Duplicate data processing (acceptable, handled by idempotency)
+//
+// 2. CronJob SQL Execution Fails:
+//   - Watermarks in cacheCommitting are cleared (lost)
+//   - Next run reads from cacheCommitted (old value) or database
+//   - Result: Duplicate data processing (acceptable)
+//
+// 3. Race Between Update and Read:
+//   - Reads may get stale watermark if CronJob hasn't persisted yet
+//   - Result: Duplicate processing (acceptable, never causes data loss)
+//
+// The key guarantee: Watermarks never advance beyond successfully persisted data,
+// ensuring no data loss even in failure scenarios.
 package cdc
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -40,6 +85,11 @@ const (
 	WatermarkUpdateInterval          = time.Second * 3
 	ReadWatermarkProjectionList      = "account_id, task_id, db_name, table_name, watermark"
 	UpdateWatermarkCronJobNamePrefix = "CDCWatermarkUpdater-CronJob"
+)
+
+const (
+	watermarkCommitMaxRetries   = 3
+	watermarkCircuitBreakPeriod = 30 * time.Second
 )
 
 var cdcWatermarkUpdater atomic.Pointer[CDCWatermarkUpdater]
@@ -196,6 +246,28 @@ func NewRemoveCachedWMJob(
 	return job
 }
 
+// CDCWatermarkUpdater manages watermarks for CDC tasks with eventual consistency.
+//
+// Consistency Model:
+// - Watermarks are allowed to LAG behind actual data progress (acceptable: causes duplicate processing)
+// - Watermarks MUST NEVER ADVANCE ahead of persisted data (forbidden: would cause data loss)
+// - Updates are buffered in memory and persisted asynchronously via batch operations
+//
+// Three-Tier Cache Architecture:
+// 1. cacheUncommitted: In-memory write buffer, updated immediately on UpdateWatermarkOnly()
+// 2. cacheCommitting: Transition state during database persistence
+// 3. cacheCommitted: Synchronized with database, represents durable watermarks
+//
+// Update Flow:
+//
+//	UpdateWatermarkOnly() -> cacheUncommitted (instant, always succeeds)
+//	                      -> cacheCommitting (moved by CronJob every 3s)
+//	                      -> cacheCommitted + DB (after batch UPDATE succeeds)
+//
+// Crash Recovery:
+// - If system crashes before CronJob persists, watermarks in cacheUncommitted are lost
+// - Next run will read old watermark from DB and re-process data (duplicate processing is acceptable)
+// - This ensures watermarks never advance beyond persisted data
 type CDCWatermarkUpdater struct {
 	sync.RWMutex
 
@@ -207,10 +279,19 @@ type CDCWatermarkUpdater struct {
 
 	// sql executor
 	ie ie.InternalExecutor
-	// watermarkMap saves the watermark of each table
-	cacheUncommitted map[WatermarkKey]types.TS
-	cacheCommitting  map[WatermarkKey]types.TS
-	cacheCommitted   map[WatermarkKey]types.TS
+
+	// Three-tier cache for watermark consistency
+	// Read priority: cacheUncommitted -> cacheCommitting -> cacheCommitted
+	cacheUncommitted map[WatermarkKey]types.TS // Write buffer, not yet persisted
+	cacheCommitting  map[WatermarkKey]types.TS // Being persisted to database
+	cacheCommitted   map[WatermarkKey]types.TS // Synchronized with database
+
+	// Error metadata cache (similar to watermark cache)
+	// Cached in memory to avoid synchronous SQL queries in RecordError()
+	errorMetadataCache map[WatermarkKey]*ErrorMetadata
+
+	commitFailureCount map[WatermarkKey]uint32    // consecutive persistence failures per key
+	commitCircuitOpen  map[WatermarkKey]time.Time // keys in circuit-breaker cool-down
 
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
@@ -240,10 +321,13 @@ func NewCDCWatermarkUpdater(
 	opts ...UpdateOption,
 ) *CDCWatermarkUpdater {
 	u := &CDCWatermarkUpdater{
-		ie:               ie,
-		cacheUncommitted: make(map[WatermarkKey]types.TS),
-		cacheCommitting:  make(map[WatermarkKey]types.TS),
-		cacheCommitted:   make(map[WatermarkKey]types.TS),
+		ie:                 ie,
+		cacheUncommitted:   make(map[WatermarkKey]types.TS),
+		cacheCommitting:    make(map[WatermarkKey]types.TS),
+		cacheCommitted:     make(map[WatermarkKey]types.TS),
+		errorMetadataCache: make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
+		commitFailureCount: make(map[WatermarkKey]uint32),
+		commitCircuitOpen:  make(map[WatermarkKey]time.Time),
 
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
@@ -267,7 +351,7 @@ func NewCDCWatermarkUpdater(
 
 func (u *CDCWatermarkUpdater) fillDefaults() {
 	if u.opts.exportStatsInterval == 0 {
-		u.opts.exportStatsInterval = time.Minute * 10
+		u.opts.exportStatsInterval = time.Minute // Reduced from 10 minutes to 1 minute for better observability
 	}
 	if u.opts.cronJobInterval == 0 {
 		u.opts.cronJobInterval = WatermarkUpdateInterval
@@ -279,7 +363,7 @@ func (u *CDCWatermarkUpdater) fillDefaults() {
 		u.customized.scheduleJob = u.scheduleJob
 	}
 	if u.opts.cronJobErrorSupressTimes == 0 {
-		u.opts.cronJobErrorSupressTimes = 500
+		u.opts.cronJobErrorSupressTimes = 50 // Reduced from 500 to 50 for more frequent error reporting
 	}
 }
 
@@ -326,7 +410,7 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 		u.resetJobs(err)
 		if err != nil {
 			logutil.Error(
-				"CDC-Watermark-Read-Error",
+				"cdc.watermark.read_error",
 				zap.Error(err),
 				zap.String("err-msg", errMsg),
 			)
@@ -358,7 +442,7 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 			u.Unlock()
 			logutil.Info(
-				"CDC-Remove-Cached-WM-Success",
+				"cdc.watermark.remove_cached_success",
 				zap.String("key", job.Key.String()),
 			)
 		default:
@@ -392,7 +476,7 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	if len(u.readKeysBuffer) == 0 {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkRead)
 	defer cancel()
 
 	readSql := u.constructReadWMSQL(u.readKeysBuffer)
@@ -458,6 +542,14 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	return
 }
 
+// execBatchUpdateWM persists buffered watermarks to database in a single batch operation.
+//
+// Process Flow:
+// 1. Move watermarks: cacheUncommitted -> cacheCommitting
+// 2. Clear cacheUncommitted (make room for new updates)
+// 3. Execute batch UPDATE SQL to persist cacheCommitting to database
+// 4. On success: Move cacheCommitting -> cacheCommitted
+// 5. On failure: Return watermarks to cacheUncommitted for retry (with circuit breaker)
 func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	if len(u.committingBuffer) == 0 {
 		return "", nil
@@ -468,30 +560,93 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		u.Unlock()
 		return "", nil
 	}
+	skippedDueToCircuit := false
 	// move uncommitted watermarks to committing
 	for key, watermark := range u.cacheUncommitted {
+		if openedAt, ok := u.commitCircuitOpen[key]; ok {
+			if time.Since(openedAt) < watermarkCircuitBreakPeriod {
+				logutil.Debug(
+					"cdc.watermark.commit.circuit_skip",
+					zap.String("key", key.String()),
+					zap.Time("opened-at", openedAt),
+				)
+				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("skip").Inc()
+				skippedDueToCircuit = true
+				continue
+			}
+			if _, existed := u.commitCircuitOpen[key]; existed {
+				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+				v2.CdcWatermarkCircuitOpenGauge.Dec()
+			}
+			delete(u.commitCircuitOpen, key)
+			delete(u.commitFailureCount, key)
+			logutil.Info(
+				"cdc.watermark.commit.circuit_reset",
+				zap.String("key", key.String()),
+			)
+		}
 		u.cacheCommitting[key] = watermark
-	}
-	// clear uncommitted watermarks
-	for key := range u.cacheUncommitted {
 		delete(u.cacheUncommitted, key)
 	}
+	committingCount := len(u.cacheCommitting)
 	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
 	u.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+	if committingCount == 0 {
+		if skippedDueToCircuit {
+			err = moerr.NewInternalErrorNoCtx("watermark commit skipped due to circuit breaker")
+		}
+	} else if commitSql != "" {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
+		defer cancel()
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+	}
+
 	u.Lock()
 	defer u.Unlock()
 
 	if err != nil {
-		errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
+		reason := "sql"
+		if commitSql != "" {
+			errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
+		} else {
+			errMsg = err.Error()
+			reason = "circuit_skip"
+		}
+		v2.CdcWatermarkCommitErrorCounter.WithLabelValues(reason).Inc()
+		now := time.Now()
+		for key, watermark := range u.cacheCommitting {
+			if existing, ok := u.cacheUncommitted[key]; ok && existing.GT(&watermark) {
+				// keep newer watermark
+			} else {
+				u.cacheUncommitted[key] = watermark
+			}
+			retry := u.commitFailureCount[key] + 1
+			u.commitFailureCount[key] = retry
+			if retry >= watermarkCommitMaxRetries {
+				if _, opened := u.commitCircuitOpen[key]; !opened {
+					u.commitCircuitOpen[key] = now
+					v2.CdcWatermarkCircuitEventCounter.WithLabelValues("opened").Inc()
+					v2.CdcWatermarkCircuitOpenGauge.Inc()
+					logutil.Error(
+						"cdc.watermark.commit.circuit_open",
+						zap.String("key", key.String()),
+						zap.Uint32("retry-count", retry),
+					)
+				}
+			}
+		}
 	} else {
 		// commit watermarks from committing to committed
 		for key, watermark := range u.cacheCommitting {
 			u.cacheCommitted[key] = watermark
+			if _, existed := u.commitCircuitOpen[key]; existed {
+				v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+				v2.CdcWatermarkCircuitOpenGauge.Dec()
+			}
+			delete(u.commitFailureCount, key)
+			delete(u.commitCircuitOpen, key)
 		}
 	}
 
@@ -514,7 +669,7 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err erro
 	if len(u.committingErrMsgBuffer) == 0 {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdateErrMsg)
 	defer cancel()
 	errMsgSql := u.constructBatchUpdateWMErrMsgSQL(u.committingErrMsgBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -544,12 +699,15 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s')",
 			key.AccountId,
-			key.TaskId,
-			key.DBName,
-			key.TableName,
-			wm.ToString(),
+			escapeSQLString(key.TaskId),
+			escapeSQLString(key.DBName),
+			escapeSQLString(key.TableName),
+			escapeSQLString(wm.ToString()),
 		)
 		i++
+	}
+	if i == 0 {
+		return ""
 	}
 	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkSQL(values)
 	return
@@ -566,10 +724,10 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s')",
 			job.Key.AccountId,
-			job.Key.TaskId,
-			job.Key.DBName,
-			job.Key.TableName,
-			job.ErrMsg, // only update the err_msg
+			escapeSQLString(job.Key.TaskId),
+			escapeSQLString(job.Key.DBName),
+			escapeSQLString(job.Key.TableName),
+			escapeSQLString(job.ErrMsg), // only update the err_msg
 		)
 	}
 	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values)
@@ -580,7 +738,7 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	if len(u.addCommittedBuffer) == 0 {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkAdd)
 	defer cancel()
 	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -614,10 +772,10 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s', '%s')",
 			job.Key.AccountId,
-			job.Key.TaskId,
-			job.Key.DBName,
-			job.Key.TableName,
-			job.Watermark.ToString(),
+			escapeSQLString(job.Key.TaskId),
+			escapeSQLString(job.Key.DBName),
+			escapeSQLString(job.Key.TableName),
+			escapeSQLString(job.Watermark.ToString()),
 			"",
 		)
 	}
@@ -640,9 +798,9 @@ func (u *CDCWatermarkUpdater) constructReadWMSQL(
 		filterStr += fmt.Sprintf(
 			"(account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s')",
 			key.AccountId,
-			key.TaskId,
-			key.DBName,
-			key.TableName,
+			escapeSQLString(key.TaskId),
+			escapeSQLString(key.DBName),
+			escapeSQLString(key.TableName),
 		)
 		idx++
 	}
@@ -675,6 +833,17 @@ func (u *CDCWatermarkUpdater) getFromCache(
 	return
 }
 
+// GetFromCache retrieves the latest watermark from the three-tier cache.
+//
+// Lookup Priority (from newest to oldest):
+// 1. cacheUncommitted - most recent updates, not yet persisted
+// 2. cacheCommitting  - updates being persisted to database
+// 3. cacheCommitted   - synchronized with database
+//
+// Returns ErrNoWatermarkFound if the key doesn't exist in any cache tier.
+// This can happen when:
+// - A new CDC task is starting for the first time
+// - CronJob failed and caches were cleared (watermarks lost, acceptable by design)
 func (u *CDCWatermarkUpdater) GetFromCache(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -687,20 +856,166 @@ func (u *CDCWatermarkUpdater) GetFromCache(
 	return
 }
 
+// UpdateWatermarkErrMsg updates error message with automatic intelligent handling:
+// - Control signal filtering (pause/cancel)
+// - Retry count tracking and auto-increment
+// - Auto-conversion to non-retryable after MaxRetryCount
+// - Timestamp recording
+// - Error expiration support
+//
+// Parameters:
+//   - ctx: Context
+//   - key: Watermark key
+//   - errMsg: Error message (empty string to clear error)
+//   - errorCtx: Error context (can be nil for backward compatibility)
+//
+// Call examples:
+//   - Retryable: UpdateWatermarkErrMsg(ctx, key, "table not found", &ErrorContext{IsRetryable: true})
+//   - Non-retryable: UpdateWatermarkErrMsg(ctx, key, "type mismatch", &ErrorContext{IsRetryable: false})
+//   - Clear: UpdateWatermarkErrMsg(ctx, key, "", nil)
+//   - Legacy: UpdateWatermarkErrMsg(ctx, key, "retryable error:xxx", nil) // Auto-parsed
+//
+// Design: Uses in-memory cache to avoid synchronous SQL queries, preserving
+// the lazy batch processing design of WatermarkUpdater
 func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 	ctx context.Context,
 	key *WatermarkKey,
 	errMsg string,
+	errorCtx *ErrorContext,
 ) (err error) {
-	job := NewUpdateWMErrMsgJob(ctx, key, errMsg)
+	// 1. Clear error: remove cache and persist empty string
+	if errMsg == "" {
+		u.Lock()
+		delete(u.errorMetadataCache, *key)
+		u.Unlock()
+
+		job := NewUpdateWMErrMsgJob(ctx, key, "")
+		if _, err = u.queue.Enqueue(job); err != nil {
+			return
+		}
+		job.WaitDone()
+		err = job.GetResult().Err
+		return
+	}
+
+	// 2. Parse error context (with backward compatibility)
+	isRetryable := false
+	isPauseOrCancel := false
+	message := errMsg
+
+	if errorCtx != nil {
+		// New API: use structured context
+		isRetryable = errorCtx.IsRetryable
+		isPauseOrCancel = errorCtx.IsPauseOrCancel || IsPauseOrCancelError(errMsg)
+	} else {
+		// Old API: parse from string prefix (backward compatible)
+		if strings.HasPrefix(errMsg, RetryableErrorPrefix) {
+			isRetryable = true
+			message = strings.TrimPrefix(errMsg, RetryableErrorPrefix)
+		} else if strings.HasPrefix(errMsg, "retryable:") {
+			isRetryable = true
+			message = strings.TrimPrefix(errMsg, "retryable:")
+		}
+
+		// Auto-detect control signals
+		isPauseOrCancel = IsPauseOrCancelError(errMsg)
+	}
+
+	// 3. Filter control signals (pause/cancel) - don't persist
+	if isPauseOrCancel {
+		logutil.Info(
+			"cdc.watermark.update_errmsg_skip_control_signal",
+			zap.String("key", key.String()),
+			zap.String("signal", errMsg),
+		)
+		return nil
+	}
+
+	// 4. Read from memory cache (NO SQL query - preserves batch processing design)
+	u.RLock()
+	oldMetadata, exists := u.errorMetadataCache[*key]
+	u.RUnlock()
+
+	// Make a copy to avoid race conditions
+	var oldMetadataCopy *ErrorMetadata
+	if exists {
+		copy := *oldMetadata
+		oldMetadataCopy = &copy
+	}
+
+	// 5. Build new metadata (auto-increment retry count)
+	record := &ErrorRecord{
+		Error:       moerr.NewInternalErrorNoCtx(message),
+		IsRetryable: isRetryable,
+		Timestamp:   time.Now(),
+	}
+	newMetadata := BuildErrorMetadata(oldMetadataCopy, record)
+
+	// 6. Check if exceeded max retry count
+	if newMetadata.IsRetryable && newMetadata.RetryCount > MaxRetryCount {
+		logutil.Warn(
+			"cdc.watermark.update_errmsg_exceeded_retry",
+			zap.String("key", key.String()),
+			zap.Int("retry-count", newMetadata.RetryCount),
+			zap.String("error", newMetadata.Message),
+		)
+		// Convert to non-retryable
+		newMetadata.IsRetryable = false
+		newMetadata.Message = fmt.Sprintf("max retry exceeded (%d): %s",
+			newMetadata.RetryCount, newMetadata.Message)
+	}
+
+	// 7. Update memory cache (like UpdateWatermarkOnly - no SQL)
+	u.Lock()
+	u.errorMetadataCache[*key] = newMetadata
+	u.Unlock()
+
+	// 8. Format and persist (async via job queue)
+	formattedMsg := FormatErrorMetadata(newMetadata)
+	logutil.Info(
+		"cdc.watermark.update_errmsg_persist",
+		zap.String("key", key.String()),
+		zap.Bool("retryable", newMetadata.IsRetryable),
+		zap.Int("retry-count", newMetadata.RetryCount),
+		zap.String("formatted-msg", formattedMsg),
+	)
+
+	job := NewUpdateWMErrMsgJob(ctx, key, formattedMsg)
 	if _, err = u.queue.Enqueue(job); err != nil {
 		return
 	}
 	job.WaitDone()
 	err = job.GetResult().Err
+	if err == nil {
+		u.Lock()
+		if _, existed := u.commitCircuitOpen[*key]; existed {
+			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+			v2.CdcWatermarkCircuitOpenGauge.Dec()
+			delete(u.commitCircuitOpen, *key)
+		}
+		delete(u.commitFailureCount, *key)
+		u.Unlock()
+	}
 	return
 }
 
+// UpdateWatermarkOnly buffers a watermark update in memory without immediate persistence.
+//
+// Consistency Guarantee:
+// - This method is called ONLY AFTER data has been successfully committed to the database
+// - It buffers the watermark in cacheUncommitted for later batch persistence
+// - Always returns nil (never fails) to maintain the consistency model
+//
+// Persistence Timing:
+// - Watermark is persisted asynchronously by CronJob (default: every 3 seconds)
+// - If system crashes before CronJob runs, the watermark update is lost
+// - This is acceptable: next run will re-read from old watermark (duplicate processing is idempotent)
+//
+// Why Always Return Nil:
+// - By design, watermark lag is acceptable but advance is forbidden
+// - Caller ensures data is committed BEFORE calling this method
+// - Even if this buffer operation "fails" (system crash), watermark stays behind (safe)
+// - Returning errors would complicate caller logic without improving consistency
 func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -708,7 +1023,22 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 ) (err error) {
 	u.Lock()
 	defer u.Unlock()
+
+	oldWatermark, hasOld := u.cacheUncommitted[*key]
 	u.cacheUncommitted[*key] = *watermark
+
+	// Log watermark updates for better observability
+	logutil.Debug(
+		"cdc.watermark.buffer_update",
+		zap.String("key", key.String()),
+		zap.String("old-watermark", oldWatermark.ToString()),
+		zap.String("new-watermark", watermark.ToString()),
+		zap.Bool("has-old", hasOld),
+		zap.Int("uncommitted-count", len(u.cacheUncommitted)),
+		zap.Int("committing-count", len(u.cacheCommitting)),
+		zap.Int("committed-count", len(u.cacheCommitted)),
+	)
+
 	return nil
 }
 
@@ -718,7 +1048,7 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 ) (err error) {
 	if err = u.ForceFlush(ctx); err != nil {
 		logutil.Error(
-			"CDCWatermarkUpdater-RemoveCachedWM-ForceFlushFailed",
+			"cdc.watermark.remove.force_flush_failed",
 			zap.String("key", key.String()),
 			zap.Error(err),
 		)
@@ -743,7 +1073,48 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	return
 }
 
-// Note: suppose there is no concurrent write to the same key
+// IsCircuitBreakerOpen returns true if the circuit breaker is currently open for the given key.
+func (u *CDCWatermarkUpdater) IsCircuitBreakerOpen(key *WatermarkKey) bool {
+	if key == nil {
+		return false
+	}
+	u.RLock()
+	defer u.RUnlock()
+	if openedAt, ok := u.commitCircuitOpen[*key]; ok {
+		return time.Since(openedAt) < watermarkCircuitBreakPeriod
+	}
+	return false
+}
+
+// GetCommitFailureCount returns the number of consecutive commit failures for the given key.
+func (u *CDCWatermarkUpdater) GetCommitFailureCount(key *WatermarkKey) uint32 {
+	if key == nil {
+		return 0
+	}
+	u.RLock()
+	defer u.RUnlock()
+	if count, ok := u.commitFailureCount[*key]; ok {
+		return count
+	}
+	return 0
+}
+
+// GetOrAddCommitted retrieves the persisted watermark from database, or adds it if not exists.
+//
+// Used for CDC task initialization to determine the starting watermark:
+// - If watermark exists in database: Return the persisted value (resume from last position)
+// - If watermark doesn't exist: Add the provided watermark to database (new task starting)
+//
+// Fast Path:
+// - Checks cacheCommitted first to avoid database query if watermark is already in memory
+// - Returns immediately if cached watermark >= requested watermark
+//
+// Slow Path (Cache Miss):
+// - Enqueues a job to read watermark from database
+// - If found: Updates cacheCommitted and returns persisted value
+// - If not found: Inserts new watermark record and returns it
+//
+// Concurrency: Assumes no concurrent writes to the same key (single reader per table)
 func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	ctx context.Context,
 	key *WatermarkKey,
@@ -779,10 +1150,38 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 	return func(ctx context.Context) {
 		if time.Since(u.stats.lastExportTime) > u.opts.exportStatsInterval {
 			u.stats.lastExportTime = time.Now()
+
+			// Export detailed statistics
+			u.RLock()
+			uncommittedCount := len(u.cacheUncommitted)
+			committingCount := len(u.cacheCommitting)
+			committedCount := len(u.cacheCommitted)
+
+			// Metrics: watermark cache sizes
+			v2.CdcWatermarkCacheGauge.WithLabelValues("uncommitted").Set(float64(uncommittedCount))
+			v2.CdcWatermarkCacheGauge.WithLabelValues("committing").Set(float64(committingCount))
+			v2.CdcWatermarkCacheGauge.WithLabelValues("committed").Set(float64(committedCount))
+
+			// Metrics: watermark lag for each table
+			for key, watermark := range u.cacheCommitted {
+				if !watermark.IsEmpty() {
+					wmTime := watermark.ToTimestamp().ToStdTime()
+					lagSeconds := time.Since(wmTime).Seconds()
+					tableLabel := key.String()
+					v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lagSeconds)
+				}
+			}
+			u.RUnlock()
+
 			logutil.Info(
-				"CDCWatermarkUpdater-Stats",
+				"cdc.watermark.stats",
 				zap.Uint64("run-times", u.stats.runTimes.Load()),
 				zap.Uint64("skip-times", u.stats.skipTimes.Load()),
+				zap.Uint64("error-times", u.stats.errorTimes.Load()),
+				zap.Int("uncommitted-watermarks", uncommittedCount),
+				zap.Int("committing-watermarks", committingCount),
+				zap.Int("committed-watermarks", committedCount),
+				zap.Float64("skip-ratio", float64(u.stats.skipTimes.Load())/float64(u.stats.runTimes.Load())),
 			)
 		}
 		u.stats.runTimes.Add(1)
@@ -798,6 +1197,24 @@ func (u *CDCWatermarkUpdater) scheduleJob(job *UpdaterJob) (err error) {
 	return
 }
 
+// cronRun is the periodic job that moves watermarks from cacheUncommitted to database.
+//
+// Execution Interval: Every 3 seconds (configurable via cronJobInterval)
+//
+// Process:
+// 1. Check if previous commit is still in progress (cacheCommitting not empty)
+//   - If yes: Skip this run to avoid concurrent commits
+//
+// 2. Move all watermarks: cacheUncommitted -> cacheCommitting
+// 3. Call ForceFlush to persist cacheCommitting to database
+//
+// Concurrency Control:
+// - Only one CronJob execution at a time (skips if cacheCommitting is not empty)
+// - This prevents concurrent database updates for the same watermarks
+//
+// Error Handling:
+// - Errors are logged but suppressed (only log every N times to avoid spam)
+// - Failed watermarks are lost (acceptable: causes watermark lag, not advance)
 func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 	u.Lock()
 	// if there is any watermark in committing, skip the current run
