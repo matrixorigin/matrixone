@@ -73,6 +73,8 @@ func TestTableScanner1(t *testing.T) {
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 
@@ -162,6 +164,8 @@ func TestScanAndProcess(t *testing.T) {
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 nil,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 
@@ -217,6 +221,8 @@ func TestProcessCallBack(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 nil,
 		lastMp:               make(map[uint32]TblMap),
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 
@@ -304,6 +310,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
