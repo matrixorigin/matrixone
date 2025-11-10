@@ -399,10 +399,28 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	retryTicker := time.NewTicker(retryTickerDuration)
 	defer retryTicker.Stop()
 
-	printStateTicker := time.NewTicker(s.options.PrintInterval)
+	printInterval := s.options.PrintInterval
+	if printInterval <= 0 {
+		logutil.Warn(
+			"cdc.table_detector.print_interval_invalid",
+			zap.Duration("interval", printInterval),
+			zap.Duration("fallback", defaultPrintInterval),
+		)
+		printInterval = defaultPrintInterval
+	}
+	printStateTicker := time.NewTicker(printInterval)
 	defer printStateTicker.Stop()
 
-	cleanupTicker := time.NewTicker(s.options.CleanupPeriod)
+	cleanupPeriod := s.options.CleanupPeriod
+	if cleanupPeriod <= 0 {
+		logutil.Warn(
+			"cdc.table_detector.cleanup_period_invalid",
+			zap.Duration("period", cleanupPeriod),
+			zap.Duration("fallback", defaultWatermarkCleanupPeriod),
+		)
+		cleanupPeriod = defaultWatermarkCleanupPeriod
+	}
+	cleanupTicker := time.NewTicker(cleanupPeriod)
 	defer cleanupTicker.Stop()
 
 	for {
@@ -485,7 +503,7 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	logutil.Info(
+	logutil.Debug(
 		"cdc.table_detector.cleanup_watermark_execute",
 		zap.String("sql", sql),
 	)
@@ -522,7 +540,7 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 				fields...,
 			)
 		} else {
-			logutil.Info(
+			logutil.Debug(
 				"cdc.table_detector.cleanup_watermark_done",
 				fields...,
 			)
