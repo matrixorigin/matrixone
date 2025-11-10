@@ -143,7 +143,7 @@ func (m *Metadata) Modify(varName string, v any) error {
 	case float32, float64:
 		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%f}`, Type_F64, v)
 	case int, int32, int64:
-		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%f}`, Type_I64, v)
+		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%d}`, Type_I64, v)
 	case string:
 		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":"%s"}`, Type_String, v)
 	default:

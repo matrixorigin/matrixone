@@ -103,4 +103,18 @@ func TestMetadataWriter(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, any(float64(0.2)), v6)
 
+	err = m.Modify("string_param", "world")
+	require.Nil(t, err)
+
+	v7, err := m.ResolveVariableFunc("string_param", false, false)
+	require.Nil(t, err)
+	require.Equal(t, any("world"), v7)
+
+	err = m.Modify("kmeans_max_iteration", 33)
+	require.Nil(t, err)
+
+	v8, err := m.ResolveVariableFunc("kmeans_max_iteration", false, false)
+	require.Nil(t, err)
+	require.Equal(t, any(int64(33)), v8)
+
 }
