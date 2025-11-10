@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -127,6 +128,13 @@ func Test_updateStorageUsageCache(t *testing.T) {
 }
 
 func Test_checkStorageUsageCache_V2(t *testing.T) {
+	origCache := cnUsageCache
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	t.Cleanup(func() {
+		cnUsageCache = origCache
+	})
+
 	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
@@ -145,12 +153,20 @@ func Test_checkStorageUsageCache_V2(t *testing.T) {
 		require.Equal(t, rep.Sizes[i], usages[int64(i)][0])
 	}
 
-	time.Sleep(time.Second * 6)
-	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
-	require.False(t, ok)
+	require.Eventually(t, func() bool {
+		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+		return !ok
+	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
 }
 
 func Test_checkStorageUsageCache(t *testing.T) {
+	origCache := cnUsageCache
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	t.Cleanup(func() {
+		cnUsageCache = origCache
+	})
+
 	rep := cmd_util.StorageUsageResp_V3{}
 
 	for i := 0; i < 10; i++ {
@@ -171,9 +187,10 @@ func Test_checkStorageUsageCache(t *testing.T) {
 		require.Equal(t, rep.SnapshotSizes[i], usages[int64(i)][1])
 	}
 
-	time.Sleep(time.Second * 6)
-	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
-	require.False(t, ok)
+	require.Eventually(t, func() bool {
+		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+		return !ok
+	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
 }
 
 func Test_GetObjectCount_V2(t *testing.T) {
