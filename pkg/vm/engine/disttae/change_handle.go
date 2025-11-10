@@ -163,7 +163,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 
 	logutil.Info("ChangesHandle-Split request snapshot read",
-		zap.String("from", nextFrom.ToString()),
+		zap.String("from", nextFrom.ToString()), //1762519148968452999-1
 	)
 	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -179,6 +179,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 		entries := resp.Entries
 		for _, entry := range entries {
+			logutil.Infof("ChangesHandle-Split get checkpoint entry: %v", entry.String())
 			start := types.TimestampToTS(*entry.Start)
 			end := types.TimestampToTS(*entry.End)
 			if start.LT(&minTS) {
@@ -194,6 +195,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
+		logutil.Infof("ChangesHandle-Split nextFrom is not in the checkpoint entry range: %s-%s", minTS.ToString(), maxTS.ToString())
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
 	h.currentPSFrom = nextFrom
