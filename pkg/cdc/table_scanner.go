@@ -331,10 +331,28 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	retryTicker := time.NewTicker(retryTickerDuration)
 	defer retryTicker.Stop()
 
-	printStateTicker := time.NewTicker(DefaultPrintInterval)
+	printInterval := DefaultPrintInterval
+	if printInterval <= 0 {
+		logutil.Warn(
+			"cdc.table_detector.print_interval_invalid",
+			zap.Duration("interval", printInterval),
+			zap.Duration("fallback", DefaultPrintInterval),
+		)
+		printInterval = DefaultPrintInterval
+	}
+	printStateTicker := time.NewTicker(printInterval)
 	defer printStateTicker.Stop()
 
-	cleanupTicker := time.NewTicker(s.cleanupPeriod)
+	cleanupPeriod := s.cleanupPeriod
+	if cleanupPeriod <= 0 {
+		logutil.Warn(
+			"cdc.table_detector.cleanup_period_invalid",
+			zap.Duration("period", cleanupPeriod),
+			zap.Duration("fallback", DefaultWatermarkCleanupPeriod),
+		)
+		cleanupPeriod = DefaultWatermarkCleanupPeriod
+	}
+	cleanupTicker := time.NewTicker(cleanupPeriod)
 	defer cleanupTicker.Stop()
 
 	for {
