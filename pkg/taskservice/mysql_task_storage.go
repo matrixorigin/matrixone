@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1126,11 +1128,28 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
 			if targetStatus == task.TaskStatus_ResumeRequested && dTask.TaskStatus != task.TaskStatus_Paused ||
 				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
+				createCdc := details.CreateCdc
+				logutil.Warn("cdc.task.state.mismatch",
+					zap.String("task-name", createCdc.TaskName),
+					zap.Uint64("task-id", dTask.ID),
+					zap.Uint64("account-id", uint64(dTask.AccountID)),
+					zap.String("current-status", dTask.TaskStatus.String()),
+					zap.String("target-status", targetStatus.String()),
+				)
 				err = moerr.NewInternalErrorf(ctx,
 					"Task %s status can not be change, now it is %s",
-					dTask.Details.Details.(*task.Details_CreateCdc).CreateCdc.TaskName,
+					createCdc.TaskName,
 					dTask.TaskStatus.String())
 				return 0, err
+			}
+			if dTask.TaskStatus != targetStatus {
+				logutil.Info("cdc.task.state.transition",
+					zap.String("task-name", details.CreateCdc.TaskName),
+					zap.Uint64("task-id", dTask.ID),
+					zap.Uint64("account-id", uint64(dTask.AccountID)),
+					zap.String("from-status", dTask.TaskStatus.String()),
+					zap.String("to-status", targetStatus.String()),
+				)
 			}
 			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)

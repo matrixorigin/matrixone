@@ -124,11 +124,13 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 		startInnerServer(serverConn)
 	}()
 
-	time.Sleep(time.Second * 2)
-	db, err = openDbConn(t, 6001)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		var openErr error
+		db, openErr = openDbConn(t, 6001)
+		return openErr == nil
+	}, time.Second, 10*time.Millisecond)
+	require.NotNil(t, db)
 
-	time.Sleep(time.Millisecond * 10)
 	closeDbConn(t, db)
 	clientConn.Close()
 	serverConn.Close()
@@ -231,6 +233,7 @@ func TestKill(t *testing.T) {
 		},
 		isSleepSql: true,
 		seconds:    30,
+		startedCh:  make(chan struct{}, 1),
 	}
 
 	sql6 := "select sleep(30);"
@@ -242,6 +245,7 @@ func TestKill(t *testing.T) {
 		},
 		isSleepSql: true,
 		seconds:    30,
+		startedCh:  make(chan struct{}, 1),
 	}
 
 	var wrapperStubFunc = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -294,14 +298,22 @@ func TestKill(t *testing.T) {
 	dbConnPool.SetMaxIdleConns(2)
 	dbConnPool.SetMaxOpenConns(2)
 	logutil.Infof("open conn1")
-	time.Sleep(time.Second * 2)
-	conn1, err = dbConnPool.Conn(ctx)
-	require.NoError(t, err)
+	waitForConn := func(db *sql.DB) *sql.Conn {
+		var (
+			conn    *sql.Conn
+			connErr error
+		)
+		require.Eventually(t, func() bool {
+			conn, connErr = db.Conn(ctx)
+			return connErr == nil
+		}, 5*time.Second, 10*time.Millisecond)
+		require.NoError(t, connErr)
+		return conn
+	}
+	conn1 = waitForConn(dbConnPool)
 	logutil.Infof("open conn1 done")
 
 	logutil.Infof("open conn2")
-	time.Sleep(time.Second * 2)
-
 	clientConn2, serverConn2 := net.Pipe()
 	defer serverConn2.Close()
 	defer clientConn2.Close()
@@ -318,8 +330,7 @@ func TestKill(t *testing.T) {
 	dbConnPool2.SetMaxIdleConns(2)
 	dbConnPool2.SetMaxOpenConns(2)
 
-	conn2, err = dbConnPool2.Conn(ctx)
-	require.NoError(t, err)
+	conn2 = waitForConn(dbConnPool2)
 	logutil.Infof("open conn2 done")
 
 	logutil.Infof("get the connection id of conn1")
@@ -355,8 +366,15 @@ func TestKill(t *testing.T) {
 		logutil.Infof("conn1 sleep(30) done")
 	}()
 
-	//sleep before cancel
-	time.Sleep(time.Second * 2)
+	waitForQueryStart := func(ch <-chan struct{}) {
+		select {
+		case <-ch:
+		case <-time.After(time.Second):
+			require.FailNow(t, "waitForQueryStart", "sleep query did not start before timeout")
+		}
+	}
+
+	waitForQueryStart(resultSet[sql5].startedCh)
 
 	logutil.Infof("conn2 kill query on conn1")
 	//conn2 kills the query
@@ -375,6 +393,10 @@ func TestKill(t *testing.T) {
 	//================================
 
 	//connection 1 exec : select sleep(30);
+	res = resultSet[sql6]
+	res.startedCh = make(chan struct{}, 1)
+	res.resultX.Store(0)
+
 	wgSleep2 := sync.WaitGroup{}
 	wgSleep2.Add(1)
 	go func() {
@@ -387,8 +409,7 @@ func TestKill(t *testing.T) {
 		logutil.Infof("conn1 sleep(30) 2 done")
 	}()
 
-	//sleep before cancel
-	time.Sleep(time.Second * 2)
+	waitForQueryStart(res.startedCh)
 
 	logutil.Infof("conn2 kill conn1")
 	//conn2 kills the connection 1
@@ -422,7 +443,6 @@ func TestKill(t *testing.T) {
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill itself done")
 
-	time.Sleep(time.Millisecond * 10)
 	//close server
 
 	logutil.Infof("close conn1,conn2")
@@ -1784,9 +1804,12 @@ func TestMysqlResultSet(t *testing.T) {
 		mo.handleConn(ctx, serverConn)
 	}()
 
-	time.Sleep(time.Second * 2)
-	db, err = openDbConn(t, 6001)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		var openErr error
+		db, openErr = openDbConn(t, 6001)
+		return openErr == nil
+	}, time.Second, 10*time.Millisecond)
+	require.NotNil(t, db)
 
 	for _, ks := range kases {
 		do_query_resp_resultset(t, db, false, false, ks.sql, ks.mrs)
@@ -1851,15 +1874,12 @@ func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
 	for i := 0; i < 3; i++ {
 		db, err = tryConn(dsn)
 		if err != nil {
-			time.Sleep(time.Second)
+			time.Sleep(20 * time.Millisecond)
 			continue
 		}
 		break
 	}
-	if err != nil {
-		panic(err)
-	}
-	return
+	return db, err
 }
 
 func tryConn(dsn string) (*sql.DB, error) {
@@ -1870,7 +1890,6 @@ func tryConn(dsn string) (*sql.DB, error) {
 		db.SetConnMaxLifetime(time.Minute * 3)
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
-		time.Sleep(time.Millisecond * 100)
 
 		//ping opens the connection
 		err = db.Ping()
