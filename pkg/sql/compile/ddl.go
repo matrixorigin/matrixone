@@ -4525,6 +4525,12 @@ func deleteManyWatermark(
 			key.AccountId,
 			key.TaskId,
 		)
+		logutil.Info(
+			"cdc.compile.delete_watermark_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
 		if cnt, err = ExecuteAndGetRowsAffected(ctx, tx, sql); err != nil {
 			return
 		}
