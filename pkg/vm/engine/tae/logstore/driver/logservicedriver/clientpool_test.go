@@ -15,11 +15,11 @@
 package logservicedriver
 
 import (
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +37,7 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 		ClientRetryDuration: time.Millisecond,
 		ClientFactory: func() (logservice.Client, error) {
 			if attempts.Add(1) == 1 {
-				return nil, errors.New("factory boom")
+				return nil, moerr.NewInternalErrorNoCtx("factory boom")
 			}
 			return newMockBackendClient(backend), nil
 		},
@@ -63,7 +63,7 @@ func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {
 		ClientRetryInterval: time.Nanosecond,
 		ClientRetryDuration: time.Nanosecond,
 		ClientFactory: func() (logservice.Client, error) {
-			return nil, errors.New("always fail")
+			return nil, moerr.NewInternalErrorNoCtx("always fail")
 		},
 	}
 	cfg.fillDefaults()
