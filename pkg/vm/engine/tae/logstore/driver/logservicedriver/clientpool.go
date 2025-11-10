@@ -134,13 +134,13 @@ func NewClient(
 		wrapped   BackendClient
 	)
 	for i := 0; i < retryTimes; i++ {
-		if time.Since(startTime) > retryDuration {
-			break
-		}
 		if wrapped, err = factory(); err == nil {
 			break
 		}
 		logutil.Errorf("WAL-Replay failed to create log service client: %v", err)
+		if time.Since(startTime) > retryDuration {
+			break
+		}
 		time.Sleep(retryInterval)
 	}
 	if err != nil {

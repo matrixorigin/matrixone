@@ -69,7 +69,7 @@ func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	require.PanicsWithError(t, "always fail", func() {
+	require.PanicsWithError(t, moerr.NewInternalErrorNoCtx("always fail").Error(), func() {
 		newClientPool(cfg)
 	})
 }
