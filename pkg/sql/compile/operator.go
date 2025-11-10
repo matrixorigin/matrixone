@@ -679,6 +679,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.SetInfo(&info)
 		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)

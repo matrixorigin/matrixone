@@ -11,10 +11,9 @@ create table insert_t2(a int, b int, c int, unique key(b, c));
 explain insert into insert_t2(a) values (1);
 TP QUERY PLAN
 Multi Update
-  ->  Project
-        ->  PreInsert on insert.insert_t2
-              ->  Project
-                    ->  Values Scan "*VALUES*" 
+  ->  PreInsert on insert.insert_t2
+        ->  Project
+              ->  Values Scan "*VALUES*" 
 drop table if exists insert_t3;
 create table insert_t3(a int auto_increment, b int, unique key(a));
 insert into insert_t3(b) values (1);
