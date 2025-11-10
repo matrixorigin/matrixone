@@ -37,8 +37,10 @@ import (
 )
 
 const (
-	DefaultSlowThreshold = 5 * time.Minute // Reduced from 10 minutes for earlier detection
-	DefaultPrintInterval = 1 * time.Minute // Reduced from 5 minutes for more frequent updates
+	DefaultSlowThreshold          = 5 * time.Minute // Reduced from 10 minutes for earlier detection
+	DefaultPrintInterval          = 1 * time.Minute // Reduced from 5 minutes for more frequent updates
+	DefaultWatermarkCleanupPeriod = 10 * time.Minute
+	DefaultCleanupWarnThreshold   = 5 * time.Second
 )
 
 var (
@@ -64,6 +66,8 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			CallBackTableName:    make(map[string][]string),
 			SubscribedTableNames: make(map[string][]string),
 			cdcStateManager:      NewCDCStateManager(),
+			cleanupPeriod:        DefaultWatermarkCleanupPeriod,
+			cleanupWarn:          DefaultCleanupWarnThreshold,
 		}
 		detector.scanTableFn = detector.scanTable
 	})
@@ -218,6 +222,8 @@ type TableDetector struct {
 	lastMp          map[uint32]TblMap
 	mu              sync.Mutex
 	cdcStateManager *CDCStateManager
+	cleanupPeriod   time.Duration
+	cleanupWarn     time.Duration
 }
 
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
@@ -248,7 +254,7 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 		go s.scanTableLoop(ctx)
 	}
 	s.Callbacks[id] = cb
-	logutil.Info(
+	logutil.Debug(
 		"cdc.table_detector.register",
 		zap.String("task-id", id),
 		zap.Uint32("account-id", accountId),
@@ -300,20 +306,16 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	delete(s.Callbacks, id)
-	if len(s.Callbacks) == 0 && s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
-	}
 
-	logutil.Info(
+	logutil.Debug(
 		"cdc.table_detector.unregister",
 		zap.String("task-id", id),
 	)
 }
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
-	logutil.Info("cdc.table_detector.scan_start")
-	defer logutil.Info("cdc.table_detector.scan_end")
+	logutil.Debug("cdc.table_detector.scan_start")
+	defer logutil.Debug("cdc.table_detector.scan_end")
 
 	var tickerDuration, retryTickerDuration time.Duration
 	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
@@ -331,6 +333,9 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 
 	printStateTicker := time.NewTicker(DefaultPrintInterval)
 	defer printStateTicker.Stop()
+
+	cleanupTicker := time.NewTicker(s.cleanupPeriod)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -358,6 +363,8 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 			go s.processCallback(ctx, lastMp)
 		case <-printStateTicker.C:
 			s.cdcStateManager.PrintActiveRunners(DefaultSlowThreshold)
+		case <-cleanupTicker.C:
+			s.cleanupOrphanWatermarks(ctx)
 		}
 	}
 }
@@ -398,11 +405,66 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	if err != nil {
 		logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
 	} else {
-		logutil.Info("cdc.table_detector.callback_success")
+		logutil.Debug("cdc.table_detector.callback_success")
 		s.lastMp = nil
 	}
 
 	s.handling = false
+}
+
+func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
+	if s.exec == nil {
+		logutil.Debug("cdc.table_detector.cleanup_watermark_skip", zap.String("reason", "executor nil"))
+		return
+	}
+
+	sql := CDCSQLBuilder.DeleteOrphanWatermarkSQL()
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	logutil.Debug(
+		"cdc.table_detector.cleanup_watermark_execute",
+		zap.String("sql", sql),
+	)
+	start := time.Now()
+	res, err := s.exec.Exec(
+		cleanupCtx,
+		sql,
+		executor.Options{}.
+			WithStatementOption(
+				executor.StatementOption{}.
+					WithAccountID(catalog.System_Account).
+					WithDisableLog(),
+			),
+	)
+	if err != nil {
+		logutil.Error(
+			"cdc.table_detector.cleanup_watermark_failed",
+			zap.Error(err),
+			zap.Duration("duration", time.Since(start)),
+		)
+		return
+	}
+
+	if res.AffectedRows > 0 {
+		duration := time.Since(start)
+		fields := []zap.Field{
+			zap.Uint64("deleted-rows", res.AffectedRows),
+			zap.Duration("duration", duration),
+			zap.String("sql", sql),
+		}
+		if duration > s.cleanupWarn {
+			logutil.Warn(
+				"cdc.table_detector.cleanup_watermark_slow",
+				fields...,
+			)
+		} else {
+			logutil.Debug(
+				"cdc.table_detector.cleanup_watermark_done",
+				fields...,
+			)
+		}
+	}
 }
 
 func (s *TableDetector) Close() {
