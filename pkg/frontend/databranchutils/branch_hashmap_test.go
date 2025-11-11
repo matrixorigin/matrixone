@@ -448,7 +448,6 @@ func TestBranchHashmapPopByEncodedKeyInMemory(t *testing.T) {
 
 	popOnce, err := bh.PopByEncodedKey(encodedKey, false)
 	require.NoError(t, err)
-	require.Len(t, popOnce, 1)
 	require.True(t, popOnce.Exists)
 	require.Len(t, popOnce.Rows, 1)
 
@@ -469,7 +468,6 @@ func TestBranchHashmapPopByEncodedKeyInMemory(t *testing.T) {
 
 	popRest, err := bh.PopByEncodedKey(encodedKey, true)
 	require.NoError(t, err)
-	require.Len(t, popRest, 1)
 	require.True(t, popRest.Exists)
 	require.Len(t, popRest.Rows, 1)
 	secondRow, _, err := bh.DecodeRow(popRest.Rows[0])
@@ -526,7 +524,6 @@ func TestBranchHashmapPopByEncodedKeySpilled(t *testing.T) {
 
 	popPartial, err := bhIface.PopByEncodedKey(encodedKey, false)
 	require.NoError(t, err)
-	require.Len(t, popPartial, 1)
 	require.True(t, popPartial.Exists)
 	require.Len(t, popPartial.Rows, 1)
 
@@ -540,7 +537,6 @@ func TestBranchHashmapPopByEncodedKeySpilled(t *testing.T) {
 
 	popRemaining, err := bhIface.PopByEncodedKey(encodedKey, true)
 	require.NoError(t, err)
-	require.Len(t, popRemaining, 1)
 	require.True(t, popRemaining.Exists)
 	require.Len(t, popRemaining.Rows, 9)
 
@@ -783,7 +779,7 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, types.Time(123456789), false, mp))
 			},
 			assert: func(v any) {
-				require.Equal(t, int64(123456789), v.(int64))
+				require.Equal(t, int64(123456789), int64(v.(types.Time)))
 			},
 		},
 		{
