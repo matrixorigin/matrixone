@@ -207,7 +207,8 @@ func IndexUpdateTaskExecutorFactory(
 			return
 		}
 
-		return exec.run(ctx)
+		err = exec.run(ctx)
+		return
 	}
 }
 
