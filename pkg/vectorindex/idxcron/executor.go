@@ -55,6 +55,8 @@ const (
 	Action_Ivfflat_Reindex      = "ivfflat_reindex"
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
 	Action_Wildcard             = "*"
+
+	OneWeek = 24 * 7 * time.Hour
 )
 
 var running atomic.Bool
@@ -69,7 +71,7 @@ type IndexUpdateTaskInfo struct {
 	Metadata     *sqlexec.Metadata
 	Status       []byte
 	CreatedAt    types.Timestamp
-	LastUpdateAt types.Timestamp
+	LastUpdateAt *types.Timestamp
 }
 
 // The optimal number of LISTS is estimated the the formula below:
@@ -81,7 +83,7 @@ type IndexUpdateTaskInfo struct {
 // Case 1: ivf_train_percent * dsize < 30 * nlist, always re-index
 // Case 2: 30 * nlist < ivf_train_percent * dsize < 256 * nlist, re-index every week
 // Case 3:  dsize > 256 * nlist, re-index every 1 week and ivf_train_percent = (256 * nlist) / dsize
-func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, ivf_train_percent float64, nlist int64) (ok bool, err error) {
+func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64) (ok bool, err error) {
 
 	lower := float64(30 * nlist)
 	upper := float64(256 * nlist)
@@ -90,23 +92,51 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		return true, nil
 	}
 
+	v, err := t.Metadata.ResolveVariableFunc("kmeans_train_percent", false, true)
+	if err != nil {
+		return false, err
+	}
+	ivf_train_percent := v.(float64)
+
 	nsample := float64(dsize) * (ivf_train_percent / 100)
 
 	if nsample < lower {
 		return true, nil
 	} else if nsample < upper {
 		// reindex every week
+		if t.LastUpdateAt == nil {
+			return true, nil
+		}
+
+		ts := time.UnixMicro(t.LastUpdateAt.Unix())
+		ts = ts.Add(OneWeek)
+		if ts.After(time.Now()) {
+			return false, nil
+		} else {
+			// update
+			return true, nil
+		}
 
 	} else {
+
+		// reindex every week
+		if t.LastUpdateAt != nil {
+			ts := time.UnixMicro(t.LastUpdateAt.Unix())
+			ts = ts.Add(OneWeek)
+			if ts.After(time.Now()) {
+				return false, nil
+			}
+		}
+
 		// reindex every week and limit nsample to upper bound
 		ratio := (upper / float64(dsize)) * 100
 		err = t.Metadata.Modify("kmeans_train_percent", ratio)
 		if err != nil {
 			return false, err
 		}
-	}
 
-	return true, nil
+		return true, nil
+	}
 }
 
 type IndexUpdateTaskExecutor struct {
@@ -175,7 +205,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
-			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata from mo_catalog.mo_index_update"
+			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at from mo_catalog.mo_index_update"
 			res, err := sqlexec.RunSql(sqlproc, sql)
 			if err != nil {
 				return err
@@ -190,6 +220,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 				accountvec := bat.Vecs[4]
 				tblidvec := bat.Vecs[5]
 				metavec := bat.Vecs[6]
+				lastupdatevec := bat.Vecs[7]
 
 				for i := 0; i < bat.RowCount(); i++ {
 					dbname := dbvec.GetStringAt(i)
@@ -199,6 +230,8 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 					accountId := vector.GetFixedAtWithTypeCheck[uint32](accountvec, i)
 					tableId := vector.GetFixedAtWithTypeCheck[uint64](tblidvec, i)
 					metadata := (*sqlexec.Metadata)(nil)
+					lastupdate := (*types.Timestamp)(nil)
+
 					if !metavec.IsNull(uint64(i)) {
 						bytes := metavec.GetRawBytesAt(i)
 						metadata, err = sqlexec.NewMetadata(bytes)
@@ -207,13 +240,20 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 						}
 					}
 
+					if !lastupdatevec.IsNull(uint64(i)) {
+						ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](lastupdatevec, i)
+						lastupdate = &ts
+					}
+
 					tasks = append(tasks, IndexUpdateTaskInfo{DbName: dbname,
-						TableName: tblname,
-						IndexName: idxname,
-						Action:    action,
-						AccountId: accountId,
-						TableId:   tableId,
-						Metadata:  metadata})
+						TableName:    tblname,
+						IndexName:    idxname,
+						Action:       action,
+						AccountId:    accountId,
+						TableId:      tableId,
+						Metadata:     metadata,
+						LastUpdateAt: lastupdate})
+
 				}
 			}
 
@@ -225,34 +265,16 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	return tasks, err
 }
 
-// The optimal number of LISTS is estimated the the formula below:
-// For datasets with less than one million rows, use lists = rows / 1000.
-// For datasets with more than one million rows, use lists = sqrt(rows).
-//
-// Faiss guidelines suggest using between 30 * nlist and 256 * nlist vectors for training, ideally from a representative sample of your data.
-//
-// we should estimate with the parameter kmeans_train_percent
-// say kmeans_train_percent is 1% (default) LISTS=1000 and Recommended samples count is between 30000 and 256000,
-//
-// Case 1:
-// e.g. 1 million vectors and last iteration is 10K vectors
-// #training_data = 1% x 1 million = 10000.  Not enough training data and perform re-index
-//
-// Case 2:
-// e.g. 5 million vectors and last iteration is 10K vectors
-// #training_data = 1% x 5 million = 50000.  Minimum requirement 30000 samples met but last iteration didn't meet requirement, so perform re-index
-//
-// Case 3:
-// e.g. 5 million vectors and last iteration is 3 million vectors
-// #training_data = 1% x 5 million = 50000.  Minimum requirement 30000 samples met and last iteration also meet requirement, so skip re-index
-//
-// Case 4:
-// e.g. 30 million vectors
-// #training_data = 1% x 30 million= 300000.  Exceed Faiss recommendation, skip re-index if last iteration also meet requirement.
-func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (err error) {
+// return status as SQL to update mo_index_update
+func runIvfflatReindex(ctx context.Context,
+	txnEngine engine.Engine,
+	txnClient client.TxnClient,
+	cnUUID string,
+	task IndexUpdateTaskInfo) (status string, err error) {
 
 	if len(task.IndexName) == 0 {
-		return moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
+		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
+		return
 	}
 
 	resolveVariableFunc := (func(string, bool, bool) (any, error))(nil)
@@ -260,6 +282,7 @@ func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient c
 		resolveVariableFunc = task.Metadata.ResolveVariableFunc
 	}
 
+	updated := false
 	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) (err2 error) {
@@ -303,22 +326,60 @@ func runIvfflatReindex(ctx context.Context, txnEngine engine.Engine, txnClient c
 				return moerr.NewInternalErrorNoCtx("IVFFLAT index parameter LISTS not found")
 			}
 
-			// run alter table alter reindex
-			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT LISTS=%d", task.DbName, task.TableName, task.IndexName, lists)
-			res, err2 := sqlexec.RunSql(sqlproc, sql)
+			// get number of rows from source table
+			cntsql := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`", task.DbName, task.TableName)
+			res, err2 := sqlexec.RunSql(sqlproc, cntsql)
 			if err2 != nil {
 				return
 			}
 			defer res.Close()
 
+			dsize := uint64(0)
+			if len(res.Batches) > 0 {
+				bat := res.Batches[0]
+				if bat.RowCount() > 0 {
+					cntvec := bat.Vecs[0]
+					dsize = vector.GetFixedAtWithTypeCheck[uint64](cntvec, 0)
+				}
+			}
+
+			ok, err := task.checkIndexUpdatable(ctx, dsize, lists)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				// skip the update
+				return nil
+			}
+
+			// run alter table alter reindex
+			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT LISTS=%d", task.DbName, task.TableName, task.IndexName, lists)
+			res, err2 = sqlexec.RunSql(sqlproc, sql)
+			if err2 != nil {
+				return
+			}
+			res.Close()
+
+			// mark reindex is performed
+			updated = true
 			return
 		})
 
+	// generate status sql to insert status to mo_index_update table
+	if err == nil {
+		if updated {
+			// reindex is performed.  Add last_update_at to status SQL
+
+		} else {
+			// reindex is NOT performed. Do not update last_update_at to status SQL
+
+		}
+	}
 	return
 }
 
-func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (err error) {
-	return moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
+func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (status string, err error) {
+	return status, moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
 }
 
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
@@ -333,12 +394,13 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete
 	for _, t := range tasks {
 		var err2 error
+		var status string
 
 		switch t.Action {
 		case Action_Ivfflat_Reindex:
-			err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
+			status, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
 		case Action_Fulltext_BatchDelete:
-			err2 = runFulltextBatchDelete(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
+			status, err2 = runFulltextBatchDelete(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
 		default:
 			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
 		}
@@ -347,11 +409,17 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 			catalog.System_Account, 5*time.Minute, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, data any) error {
 				if err2 != nil {
-					// save error status to db
+					// save error status column to mo_index_update
 
-				} else {
-					// save success status to db
+				}
 
+				// run status sql
+				if len(status) > 0 {
+					res, err3 := sqlexec.RunSql(sqlproc, status)
+					if err3 != nil {
+						return err3
+					}
+					res.Close()
 				}
 				return nil
 			})
