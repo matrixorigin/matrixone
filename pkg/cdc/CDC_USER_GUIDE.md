@@ -677,6 +677,28 @@ where t.state = 'running'
 order by lag_minutes desc;
 ```
 
+#### Detect Snapshot Stalls
+
+Each table stream tracks whether recent polling rounds failed to advance the snapshot watermark. When this happens, CDC:
+
+- Increments `mo_cdc_table_snapshot_no_progress_total` for the affected table on every stalled round.
+- Sets `mo_cdc_table_stuck` to `1` and records the time in `mo_cdc_table_last_activity_timestamp`.
+- Emits throttled warning logs; if the stall exceeds the internal threshold (default 1 minute) the table stream raises a retryable error so the scheduler can retry later.
+- Resets counters and gauges automatically once progress resumes.
+
+```promql
+# Tables currently flagged as stalled
+mo_cdc_table_stuck == 1
+
+# Minutes since last successful progress
+(time() - mo_cdc_table_last_activity_timestamp) / 60
+
+# Rounds without progress in the last 10 minutes
+increase(mo_cdc_table_snapshot_no_progress_total[10m]) > 0
+```
+
+> **Note**: The stall threshold and warning interval are configurable (defaults: 1 minute stall threshold, 10 second warning throttle). Adjust your alerting thresholds if you override these values.
+
 ### Common Error Messages
 
 | Error Message | Cause | Resolution |
@@ -785,6 +807,7 @@ rate(mo_cdc_task_state_change_total[5m])
 | `mo_cdc_watermark_cache_size` | Gauge | `tier` | Number of watermarks in each cache tier |
 | `mo_cdc_watermark_update_total` | Counter | `table`, `update_type` | Count of watermark updates |
 | `mo_cdc_watermark_commit_duration_seconds` | Histogram | - | Duration of watermark commits to database |
+| `mo_cdc_table_snapshot_no_progress_total` | Counter | `table` | Count of processing rounds where snapshot timestamps failed to advance (stall detection) |
 
 **Example Queries**:
 ```promql
@@ -807,6 +830,9 @@ mo_cdc_watermark_cache_size{tier="committed"}
 
 # Watermark commit latency (P99)
 histogram_quantile(0.99, mo_cdc_watermark_commit_duration_seconds_bucket)
+
+# Snapshot stalls detected in the last 10 minutes
+increase(mo_cdc_table_snapshot_no_progress_total[10m]) > 0
 
 # ⚠️ Planned feature: Watermark Lag Ratio (frequency-agnostic)
 # mo_cdc_watermark_lag_ratio  # <2: normal, 2-5: warning, >5: critical
@@ -860,6 +886,8 @@ avg(mo_cdc_batch_size_rows)
 | `mo_cdc_table_stream_total` | Gauge | `state` | Number of active table streams |
 | `mo_cdc_table_stream_round_total` | Counter | `table`, `status` | Count of processing rounds |
 | `mo_cdc_table_stream_round_duration_seconds` | Histogram | `table` | Duration of processing rounds |
+| `mo_cdc_table_stuck` | Gauge | `table` | Whether a table stream is currently flagged as stalled (1 = stuck, 0 = healthy) |
+| `mo_cdc_table_last_activity_timestamp` | Gauge | `table` | Unix timestamp when the table stream last made forward progress |
 
 **Example Queries**:
 ```promql
@@ -873,6 +901,12 @@ rate(mo_cdc_table_stream_round_total[5m])
 
 # Processing duration P99
 histogram_quantile(0.99, mo_cdc_table_stream_round_duration_seconds_bucket)
+
+# Tables currently marked as stuck
+mo_cdc_table_stuck == 1
+
+# Minutes since last successful progress
+(time() - mo_cdc_table_last_activity_timestamp) / 60
 ```
 
 #### Sinker Metrics
@@ -1227,6 +1261,7 @@ Configure alerts for critical conditions:
 - ✅ Watermark stuck (`mo_cdc_watermark_lag_seconds > 300`)
 - ✅ No heartbeat (`rate(mo_cdc_heartbeat_total[5m]) == 0`)
 - ✅ High error rate (`rate(mo_cdc_task_error_total[5m]) > 0.01`)
+- ✅ Snapshot stall detection (`increase(mo_cdc_table_snapshot_no_progress_total[10m]) > 0` or `mo_cdc_table_stuck == 1`)
 
 #### 2. Monitor Watermark Lag
 
