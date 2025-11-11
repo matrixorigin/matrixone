@@ -585,21 +585,6 @@ func handleBranchMerge(
 	return
 }
 
-func hasLeadingSlashInRawPath(rawPath string, hasService bool) bool {
-	trimmed := strings.TrimSpace(rawPath)
-	if trimmed == "" {
-		return false
-	}
-
-	if hasService {
-		if idx := strings.LastIndex(trimmed, fileservice.ServiceNameSeparator); idx >= 0 {
-			trimmed = trimmed[idx+1:]
-		}
-	}
-
-	return strings.HasPrefix(trimmed, "/")
-}
-
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	ses *Session,
@@ -686,7 +671,7 @@ func satisfyDiffOutputOpt(
 
 	if len(stmt.OutputOpt.DirPath) != 0 {
 		return diffOutputFile(
-			ctx, ses, mrs, stmt, rows1, rows2, srcRel, dstRel,
+			ctx, ses, stmt, rows1, rows2, srcRel, dstRel,
 			lcaType, colTypes, pkColIdxes,
 		)
 	}
@@ -697,7 +682,6 @@ func satisfyDiffOutputOpt(
 func diffOutputFile(
 	ctx context.Context,
 	ses *Session,
-	mrs *MysqlResultSet,
 	stmt *tree.DataBranchDiff,
 	rows1 [][]any,
 	rows2 [][]any,
@@ -840,7 +824,7 @@ func diffOutputFile(
 
 	ses.ClearAllMysqlResultSet()
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	mrs = ses.GetMysqlResultSet()
+	mrs := ses.GetMysqlResultSet()
 
 	col1 := new(MysqlColumn)
 	col1.SetName("FILE SAVED TO")
@@ -1892,7 +1876,11 @@ func handleDelsOnLCA(
 			row[0] = tableName
 			row[1] = flag
 			for j := range len(colTypes) {
-				row[j+2] = types.DecodeValue(cols[j+1].GetRawBytesAt(i), colTypes[j].Oid)
+				if cols[j+1].GetNulls().Contains(uint64(i)) {
+					row[j+2] = nil
+				} else {
+					row[j+2] = types.DecodeValue(cols[j+1].GetRawBytesAt(i), colTypes[j].Oid)
+				}
 			}
 			rows = append(rows, row)
 		}
