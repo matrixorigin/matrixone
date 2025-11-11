@@ -139,6 +139,26 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 	}
 }
 
+func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, err error) error {
+
+	if err != nil {
+		// save error status column to mo_index_update
+
+	}
+
+	// run status sql
+	if updated {
+		sql := ""
+		res, err2 := sqlexec.RunSql(sqlproc, sql)
+		if err2 != nil {
+			return err2
+		}
+		res.Close()
+	}
+
+	return nil
+}
+
 type IndexUpdateTaskExecutor struct {
 	ctx         context.Context
 	cancelFunc  context.CancelFunc
@@ -270,7 +290,7 @@ func runIvfflatReindex(ctx context.Context,
 	txnEngine engine.Engine,
 	txnClient client.TxnClient,
 	cnUUID string,
-	task IndexUpdateTaskInfo) (status string, err error) {
+	task IndexUpdateTaskInfo) (updated bool, err error) {
 
 	if len(task.IndexName) == 0 {
 		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
@@ -282,7 +302,6 @@ func runIvfflatReindex(ctx context.Context,
 		resolveVariableFunc = task.Metadata.ResolveVariableFunc
 	}
 
-	updated := false
 	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) (err2 error) {
@@ -365,21 +384,11 @@ func runIvfflatReindex(ctx context.Context,
 			return
 		})
 
-	// generate status sql to insert status to mo_index_update table
-	if err == nil {
-		if updated {
-			// reindex is performed.  Add last_update_at to status SQL
-
-		} else {
-			// reindex is NOT performed. Do not update last_update_at to status SQL
-
-		}
-	}
 	return
 }
 
-func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (status string, err error) {
-	return status, moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
+func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (updated bool, err error) {
+	return updated, moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
 }
 
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
@@ -394,13 +403,13 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete
 	for _, t := range tasks {
 		var err2 error
-		var status string
+		var updated bool
 
 		switch t.Action {
 		case Action_Ivfflat_Reindex:
-			status, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
+			updated, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
 		case Action_Fulltext_BatchDelete:
-			status, err2 = runFulltextBatchDelete(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
+			updated, err2 = runFulltextBatchDelete(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
 		default:
 			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
 		}
@@ -408,20 +417,8 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 		sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
 			catalog.System_Account, 5*time.Minute, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, data any) error {
-				if err2 != nil {
-					// save error status column to mo_index_update
 
-				}
-
-				// run status sql
-				if len(status) > 0 {
-					res, err3 := sqlexec.RunSql(sqlproc, status)
-					if err3 != nil {
-						return err3
-					}
-					res.Close()
-				}
-				return nil
+				return t.saveStatus(sqlproc, updated, err2)
 			})
 	}
 
