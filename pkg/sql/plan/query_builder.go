@@ -194,9 +194,9 @@ func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]i
 		col.ColPos = ids[1]
 		col.Name = builder.nameByColRef[mapID]
 	} else {
-		colName := builder.nameByColRef[mapID]
-		if colName == "" {
-			colName = "<unknown>"
+		colName := "<unknown>"
+		if builder != nil {
+			colName = builder.nameByColRef[mapID]
 		}
 		errorMsg := builder.buildRemapErrorMessage(mapID, colName, colMap, remapInfo)
 		return moerr.NewParseErrorf(builder.GetContext(), "%s", errorMsg)
