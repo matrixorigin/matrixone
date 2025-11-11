@@ -160,8 +160,8 @@ func (m *Metadata) Modify(varName string, v any) error {
 		return err
 	}
 
-	fmt.Println(cfgvalue)
-	fmt.Println(bj.String())
+	//fmt.Println(cfgvalue)
+	//fmt.Println(bj.String())
 
 	m.bj = bj
 

@@ -118,7 +118,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 			return true, nil
 		}
 
-		ts := time.UnixMicro(t.LastUpdateAt.Unix())
+		ts := time.Unix(t.LastUpdateAt.Unix(), 0)
 		ts = ts.Add(OneWeek)
 		if ts.After(time.Now()) {
 			return false, nil
@@ -128,10 +128,9 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		}
 
 	} else {
-
 		// reindex every week
 		if t.LastUpdateAt != nil {
-			ts := time.UnixMicro(t.LastUpdateAt.Unix())
+			ts := time.Unix(t.LastUpdateAt.Unix(), 0)
 			ts = ts.Add(OneWeek)
 			if ts.After(time.Now()) {
 				return false, nil
