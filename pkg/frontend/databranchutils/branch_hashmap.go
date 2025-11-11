@@ -1067,8 +1067,8 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 		v := vector.GetFixedAtNoTypeCheck[uint64](vec, row)
 		p.EncodeBit(v)
 	case types.T_enum:
-		v := vector.GetFixedAtNoTypeCheck[uint16](vec, row)
-		p.EncodeUint16(v)
+		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, row)
+		p.EncodeUint16(uint16(v))
 	case types.T_uuid:
 		v := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row)
 		p.EncodeUuid(v)

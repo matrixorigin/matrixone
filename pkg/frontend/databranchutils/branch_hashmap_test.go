@@ -819,7 +819,7 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, types.Enum(42), false, mp))
 			},
 			assert: func(v any) {
-				require.Equal(t, uint16(42), v.(uint16))
+				require.Equal(t, uint16(42), uint16(v.(uint16)))
 			},
 		},
 		{
