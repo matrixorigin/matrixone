@@ -245,23 +245,21 @@ func onPreUpdateCDCTasks(
 
 	//Cancel cdc task
 	if targetTaskStatus == task.TaskStatus_CancelRequested {
-		//deleting mo_cdc_task
-		if cnt, err = dao.DeleteTaskByName(
-			ctx, accountId, taskName,
-		); err != nil {
+		var deleteRes DeleteCDCArtifactsResult
+		if deleteRes, err = dao.DeleteTaskAndWatermark(ctx, accountId, taskName, keys); err != nil {
 			return
 		}
-		affectedCdcRow += int(cnt)
-
-		//delete mo_cdc_watermark
-		if cnt, err = dao.DeleteManyWatermark(
-			ctx, keys,
-		); err != nil {
-			return
-		}
-		affectedCdcRow += int(cnt)
+		affectedCdcRow += int(deleteRes.TaskRows + deleteRes.WatermarkRows)
 		return
 	}
+
+	logutil.Debug(
+		"cdc.handle.update_task",
+		zap.Uint64("account-id", accountId),
+		zap.String("task-name", taskName),
+		zap.Int("key-count", len(keys)),
+		zap.String("target-status", targetTaskStatus.String()),
+	)
 
 	//step2: update or cancel cdc task
 	var targetCDCStatus string

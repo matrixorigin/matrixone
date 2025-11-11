@@ -147,6 +147,11 @@ func RequestMultipleCn(ctx context.Context,
 		return moerr.NewInternalError(ctx, "invalid response handle function")
 	}
 
+	// If the context is already canceled, return immediately
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Count valid nodes (non-empty addresses)
 	validNodes := 0
 	for _, node := range nodes {

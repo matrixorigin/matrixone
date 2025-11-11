@@ -62,6 +62,12 @@ type CDCDao struct {
 	sqlExecutor taskservice.SqlExecutor
 }
 
+type DeleteCDCArtifactsResult struct {
+	TaskRows       int64
+	WatermarkRows  int64
+	LocalTxnOpened bool
+}
+
 func NewCDCDao(
 	ses *Session,
 	opts ...CDCDaoOption,
@@ -364,6 +370,12 @@ func (t *CDCDao) DeleteManyWatermark(
 			key.AccountId,
 			key.TaskId,
 		)
+		logutil.Debug(
+			"cdc.dao.delete_watermark_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
 		if cnt, err = ExecuteAndGetRowsAffected(ctx, executor, sql); err != nil {
 			return
 		}
@@ -384,6 +396,47 @@ func (t *CDCDao) DeleteTaskByName(
 	)
 	sql := cdc.CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
 	deletedCnt, err = ExecuteAndGetRowsAffected(ctx, executor, sql)
+	return
+}
+
+func (t *CDCDao) DeleteTaskAndWatermark(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+	keys map[taskservice.CDCTaskKey]struct{},
+) (res DeleteCDCArtifactsResult, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+	)
+
+	_, isTxn := executor.(*sql.Tx)
+	res.LocalTxnOpened = false
+
+	logutil.Debug(
+		"cdc.dao.delete_task_and_watermark.begin",
+		zap.Uint64("account-id", accountId),
+		zap.String("task-name", taskName),
+		zap.Int("key-count", len(keys)),
+		zap.Bool("executor-is-tx", isTxn),
+	)
+
+	if res.TaskRows, err = t.DeleteTaskByName(ctx, accountId, taskName); err != nil {
+		return
+	}
+
+	if res.WatermarkRows, err = t.DeleteManyWatermark(ctx, keys); err != nil {
+		return
+	}
+
+	logutil.Debug(
+		"cdc.dao.delete_task_and_watermark.done",
+		zap.Uint64("account-id", accountId),
+		zap.String("task-name", taskName),
+		zap.Int64("task-rows", res.TaskRows),
+		zap.Int64("watermark-rows", res.WatermarkRows),
+		zap.Bool("executor-is-tx", isTxn),
+	)
+
 	return
 }
 
