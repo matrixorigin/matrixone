@@ -56,7 +56,8 @@ const (
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
 	Action_Wildcard             = "*"
 
-	OneWeek = 24 * 7 * time.Hour
+	OneWeek            = 24 * 7 * time.Hour
+	KmeansTrainPercent = "kmeans_train_percent"
 )
 
 var running atomic.Bool
@@ -92,7 +93,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		return true, nil
 	}
 
-	v, err := t.Metadata.ResolveVariableFunc("kmeans_train_percent", false, true)
+	v, err := t.Metadata.ResolveVariableFunc(KmeansTrainPercent, false, true)
 	if err != nil {
 		return false, err
 	}
@@ -130,7 +131,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 		// reindex every week and limit nsample to upper bound
 		ratio := (upper / float64(dsize)) * 100
-		err = t.Metadata.Modify("kmeans_train_percent", ratio)
+		err = t.Metadata.Modify(KmeansTrainPercent, ratio)
 		if err != nil {
 			return false, err
 		}
@@ -144,11 +145,13 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 	if err != nil {
 		// save error status column to mo_index_update
 
+		return nil
 	}
 
 	// run status sql
 	if updated {
-		sql := ""
+		sql := fmt.Sprintf("UPDATE `%s`.`%s` SET last_update_at = now() WHERE table_id = %d AND account_id = %d AND action = '%s'",
+			t.DbName, t.TableName, t.TableId, t.AccountId, t.Action)
 		res, err2 := sqlexec.RunSql(sqlproc, sql)
 		if err2 != nil {
 			return err2
