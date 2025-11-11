@@ -62,10 +62,11 @@ const (
 )
 
 var (
-	runSaveStatusSql = sqlexec.RunSql
-	runGetTasksSql   = sqlexec.RunSql
-	runReindexSql    = sqlexec.RunSql
-	runGetCountSql   = sqlexec.RunSql
+	runSaveStatusSql     = sqlexec.RunSql
+	runGetTasksSql       = sqlexec.RunSql
+	runReindexSql        = sqlexec.RunSql
+	runGetCountSql       = sqlexec.RunSql
+	runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
 )
 
 var running atomic.Bool
@@ -232,7 +233,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 
 	tasks := make([]IndexUpdateTaskInfo, 0, 16)
 
-	err := sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
+	err := runTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
@@ -313,7 +314,7 @@ func runIvfflatReindex(ctx context.Context,
 		resolveVariableFunc = task.Metadata.ResolveVariableFunc
 	}
 
-	err = sqlexec.RunTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
+	err = runTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) (err2 error) {
 
@@ -425,7 +426,7 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
 		}
 
-		sqlexec.RunTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
+		runTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
 			catalog.System_Account, 5*time.Minute, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, data any) error {
 
