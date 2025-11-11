@@ -59,6 +59,7 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -430,8 +431,13 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			u.committingBuffer = append(u.committingBuffer, job)
 		case JT_CDC_UpdateWMErrMsg:
 			if _, err := u.GetFromCache(context.Background(), job.Key); err != nil {
-				job.DoneWithErr(err)
-				continue
+				if !errors.Is(err, ErrNoWatermarkFound) {
+					job.DoneWithErr(err)
+					continue
+				}
+				if _, exists := u.readKeysBuffer[*job.Key]; !exists {
+					u.readKeysBuffer[*job.Key] = WatermarkResult{}
+				}
 			}
 			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
 		case JT_CDC_RemoveCachedWM:
@@ -529,6 +535,11 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	// the jobs in the addCommittedBuffer will be processed in the `execAddWM`
 	u.Lock()
 	defer u.Unlock()
+	for key, result := range u.readKeysBuffer {
+		if result.Ok {
+			u.cacheCommitted[key] = result.Watermark
+		}
+	}
 	for i, job := range u.getOrAddCommittedBuffer {
 		if u.readKeysBuffer[*job.Key].Ok {
 			u.cacheCommitted[*job.Key] = u.readKeysBuffer[*job.Key].Watermark
