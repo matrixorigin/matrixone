@@ -155,7 +155,7 @@ func (m *Metadata) Modify(varName string, v any) error {
 		return err
 	}
 
-	bj, err = bj.Modify([]*bytejson.Path{&path}, []bytejson.ByteJson{val}, bytejson.JsonModifyReplace)
+	bj, err = bj.Modify([]*bytejson.Path{&path}, []bytejson.ByteJson{val}, bytejson.JsonModifySet)
 	if err != nil {
 		return err
 	}
