@@ -14,15 +14,14 @@ create table customer_lifecycle (
     last_contact timestamp,
     is_active tinyint,
     birthdate date,
-    profile_hash varbinary(8),
     primary key(customer_id)
 );
 
 insert into customer_lifecycle values
-(1001, 'east', 3, 8000.00, 720, 'app', 'stable usage', '2024-03-01 09:20:00', 1, '1990-02-10', x'AAEE12CD'),
-(1002, 'north', null, null, null, null, 'missing bureau', null, 1, '1984-05-05', null),
-(1003, 'west', 2, 4500.00, 655, 'web', null, '2024-03-02 15:11:00', 0, null, x'00FFEE12'),
-(1004, null, 1, 3200.50, 610, 'branch', 'watchlist', null, 1, '1992-09-01', x'BBBBBBBB');
+(1001, 'east', 3, 8000.00, 720, 'app', 'stable usage', '2024-03-01 09:20:00', 1, '1990-02-10'),
+(1002, 'north', null, null, null, null, 'missing bureau', null, 1, '1984-05-05'),
+(1003, 'west', 2, 4500.00, 655, 'web', null, '2024-03-02 15:11:00', 0, null),
+(1004, null, 1, 3200.50, 610, 'branch', 'watchlist', null, 1, '1992-09-01');
 
 create snapshot sp_customer_base for table test_null_diff customer_lifecycle;
 
@@ -32,8 +31,7 @@ create table customer_branch_beta clone customer_lifecycle{snapshot='sp_customer
 update customer_branch_alpha
    set credit_score = null,
        risk_note = null,
-       last_contact = null,
-       profile_hash = null
+       last_contact = null
  where customer_id = 1001;
 
 update customer_branch_alpha
@@ -47,7 +45,7 @@ delete from customer_branch_alpha
  where customer_id = 1004;
 
 insert into customer_branch_alpha values
-(1005, 'south', null, null, 580, null, 'manual review', '2024-03-04 08:00:00', 1, null, null);
+(1005, 'south', null, null, 580, null, 'manual review', '2024-03-04 08:00:00', 1, null);
 
 create snapshot sp_customer_alpha for table test_null_diff customer_branch_alpha;
 
@@ -59,13 +57,13 @@ update customer_branch_beta
 
 update customer_branch_beta
    set risk_note = 'reactivated',
-       credit_score = 670,
-       profile_hash = null
+       credit_score = 670
  where customer_id = 1003;
 
 insert into customer_branch_beta values
-(1006, 'central', 1, 2500.00, null, 'ivr', null, null, 1, '1995-10-12', x'12345678');
+(1006, 'central', 1, 2500.00, null, 'ivr', null, null, 1, '1995-10-12');
 
+drop snapshot if exists sp_customer_beta;
 create snapshot sp_customer_beta for table test_null_diff customer_branch_beta;
 
 data branch diff customer_branch_alpha{snapshot='sp_customer_alpha'} against customer_branch_beta{snapshot='sp_customer_beta'};
@@ -88,16 +86,16 @@ create table instrument_positions (
     notes varchar(40),
     settle_date date,
     settle_time timestamp,
-    audit_token varbinary(8),
     primary key (account_id, instrument_code, bucket)
 );
 
 insert into instrument_positions values
-(5001, 'FX001', 'spot', 120000.25, 0.4321, 0.12, 'hedged', '2024-03-01', '2024-03-01 16:00:00', x'01020304'),
-(5001, 'FX002', 'swap', null, null, 0.05, null, null, null, null),
-(5002, 'EQ100', 'beta', 8500.00, -0.1250, null, 'partial', '2024-03-02', null, x'0A0B0C0D'),
-(5003, 'CB200', 'spot', 62000.00, 0.0050, 0.01, 'new issue', '2024-03-03', '2024-03-03 09:45:00', x'0D0C0B0A');
+(5001, 'FX001', 'spot', 120000.25, 0.4321, 0.12, 'hedged', '2024-03-01', '2024-03-01 16:00:00'),
+(5001, 'FX002', 'swap', null, null, 0.05, null, null, null),
+(5002, 'EQ100', 'beta', 8500.00, -0.1250, null, 'partial', '2024-03-02', null),
+(5003, 'CB200', 'spot', 62000.00, 0.0050, 0.01, 'new issue', '2024-03-03', '2024-03-03 09:45:00');
 
+drop snapshot if exists sp_position_base;
 create snapshot sp_position_base for table test_null_diff instrument_positions;
 
 create table position_branch_live clone instrument_positions{snapshot='sp_position_base'};
@@ -118,8 +116,9 @@ delete from position_branch_live
  where account_id = 5003 and instrument_code = 'CB200' and bucket = 'spot';
 
 insert into position_branch_live values
-(5004, 'IR300', 'swap', null, 0.2500, null, 'pilot', '2024-03-05', null, null);
+(5004, 'IR300', 'swap', null, 0.2500, null, 'pilot', '2024-03-05', null);
 
+drop snapshot if exists sp_position_live;
 create snapshot sp_position_live for table test_null_diff position_branch_live;
 
 update position_branch_model
@@ -130,13 +129,13 @@ update position_branch_model
 
 update position_branch_model
    set settle_date = '2024-03-04',
-       settle_time = '2024-03-04 10:00:00',
-       audit_token = null
+       settle_time = '2024-03-04 10:00:00'
  where account_id = 5002 and instrument_code = 'EQ100' and bucket = 'beta';
 
 insert into position_branch_model values
-(5005, 'EQ200', 'spot', 41000.00, null, 0.08, 'hedge-ext', null, null, x'ABCDEF12');
+(5005, 'EQ200', 'spot', 41000.00, null, 0.08, 'hedge-ext', null, null);
 
+drop snapshot if exists sp_position_model;
 create snapshot sp_position_model for table test_null_diff position_branch_model;
 
 data branch diff position_branch_live{snapshot='sp_position_live'} against position_branch_model{snapshot='sp_position_model'};
