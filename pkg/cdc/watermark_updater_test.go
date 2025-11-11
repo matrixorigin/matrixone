@@ -1297,8 +1297,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		"err1",
 		nil, // Legacy format
 	)
-	// should be error because the watermark is not found
-	assert.Error(t, err)
+	assert.NoError(t, err)
 
 	ts := types.BuildTS(1, 1)
 	ret, err := u.GetOrAddCommitted(
@@ -1337,4 +1336,27 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 	assert.False(t, metadata.IsRetryable)
 	assert.Equal(t, 0, metadata.RetryCount) // Non-retryable format doesn't track retry count
 	assert.Contains(t, metadata.Message, "err1")
+}
+
+func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	key := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	wm := types.BuildTS(100, 0)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wm))
+	require.NoError(t, updater.ForceFlush(ctx))
+	require.NoError(t, updater.RemoveCachedWM(ctx, key))
+
+	// UpdateWatermarkErrMsg is expected to succeed even after RemoveCachedWM; current implementation returns ErrNoWatermarkFound.
+	err := updater.UpdateWatermarkErrMsg(ctx, key, "boom", nil)
+	require.NoError(t, err)
 }
