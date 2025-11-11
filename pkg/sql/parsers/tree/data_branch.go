@@ -294,10 +294,10 @@ const (
 
 type DiffOutputOpt struct {
 	// store the result to another table called `As`
-	As       TableName
-	Limit    *int64
-	Count    bool
-	FilePath string
+	As      TableName
+	Limit   *int64
+	Count   bool
+	DirPath string
 }
 
 type DataBranchDiff struct {

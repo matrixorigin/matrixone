@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -174,6 +177,7 @@ const (
 	mergeDiffOutputNone = iota
 	mergeDiffOutputSQLs
 	mergeDiffOutputRows
+	mergeDiffOutputBatch
 )
 
 func (c *rowsCollector) addRow(row []any) {
@@ -236,6 +240,26 @@ type tablePair struct {
 	baseRel      engine.Relation
 	tarSnapshot  *plan.Snapshot
 	baseSnapshot *plan.Snapshot
+}
+
+func validate(stmt tree.Statement) error {
+	switch s := stmt.(type) {
+	case *tree.DataBranchDiff:
+		if s.OutputOpt != nil && len(s.OutputOpt.DirPath) != 0 {
+			info, err := os.Stat(s.OutputOpt.DirPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return moerr.NewInternalErrorNoCtxf("diff output directory does not exist: %s", s.OutputOpt.DirPath)
+				}
+				return moerr.NewInternalErrorNoCtxf("diff output directory check failed: %v", err)
+			}
+			if !info.IsDir() {
+				return moerr.NewInternalErrorNoCtxf("diff output file only accept a directory path")
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 func handleDataBranch(
@@ -468,6 +492,10 @@ func handleBranchDiff(
 		deferred func(error) error
 	)
 
+	if err = validate(stmt); err != nil {
+		return err
+	}
+
 	// do not open another transaction,
 	// if the clone already executed within a transaction.
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
@@ -498,7 +526,7 @@ func handleBranchDiff(
 	}
 
 	return satisfyDiffOutputOpt(
-		execCtx.reqCtx, ses, mrs, stmt.OutputOpt,
+		execCtx.reqCtx, ses, mrs, stmt,
 		rows1, rows2, srcRel, dstRel,
 		lcaType, colTypes, pkColIdxes,
 	)
@@ -546,7 +574,7 @@ func handleBranchMerge(
 		conflictOpt = stmt.ConflictOpt.Opt
 	}
 
-	if _, _, err = mergeDiff(
+	if _, _, _, err = mergeDiff(
 		execCtx.reqCtx, ses, srcRel, dstRel,
 		rows1, rows2, lcaType, conflictOpt,
 		colTypes, pkColIdxes, mergeDiffOutputNone,
@@ -557,11 +585,26 @@ func handleBranchMerge(
 	return
 }
 
+func hasLeadingSlashInRawPath(rawPath string, hasService bool) bool {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return false
+	}
+
+	if hasService {
+		if idx := strings.LastIndex(trimmed, fileservice.ServiceNameSeparator); idx >= 0 {
+			trimmed = trimmed[idx+1:]
+		}
+	}
+
+	return strings.HasPrefix(trimmed, "/")
+}
+
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	ses *Session,
 	mrs *MysqlResultSet,
-	outputOpt *tree.DiffOutputOpt,
+	stmt *tree.DataBranchDiff,
 	rows1 [][]any,
 	rows2 [][]any,
 	srcRel engine.Relation,
@@ -573,11 +616,10 @@ func satisfyDiffOutputOpt(
 
 	var (
 		rows [][]any
-		sqls []string
 	)
 
 	merge := func(config int) error {
-		if rows, sqls, err = mergeDiff(
+		if rows, _, _, err = mergeDiff(
 			ctx, ses, srcRel, dstRel, rows1, rows2, lcaType,
 			tree.CONFLICT_ACCEPT, colTypes, pkColIdxes, config,
 		); err != nil {
@@ -614,17 +656,17 @@ func satisfyDiffOutputOpt(
 		}
 	}
 
-	if outputOpt == nil {
+	if stmt.OutputOpt == nil {
 		fillMrsWithRows(-1)
 		return trySaveQueryResult(ctx, ses, mrs)
 	}
 
-	if outputOpt.Limit != nil {
-		fillMrsWithRows(*outputOpt.Limit)
+	if stmt.OutputOpt.Limit != nil {
+		fillMrsWithRows(*stmt.OutputOpt.Limit)
 		return trySaveQueryResult(ctx, ses, mrs)
 	}
 
-	if outputOpt.Count {
+	if stmt.OutputOpt.Count {
 		if err = merge(mergeDiffOutputRows); err != nil {
 			return
 		}
@@ -642,67 +684,252 @@ func satisfyDiffOutputOpt(
 		return trySaveQueryResult(ctx, ses, mrs)
 	}
 
-	if len(outputOpt.FilePath) != 0 {
-		if err = merge(mergeDiffOutputSQLs); err != nil {
+	if len(stmt.OutputOpt.DirPath) != 0 {
+		return diffOutputFile(
+			ctx, ses, mrs, stmt, rows1, rows2, srcRel, dstRel,
+			lcaType, colTypes, pkColIdxes,
+		)
+	}
+
+	panic(fmt.Sprintf("unreachable: %v", stmt.OutputOpt))
+}
+
+func diffOutputFile(
+	ctx context.Context,
+	ses *Session,
+	mrs *MysqlResultSet,
+	stmt *tree.DataBranchDiff,
+	rows1 [][]any,
+	rows2 [][]any,
+	srcRel engine.Relation,
+	dstRel engine.Relation,
+	lcaType int,
+	colTypes []types.Type,
+	pkColIdxes []int,
+) (err error) {
+
+	var (
+		sql      string
+		sqlRet   executor.Result
+		fileName string
+
+		bat     *batch.Batch
+		sqls    []string
+		content []byte
+
+		spitRules string
+		sp        *plan.Snapshot
+
+		srcName  = srcRel.GetTableName()
+		baseName = dstRel.GetTableName()
+	)
+
+	sql = fmt.Sprintf("select count(*) from %s.%s", dstRel.GetTableDef(ctx).DbName, dstRel.GetTableName())
+	if stmt.BaseTable.AtTsExpr != nil {
+		if sp, err = resolveSnapshot(ses, stmt.BaseTable.AtTsExpr); err != nil {
 			return
 		}
+		sql += fmt.Sprintf("{mo_ts=%d}", sp.TS.PhysicalTime)
+		baseName = fmt.Sprintf("%s_%s", baseName, sp.ExtraInfo.Name)
+	}
 
-		var buf bytes.Buffer
-		for i, stmt := range sqls {
+	if stmt.TargetTable.AtTsExpr != nil {
+		srcName = fmt.Sprintf("%s_%s", srcName, stmt.TargetTable.AtTsExpr.SnapshotName)
+	}
+
+	fileName = fmt.Sprintf(
+		"diff_%s_%s_%s",
+		srcName, baseName,
+		time.Now().UTC().Format("20060102_150405"),
+	)
+
+	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), sql); err != nil {
+		return err
+	}
+
+	// output sql file
+	config := mergeDiffOutputSQLs
+
+	// output csv file
+	if vector.GetFixedAtNoTypeCheck[uint64](sqlRet.Batches[0].Vecs[0], 0) == 0 {
+		fileName += ".csv"
+		config = mergeDiffOutputBatch
+	} else {
+		fileName += ".sql"
+	}
+
+	if _, sqls, bat, err = mergeDiff(
+		ctx, ses, srcRel, dstRel, rows1, rows2, lcaType,
+		tree.CONFLICT_ACCEPT, colTypes, pkColIdxes, config,
+	); err != nil {
+		return err
+	}
+
+	var (
+		buf = acquireBuffer()
+	)
+
+	defer func() {
+		releaseBuffer(buf)
+	}()
+
+	if len(sqls) != 0 {
+		for i, s := range sqls {
 			if i > 0 {
 				buf.WriteByte('\n')
 			}
-			buf.WriteString(stmt)
+			buf.WriteString(s)
 			buf.WriteString(";")
 		}
 
-		content := append([]byte(nil), buf.Bytes()...)
+		content = append([]byte(nil), buf.Bytes()...)
+	} else {
+		defer func() {
+			bat.Clean(ses.proc.Mp())
+		}()
 
-		fsPath, err2 := fileservice.ParsePath(outputOpt.FilePath)
-		if err2 != nil {
-			err = err2
-			return
+		if content, spitRules, err = constructDiffCSVContent(ctx, ses, bat); err != nil {
+			return err
 		}
+	}
 
-		var (
-			targetFS   fileservice.FileService
-			targetPath string
-		)
+	var (
+		fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+	)
 
-		if fsPath.Service == defines.SharedFileServiceName {
-			targetFS = getPu(ses.GetService()).FileService
-			targetPath = outputOpt.FilePath
-		} else {
-			var etlFS fileservice.ETLFileService
-			if etlFS, targetPath, err2 = fileservice.GetForETL(ctx, nil, outputOpt.FilePath); err2 != nil {
-				err = err2
-				return
-			}
-			targetFS = etlFS
-		}
-
-		if err2 = targetFS.Delete(ctx, targetPath); err2 != nil && !moerr.IsMoErrCode(err2, moerr.ErrFileNotFound) {
-			err = err2
-			return
-		}
-
-		vec := fileservice.IOVector{
-			FilePath: targetPath,
-			Entries: []fileservice.IOEntry{
-				{
-					Size: int64(len(content)),
-					Data: content,
-				},
-			},
-		}
-		if err2 = targetFS.Write(ctx, vec); err2 != nil {
-			err = err2
-		}
-
+	fsPath, err2 := fileservice.ParsePath(fullFilePath)
+	if err2 != nil {
+		err = err2
 		return
 	}
 
-	panic(fmt.Sprintf("unreachable: %v", outputOpt))
+	var (
+		targetFS   fileservice.FileService
+		targetPath string
+	)
+
+	if fsPath.Service == defines.SharedFileServiceName {
+		targetFS = getPu(ses.GetService()).FileService
+		targetPath = fullFilePath
+	} else {
+		var etlFS fileservice.ETLFileService
+		if etlFS, targetPath, err2 = fileservice.GetForETL(ctx, nil, fullFilePath); err2 != nil {
+			err = err2
+			return
+		}
+		targetFS = etlFS
+	}
+
+	if err2 = targetFS.Delete(ctx, targetPath); err2 != nil && !moerr.IsMoErrCode(err2, moerr.ErrFileNotFound) {
+		err = err2
+		return
+	}
+
+	vec := fileservice.IOVector{
+		FilePath: targetPath,
+		Entries: []fileservice.IOEntry{
+			{
+				Size: int64(len(content)),
+				Data: content,
+			},
+		},
+	}
+	if err2 = targetFS.Write(ctx, vec); err2 != nil {
+		err = err2
+	}
+
+	ses.ClearAllMysqlResultSet()
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	mrs = ses.GetMysqlResultSet()
+
+	col1 := new(MysqlColumn)
+	col1.SetName("FILE SAVED TO")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := new(MysqlColumn)
+	col2.SetName("SPILT RULES")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddRow([]any{fullFilePath, spitRules})
+
+	return trySaveQueryResult(ctx, ses, mrs)
+}
+
+func constructDiffCSVContent(
+	ctx context.Context, ses *Session, bat *batch.Batch,
+) ([]byte, string, error) {
+
+	var (
+		result     *BatchByte
+		spiltRules string
+	)
+
+	if bat == nil || bat.RowCount() == 0 {
+		return nil, "", nil
+	}
+
+	exportCfg := &ExportConfig{
+		userConfig: newDiffCSVExportParam(),
+		service:    ses.GetService(),
+	}
+	initDiffCSVExportConfig(exportCfg, len(bat.Vecs))
+
+	spiltRules = exportCfg.userConfig.String()
+
+	byteChan := make(chan *BatchByte, 1)
+	constructByte(ctx, ses, bat, 0, byteChan, exportCfg)
+
+	result = <-byteChan
+	if result == nil {
+		return nil, "", moerr.NewInternalError(ctx, "failed to construct csv content")
+	}
+	if result.err != nil {
+		return nil, "", result.err
+	}
+
+	return result.writeByte, spiltRules, nil
+}
+
+func newDiffCSVExportParam() *tree.ExportParam {
+	fields := tree.NewFields(
+		tree.DefaultFieldsTerminated,
+		false,
+		tree.DefaultFieldsEnclosedBy[0],
+		tree.DefaultFieldsEscapedBy[0],
+	)
+	return &tree.ExportParam{
+		Outfile: true,
+		Fields:  fields,
+		Lines:   tree.NewLines("", "\n"),
+		Header:  false,
+	}
+}
+
+func initDiffCSVExportConfig(ep *ExportConfig, columnCount int) {
+	if columnCount <= 0 {
+		ep.Symbol = nil
+		ep.ColumnFlag = nil
+		return
+	}
+	ep.Symbol = make([][]byte, columnCount)
+	ep.ColumnFlag = make([]bool, columnCount)
+
+	fieldTerminated := tree.DefaultFieldsTerminated
+	if ep.userConfig != nil && ep.userConfig.Fields != nil && ep.userConfig.Fields.Terminated != nil {
+		fieldTerminated = ep.userConfig.Fields.Terminated.Value
+	}
+
+	lineTerminated := "\n"
+	if ep.userConfig != nil && ep.userConfig.Lines != nil && ep.userConfig.Lines.TerminatedBy != nil {
+		lineTerminated = ep.userConfig.Lines.TerminatedBy.Value
+	}
+
+	for i := 0; i < columnCount-1; i++ {
+		ep.Symbol[i] = []byte(fieldTerminated)
+	}
+	ep.Symbol[columnCount-1] = []byte(lineTerminated)
 }
 
 func mergeDiff(
@@ -717,7 +944,7 @@ func mergeDiff(
 	colTypes []types.Type,
 	pkColIdxes []int,
 	outputConf int,
-) (retRows [][]any, retSQLs []string, err error) {
+) (retRows [][]any, retSQLs []string, bat *batch.Batch, err error) {
 
 	var (
 		replaceCnt int
@@ -841,11 +1068,26 @@ func mergeDiff(
 		if outputConf == mergeDiffOutputRows {
 			retRows = append(retRows, row)
 			return
-		}
-		if row[1].(string) == diffDelete {
-			writeDeleteFrom(row)
+		} else if outputConf == mergeDiffOutputBatch {
+			if bat == nil {
+				bat = batch.NewWithSize(len(colTypes))
+				for i := range colTypes {
+					bat.Vecs[i] = vector.NewVec(colTypes[i])
+				}
+			}
+
+			for i := range colTypes {
+				vector.AppendAny(bat.Vecs[i], row[i+2], row[i+2] == nil, ses.proc.Mp())
+			}
+			bat.SetRowCount(bat.Vecs[0].Length())
+
 		} else {
-			writeReplaceInto(row)
+			// output sql, none
+			if row[1].(string) == diffDelete {
+				writeDeleteFrom(row)
+			} else {
+				writeReplaceInto(row)
+			}
 		}
 	}
 
@@ -860,25 +1102,28 @@ func mergeDiff(
 			if len(prevRow) == 0 || row[0] == prevRow[0] {
 				prevRow = row
 				if row[0].(string) == srcRel.GetTableName() {
-					writeReplaceInto(row)
+					//writeReplaceInto(row)
+					writeRow(row)
 				}
 			} else {
 				if compareRows(row, prevRow, pkColIdxes, colTypes, true) == 0 {
 					switch conflictOpt {
 					case tree.CONFLICT_FAIL:
-						return nil, nil, moerr.NewInternalErrorNoCtxf(
+						return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
 							"merge diff conflict happend %v <=> %v", row, prevRow,
 						)
 					case tree.CONFLICT_SKIP:
 					// do nothing
 					case tree.CONFLICT_ACCEPT:
 						if row[0].(string) == srcRel.GetTableName() {
-							writeReplaceInto(row)
+							//writeReplaceInto(row)
+							writeRow(row)
 						}
 					}
 				} else {
 					if row[0].(string) == srcRel.GetTableName() {
-						writeReplaceInto(row)
+						//writeReplaceInto(row)
+						writeRow(row)
 					}
 				}
 			}
@@ -909,7 +1154,7 @@ func mergeDiff(
 					}
 					switch conflictOpt {
 					case tree.CONFLICT_FAIL:
-						return nil, nil, moerr.NewInternalErrorNoCtxf(
+						return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
 							"merge diff conflict happend %v <=> %v", rows1[i], rows2[j],
 						)
 					case tree.CONFLICT_SKIP:
@@ -928,22 +1173,24 @@ func mergeDiff(
 					}
 					j++
 				} else {
-					if outputConf == mergeDiffOutputRows {
-						retRows = append(retRows, rows1[i])
-					} else {
-						writeRow(rows1[i])
-					}
+					writeRow(rows1[i])
+					//if outputConf == mergeDiffOutputRows {
+					//	retRows = append(retRows, rows1[i])
+					//} else {
+					//	writeRow(rows1[i])
+					//}
 					i++
 				}
 			}
 		}
 
 		for ; i < len(rows1); i++ {
-			if outputConf == mergeDiffOutputRows {
-				retRows = append(retRows, rows1[i])
-			} else {
-				writeRow(rows1[i])
-			}
+			writeRow(rows1[i])
+			//if outputConf == mergeDiffOutputRows {
+			//	retRows = append(retRows, rows1[i])
+			//} else {
+			//	writeRow(rows1[i])
+			//}
 		}
 
 		if outputConf == mergeDiffOutputRows {
@@ -1664,6 +1911,11 @@ func handleDelsOnLCA(
 }
 
 func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) {
+	if val == nil {
+		buf.WriteString("NULL")
+		return
+	}
+
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
 		T_varbinary, types.T_binary, types.T_array_float32, types.T_array_float64:
