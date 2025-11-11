@@ -58,6 +58,14 @@ const (
 
 	OneWeek            = 24 * 7 * time.Hour
 	KmeansTrainPercent = "kmeans_train_percent"
+	KmeansMaxIteration = "kmeans_max_iteration"
+)
+
+var (
+	runSaveStatusSql = sqlexec.RunSql
+	runGetTasksSql   = sqlexec.RunSql
+	runReindexSql    = sqlexec.RunSql
+	runGetCountSql   = sqlexec.RunSql
 )
 
 var running atomic.Bool
@@ -152,7 +160,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 	if updated {
 		sql := fmt.Sprintf("UPDATE `%s`.`%s` SET last_update_at = now() WHERE table_id = %d AND account_id = %d AND action = '%s'",
 			t.DbName, t.TableName, t.TableId, t.AccountId, t.Action)
-		res, err2 := sqlexec.RunSql(sqlproc, sql)
+		res, err2 := runSaveStatusSql(sqlproc, sql)
 		if err2 != nil {
 			return err2
 		}
@@ -229,7 +237,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
 			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at from mo_catalog.mo_index_update"
-			res, err := sqlexec.RunSql(sqlproc, sql)
+			res, err := runGetTasksSql(sqlproc, sql)
 			if err != nil {
 				return err
 			}
@@ -350,7 +358,7 @@ func runIvfflatReindex(ctx context.Context,
 
 			// get number of rows from source table
 			cntsql := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`", task.DbName, task.TableName)
-			res, err2 := sqlexec.RunSql(sqlproc, cntsql)
+			res, err2 := runGetCountSql(sqlproc, cntsql)
 			if err2 != nil {
 				return
 			}
@@ -376,7 +384,7 @@ func runIvfflatReindex(ctx context.Context,
 
 			// run alter table alter reindex
 			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT LISTS=%d", task.DbName, task.TableName, task.IndexName, lists)
-			res, err2 = sqlexec.RunSql(sqlproc, sql)
+			res, err2 = runReindexSql(sqlproc, sql)
 			if err2 != nil {
 				return
 			}
