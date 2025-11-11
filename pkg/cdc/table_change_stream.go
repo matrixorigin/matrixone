@@ -92,6 +92,54 @@ type TableChangeStream struct {
 
 	// Observability
 	progressTracker *ProgressTracker
+
+	// Watermark stall detection
+	watermarkStallThreshold   time.Duration
+	noProgressWarningInterval time.Duration
+	lastWatermarkAdvance      time.Time
+	noProgressSince           time.Time
+	lastNoProgressWarning     time.Time
+}
+
+type TableChangeStreamOption func(*tableChangeStreamOptions)
+
+type tableChangeStreamOptions struct {
+	watermarkStallThreshold   time.Duration
+	noProgressWarningInterval time.Duration
+}
+
+const (
+	defaultWatermarkStallThreshold   = time.Minute
+	defaultNoProgressWarningInterval = 10 * time.Second
+)
+
+func defaultTableChangeStreamOptions() *tableChangeStreamOptions {
+	opts := &tableChangeStreamOptions{}
+	opts.fillDefaults()
+	return opts
+}
+
+func (opts *tableChangeStreamOptions) fillDefaults() {
+	if opts.watermarkStallThreshold <= 0 {
+		opts.watermarkStallThreshold = defaultWatermarkStallThreshold
+	}
+	if opts.noProgressWarningInterval <= 0 {
+		opts.noProgressWarningInterval = defaultNoProgressWarningInterval
+	}
+}
+
+// WithWatermarkStallThreshold configures how long snapshot stagnation is tolerated before surfacing an error.
+func WithWatermarkStallThreshold(threshold time.Duration) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.watermarkStallThreshold = threshold
+	}
+}
+
+// WithNoProgressWarningInterval configures how frequently warnings are emitted when snapshot timestamps stall.
+func WithNoProgressWarningInterval(interval time.Duration) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.noProgressWarningInterval = interval
+	}
 }
 
 // NewTableChangeStream creates a new table change stream
@@ -111,11 +159,20 @@ var NewTableChangeStream = func(
 	startTs, endTs types.TS,
 	noFull bool,
 	frequency time.Duration,
+	options ...TableChangeStreamOption,
 ) *TableChangeStream {
 	// Parse frequency
 	if frequency <= 0 {
 		frequency = DefaultFrequency
 	}
+
+	opts := defaultTableChangeStreamOptions()
+	for _, opt := range options {
+		if opt != nil {
+			opt(opts)
+		}
+	}
+	opts.fillDefaults()
 
 	// Create watermark key
 	watermarkKey := &WatermarkKey{
@@ -179,33 +236,40 @@ var NewTableChangeStream = func(
 	}
 
 	stream := &TableChangeStream{
-		txnManager:            txnManager,
-		dataProcessor:         dataProcessor,
-		cnTxnClient:           cnTxnClient,
-		cnEngine:              cnEngine,
-		mp:                    mp,
-		packerPool:            packerPool,
-		accountId:             accountId,
-		taskId:                taskId,
-		tableInfo:             tableInfo,
-		tableDef:              tableDef,
-		sinker:                sinker,
-		watermarkUpdater:      watermarkUpdater,
-		watermarkKey:          watermarkKey,
-		tick:                  time.NewTicker(frequency),
-		frequency:             frequency,
-		runningReaders:        runningReaders,
-		runningReaderKey:      GenDbTblKey(tableInfo.SourceDbName, tableInfo.SourceTblName),
-		initSnapshotSplitTxn:  initSnapshotSplitTxn,
-		startTs:               startTs,
-		endTs:                 endTs,
-		noFull:                noFull,
-		insTsColIdx:           insTsColIdx,
-		insCompositedPkColIdx: insCompositedPkColIdx,
-		delTsColIdx:           delTsColIdx,
-		delCompositedPkColIdx: delCompositedPkColIdx,
-		progressTracker:       progressTracker,
+		txnManager:                txnManager,
+		dataProcessor:             dataProcessor,
+		cnTxnClient:               cnTxnClient,
+		cnEngine:                  cnEngine,
+		mp:                        mp,
+		packerPool:                packerPool,
+		accountId:                 accountId,
+		taskId:                    taskId,
+		tableInfo:                 tableInfo,
+		tableDef:                  tableDef,
+		sinker:                    sinker,
+		watermarkUpdater:          watermarkUpdater,
+		watermarkKey:              watermarkKey,
+		tick:                      time.NewTicker(frequency),
+		frequency:                 frequency,
+		runningReaders:            runningReaders,
+		runningReaderKey:          GenDbTblKey(tableInfo.SourceDbName, tableInfo.SourceTblName),
+		initSnapshotSplitTxn:      initSnapshotSplitTxn,
+		startTs:                   startTs,
+		endTs:                     endTs,
+		noFull:                    noFull,
+		insTsColIdx:               insTsColIdx,
+		insCompositedPkColIdx:     insCompositedPkColIdx,
+		delTsColIdx:               delTsColIdx,
+		delCompositedPkColIdx:     delCompositedPkColIdx,
+		progressTracker:           progressTracker,
+		watermarkStallThreshold:   opts.watermarkStallThreshold,
+		noProgressWarningInterval: opts.noProgressWarningInterval,
+		lastWatermarkAdvance:      time.Now(),
 	}
+
+	tableLabel := progressTracker.tableKey()
+	v2.CdcTableStuckGauge.WithLabelValues(tableLabel).Set(0)
+	v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
 
 	stream.start.Add(1)
 	return stream
@@ -567,6 +631,12 @@ func (s *TableChangeStream) processWithTxn(
 		toTs = s.endTs
 	}
 
+	if !toTs.GT(&fromTs) {
+		return s.handleSnapshotNoProgress(ctx, fromTs, toTs)
+	}
+
+	s.resetWatermarkStallState()
+
 	// Start tracking this round
 	s.progressTracker.StartRound(fromTs, toTs)
 	s.progressTracker.SetTargetWatermark(toTs)
@@ -697,6 +767,7 @@ func (s *TableChangeStream) processWithTxn(
 			s.progressTracker.EndRound(true, nil)
 			s.progressTracker.UpdateWatermark(toTs)
 			s.progressTracker.RecordTransaction()
+			s.onWatermarkAdvanced()
 
 			logutil.Debug(
 				"cdc.table_stream.round_complete",
@@ -718,6 +789,67 @@ func (s *TableChangeStream) processWithTxn(
 			return nil
 		}
 	}
+}
+
+func (s *TableChangeStream) handleSnapshotNoProgress(ctx context.Context, fromTs, snapshotTs types.TS) error {
+	now := time.Now()
+	tableLabel := s.progressTracker.tableKey()
+
+	s.progressTracker.RecordRetry()
+	v2.CdcTableNoProgressCounter.WithLabelValues(tableLabel).Inc()
+	v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(now.Unix()))
+
+	if s.noProgressSince.IsZero() {
+		s.noProgressSince = now
+	}
+
+	stalledFor := now.Sub(s.noProgressSince)
+	v2.CdcTableStuckGauge.WithLabelValues(tableLabel).Set(1)
+
+	if s.lastNoProgressWarning.IsZero() ||
+		now.Sub(s.lastNoProgressWarning) >= s.noProgressWarningInterval {
+		logutil.Warn(
+			"cdc.table_stream.snapshot_not_advanced",
+			zap.String("table", s.tableInfo.String()),
+			zap.String("from-ts", fromTs.ToString()),
+			zap.String("snapshot-ts", snapshotTs.ToString()),
+			zap.Duration("stall-duration", stalledFor),
+			zap.Duration("threshold", s.watermarkStallThreshold),
+		)
+		s.lastNoProgressWarning = now
+	}
+
+	if stalledFor >= s.watermarkStallThreshold {
+		s.retryable = true
+		return moerr.NewInternalErrorf(
+			ctx,
+			"CDC tableChangeStream %s snapshot timestamp stuck for %v (threshold %v)",
+			s.tableInfo.String(),
+			stalledFor,
+			s.watermarkStallThreshold,
+		)
+	}
+
+	return nil
+}
+
+func (s *TableChangeStream) resetWatermarkStallState() {
+	if s.noProgressSince.IsZero() && s.lastNoProgressWarning.IsZero() {
+		return
+	}
+
+	s.noProgressSince = time.Time{}
+	s.lastNoProgressWarning = time.Time{}
+	v2.CdcTableStuckGauge.WithLabelValues(s.progressTracker.tableKey()).Set(0)
+}
+
+func (s *TableChangeStream) onWatermarkAdvanced() {
+	now := time.Now()
+	s.lastWatermarkAdvance = now
+	s.resetWatermarkStallState()
+	v2.CdcTableLastActivityTimestamp.WithLabelValues(
+		s.progressTracker.tableKey(),
+	).Set(float64(now.Unix()))
 }
 
 // handleStaleRead handles StaleRead error by resetting watermark

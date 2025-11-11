@@ -265,6 +265,15 @@ var (
 			Name:      "table_last_activity_timestamp",
 			Help:      "Unix timestamp of last activity for each table",
 		}, []string{"table"})
+
+	// CdcTableNoProgressCounter counts rounds where snapshot did not advance
+	CdcTableNoProgressCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_snapshot_no_progress_total",
+			Help:      "Number of times a table round observed snapshot timestamp not advancing",
+		}, []string{"table"})
 )
 
 // CDC Initial Sync Metrics
@@ -397,6 +406,7 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcHeartbeatCounter)
 	registry.MustRegister(CdcTableStuckGauge)
 	registry.MustRegister(CdcTableLastActivityTimestamp)
+	registry.MustRegister(CdcTableNoProgressCounter)
 
 	// Initial sync metrics
 	registry.MustRegister(CdcInitialSyncStatusGauge)
