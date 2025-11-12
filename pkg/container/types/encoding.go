@@ -367,6 +367,16 @@ func DecodeValue(val []byte, t T) any {
 }
 
 func CompareValues(left, right any, t T) int {
+	if left == nil {
+		if right == nil {
+			return 0
+		}
+		return -1
+	}
+	if right == nil {
+		return 1
+	}
+
 	switch t {
 	case T_bool:
 		lVal := left.(bool)
