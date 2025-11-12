@@ -133,6 +133,12 @@ const (
 		"account_id = %d AND " +
 		"task_id = '%s'"
 
+	CDCDeleteOrphanWatermarkSqlTemplate = "DELETE w FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` AS w " +
+		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"WHERE w.account_id IN (%s) AND t.task_id IS NULL"
+
 	CDCGetTableWatermarkSqlTemplate = "SELECT " +
 		"watermark " +
 		"FROM " +
@@ -312,22 +318,23 @@ const (
 	CDCUpdateWatermarkErrMsgSQL_Idx                 = 12
 	CDCDeleteWatermarkSqlTemplate_Idx               = 13
 	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 14
-	CDCGetDataKeySQL_Idx                            = 15
-	CDCCollectTableInfoSqlTemplate_Idx              = 16
-	CDCGetWatermarkWhereSqlTemplate_Idx             = 17
-	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 18
-	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 19
-	CDCClearTaskTableErrorsSQL_Idx                  = 20
-	CDCInsertMOISCPLogSqlTemplate_Idx               = 21
-	CDCUpdateMOISCPLogSqlTemplate_Idx               = 22
-	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx         = 23
-	CDCDeleteMOISCPLogSqlTemplate_Idx               = 24
-	CDCSelectMOISCPLogSqlTemplate_Idx               = 25
-	CDCSelectMOISCPLogByTableSqlTemplate_Idx        = 26
-	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx        = 27
-	CDCGetTableIDTemplate_Idx                       = 28
+	CDCDeleteOrphanWatermarkSqlTemplate_Idx         = 15
+	CDCGetDataKeySQL_Idx                            = 16
+	CDCCollectTableInfoSqlTemplate_Idx              = 17
+	CDCGetWatermarkWhereSqlTemplate_Idx             = 18
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 19
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 20
+	CDCClearTaskTableErrorsSQL_Idx                  = 21
+	CDCInsertMOISCPLogSqlTemplate_Idx               = 22
+	CDCUpdateMOISCPLogSqlTemplate_Idx               = 23
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx         = 24
+	CDCDeleteMOISCPLogSqlTemplate_Idx               = 25
+	CDCSelectMOISCPLogSqlTemplate_Idx               = 26
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx        = 27
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx        = 28
+	CDCGetTableIDTemplate_Idx                       = 29
 
-	CDCSqlTemplateCount = 29
+	CDCSqlTemplateCount = 30
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -407,6 +414,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCDeleteWatermarkSqlTemplate_Idx: {
 		SQL: CDCDeleteWatermarkSqlTemplate,
+	},
+	CDCDeleteOrphanWatermarkSqlTemplate_Idx: {
+		SQL: CDCDeleteOrphanWatermarkSqlTemplate,
 	},
 	CDCDeleteWatermarkByTableSqlTemplate_Idx: {
 		SQL: CDCDeleteWatermarkByTableSqlTemplate,
@@ -697,6 +707,13 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 		accountId,
 		taskId,
 	)
+}
+
+func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL() string {
+	return "DELETE w FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
+		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"WHERE t.task_id IS NULL"
 }
 
 func (b cdcSQLBuilder) GetWatermarkSQL(

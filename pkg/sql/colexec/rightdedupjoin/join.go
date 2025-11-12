@@ -263,7 +263,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	result.Batch.SetRowCount(count)
 
 	for i, rp := range ap.Result {
-		result.Batch.Vecs[i] = bat.Vecs[rp.Pos]
+		if rp.Rel == 0 {
+			result.Batch.Vecs[i] = bat.Vecs[rp.Pos]
+		} else {
+			nullvec := vector.NewVec(ap.RightTypes[rp.Pos])
+			if err := vector.AppendMultiFixed(nullvec, 0, true, bat.RowCount(), proc.Mp()); err != nil {
+				return err
+			}
+			result.Batch.Vecs[i] = nullvec
+		}
+
 	}
 
 	return nil

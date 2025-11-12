@@ -9,12 +9,12 @@ insert into t2 values(1, "1"), (2, "2"), (4, "4");
 create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    +    4    4
-t2    -    3    3
+t1    INSERT    3    3
+t2    INSERT    4    4
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    +    3    3
-t1    -    4    4
+t1    INSERT    3    3
+t2    INSERT    4    4
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;
@@ -30,12 +30,12 @@ insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    +    5    5
-t2    -    4    4
+t2    INSERT    5    5
+t1    INSERT    4    4
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    +    4    4
-t1    -    5    5
+t1    INSERT    4    4
+t2    INSERT    5    5
 drop snapshot sp1;
 drop snapshot sp2;
 drop snapshot sp0;
@@ -55,14 +55,14 @@ insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    +    5    5
-t2    +    2    2
-t2    -    4    4
+t2    INSERT    2    2
+t2    INSERT    5    5
+t1    INSERT    4    4
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    +    4    4
-t1    -    5    5
-t1    -    2    2
+t1    INSERT    4    4
+t2    INSERT    2    2
+t2    INSERT    5    5
 drop snapshot sp1;
 drop snapshot sp2;
 drop snapshot sp00;
@@ -79,12 +79,12 @@ insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    +    4    4
-t2    +    3    3
+t2    INSERT    3    3
+t2    INSERT    4    4
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    -    4    4
-t1    -    3    3
+t2    INSERT    3    3
+t2    INSERT    4    4
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;
@@ -98,34 +98,29 @@ insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    +    4    4
+t2    INSERT    4    4
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    -    4    4
+t2    INSERT    4    4
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;
 drop table t2;
-
 create table t1(a int, b int, primary key(a));
 insert into t1 values(1,1),(2,2);
-
 create table t2 clone t1;
 insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
-
 create snapshot sp1 for table test t1;
 insert into t1 values(3,3);
-
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    +    4    4
+t2    INSERT    4    4
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    -    4    4
+t2    INSERT    4    4
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;
 drop table t2;
-
 drop database test;
