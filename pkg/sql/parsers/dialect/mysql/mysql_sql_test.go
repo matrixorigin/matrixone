@@ -448,6 +448,45 @@ var (
 			input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 			output: "select cast(2022-01-01 01:23:34 as varchar)",
 		}, {
+			input:  "select '123'::int",
+			output: "select cast(123 as int)",
+		}, {
+			input:  "select '123'::varchar",
+			output: "select cast(123 as varchar)",
+		}, {
+			input:  "select a::int from t1",
+			output: "select cast(a as int) from t1",
+		}, {
+			input:  "select column1::timestamp from t2",
+			output: "select cast(column1 as timestamp) from t2",
+		}, {
+			input:  "select '2022-01-30'::date",
+			output: "select cast(2022-01-30 as date)",
+		}, {
+			input:  "select 123::varchar(50)",
+			output: "select cast(123 as varchar(50))",
+		}, {
+			input:  "select a + b::int",
+			output: "select a + cast(b as int)",
+		}, {
+			input:  "select (a + b)::int",
+			output: "select cast((a + b) as int)",
+		}, {
+			input:  "select a::int + b::int",
+			output: "select cast(a as int) + cast(b as int)",
+		}, {
+			input:  "select * from t where col::int > 100",
+			output: "select * from t where cast(col as int) > 100",
+		}, {
+			input:  "select count(*) from t where value::varchar = 'test'",
+			output: "select count(*) from t where cast(value as varchar) = test",
+		}, {
+			input:  "select '123'::bigint",
+			output: "select cast(123 as bigint)",
+		}, {
+			input:  "select null::int",
+			output: "select cast(null as int)",
+		}, {
 			input:  "select serial_extract(col, 1 as varchar(3)) from t1",
 			output: "select serial_extract(col, 1 as varchar(3)) from t1",
 		}, {

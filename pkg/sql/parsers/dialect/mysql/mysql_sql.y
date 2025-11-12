@@ -312,6 +312,7 @@ import (
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %right <str> '~' UNARY
+%right <str> COLON_COLON
 %left <str> COLLATE
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
@@ -10088,6 +10089,10 @@ simple_expr:
 |   simple_expr COLLATE collate_name
     {
         $$ = $1
+    }
+|   simple_expr COLON_COLON mo_cast_type
+    {
+        $$ = tree.NewCastExpr($1, $3)
     }
 |   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {
