@@ -7074,6 +7074,27 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: fulltext_expand_overload(types.T_float32),
 	},
+
+	// function `mo_tuple_expr`
+	{
+		functionId: MO_TUPLE_EXPR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTupleExpr
+				},
+			},
+		},
+	},
 }
 
 // fulltext_match supports varchar, char and text.  Expand the function signature to all possible combination of input types
