@@ -54,6 +54,7 @@ const (
 var (
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,
+		DistFn_L2sqDistance:   OpType_L2Distance,
 		DistFn_InnerProduct:   OpType_InnerProduct,
 		DistFn_CosineDistance: OpType_CosineDistance,
 	}
@@ -119,4 +120,20 @@ func MaxFloat[T types.RealNumbers]() T {
 	default:
 		panic("MaxFloat: type not supported")
 	}
+}
+
+func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
+	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
+		// metric is l2sq but origin is l2_distance
+		return math.Sqrt(dist)
+	}
+	return dist
+}
+
+func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricType) float64 {
+	if origMetricType == Metric_L2Distance && metricType == Metric_L2sqDistance {
+		// metric is l2sq but origin is l2_distance
+		return math.Sqrt(dist)
+	}
+	return dist
 }
