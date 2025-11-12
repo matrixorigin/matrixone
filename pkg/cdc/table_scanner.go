@@ -263,6 +263,14 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 	)
 }
 
+// IsTaskRegistered checks if a task is already registered
+func (s *TableDetector) IsTaskRegistered(id string) bool {
+	s.Lock()
+	defer s.Unlock()
+	_, exists := s.Callbacks[id]
+	return exists
+}
+
 func (s *TableDetector) UnRegister(id string) {
 	s.Lock()
 	defer s.Unlock()

@@ -182,6 +182,21 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 
+	// Check if this task is already registered in TableDetector
+	// This prevents duplicate task execution when taskservice schedules the same task twice
+	detector := cdc.GetTableDetector(cnUUID)
+	if detector.IsTaskRegistered(taskId) {
+		logutil.Warn(
+			"cdc.frontend.task.already_registered",
+			zap.String("task-id", taskId),
+			zap.String("task-name", taskName),
+			zap.String("cn-uuid", cnUUID),
+			zap.Uint32("account-id", accountId),
+			zap.String("reason", "task is already registered in TableDetector, skipping duplicate start"),
+		)
+		return moerr.NewInternalErrorf(rootCtx, "task %s is already running", taskId)
+	}
+
 	// Transition to Starting state (skip if already Starting, e.g., from Resume)
 	if exec.stateMachine.State() != StateStarting {
 		if err = exec.stateMachine.Transition(TransitionStart); err != nil {
@@ -1050,7 +1065,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 
 	// step 4. start goroutines (sinker first, then reader)
 	// Note: Reader will register itself in runningReaders during Run()
-	// to prevent duplicate readers (see TableChangeStream.Run line 207)
+	// to prevent duplicate readers (see TableChangeStream.Run line 287)
 	go sinker.Run(ctx, exec.activeRoutine)
 	go reader.Run(ctx, exec.activeRoutine)
 

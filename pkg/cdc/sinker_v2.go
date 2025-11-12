@@ -710,7 +710,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		return
 	}
 
-	if data.toTs.LE(&watermark) {
+	if data.toTs.LT(&watermark) {
 		logutil.Error("cdc.mysql_sinker2.unexpected_watermark",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("toTs", data.toTs.ToString()),
