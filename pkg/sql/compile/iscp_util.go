@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 var (
@@ -200,6 +202,80 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 			idxmap[idx.IndexName] = true
 			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
 			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type, startFromNow, "")
+			if e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+func getIvfflatMetadata(c *Compile) ([]byte, error) {
+	val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	if err != nil {
+		return nil, err
+	}
+	threadsBuild := val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+	if err != nil {
+		return nil, err
+	}
+	kmeansTrainPercent := val.(float64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+	if err != nil {
+		return nil, err
+	}
+	kmeansMaxIteration := val.(int64)
+
+	w := sqlexec.NewMetadataWriter()
+	w.AddInt("ivf_threads_build", threadsBuild)
+	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
+	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
+	metadata, err := w.Marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	return metadata, nil
+}
+
+// idxcron function
+func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) error {
+	if c.proc.GetResolveVariableFunc() == nil {
+		return nil
+	}
+
+	ivf_metadata, err := getIvfflatMetadata(c)
+	if err != nil {
+		return err
+	}
+
+	idxmap := make(map[string]bool)
+	for _, idx := range indexes {
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+			idxmap[idx.IndexName] = true
+
+			if len(idx.IndexName) == 0 {
+				// skip empty index name because alter reindex sql don't support empty index name
+				continue
+			}
+
+			e := idxcron.RegisterUpdate(c.proc.Ctx,
+				c.proc.GetService(),
+				c.proc.GetTxnOperator(),
+				tableid,
+				dbname,
+				tablename,
+				idx.IndexName,
+				idxcron.Action_Ivfflat_Reindex,
+				string(ivf_metadata))
 			if e != nil {
 				return e
 			}

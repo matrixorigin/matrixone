@@ -1531,6 +1531,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 				if err != nil {
 					return err
 				}
+
+				// register index update for IVFFLAT
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
+				if err != nil {
+					return err
+				}
 			}
 		}
 
