@@ -133,7 +133,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, moerr.NewInternalError(sqlproc.GetContext(), "heap return key is not int64")
 		}
 		reskeys = append(reskeys, sr.Id)
-		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, s.Idxcfg.OpType, s.Idxcfg.Usearch.Metric)
+		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[s.Tblcfg.OrigFuncName], s.Idxcfg.Usearch.Metric)
 		resdistances = append(resdistances, sr.Distance)
 	}
 
@@ -247,6 +247,6 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // check config and update some parameters such as ef_search
 func (s *HnswSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-
+	s.Tblcfg.OrigFuncName = newalgo.(*HnswSearch[T]).Tblcfg.OrigFuncName
 	return nil
 }
