@@ -76,6 +76,29 @@ select * from t1 order by a asc;
 drop table t1;
 drop table t2;
 
+
+-- case 4: complex merge
+create table t0(a int primary key, b varchar(10));
+insert into t0 select *, "t0" from generate_series(1, 100)g;
+
+create table t1 clone t0;
+update t1 set b = "t1" where a in (1, 20, 40, 60, 80, 100);
+
+create table t2 clone t0;
+update t2 set b = "t2" where a in (2, 22, 42, 62, 82);
+
+create table t3 clone t0;
+update t3 set b = "t3" where a in (3, 23, 43, 63, 83);
+
+data branch merge t1 into t0;
+select count(*) as cnt, b from t0 group by b order by cnt;
+
+data branch merge t2 into t0;
+select count(*) as cnt, b from t0 group by b order by cnt;
+
+data branch merge t3 into t0;
+select count(*) as cnt, b from t0 group by b order by cnt;
+
 drop database test;
 
 
