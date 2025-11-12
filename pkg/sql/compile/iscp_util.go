@@ -229,10 +229,25 @@ func getIvfflatMetadata(c *Compile) ([]byte, error) {
 	}
 	kmeansMaxIteration := val.(int64)
 
+	val, err = c.proc.GetResolveVariableFunc()("lower_case_table_names", true, false)
+	if err != nil {
+		return nil, err
+	}
+	lowerCaseTableNames := val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("experimental_ivf_index", true, false)
+	if err != nil {
+		return nil, err
+	}
+	experimentalIvfIndex := val.(int8)
+
 	w := sqlexec.NewMetadataWriter()
 	w.AddInt("ivf_threads_build", threadsBuild)
 	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
 	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
+	w.AddInt("lower_case_table_names", lowerCaseTableNames)
+	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
+
 	metadata, err := w.Marshal()
 	if err != nil {
 		return nil, err
