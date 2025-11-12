@@ -12,7 +12,7 @@ diff t2 against t1    flag    a    b
 t2    INSERT    3    4
 t1    INSERT    3    3
 data branch merge t2 into t1;
-internal error: merge diff conflict happend [t2 INSERT 3 4] <=> [t1 INSERT 3 3]
+internal error: merge conflict: t2 INSERT pk(3) <=> t1 INSERT pk(3)
 data branch merge t2 into t1 when conflict skip;
 select * from t1 order by a asc;
 a    b
@@ -39,7 +39,7 @@ t2    INSERT    1    2
 t1    INSERT    2    2
 t2    INSERT    3    3
 data branch merge t2 into t1;
-internal error: merge diff conflict happend [t2 INSERT 1 2] <=> [t1 INSERT 1 1]
+internal error: merge conflict: t2 INSERT pk(1) <=> t1 INSERT pk(1)
 data branch merge t2 into t1 when conflict skip;
 select * from t1 order by a asc;
 a    b
@@ -64,7 +64,7 @@ diff t2 against t1    flag    a    b
 t2    UPDATE    1    3
 t1    UPDATE    1    2
 data branch merge t2 into t1;
-internal error: merge diff conflict happend [t2 UPDATE 1 3] <=> [t1 UPDATE 1 2]
+internal error: merge conflict: t2 UPDATE pk(1) <=> t1 UPDATE pk(1)
 data branch merge t2 into t1 when conflict skip;
 select * from t1 order by a asc;
 a    b
@@ -87,7 +87,7 @@ diff t2 against t1    flag    a    b
 t2    UPDATE    1    3
 t1    UPDATE    1    2
 data branch merge t2 into t1;
-internal error: merge diff conflict happend [t2 UPDATE 1 3] <=> [t1 UPDATE 1 2]
+internal error: merge conflict: t2 UPDATE pk(1) <=> t1 UPDATE pk(1)
 data branch merge t2 into t1 when conflict skip;
 select * from t1 order by a asc;
 a    b
