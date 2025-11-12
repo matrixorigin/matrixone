@@ -701,8 +701,8 @@ func diffOutputFile(
 		sqls    []string
 		content []byte
 
-		spitRules string
-		sp        *plan.Snapshot
+		hint string
+		sp   *plan.Snapshot
 
 		srcName  = srcRel.GetTableName()
 		baseName = dstRel.GetTableName()
@@ -767,12 +767,17 @@ func diffOutputFile(
 		}
 
 		content = append([]byte(nil), buf.Bytes()...)
+		hint = fmt.Sprintf(
+			"DELETE FROM %s.%s, REPLACE INTO %s.%s",
+			dstRel.GetTableDef(ctx).DbName, dstRel.GetTableName(),
+			dstRel.GetTableDef(ctx).DbName, dstRel.GetTableName(),
+		)
 	} else {
 		defer func() {
 			bat.Clean(ses.proc.Mp())
 		}()
 
-		if content, spitRules, err = constructDiffCSVContent(ctx, ses, bat); err != nil {
+		if content, hint, err = constructDiffCSVContent(ctx, ses, bat); err != nil {
 			return err
 		}
 	}
@@ -831,12 +836,12 @@ func diffOutputFile(
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 
 	col2 := new(MysqlColumn)
-	col2.SetName("SPILT RULES")
+	col2.SetName("HINT")
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
-	mrs.AddRow([]any{fullFilePath, spitRules})
+	mrs.AddRow([]any{fullFilePath, hint})
 
 	return trySaveQueryResult(ctx, ses, mrs)
 }
