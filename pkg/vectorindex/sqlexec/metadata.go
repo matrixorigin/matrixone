@@ -29,6 +29,7 @@ import (
 // 4. set ResolveVaribaleFunc() with Metadata.ResolveVariableFunc() when execute SQL
 
 const (
+	Type_I8     = "I8"
 	Type_I64    = "I"
 	Type_F64    = "F"
 	Type_String = "S"
@@ -115,6 +116,8 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 	}
 
 	switch string(typebj.GetString()) {
+	case Type_I8:
+		return int8(valbj.GetInt64()), nil
 	case Type_I64:
 		return valbj.GetInt64(), nil
 	case Type_F64:
@@ -142,6 +145,8 @@ func (m *Metadata) Modify(varName string, v any) error {
 	switch v.(type) {
 	case float32, float64:
 		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%f}`, Type_F64, v)
+	case int8:
+		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%d}`, Type_I8, v)
 	case int, int32, int64:
 		cfgvalue = fmt.Sprintf(`{"t":"%s", "v":%d}`, Type_I64, v)
 	case string:
@@ -183,6 +188,10 @@ func NewMetadataWriter() *MetadataWriter {
 
 func (w *MetadataWriter) AddInt(key string, value int64) {
 	w.Cfg[key] = ConfigValue{T: Type_I64, V: value}
+}
+
+func (w *MetadataWriter) AddInt8(key string, value int8) {
+	w.Cfg[key] = ConfigValue{T: Type_I8, V: value}
 }
 
 func (w *MetadataWriter) AddString(key string, value string) {
