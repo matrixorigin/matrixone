@@ -17,9 +17,11 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -47,6 +49,8 @@ var (
 	detector *TableDetector
 	once     sync.Once
 )
+
+var cdcScanTableInjected = objectio.CDCScanTableInjected
 
 var getSqlExecutor = func(cnUUID string) executor.SQLExecutor {
 	v, _ := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -196,8 +200,6 @@ func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
 }
 
 type TableDetector struct {
-	sync.Mutex
-
 	Mp        map[uint32]TblMap
 	Callbacks map[string]TableCallback
 	exec      executor.SQLExecutor
@@ -226,11 +228,31 @@ type TableDetector struct {
 	cleanupPeriod   time.Duration
 	cleanupWarn     time.Duration
 	nowFn           func() time.Time
+
+	loopRunning atomic.Bool
+	loopSeq     atomic.Uint64
+	currentLoop uint64
 }
 
-func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
-	s.Lock()
-	defer s.Unlock()
+// RegisterIfAbsent registers the task only if it has not been registered before.
+// Returns true when registration succeeds, false if the task already exists.
+func (s *TableDetector) RegisterIfAbsent(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) bool {
+	s.mu.Lock()
+	if _, exists := s.Callbacks[id]; exists {
+		s.mu.Unlock()
+		return false
+	}
+	startLoop := s.registerLocked(id, accountId, dbs, tables, cb)
+	s.mu.Unlock()
+
+	if startLoop {
+		s.startScanLoop()
+	}
+	return true
+}
+
+func (s *TableDetector) registerLocked(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) bool {
+	startLoop := len(s.Callbacks) == 0
 
 	s.SubscribedAccountIds[accountId] = append(s.SubscribedAccountIds[accountId], id)
 	s.CallBackAccountId[id] = accountId
@@ -245,35 +267,26 @@ func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tabl
 	}
 	s.CallBackTableName[id] = tables
 
-	if len(s.Callbacks) == 0 {
-		ctx, cancel := context.WithCancel(
-			defines.AttachAccountId(
-				context.Background(),
-				catalog.System_Account,
-			),
-		)
-		s.cancel = cancel
-		go s.scanTableLoop(ctx)
-	}
 	s.Callbacks[id] = cb
 	logutil.Debug(
 		"cdc.table_detector.register",
 		zap.String("task-id", id),
 		zap.Uint32("account-id", accountId),
 	)
+	return startLoop
 }
 
 // IsTaskRegistered checks if a task is already registered
 func (s *TableDetector) IsTaskRegistered(id string) bool {
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, exists := s.Callbacks[id]
 	return exists
 }
 
 func (s *TableDetector) UnRegister(id string) {
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if accountID, ok := s.CallBackAccountId[id]; ok {
 		if tasks, ok := s.SubscribedAccountIds[accountID]; ok {
@@ -323,12 +336,56 @@ func (s *TableDetector) UnRegister(id string) {
 	)
 }
 
+func (s *TableDetector) startScanLoop() {
+	if s.loopRunning.Load() {
+		return
+	}
+
+	ctx, newCancel := context.WithCancel(
+		defines.AttachAccountId(
+			context.Background(),
+			catalog.System_Account,
+		),
+	)
+
+	if !s.loopRunning.CompareAndSwap(false, true) {
+		newCancel()
+		return
+	}
+
+	loopID := s.loopSeq.Add(1)
+	var previous context.CancelFunc
+	s.mu.Lock()
+	previous = s.cancel
+	s.cancel = newCancel
+	s.currentLoop = loopID
+	s.mu.Unlock()
+
+	if previous != nil {
+		previous()
+	}
+
+	go s.runScanLoop(ctx, newCancel, loopID)
+}
+
+func (s *TableDetector) runScanLoop(ctx context.Context, cancel context.CancelFunc, loopID uint64) {
+	defer func() {
+		s.mu.Lock()
+		if s.currentLoop == loopID {
+			s.cancel = nil
+		}
+		s.mu.Unlock()
+		s.loopRunning.Store(false)
+	}()
+	s.scanTableLoop(ctx)
+}
+
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Debug("cdc.table_detector.scan_start")
 	defer logutil.Debug("cdc.table_detector.scan_end")
 
 	var tickerDuration, retryTickerDuration time.Duration
-	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
+	if msg, injected := cdcScanTableInjected(); injected || msg == "fast scan" {
 		tickerDuration = 1 * time.Millisecond
 		retryTickerDuration = 1 * time.Millisecond
 	} else {
@@ -419,25 +476,50 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
 	s.mu.Lock()
+	if s.handling {
+		s.mu.Unlock()
+		return
+	}
 	s.handling = true
+	callbacks := make([]TableCallback, 0, len(s.Callbacks))
+	for _, cb := range s.Callbacks {
+		callbacks = append(callbacks, cb)
+	}
 	s.mu.Unlock()
 
 	var err error
-	for _, cb := range s.Callbacks {
-		err = cb(tables)
+	var panicVal any
+	defer func() {
+		if r := recover(); r != nil {
+			panicVal = r
+			err = fmt.Errorf("callback panic: %v", r)
+			logutil.Error(
+				"cdc.table_detector.callback_panic",
+				zap.Any("panic", r),
+				zap.ByteString("stack", debug.Stack()),
+			)
+		}
+
+		s.mu.Lock()
+		if err != nil {
+			logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
+		} else {
+			logutil.Debug("cdc.table_detector.callback_success")
+			s.lastMp = nil
+		}
+		s.handling = false
+		s.mu.Unlock()
+
+		if panicVal != nil {
+			panic(panicVal)
+		}
+	}()
+
+	for _, cb := range callbacks {
+		if cbErr := cb(tables); cbErr != nil {
+			err = cbErr
+		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if err != nil {
-		logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
-	} else {
-		logutil.Debug("cdc.table_detector.callback_success")
-		s.lastMp = nil
-	}
-
-	s.handling = false
 }
 
 func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
@@ -503,8 +585,13 @@ func (s *TableDetector) now() time.Time {
 }
 
 func (s *TableDetector) Close() {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	cancel := s.cancel
+	s.cancel = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -518,11 +605,11 @@ func (s *TableDetector) scanTable() error {
 		mp         = make(map[uint32]TblMap)
 	)
 
-	s.Lock()
+	s.mu.Lock()
 
 	if len(s.SubscribedAccountIds) == 0 || len(s.SubscribedDbNames) == 0 || len(s.SubscribedTableNames) == 0 {
 		s.Mp = mp
-		s.Unlock()
+		s.mu.Unlock()
 		return nil
 	}
 	var i int
@@ -555,7 +642,7 @@ func (s *TableDetector) scanTable() error {
 	if tableNames != "*" {
 		tableNames = AddSingleQuotesJoin(tableNamesSlice)
 	}
-	s.Unlock()
+	s.mu.Unlock()
 
 	result, err := s.exec.Exec(
 		ctx,
@@ -612,8 +699,8 @@ func (s *TableDetector) scanTable() error {
 	})
 
 	// replace the old table map
-	s.Lock()
+	s.mu.Lock()
 	s.Mp = mp
-	s.Unlock()
+	s.mu.Unlock()
 	return nil
 }

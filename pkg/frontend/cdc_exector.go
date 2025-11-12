@@ -181,10 +181,14 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	taskName := exec.spec.TaskName
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
+	detector := cdc.GetTableDetector(cnUUID)
+	var (
+		registered      bool
+		enteredStarting bool
+	)
 
 	// Check if this task is already registered in TableDetector
 	// This prevents duplicate task execution when taskservice schedules the same task twice
-	detector := cdc.GetTableDetector(cnUUID)
 	if detector.IsTaskRegistered(taskId) {
 		logutil.Warn(
 			"cdc.frontend.task.already_registered",
@@ -197,46 +201,31 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return moerr.NewInternalErrorf(rootCtx, "task %s is already running", taskId)
 	}
 
-	// Transition to Starting state (skip if already Starting, e.g., from Resume)
-	if exec.stateMachine.State() != StateStarting {
-		if err = exec.stateMachine.Transition(TransitionStart); err != nil {
-			return moerr.NewInternalErrorf(rootCtx, "cannot start: %v", err)
-		}
-	}
-
-	logutil.Info(
-		"cdc.frontend.task.start",
-		zap.String("task-id", taskId),
-		zap.String("task-name", taskName),
-		zap.String("cn-uuid", cnUUID),
-		zap.Uint32("account-id", accountId),
-		zap.String("state", exec.stateMachine.State().String()),
-	)
-
 	defer func() {
 		if err != nil {
-			// Transition to Failed state
-			if setFailErr := exec.stateMachine.SetFailed(err.Error()); setFailErr != nil {
-				logutil.Warn(
-					"cdc.frontend.task.set_state_failed",
-					zap.String("target-state", StateFailed.String()),
-					zap.Error(setFailErr),
-				)
+			if registered {
+				detector.UnRegister(taskId)
 			}
 
-			// Metrics: task failed
-			v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
-			v2.CdcTaskErrorCounter.WithLabelValues("start_failed", "false").Inc()
+			// Transition to Failed state only if we entered Starting state
+			if enteredStarting {
+				if setFailErr := exec.stateMachine.SetFailed(err.Error()); setFailErr != nil {
+					logutil.Warn(
+						"cdc.frontend.task.set_state_failed",
+						zap.String("target-state", StateFailed.String()),
+						zap.Error(setFailErr),
+					)
+				}
+
+				// Metrics: task failed
+				v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+				v2.CdcTaskErrorCounter.WithLabelValues("start_failed", "false").Inc()
+			}
 
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
 			exec.activeRoutine.ClosePause()
 			exec.activeRoutine.CloseCancel()
-
-			// UnRegister from TableDetector if already registered
-			if exec.stateMachine.IsRunning() {
-				cdc.GetTableDetector(cnUUID).UnRegister(taskId)
-			}
 
 			updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error())
 			logutil.Error(
@@ -291,7 +280,37 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
 
 	// register to table scanner
-	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
+	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, exec.handleNewTables) {
+		logutil.Warn(
+			"cdc.frontend.task.duplicate_registration_detected",
+			zap.String("task-id", taskId),
+			zap.String("task-name", taskName),
+			zap.String("cn-uuid", cnUUID),
+			zap.Uint32("account-id", accountId),
+			zap.String("reason", "RegisterIfAbsent rejected duplicate task"),
+		)
+		return moerr.NewInternalErrorf(ctx, "task %s is already running", taskId)
+	}
+	registered = true
+
+	// Transition to Starting state (skip if already Starting, e.g., from Resume)
+	if exec.stateMachine.State() != StateStarting {
+		if err = exec.stateMachine.Transition(TransitionStart); err != nil {
+			detector.UnRegister(taskId)
+			registered = false
+			return moerr.NewInternalErrorf(ctx, "cannot start: %v", err)
+		}
+	}
+	enteredStarting = true
+
+	logutil.Info(
+		"cdc.frontend.task.start",
+		zap.String("task-id", taskId),
+		zap.String("task-name", taskName),
+		zap.String("cn-uuid", cnUUID),
+		zap.Uint32("account-id", accountId),
+		zap.String("state", exec.stateMachine.State().String()),
+	)
 
 	// Transition to Running state
 	if err = exec.stateMachine.Transition(TransitionStartSuccess); err != nil {
