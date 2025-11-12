@@ -257,3 +257,442 @@ func TestReplaceParamVals(t *testing.T) {
 		})
 	}
 }
+
+func Test_extractColRefInFilter(t *testing.T) {
+	tests := []struct {
+		name    string
+		expr    *plan.Expr
+		wantCol *ColRef
+		wantNil bool
+		desc    string
+	}{
+		{
+			name: "simple column reference",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: 2,
+						Name:   "col1",
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Direct column reference should return the column",
+		},
+		{
+			name: "comparison with literal - col = 1",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Lit{
+									Lit: &plan.Literal{
+										Value: &plan.Literal_I64Val{I64Val: 1},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Comparison with literal should return the column",
+		},
+		{
+			name: "comparison with same column - col = trim(col)",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: &plan.ObjectRef{ObjName: "trim"},
+										Args: []*plan.Expr{
+											{
+												Expr: &plan.Expr_Col{
+													Col: &plan.ColRef{
+														RelPos: 1,
+														ColPos: 2,
+														Name:   "col1",
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Comparison with function of same column should return the column",
+		},
+		{
+			name: "comparison with different column - col1 = col2",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 3,
+										Name:   "col2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantNil: true,
+			desc:    "Comparison with different column should return nil",
+		},
+		{
+			name: "nested function - func(col) > 2",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: ">"},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: &plan.ObjectRef{ObjName: "upper"},
+										Args: []*plan.Expr{
+											{
+												Expr: &plan.Expr_Col{
+													Col: &plan.ColRef{
+														RelPos: 1,
+														ColPos: 2,
+														Name:   "col1",
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Lit{
+									Lit: &plan.Literal{
+										Value: &plan.Literal_I64Val{I64Val: 2},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Nested function call should return the column",
+		},
+		{
+			name: "logical operator - and(col, col)",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "and"},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Logical operator with same column should return the column",
+		},
+		{
+			name: "logical operator - and(col1, col2)",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "and"},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 3,
+										Name:   "col2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantNil: true,
+			desc:    "Logical operator with different columns should return nil",
+		},
+		{
+			name: "logical operator - and(col, 1)",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "and"},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Lit{
+									Lit: &plan.Literal{
+										Value: &plan.Literal_I64Val{I64Val: 1},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Logical operator with literal should return the column",
+		},
+		{
+			name: "function with no args",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "now"},
+						Args: []*plan.Expr{},
+					},
+				},
+			},
+			wantNil: true,
+			desc:    "Function with no arguments should return nil",
+		},
+		{
+			name: "function with first arg without column",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Lit{
+									Lit: &plan.Literal{
+										Value: &plan.Literal_I64Val{I64Val: 1},
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantNil: true,
+			desc:    "Function with first arg as literal should return nil",
+		},
+		{
+			name: "cast function",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "cast"},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 2,
+										Name:   "col1",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_T{
+									T: &plan.TargetType{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCol: &ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "col1",
+			},
+			wantNil: false,
+			desc:    "Cast function should return the column",
+		},
+		{
+			name: "comparison with cast of different column - m.id = cast(o.id as int)",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 1,
+										ColPos: 0,
+										Name:   "m.id",
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: &plan.ObjectRef{ObjName: "cast"},
+										Args: []*plan.Expr{
+											{
+												Expr: &plan.Expr_Col{
+													Col: &plan.ColRef{
+														RelPos: 2,
+														ColPos: 0,
+														Name:   "o.id",
+													},
+												},
+											},
+											{
+												Expr: &plan.Expr_T{
+													T: &plan.TargetType{},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantNil: true,
+			desc:    "Comparison with cast of different column should return nil",
+		},
+		{
+			name: "non-expression type",
+			expr: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_I64Val{I64Val: 1},
+					},
+				},
+			},
+			wantNil: true,
+			desc:    "Literal expression should return nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractColRefInFilter(tt.expr)
+			if tt.wantNil {
+				assert.Nil(t, got, tt.desc)
+			} else {
+				require.NotNil(t, got, tt.desc)
+				assert.Equal(t, tt.wantCol.RelPos, got.RelPos, "RelPos should match")
+				assert.Equal(t, tt.wantCol.ColPos, got.ColPos, "ColPos should match")
+				assert.Equal(t, tt.wantCol.Name, got.Name, "Name should match")
+			}
+		})
+	}
+}
