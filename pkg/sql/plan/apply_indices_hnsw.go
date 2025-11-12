@@ -72,7 +72,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		return nodeID, nil
 	}
 
-	if opType != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
+	origFuncName := distFnExpr.Func.ObjName
+	if opType != metric.DistFuncOpTypes[origFuncName] {
 		return nodeID, nil
 	}
 
@@ -93,12 +94,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	}
 
 	// generate JSON by fmt.Sprintf instead of sonic.Marshal for performance
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		metaDef.IndexTableName,
 		idxDef.IndexTableName,
-		nThread.(int64))
+		nThread.(int64),
+		origFuncName)
 
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewTag()

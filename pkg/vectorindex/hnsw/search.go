@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -30,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -326,10 +326,7 @@ func (s *HnswSearch) Search(
 			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
 		}
 		reskeys = append(reskeys, sr.Id)
-		if s.Idxcfg.Usearch.Metric == usearch.L2sq {
-			// distance functino of L2Distance is l2sq so sqrt at the end
-			sr.Distance = math.Sqrt(sr.Distance)
-		}
+		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[s.Tblcfg.OrigFuncName], s.Idxcfg.Usearch.Metric)
 		resdistances = append(resdistances, sr.Distance)
 	}
 
@@ -435,6 +432,6 @@ func (s *HnswSearch) Load(proc *process.Process) error {
 
 // check config and update some parameters such as ef_search
 func (s *HnswSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-
+	s.Tblcfg.OrigFuncName = newalgo.(*HnswSearch).Tblcfg.OrigFuncName
 	return nil
 }
