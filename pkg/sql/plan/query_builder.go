@@ -67,6 +67,126 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	}
 }
 
+// buildRemapErrorMessage constructs a human-readable error message for column remapping failures.
+// This function provides detailed context to help debug issues where a column reference cannot
+// be found in the remapping context.
+//
+// Example error scenario:
+//   - A filter expression like "o.id = cast(d.id AS INT)" is incorrectly deduced during join
+//   - The deduced predicate "m.id = cast(d.id AS INT)" references d.id which is not available
+//   - in the m-side context, causing remap failure
+//
+// Debugging tips:
+//  1. Check if the expression contains columns from multiple tables (cross-table reference)
+//  2. Verify that predicate deduction (deduceNewFilterList) is correct
+//  3. Ensure column pruning (remapAllColRefs) hasn't removed necessary columns
+//  4. Review the node type and tip to understand the remapping context
+//
+// Parameters:
+//   - missingCol: The column reference that cannot be found [RelPos, ColPos]
+//   - colName: The name of the missing column (for readability)
+//   - colMap: The available column mapping in the current context
+//   - remapInfo: Context information about the remapping operation
+//   - builder: QueryBuilder instance for accessing column name mappings
+//
+// Returns:
+//
+//	A formatted error message string with:
+//	- Clear error description
+//	- Missing column information (name and position)
+//	- Available columns list (formatted)
+//	- Related expression (if available)
+//	- Node type and context information
+func (builder *QueryBuilder) buildRemapErrorMessage(
+	missingCol [2]int32,
+	colName string,
+	colMap map[[2]int32][2]int32,
+	remapInfo *RemapInfo,
+) string {
+	var sb strings.Builder
+
+	// Header: Error description
+	sb.WriteString("Column remapping failed: cannot find column reference\n")
+
+	// Missing column information
+	sb.WriteString("❌ Missing Column:\n")
+	sb.WriteString(fmt.Sprintf("   Position: [RelPos=%d, ColPos=%d]\n", missingCol[0], missingCol[1]))
+	sb.WriteString(fmt.Sprintf("   Name: %s\n", colName))
+	sb.WriteString("\n")
+
+	// Context information
+	if remapInfo != nil && remapInfo.node != nil {
+		sb.WriteString("📍 Context:\n")
+		sb.WriteString(fmt.Sprintf("   Step: %d\n", remapInfo.step))
+		sb.WriteString(fmt.Sprintf("   Node ID: %d\n", remapInfo.node.NodeId))
+		sb.WriteString(fmt.Sprintf("   Node Type: %s\n", remapInfo.node.NodeType))
+		if remapInfo.tip != "" {
+			sb.WriteString(fmt.Sprintf("   Tip: %s\n", remapInfo.tip))
+		}
+		if remapInfo.srcExprIdx >= 0 {
+			sb.WriteString(fmt.Sprintf("   Expression Index: %d\n", remapInfo.srcExprIdx))
+		}
+		sb.WriteString("\n")
+
+		// Related expression
+		var exprStr string
+		if remapInfo.node != nil {
+			var expr *plan.Expr
+			switch remapInfo.node.NodeType {
+			case plan.Node_FILTER:
+				if remapInfo.srcExprIdx >= 0 && remapInfo.srcExprIdx < len(remapInfo.node.FilterList) {
+					expr = remapInfo.node.FilterList[remapInfo.srcExprIdx]
+				}
+			case plan.Node_PROJECT:
+				if remapInfo.srcExprIdx >= 0 && remapInfo.srcExprIdx < len(remapInfo.node.ProjectList) {
+					expr = remapInfo.node.ProjectList[remapInfo.srcExprIdx]
+				}
+			case plan.Node_AGG:
+				if remapInfo.srcExprIdx >= 0 && remapInfo.srcExprIdx < len(remapInfo.node.AggList) {
+					expr = remapInfo.node.AggList[remapInfo.srcExprIdx]
+				}
+			}
+			if expr != nil {
+				// Format the expression using FormatExpr for better readability
+				option := FormatOption{
+					ExpandVec:       false,
+					ExpandVecMaxLen: 0,
+					MaxDepth:        7, // Limit depth to avoid overly long output
+				}
+				exprStr = FormatExpr(expr, option)
+			}
+		}
+		if exprStr != "" {
+			sb.WriteString("🔍 Related Expression:\n")
+			sb.WriteString(fmt.Sprintf("   %s\n", exprStr))
+			sb.WriteString("\n")
+		}
+	}
+
+	// Available columns
+	if len(colMap) > 0 {
+		sb.WriteString("✅ Available Columns in Context:\n")
+		var keyPairs []string
+		for k := range colMap {
+			name := builder.nameByColRef[k]
+			if name == "" {
+				name = "<unknown>"
+			}
+			keyPairs = append(keyPairs, fmt.Sprintf("   [RelPos=%d, ColPos=%d] -> %s", k[0], k[1], name))
+		}
+		slices.Sort(keyPairs)
+		for _, pair := range keyPairs {
+			sb.WriteString(pair)
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("⚠️  No columns available in context\n\n")
+	}
+
+	return sb.String()
+}
+
 func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
 	mapID := [2]int32{col.RelPos, col.ColPos}
 	if ids, ok := colMap[mapID]; ok {
@@ -74,12 +194,12 @@ func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]i
 		col.ColPos = ids[1]
 		col.Name = builder.nameByColRef[mapID]
 	} else {
-		var keys []string
-		for k := range colMap {
-			keys = append(keys, fmt.Sprintf("%v", k))
+		colName := "<unknown>"
+		if builder != nil {
+			colName = builder.nameByColRef[mapID]
 		}
-		mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
-		return moerr.NewParseErrorf(builder.GetContext(), "remapInfo %s ; can't find column %v in context's map %s", remapInfo.String(), mapID, mapKeys)
+		errorMsg := builder.buildRemapErrorMessage(mapID, colName, colMap, remapInfo)
+		return moerr.NewParseErrorf(builder.GetContext(), "%s", errorMsg)
 	}
 	return nil
 }
