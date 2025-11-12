@@ -105,6 +105,11 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		return false, nil
 	}
 
+	// If data size is smaller than nlist, skip the reindex
+	if dsize < uint64(nlist) {
+		return false, nil
+	}
+
 	lower := float64(30 * nlist)
 	upper := float64(256 * nlist)
 

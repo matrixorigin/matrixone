@@ -111,7 +111,6 @@ func UnregisterUpdate(ctx context.Context,
 func UnregisterUpdateByDbName(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
-	accountId uint32,
 	dbName string) (err error) {
 
 	var tenantId uint32
@@ -127,6 +126,33 @@ func UnregisterUpdateByDbName(ctx context.Context,
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
 	sql := fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, dbName)
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return
+	}
+	defer res.Close()
+
+	return
+}
+
+func UnregisterUpdateByTableId(ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	tableId uint64) (err error) {
+
+	var tenantId uint32
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
+
+	duration := 5 * time.Minute
+	newctx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	newctx, cancel := context.WithTimeout(newctx, duration)
+	defer cancel()
+	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+
+	sql := fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d", tenantId, tableId)
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return

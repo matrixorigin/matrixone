@@ -37,6 +37,19 @@ func TestCheckIndexUpdatable(t *testing.T) {
 
 	tasks := []TestTask{
 		{
+			// data size < nlist
+			jstr: `{"cfg":{"kmeans_train_percent":{"t":"F", "v":1},
+        "kmeans_max_iteration":{"t":"I", "v":4},
+        "ivf_threads_build":{"t":"I", "v":8}
+        }}`,
+			dsize:     uint64(100),
+			nlists:    int64(1000),
+			ts:        types.UnixToTimestamp(0),
+			createdAt: types.UnixToTimestamp(time.Now().Unix()),
+			expected:  false,
+		},
+
+		{
 			// just CreatedAt and skip update
 			jstr: `{"cfg":{"kmeans_train_percent":{"t":"F", "v":1},
         "kmeans_max_iteration":{"t":"I", "v":4},
