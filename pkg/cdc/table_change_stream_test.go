@@ -210,6 +210,112 @@ func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo, opts ...TableChan
 	)
 }
 
+type watermarkUpdaterStub struct {
+	mu             sync.Mutex
+	watermarks     map[string]types.TS
+	errMsgs        []string
+	updateErrFn    func(call int) error
+	removeErr      error
+	updateCalls    atomic.Int32
+	updateNotifies chan struct{}
+}
+
+func newWatermarkUpdaterStub() *watermarkUpdaterStub {
+	return &watermarkUpdaterStub{
+		watermarks: make(map[string]types.TS),
+		errMsgs:    make([]string, 0),
+	}
+}
+
+func (m *watermarkUpdaterStub) withUpdateError(fn func(call int) error) *watermarkUpdaterStub {
+	m.updateErrFn = fn
+	return m
+}
+
+func (m *watermarkUpdaterStub) withNotify(ch chan struct{}) *watermarkUpdaterStub {
+	m.updateNotifies = ch
+	return m
+}
+
+func (m *watermarkUpdaterStub) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+	if err := m.removeErr; err != nil {
+		return err
+	}
+	m.mu.Lock()
+	delete(m.watermarks, m.keyString(key))
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *watermarkUpdaterStub) UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) error {
+	m.mu.Lock()
+	m.errMsgs = append(m.errMsgs, errMsg)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *watermarkUpdaterStub) GetFromCache(ctx context.Context, key *WatermarkKey) (types.TS, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ts, ok := m.watermarks[m.keyString(key)]
+	if !ok {
+		return types.TS{}, moerr.NewInternalError(ctx, "watermark not found")
+	}
+	return ts, nil
+}
+
+func (m *watermarkUpdaterStub) GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (types.TS, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keyStr := m.keyString(key)
+	if ts, ok := m.watermarks[keyStr]; ok {
+		return ts, nil
+	}
+	m.watermarks[keyStr] = *watermark
+	return *watermark, nil
+}
+
+func (m *watermarkUpdaterStub) UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) error {
+	call := int(m.updateCalls.Add(1))
+	if m.updateNotifies != nil {
+		select {
+		case m.updateNotifies <- struct{}{}:
+		default:
+		}
+	}
+	if m.updateErrFn != nil {
+		if err := m.updateErrFn(call); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	m.watermarks[m.keyString(key)] = *watermark
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *watermarkUpdaterStub) IsCircuitBreakerOpen(key *WatermarkKey) bool {
+	return false
+}
+
+func (m *watermarkUpdaterStub) GetCommitFailureCount(key *WatermarkKey) uint32 {
+	return 0
+}
+
+func (m *watermarkUpdaterStub) keyString(key *WatermarkKey) string {
+	if key == nil {
+		return ""
+	}
+	return key.TaskId + ":" + key.DBName + ":" + key.TableName
+}
+
+func (m *watermarkUpdaterStub) loadWatermark(key *WatermarkKey) (types.TS, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ts, ok := m.watermarks[m.keyString(key)]
+	return ts, ok
+}
+
 func readGaugeValue(t *testing.T, gauge prometheus.Gauge) float64 {
 	t.Helper()
 	var metric dto.Metric
@@ -890,6 +996,292 @@ func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 	assert.NotNil(t, stream.lastError, "Should have error")
 	assert.False(t, stream.retryable, "Should NOT be retryable")
 	assert.Contains(t, stream.lastError.Error(), "cannot recover", "Error should indicate cannot recover")
+}
+
+func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) {},
+	)
+
+	watermarkNotify := make(chan struct{}, 1)
+	failureErr := moerr.NewInternalError(ctx, "inject update failure")
+	updater := newWatermarkUpdaterStub().
+		withUpdateError(func(call int) error {
+			return failureErr
+		}).
+		withNotify(watermarkNotify)
+
+	var readCount atomic.Int32
+	stub1 := gostub.Stub(&GetTxnOp,
+		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		})
+	stub2 := gostub.Stub(&FinishTxnOp,
+		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
+	stub3 := gostub.Stub(&GetTxn,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+			return nil
+		})
+	stub4 := gostub.Stub(&GetRelationById,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (string, string, engine.Relation, error) {
+			if readCount.Add(1) > 1 {
+				t.Fatalf("unexpected retry after update failure")
+			}
+			return "", "", nil, moerr.NewErrStaleReadNoCtx("", "test stale read")
+		})
+	stub5 := gostub.Stub(&GetSnapshotTS,
+		func(txnOp client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{
+				PhysicalTime: 100,
+				LogicalTime:  0,
+			}
+		})
+	stub6 := gostub.Stub(&CollectChanges,
+		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+			t.Fatalf("collect changes should not be reached when watermark update fails")
+			return nil, nil
+		})
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	stubs := []*gostub.Stubs{stub1, stub2, stub3, stub4, stub5, stub6, stub7, stub8}
+	defer func() {
+		for _, s := range stubs {
+			s.Reset()
+		}
+	}()
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "ts"},
+			{Name: "a"},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"a"},
+		},
+		Name2ColIndex: map[string]int32{
+			"ts": 0,
+			"a":  1,
+		},
+	}
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	sinker := NewConsoleSinker(nil, nil)
+
+	stream := NewTableChangeStream(
+		nil, nil, mp, pool,
+		1, "task1", tableInfo,
+		sinker, updater, tableDef,
+		false, &sync.Map{},
+		types.TS{}, types.TS{},
+		true, // allow retry but failure should abort
+		50*time.Millisecond,
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		stream.Run(ctx, NewCdcActiveRoutine())
+	}()
+
+	select {
+	case <-watermarkNotify:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for watermark update attempt")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for stream to exit after watermark failure")
+	}
+
+	require.NotNil(t, stream.lastError)
+	require.Contains(t, stream.lastError.Error(), "failed to update watermark")
+	require.False(t, stream.retryable, "failure to update watermark should be treated as non-retryable")
+	require.Equal(t, int32(1), updater.updateCalls.Load())
+	require.Equal(t, int32(1), readCount.Load())
+
+	if _, ok := updater.loadWatermark(stream.watermarkKey); ok {
+		t.Fatalf("watermark should not be recorded on failure")
+	}
+}
+
+func TestTableChangeStream_StaleReadRetry_MultipleAttempts(t *testing.T) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) {},
+	)
+
+	var packer *types.Packer
+	put := pool.Get(&packer)
+
+	readDone := make(chan struct{}, 8)
+	updateNotify := make(chan struct{}, 8)
+
+	updater := newWatermarkUpdaterStub().withNotify(updateNotify)
+
+	var readCount atomic.Int32
+	stub1 := gostub.Stub(&GetTxnOp,
+		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		})
+	stub2 := gostub.Stub(&FinishTxnOp,
+		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
+	stub3 := gostub.Stub(&GetTxn,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+			return nil
+		})
+	stub4 := gostub.Stub(&GetRelationById,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (string, string, engine.Relation, error) {
+			attempt := int(readCount.Add(1))
+			select {
+			case readDone <- struct{}{}:
+			default:
+			}
+			if attempt <= 3 {
+				return "", "", nil, moerr.NewErrStaleReadNoCtx("", "transient stale read")
+			}
+			return "", "", nil, nil
+		})
+	stub5 := gostub.Stub(&GetSnapshotTS,
+		func(txnOp client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{
+				PhysicalTime: 200,
+				LogicalTime:  0,
+			}
+		})
+	stub6 := gostub.Stub(&CollectChanges,
+		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer), nil
+		})
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	stubs := []*gostub.Stubs{stub1, stub2, stub3, stub4, stub5, stub6, stub7, stub8}
+	defer func() {
+		put.Put()
+		for _, s := range stubs {
+			s.Reset()
+		}
+	}()
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "ts"},
+			{Name: "a"},
+			{Name: "b"},
+			{Name: "cpk"},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"a", "b"},
+		},
+		Name2ColIndex: map[string]int32{
+			"ts":  0,
+			"a":   1,
+			"b":   2,
+			"cpk": 3,
+		},
+	}
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	sinker := NewConsoleSinker(nil, nil)
+
+	stream := NewTableChangeStream(
+		nil, nil, mp, pool,
+		1, "task1", tableInfo,
+		sinker, updater, tableDef,
+		false, &sync.Map{},
+		types.TS{}, types.TS{},
+		true,
+		50*time.Millisecond,
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		stream.Run(ctx, NewCdcActiveRoutine())
+	}()
+
+	for i := 0; i < 3; i++ {
+		select {
+		case <-readDone:
+		case <-time.After(1 * time.Second):
+			t.Fatalf("timeout waiting for stale read attempt %d", i+1)
+		}
+		select {
+		case <-updateNotify:
+		case <-time.After(1 * time.Second):
+			t.Fatalf("timeout waiting for watermark update %d", i+1)
+		}
+	}
+
+	select {
+	case <-readDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for successful read after retries")
+	}
+
+	require.Eventually(t, func() bool {
+		return stream.lastError == nil
+	}, time.Second, 10*time.Millisecond, "expected successful retry to clear lastError")
+
+	stream.cancelRun()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for stream stop after cancel")
+	}
+
+	cancel()
+
+	require.Nil(t, stream.lastError, "successful retry should not leave residual error")
+	require.GreaterOrEqual(t, readCount.Load(), int32(4))
+	require.GreaterOrEqual(t, updater.updateCalls.Load(), int32(3), "expected watermark updates for each stale read attempt")
+
+	// Watermark updates are issued asynchronously; cleanup clears cached state.
+	// Presence of stored watermark is not guaranteed post-cleanup, so we rely on
+	// updateCalls/count assertions above for coverage.
 }
 
 // Test end-to-end with real change processing

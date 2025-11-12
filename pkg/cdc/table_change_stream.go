@@ -882,6 +882,13 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 			zap.String("watermark", watermark.ToString()),
 			zap.Error(err),
 		)
+		s.retryable = false
+		return moerr.NewInternalErrorf(
+			ctx,
+			"CDC tableChangeStream %s stale read recovery failed to update watermark: %v",
+			s.tableInfo.String(),
+			err,
+		)
 	}
 
 	logutil.Info(
