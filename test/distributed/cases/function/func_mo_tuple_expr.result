@@ -35,9 +35,9 @@ set @sql1 = concat('select mo_tuple_expr(__mo_index_idx_col) as decoded_tuple fr
 prepare stmt1 from @sql1;
 execute stmt1;
 decoded_tuple
-("Apple", 100, 1)
-("Banana", 150, 2)
-("Laptop", 20, 3)
+(Apple, 100, 1)
+(Banana, 150, 2)
+(Laptop, 20, 3)
 deallocate prepare stmt1;
 set @tbl2 = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx_price_qty' limit 1);
 set @sql2 = concat('select mo_tuple_expr(__mo_index_idx_col) as decoded_tuple from test_tuple.`', @tbl2, '` order by __mo_index_pri_col');
@@ -53,8 +53,8 @@ set @sql3 = concat('select mo_tuple_expr(__mo_index_idx_col) as decoded_tuple fr
 prepare stmt3 from @sql3;
 execute stmt3;
 decoded_tuple
-("Fruit", 10, 1)
-("Fruit", 15, 2)
-("Electronics", 5, 3)
+(Fruit, 10, 1)
+(Fruit, 15, 2)
+(Electronics, 5, 3)
 deallocate prepare stmt3;
 drop database if exists test_tuple;
