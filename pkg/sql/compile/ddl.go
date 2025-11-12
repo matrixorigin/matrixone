@@ -927,7 +927,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
+				// iscp
 				err = iscp.RenameSrcTable(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.DbId,
+					req.TableId,
+					op.RenameTable.OldName,
+					op.RenameTable.NewName)
+				if err != nil {
+					return err
+				}
+
+				// idxcron
+				err = idxcron.RenameSrcTable(c.proc.Ctx,
 					c.proc.GetService(),
 					c.proc.GetTxnOperator(),
 					req.DbId,

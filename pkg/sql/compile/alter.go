@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -169,6 +170,15 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	// Idxcron: remove index update tasks with temp table id
+	err = idxcron.UnregisterUpdateByTableId(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		newRel.GetTableID(c.proc.Ctx))
+	if err != nil {
+		return err
+	}
+
 	// 6. copy the original table data to the temporary replica table
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	if err != nil {
@@ -267,22 +277,50 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						continue
 					}
 
-					valid, err := checkValidIndexCdc(newTableDef, indexDef.IndexName)
-					if err != nil {
-						return err
-					}
-
-					if valid {
-						// index table may not be fully sync'd with source table via ISCP during alter table
-						// clone index table (with ISCP) may not be a complete clone
-						// so register ISCP job with startFromNow = false
-						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+					{
+						// ISCP
+						valid, err := checkValidIndexCdc(newTableDef, indexDef.IndexName)
 						if err != nil {
 							return err
 						}
 
-						logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+						if valid {
+							// index table may not be fully sync'd with source table via ISCP during alter table
+							// clone index table (with ISCP) may not be a complete clone
+							// so register ISCP job with startFromNow = false
+							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+							if err != nil {
+								return err
+							}
+
+							logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+						}
+					}
+
+					{
+						// idxcron
+						metadata, err := getIvfflatMetadata(c)
+						if err != nil {
+							return err
+						}
+
+						if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+
+							err = idxcron.RegisterUpdate(c.proc.Ctx,
+								c.proc.GetService(),
+								c.proc.GetTxnOperator(),
+								id,
+								dbName,
+								newTableDef.Name,
+								indexDef.IndexName,
+								idxcron.Action_Ivfflat_Reindex,
+								string(metadata))
+
+							if err != nil {
+								return err
+							}
+						}
 					}
 
 					unaffectedIndexProcessed[indexDef.IndexName] = true
