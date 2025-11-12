@@ -3,10 +3,6 @@ mo-data/
 logs/
 *.log
 
-# Ignore version control
-.git/
-.gitignore
-
 # Ignore IDE files
 .vscode/
 .idea/
