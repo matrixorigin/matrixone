@@ -1075,6 +1075,29 @@ func mergeDiff(
 		}
 	}
 
+	conflictErr := func(a, b []any) error {
+		pkStr := func(c []any) string {
+			buf := acquireBuffer()
+			defer releaseBuffer(buf)
+
+			buf.WriteString("pk(")
+			for i, idx := range pkColIdxes {
+				formatValIntoString(ses, c[idx+2], colTypes[idx], buf)
+				if i != len(pkColIdxes)-1 {
+					buf.WriteString(",")
+				}
+			}
+			buf.WriteString(")")
+			return buf.String()
+		}
+
+		return moerr.NewInternalErrorNoCtxf(
+			"merge conflict: %v %v %s <=> %v %v %s",
+			a[0], a[1], pkStr(a),
+			b[0], b[1], pkStr(b),
+		)
+	}
+
 	if lcaType == lcaEmpty {
 		var prevRow []any
 		for _, row := range rows1 {
@@ -1093,9 +1116,7 @@ func mergeDiff(
 				if compareRows(row, prevRow, pkColIdxes, colTypes, true) == 0 {
 					switch conflictOpt {
 					case tree.CONFLICT_FAIL:
-						return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
-							"merge diff conflict happend %v <=> %v", row, prevRow,
-						)
+						return nil, nil, nil, conflictErr(row, prevRow)
 					case tree.CONFLICT_SKIP:
 					// do nothing
 					case tree.CONFLICT_ACCEPT:
@@ -1138,9 +1159,7 @@ func mergeDiff(
 					}
 					switch conflictOpt {
 					case tree.CONFLICT_FAIL:
-						return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
-							"merge diff conflict happend %v <=> %v", rows1[i], rows2[j],
-						)
+						return nil, nil, nil, conflictErr(rows1[i], rows2[j])
 					case tree.CONFLICT_SKIP:
 						i++
 						j++
