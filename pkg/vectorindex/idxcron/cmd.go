@@ -17,6 +17,7 @@ package idxcron
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -98,6 +99,9 @@ func UnregisterUpdate(ctx context.Context,
 		sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d AND index_name = '%s' AND action = '%s'",
 			tenantId, tableId, indexname, action)
 	}
+
+	os.Stderr.WriteString(sql)
+	os.Stderr.WriteString("\n")
 
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {

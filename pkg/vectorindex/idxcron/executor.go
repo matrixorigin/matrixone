@@ -56,9 +56,9 @@ const (
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
 	Action_Wildcard             = "*"
 
-	OneWeek            = 24 * 7 * time.Hour
-	KmeansTrainPercent = "kmeans_train_percent"
-	KmeansMaxIteration = "kmeans_max_iteration"
+	OneWeek                 = 24 * 7 * time.Hour
+	KmeansTrainPercentParam = "kmeans_train_percent"
+	KmeansMaxIterationParam = "kmeans_max_iteration"
 )
 
 var (
@@ -117,7 +117,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		return true, nil
 	}
 
-	v, err := t.Metadata.ResolveVariableFunc(KmeansTrainPercent, false, true)
+	v, err := t.Metadata.ResolveVariableFunc(KmeansTrainPercentParam, false, true)
 	if err != nil {
 		return false, err
 	}
@@ -154,7 +154,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 		// reindex every week and limit nsample to upper bound
 		ratio := (upper / float64(dsize)) * 100
-		err = t.Metadata.Modify(KmeansTrainPercent, ratio)
+		err = t.Metadata.Modify(KmeansTrainPercentParam, ratio)
 		if err != nil {
 			return false, err
 		}
@@ -252,7 +252,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
-			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at, created_at from mo_catalog.mo_index_update"
+			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at, create_at from mo_catalog.mo_index_update"
 			res, err := runGetTasksSql(sqlproc, sql)
 			if err != nil {
 				return err

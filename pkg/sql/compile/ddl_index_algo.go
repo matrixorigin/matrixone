@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -458,6 +460,47 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	}
 
 	return nil
+}
+
+func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
+
+	val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	if err != nil {
+		return err
+	}
+	threadsBuild := val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+	if err != nil {
+		return err
+	}
+	kmeansTrainPercent := val.(float64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+	if err != nil {
+		return err
+	}
+	kmeansMaxIteration := val.(int64)
+
+	w := sqlexec.NewMetadataWriter()
+	w.AddInt("ivf_threads_build", threadsBuild)
+	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
+	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
+	metadata, err := w.Marshal()
+	if err != nil {
+		return err
+	}
+
+	return idxcron.RegisterUpdate(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		originalTableDef.TblId,
+		qryDatabase,
+		originalTableDef.Name,
+		indexDef.IndexName,
+		idxcron.Action_Ivfflat_Reindex,
+		string(metadata))
+
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
