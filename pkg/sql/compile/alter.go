@@ -300,7 +300,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 					{
 						// idxcron
-						metadata, err := getIvfflatMetadata(c)
+						metadata, _, err := getIvfflatMetadata(c)
 						if err != nil {
 							return err
 						}

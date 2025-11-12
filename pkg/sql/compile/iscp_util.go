@@ -210,34 +210,42 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 	return nil
 }
 
-func getIvfflatMetadata(c *Compile) ([]byte, error) {
-	val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) {
+	var val any
+
+	// only frontend has ivf_threads_search variable declared
+	_, err = c.proc.GetResolveVariableFunc()("ivf_threads_search", true, false)
+	if err == nil {
+		frontend = true
+	}
+
+	val, err = c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
 	if err != nil {
-		return nil, err
+		return
 	}
 	threadsBuild := val.(int64)
 
 	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
 	if err != nil {
-		return nil, err
+		return
 	}
 	kmeansTrainPercent := val.(float64)
 
 	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
 	if err != nil {
-		return nil, err
+		return
 	}
 	kmeansMaxIteration := val.(int64)
 
 	val, err = c.proc.GetResolveVariableFunc()("lower_case_table_names", true, false)
 	if err != nil {
-		return nil, err
+		return
 	}
 	lowerCaseTableNames := val.(int64)
 
 	val, err = c.proc.GetResolveVariableFunc()("experimental_ivf_index", true, false)
 	if err != nil {
-		return nil, err
+		return
 	}
 	experimentalIvfIndex := val.(int8)
 
@@ -248,12 +256,12 @@ func getIvfflatMetadata(c *Compile) ([]byte, error) {
 	w.AddInt("lower_case_table_names", lowerCaseTableNames)
 	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
 
-	metadata, err := w.Marshal()
+	metadata, err = w.Marshal()
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	return metadata, nil
+	return
 }
 
 // idxcron function
@@ -262,7 +270,7 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 		return nil
 	}
 
-	ivf_metadata, err := getIvfflatMetadata(c)
+	ivf_metadata, _, err := getIvfflatMetadata(c)
 	if err != nil {
 		return err
 	}

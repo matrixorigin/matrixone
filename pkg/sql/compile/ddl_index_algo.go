@@ -463,9 +463,15 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
 
-	metadata, err := getIvfflatMetadata(c)
+	metadata, frontend, err := getIvfflatMetadata(c)
 	if err != nil {
 		return err
+	}
+
+	if !frontend {
+		// this function call is from background so ignore it
+		logutil.Infof("Background invoke reindex and ignore register index update function call")
+		return nil
 	}
 
 	return idxcron.RegisterUpdate(c.proc.Ctx,
@@ -477,7 +483,6 @@ func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef
 		indexDef.IndexName,
 		idxcron.Action_Ivfflat_Reindex,
 		string(metadata))
-
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {

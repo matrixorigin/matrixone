@@ -173,8 +173,8 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 
 	// run status sql
 	if updated {
-		sql := fmt.Sprintf("UPDATE `%s`.`%s` SET last_update_at = now() WHERE table_id = %d AND account_id = %d AND action = '%s'",
-			t.DbName, t.TableName, t.TableId, t.AccountId, t.Action)
+		sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET last_update_at = now() WHERE table_id = %d AND account_id = %d AND action = '%s'",
+			t.TableId, t.AccountId, t.Action)
 		res, err2 := runSaveStatusSql(sqlproc, sql)
 		if err2 != nil {
 			return err2
@@ -410,6 +410,8 @@ func runIvfflatReindex(ctx context.Context,
 			}
 			res.Close()
 
+			os.Stderr.WriteString(sql)
+			os.Stderr.WriteString(fmt.Sprintf("\ndsize = %d\n", dsize))
 			// mark reindex is performed
 			updated = true
 			return
