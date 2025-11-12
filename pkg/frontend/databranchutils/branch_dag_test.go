@@ -78,6 +78,18 @@ func TestDAGFunctionality(t *testing.T) {
 		}
 	})
 
+	t.Run("Parent Checks", func(t *testing.T) {
+		if !dag.HasParent(111) {
+			t.Error("Expected node 111 to have a parent")
+		}
+		if dag.HasParent(100) {
+			t.Error("Expected root node 100 to have no parent")
+		}
+		if dag.HasParent(9999) {
+			t.Error("Expected unknown node 9999 to report no parent")
+		}
+	})
+
 	// Sub-test for LCA logic - no changes needed here as it tests the final graph structure.
 	t.Run("Lowest Common Ancestor Checks", func(t *testing.T) {
 		testCases := []struct {

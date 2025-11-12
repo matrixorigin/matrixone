@@ -8,9 +8,9 @@ create table t2(a int, b int, primary key(a));
 insert into t2 select *,* from generate_series(1, 8192)g;
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    +    9    9
-t2    +    99    99
-t2    +    999    999
+t2    INSERT    9    9
+t2    INSERT    99    99
+t2    INSERT    999    999
 delete from t2 where a in (9, 99, 999);
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
@@ -23,12 +23,12 @@ create table t2(a int, b int, primary key(a));
 insert into t2 select *,* from generate_series(1, 8192)g;
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    -    9    10
-t2    +    9    9
-t2    -    99    100
-t2    +    99    99
-t2    -    999    1000
-t2    +    999    999
+t1    INSERT    9    10
+t2    INSERT    9    9
+t1    INSERT    99    100
+t2    INSERT    99    99
+t1    INSERT    999    1000
+t2    INSERT    999    999
 update t2 set b = b+1 where a in (9, 99, 999);
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
@@ -43,14 +43,14 @@ create table t2 clone t0;
 insert into t2 values(5, 5);
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    +    5    5
-t2    +    3    3
-t2    -    4    4
+t2    INSERT    5    5
+t1    DELETE    3    3
+t1    INSERT    4    4
 delete from t2 where a = 3;
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    +    5    5
-t2    -    4    4
+t2    INSERT    5    5
+t1    INSERT    4    4
 drop table t0;
 drop table t1;
 drop table t2;
@@ -63,15 +63,14 @@ create table t2 clone t0;
 insert into t2 values(5,5);
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    +    5    5
-t2    -    3    4
-t2    +    3    3
-t2    -    4    4
+t2    INSERT    5    5
+t1    UPDATE    3    4
+t1    INSERT    4    4
 update t2 set b = b + 1 where a = 3;
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    +    5    5
-t2    -    4    4
+t2    INSERT    5    5
+t1    INSERT    4    4
 drop table t0;
 drop table t1;
 drop table t2;
@@ -82,7 +81,7 @@ insert into t2 select *,* from generate_series(101,200)g;
 delete from t2 where a >= 100;
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b
-t2    -    100    100
+t2    DELETE    100    100
 drop table t1;
 drop table t2;
 create table t0(a int, b int, c int, primary key(a, b));
@@ -95,14 +94,10 @@ update t2 set c = c + 1 where a in (2, 200, 1000);
 insert into t2 values(9001, 9001, 9001);
 data branch diff t2 against t1;
 diff t2 against t1    flag    a    b    c
-t2    -    2    2    2
-t2    +    2    2    3
-t2    -    200    200    200
-t2    +    200    200    201
-t2    +    9001    9001    9001
-t2    -    1    1    2
-t2    +    1    1    1
-t2    -    100    100    101
-t2    +    100    100    100
-t2    -    9000    9000    9000
+t2    UPDATE    2    2    3
+t1    UPDATE    1    1    2
+t2    UPDATE    200    200    201
+t1    UPDATE    100    100    101
+t2    INSERT    9001    9001    9001
+t1    INSERT    9000    9000    9000
 drop database test;
