@@ -67,6 +67,9 @@ var (
 	runReindexSql        = sqlexec.RunSql
 	runGetCountSql       = sqlexec.RunSql
 	runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+
+	// createdAt Delay update duration
+	createdAtDelay = 2 * 24 * time.Hour
 )
 
 var running atomic.Bool
@@ -95,6 +98,13 @@ type IndexUpdateTaskInfo struct {
 // Case 3:  dsize > 256 * nlist, re-index every 1 week and ivf_train_percent = (256 * nlist) / dsize
 func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64) (ok bool, err error) {
 
+	now := time.Now()
+	createdAt := time.Unix(t.CreatedAt.Unix(), 0)
+	if createdAt.Add(createdAtDelay).After(now) {
+		// skip update when createdAt + delay is after current time
+		return false, nil
+	}
+
 	lower := float64(30 * nlist)
 	upper := float64(256 * nlist)
 
@@ -120,7 +130,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 		ts := time.Unix(t.LastUpdateAt.Unix(), 0)
 		ts = ts.Add(OneWeek)
-		if ts.After(time.Now()) {
+		if ts.After(now) {
 			return false, nil
 		} else {
 			// update
@@ -132,7 +142,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		if t.LastUpdateAt != nil {
 			ts := time.Unix(t.LastUpdateAt.Unix(), 0)
 			ts = ts.Add(OneWeek)
-			if ts.After(time.Now()) {
+			if ts.After(now) {
 				return false, nil
 			}
 		}
@@ -237,7 +247,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
-			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at from mo_catalog.mo_index_update"
+			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at, created_at from mo_catalog.mo_index_update"
 			res, err := runGetTasksSql(sqlproc, sql)
 			if err != nil {
 				return err
@@ -253,6 +263,7 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 				tblidvec := bat.Vecs[5]
 				metavec := bat.Vecs[6]
 				lastupdatevec := bat.Vecs[7]
+				createdAtVec := bat.Vecs[8]
 
 				for i := 0; i < bat.RowCount(); i++ {
 					dbname := dbvec.GetStringAt(i)
@@ -261,6 +272,8 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 					action := actionvec.GetStringAt(i)
 					accountId := vector.GetFixedAtWithTypeCheck[uint32](accountvec, i)
 					tableId := vector.GetFixedAtWithTypeCheck[uint64](tblidvec, i)
+					createdAt := vector.GetFixedAtWithTypeCheck[types.Timestamp](createdAtVec, i)
+
 					metadata := (*sqlexec.Metadata)(nil)
 					lastupdate := (*types.Timestamp)(nil)
 
@@ -284,7 +297,8 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 						AccountId:    accountId,
 						TableId:      tableId,
 						Metadata:     metadata,
-						LastUpdateAt: lastupdate})
+						LastUpdateAt: lastupdate,
+						CreatedAt:    createdAt})
 
 				}
 			}

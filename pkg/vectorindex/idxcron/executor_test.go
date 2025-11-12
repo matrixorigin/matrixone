@@ -27,23 +27,38 @@ import (
 func TestCheckIndexUpdatable(t *testing.T) {
 
 	type TestTask struct {
-		jstr     string
-		dsize    uint64
-		nlists   int64
-		ts       types.Timestamp
-		expected bool
+		jstr      string
+		dsize     uint64
+		nlists    int64
+		ts        types.Timestamp
+		createdAt types.Timestamp
+		expected  bool
 	}
 
 	tasks := []TestTask{
+		{
+			// just CreatedAt and skip update
+			jstr: `{"cfg":{"kmeans_train_percent":{"t":"F", "v":1},
+        "kmeans_max_iteration":{"t":"I", "v":4},
+        "ivf_threads_build":{"t":"I", "v":8}
+        }}`,
+			dsize:     uint64(1000000),
+			nlists:    int64(1000),
+			ts:        types.UnixToTimestamp(0),
+			createdAt: types.UnixToTimestamp(time.Now().Unix()),
+			expected:  false,
+		},
+
 		{
 			jstr: `{"cfg":{"kmeans_train_percent":{"t":"F", "v":1},
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:    uint64(1000000),
-			nlists:   int64(1000),
-			ts:       types.UnixToTimestamp(0),
-			expected: true,
+			dsize:     uint64(1000000),
+			nlists:    int64(1000),
+			ts:        types.UnixToTimestamp(0),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
+			expected:  true,
 		},
 
 		{
@@ -62,8 +77,9 @@ func TestCheckIndexUpdatable(t *testing.T) {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:  uint64(1000000),
-			nlists: int64(1000),
+			dsize:     uint64(1000000),
+			nlists:    int64(1000),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
 				unixts := now.Add(-2 * OneWeek).Unix()
@@ -77,8 +93,9 @@ func TestCheckIndexUpdatable(t *testing.T) {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:  uint64(1000000),
-			nlists: int64(1000),
+			dsize:     uint64(1000000),
+			nlists:    int64(1000),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
 				unixts := now.Add(-time.Hour).Unix()
@@ -92,8 +109,9 @@ func TestCheckIndexUpdatable(t *testing.T) {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:  uint64(10000000),
-			nlists: int64(1000),
+			dsize:     uint64(10000000),
+			nlists:    int64(1000),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
 				unixts := now.Add(-1 * time.Hour).Unix()
@@ -107,8 +125,9 @@ func TestCheckIndexUpdatable(t *testing.T) {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:  uint64(10000000),
-			nlists: int64(1000),
+			dsize:     uint64(10000000),
+			nlists:    int64(1000),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
 				now := time.Now()
 				unixts := now.Add(-2 * OneWeek).Unix()
@@ -132,6 +151,7 @@ func TestCheckIndexUpdatable(t *testing.T) {
 			TableId:      uint64(100),
 			Metadata:     m,
 			LastUpdateAt: &ta.ts,
+			CreatedAt:    ta.createdAt,
 		}
 
 		ok, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists)
