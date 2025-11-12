@@ -91,6 +91,7 @@ const (
 const (
 	watermarkCommitMaxRetries   = 3
 	watermarkCircuitBreakPeriod = 30 * time.Second
+	fallbackLogThrottleWindow   = time.Second
 )
 
 var cdcWatermarkUpdater atomic.Pointer[CDCWatermarkUpdater]
@@ -314,6 +315,8 @@ type CDCWatermarkUpdater struct {
 		errorTimes     atomic.Uint64
 		lastExportTime time.Time
 	}
+
+	fallbackLog sync.Map
 }
 
 func NewCDCWatermarkUpdater(
@@ -441,16 +444,35 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
 		case JT_CDC_RemoveCachedWM:
+			var inCommitted bool
 			u.Lock()
 			if _, ok := u.cacheCommitted[*job.Key]; ok {
 				delete(u.cacheCommitted, *job.Key)
-				job.DoneWithErr(nil)
+				inCommitted = true
 			}
+			delete(u.cacheUncommitted, *job.Key)
+			delete(u.cacheCommitting, *job.Key)
+			delete(u.errorMetadataCache, *job.Key)
+			if openedAt, opened := u.commitCircuitOpen[*job.Key]; opened {
+				if time.Since(openedAt) < watermarkCircuitBreakPeriod {
+					v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+					v2.CdcWatermarkCircuitOpenGauge.Dec()
+				}
+				delete(u.commitCircuitOpen, *job.Key)
+			}
+			delete(u.commitFailureCount, *job.Key)
 			u.Unlock()
-			logutil.Info(
-				"cdc.watermark.remove_cached_success",
+
+			job.DoneWithErr(nil)
+
+			fields := []zap.Field{
 				zap.String("key", job.Key.String()),
-			)
+			}
+			if inCommitted {
+				logutil.Info("cdc.watermark.remove_cached_success", fields...)
+			} else {
+				logutil.Info("cdc.watermark.remove_cached_skip", fields...)
+			}
 		default:
 			logutil.Fatal("unknown job type", zap.Int("job-type", int(job.Type())))
 		}
@@ -902,6 +924,17 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 
 		job := NewUpdateWMErrMsgJob(ctx, key, "")
 		if _, err = u.queue.Enqueue(job); err != nil {
+			if errors.Is(err, sm.ErrClose) {
+				if u.shouldLogFallback(key) {
+					logutil.Info(
+						"cdc.watermark.update_errmsg_fallback",
+						zap.String("key", key.String()),
+						zap.Bool("clear", true),
+						zap.Bool("retryable", false),
+					)
+				}
+				return nil
+			}
 			return
 		}
 		job.WaitDone()
@@ -993,6 +1026,18 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 
 	job := NewUpdateWMErrMsgJob(ctx, key, formattedMsg)
 	if _, err = u.queue.Enqueue(job); err != nil {
+		if errors.Is(err, sm.ErrClose) {
+			if u.shouldLogFallback(key) {
+				logutil.Info(
+					"cdc.watermark.update_errmsg_fallback",
+					zap.String("key", key.String()),
+					zap.Bool("clear", false),
+					zap.Bool("retryable", newMetadata.IsRetryable),
+					zap.Int("retry-count", newMetadata.RetryCount),
+				)
+			}
+			return nil
+		}
 		return
 	}
 	job.WaitDone()
@@ -1058,20 +1103,75 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 	key *WatermarkKey,
 ) (err error) {
 	if err = u.ForceFlush(ctx); err != nil {
-		logutil.Error(
+		logutil.Warn(
 			"cdc.watermark.remove.force_flush_failed",
 			zap.String("key", key.String()),
 			zap.Error(err),
 		)
-		return
+		err = nil
 	}
 	job := NewRemoveCachedWMJob(ctx, key)
 	if _, err = u.queue.Enqueue(job); err != nil {
-		return
+		if errors.Is(err, sm.ErrClose) {
+			u.removeCachedWMSynchronously(key, true)
+			return nil
+		}
+		job.DoneWithErr(err)
+		return err
 	}
 	job.WaitDone()
 	err = job.GetResult().Err
 	return
+}
+
+func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, logSkip bool) {
+	var inCommitted bool
+	u.Lock()
+	if _, ok := u.cacheCommitted[*key]; ok {
+		delete(u.cacheCommitted, *key)
+		inCommitted = true
+	}
+	delete(u.cacheUncommitted, *key)
+	delete(u.cacheCommitting, *key)
+	delete(u.errorMetadataCache, *key)
+	if openedAt, opened := u.commitCircuitOpen[*key]; opened {
+		if time.Since(openedAt) < watermarkCircuitBreakPeriod {
+			v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+			v2.CdcWatermarkCircuitOpenGauge.Dec()
+		}
+		delete(u.commitCircuitOpen, *key)
+	}
+	delete(u.commitFailureCount, *key)
+	u.Unlock()
+
+	if !u.shouldLogFallback(key) {
+		return
+	}
+
+	fields := []zap.Field{
+		zap.String("key", key.String()),
+		zap.Bool("fallback", true),
+	}
+	if inCommitted {
+		logutil.Info("cdc.watermark.remove_cached_success", fields...)
+	} else if logSkip {
+		logutil.Info("cdc.watermark.remove_cached_skip", fields...)
+	}
+}
+
+func (u *CDCWatermarkUpdater) shouldLogFallback(key *WatermarkKey) bool {
+	if key == nil {
+		return true
+	}
+	now := time.Now()
+	ks := key.String()
+	if prev, ok := u.fallbackLog.Load(ks); ok {
+		if elapsed := now.Sub(prev.(time.Time)); elapsed < fallbackLogThrottleWindow {
+			return false
+		}
+	}
+	u.fallbackLog.Store(ks, now)
+	return true
 }
 
 func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
@@ -1143,6 +1243,25 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 
 	job := NewGetOrAddCommittedWMJob(ctx, key, watermark)
 	if _, err = u.queue.Enqueue(job); err != nil {
+		if errors.Is(err, sm.ErrClose) {
+			if watermark != nil {
+				u.Lock()
+				u.cacheCommitted[*key] = *watermark
+				u.Unlock()
+				ret = *watermark
+			}
+			if u.shouldLogFallback(key) {
+				fields := []zap.Field{
+					zap.String("key", key.String()),
+					zap.Bool("fallback", true),
+				}
+				if watermark != nil {
+					fields = append(fields, zap.String("watermark", watermark.ToString()))
+				}
+				logutil.Info("cdc.watermark.get_or_add_fallback", fields...)
+			}
+			return ret, nil
+		}
 		return
 	}
 	job.WaitDone()
