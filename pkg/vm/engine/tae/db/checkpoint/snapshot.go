@@ -69,6 +69,9 @@ func FilterSortedMetaFilesByTimestamp(
 		// ts.LE(&curr.end) means the ts is in the range of the checkpoint
 		// ts.LT(&prevFile.end) means the ts is not in the range of the previous checkpoint
 		if curr.GetStart().IsEmpty() && ts.LE(curr.GetEnd()) {
+			if ts.Equal(curr.GetEnd()) {
+				return files[:i+1]
+			}
 			return files[:i]
 		}
 	}
