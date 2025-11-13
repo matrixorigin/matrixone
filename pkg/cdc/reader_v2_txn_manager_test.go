@@ -16,11 +16,13 @@ package cdc
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockSinker for testing
@@ -76,6 +78,111 @@ func (m *mockSinker) reset() {
 	m.clearCalled = false
 	m.err = nil
 	m.rollbackErr = nil
+}
+
+type recordingSinker struct {
+	mu          sync.Mutex
+	ops         []string
+	err         error
+	rollbackErr error
+	commitErr   error
+	beginErr    error
+}
+
+func newRecordingSinker() *recordingSinker {
+	return &recordingSinker{}
+}
+
+func (s *recordingSinker) record(op string) {
+	s.mu.Lock()
+	s.ops = append(s.ops, op)
+	s.mu.Unlock()
+}
+
+func (s *recordingSinker) opsSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]string, len(s.ops))
+	copy(cp, s.ops)
+	return cp
+}
+
+func (s *recordingSinker) resetOps() {
+	s.mu.Lock()
+	s.ops = nil
+	s.mu.Unlock()
+}
+
+func (s *recordingSinker) setError(err error) {
+	s.mu.Lock()
+	s.err = err
+	s.mu.Unlock()
+}
+
+func (s *recordingSinker) setCommitError(err error) {
+	s.mu.Lock()
+	s.commitErr = err
+	s.mu.Unlock()
+}
+
+func (s *recordingSinker) setBeginError(err error) {
+	s.mu.Lock()
+	s.beginErr = err
+	s.mu.Unlock()
+}
+
+func (s *recordingSinker) Run(context.Context, *ActiveRoutine)  {}
+func (s *recordingSinker) Sink(context.Context, *DecoderOutput) {}
+func (s *recordingSinker) Close()                               {}
+func (s *recordingSinker) Reset()                               {}
+
+func (s *recordingSinker) SendBegin() {
+	var err error
+	s.mu.Lock()
+	s.ops = append(s.ops, "begin")
+	err = s.beginErr
+	s.mu.Unlock()
+	if err != nil {
+		s.setError(err)
+	}
+}
+
+func (s *recordingSinker) SendCommit() {
+	var err error
+	s.mu.Lock()
+	s.ops = append(s.ops, "commit")
+	err = s.commitErr
+	s.mu.Unlock()
+	if err != nil {
+		s.setError(err)
+	}
+}
+
+func (s *recordingSinker) SendDummy() {
+	s.record("dummy")
+}
+
+func (s *recordingSinker) SendRollback() {
+	var rollbackErr error
+	s.mu.Lock()
+	rollbackErr = s.rollbackErr
+	s.mu.Unlock()
+
+	s.record("rollback")
+	if rollbackErr != nil {
+		s.setError(rollbackErr)
+	}
+}
+
+func (s *recordingSinker) Error() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+func (s *recordingSinker) ClearError() {
+	s.record("clear")
+	s.setError(nil)
 }
 
 // mockWatermarkUpdater for testing
@@ -192,6 +299,31 @@ func TestTransactionManager_BeginTransaction_WithError(t *testing.T) {
 	assert.False(t, tm.tracker.hasBegin)
 }
 
+func TestTransactionManager_BeginTransaction_RollsBackUnfinished(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	oldFrom := types.TS{}
+	oldTo := (&oldFrom).Next()
+	pending := NewTransactionTracker(oldFrom, oldTo)
+	pending.MarkBegin()
+	tm.tracker = pending
+
+	newFrom := oldTo
+	newTo := (&newFrom).Next()
+	err := tm.BeginTransaction(ctx, newFrom, newTo)
+	require.NoError(t, err)
+
+	require.NotEqual(t, pending, tm.tracker)
+	require.NotNil(t, tm.tracker)
+	assert.Equal(t, newFrom, tm.tracker.GetFromTs())
+	assert.Equal(t, newTo, tm.tracker.GetToTs())
+
+	require.Equal(t, []string{"clear", "rollback", "dummy", "begin"}, sinker.opsSnapshot())
+}
+
 func TestTransactionManager_CommitTransaction(t *testing.T) {
 	ctx := context.Background()
 	sinker := &mockSinker{}
@@ -261,6 +393,38 @@ func TestTransactionManager_CommitTransaction_WithError(t *testing.T) {
 	assert.True(t, sinker.commitCalled)
 	assert.False(t, tm.tracker.hasCommitted)
 	assert.True(t, tm.tracker.NeedsRollback())
+}
+
+func TestTransactionManager_EnsureCleanup_AfterCommitFailure(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+
+	commitErr := moerr.NewInternalError(ctx, "commit error")
+	sinker.setError(commitErr)
+
+	err := tm.CommitTransaction(ctx)
+	require.ErrorIs(t, err, commitErr)
+	require.True(t, tm.tracker.NeedsRollback())
+
+	err = tm.EnsureCleanup(ctx)
+	require.NoError(t, err)
+	require.False(t, tm.tracker.NeedsRollback())
+
+	require.Equal(t, []string{
+		"begin",
+		"commit",
+		"dummy",
+		"clear",
+		"rollback",
+		"dummy",
+	}, sinker.opsSnapshot())
+	require.NoError(t, sinker.Error())
 }
 
 func TestTransactionManager_RollbackTransaction(t *testing.T) {
@@ -428,6 +592,31 @@ func TestTransactionManager_EnsureCleanup_WatermarkMismatch(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, sinker.rollbackCalled)
+}
+
+func TestTransactionManager_EnsureCleanup_WatermarkMismatch_Idempotent(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, tm.watermarkKey, &fromTs))
+
+	tm.tracker.MarkCommit()
+
+	sinker.resetOps()
+
+	err := tm.EnsureCleanup(ctx)
+	require.NoError(t, err)
+	require.False(t, tm.tracker.NeedsRollback())
+	require.Equal(t, []string{"clear", "rollback", "dummy"}, sinker.opsSnapshot())
+
+	err = tm.EnsureCleanup(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"clear", "rollback", "dummy"}, sinker.opsSnapshot())
 }
 
 func TestTransactionManager_Reset(t *testing.T) {

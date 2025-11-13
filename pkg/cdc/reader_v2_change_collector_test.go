@@ -16,7 +16,10 @@ package cdc
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockChangesHandle for testing
@@ -46,6 +50,45 @@ func (m *mockChangesHandle) Close() error {
 		return m.closeFunc()
 	}
 	return nil
+}
+
+type collectorBlockingHandle struct {
+	nextInvoked sync.Once
+	nextCalled  chan struct{}
+	release     chan struct{}
+	err         atomic.Value // stores error
+	closed      atomic.Bool
+}
+
+func newCollectorBlockingHandle() *collectorBlockingHandle {
+	return &collectorBlockingHandle{
+		nextCalled: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (h *collectorBlockingHandle) Next(ctx context.Context, mp *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.nextInvoked.Do(func() { close(h.nextCalled) })
+	select {
+	case <-h.release:
+		if v := h.err.Load(); v != nil {
+			return nil, nil, engine.ChangesHandle_Snapshot, v.(error)
+		}
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	case <-ctx.Done():
+		return nil, nil, engine.ChangesHandle_Snapshot, ctx.Err()
+	}
+}
+
+func (h *collectorBlockingHandle) Close() error {
+	if h.closed.CompareAndSwap(false, true) {
+		close(h.release)
+	}
+	return nil
+}
+
+func (h *collectorBlockingHandle) injectError(err error) {
+	h.err.Store(err)
 }
 
 func TestChangeType_String(t *testing.T) {
@@ -261,6 +304,96 @@ func TestChangeCollector_Next_WithError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 	assert.Nil(t, data)
+}
+
+func TestChangeCollector_Next_UnblocksOnClose(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	handle := newCollectorBlockingHandle()
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+	cc := NewChangeCollector(handle, mp, fromTs, toTs, 1, "task1", "db1", "table1")
+
+	resultCh := make(chan struct {
+		data *ChangeData
+		err  error
+	}, 1)
+
+	go func() {
+		data, err := cc.Next(ctx)
+		resultCh <- struct {
+			data *ChangeData
+			err  error
+		}{data, err}
+	}()
+
+	select {
+	case <-handle.nextCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not start")
+	}
+
+	require.NoError(t, cc.Close())
+
+	select {
+	case res := <-resultCh:
+		require.NoError(t, res.err)
+		require.NotNil(t, res.data)
+		assert.Equal(t, ChangeTypeNoMoreData, res.data.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not unblock after Close")
+	}
+}
+
+func TestChangeCollector_Next_ContextCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	handle := newCollectorBlockingHandle()
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+	cc := NewChangeCollector(handle, mp, fromTs, toTs, 1, "task1", "db1", "table1")
+
+	resultCh := make(chan struct {
+		data *ChangeData
+		err  error
+	}, 1)
+
+	go func() {
+		data, err := cc.Next(ctx)
+		resultCh <- struct {
+			data *ChangeData
+			err  error
+		}{data, err}
+	}()
+
+	select {
+	case <-handle.nextCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not start")
+	}
+
+	cancel()
+
+	select {
+	case res := <-resultCh:
+		require.Error(t, res.err)
+		assert.ErrorIs(t, res.err, context.Canceled)
+		assert.Nil(t, res.data)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not unblock after context cancel")
+	}
 }
 
 func TestChangeCollector_Next_AfterClose(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockDataProcessorSinker for testing DataProcessor
@@ -40,6 +41,123 @@ func (m *mockDataProcessorSinker) Sink(ctx context.Context, data *DecoderOutput)
 func (m *mockDataProcessorSinker) reset() {
 	m.mockSinker.reset()
 	m.sinkCalls = nil
+}
+
+type dataProcessorRecordingSinker struct {
+	*recordingSinker
+	sinkCalls []*DecoderOutput
+}
+
+func newDataProcessorRecordingSinker() *dataProcessorRecordingSinker {
+	return &dataProcessorRecordingSinker{
+		recordingSinker: newRecordingSinker(),
+	}
+}
+
+func (s *dataProcessorRecordingSinker) Sink(ctx context.Context, data *DecoderOutput) {
+	s.mu.Lock()
+	s.ops = append(s.ops, "sink")
+	s.sinkCalls = append(s.sinkCalls, data)
+	s.mu.Unlock()
+}
+
+func (s *dataProcessorRecordingSinker) reset() {
+	s.mu.Lock()
+	s.err = nil
+	s.rollbackErr = nil
+	s.commitErr = nil
+	s.beginErr = nil
+	s.sinkCalls = nil
+	s.mu.Unlock()
+	s.resetOps()
+}
+
+func (s *dataProcessorRecordingSinker) sinkCallsSnapshot() []*DecoderOutput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]*DecoderOutput, len(s.sinkCalls))
+	copy(cp, s.sinkCalls)
+	return cp
+}
+
+type dataProcessorHarness struct {
+	dp     *DataProcessor
+	sinker *dataProcessorRecordingSinker
+	txnMgr *TransactionManager
+	update *mockWatermarkUpdater
+	mp     *mpool.MPool
+}
+
+func newDataProcessorHarness(t *testing.T, splitSnapshot bool) *dataProcessorHarness {
+	t.Helper()
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) {},
+	)
+
+	sinker := newDataProcessorRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	txnMgr := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	dp := NewDataProcessor(
+		sinker,
+		txnMgr,
+		mp,
+		packerPool,
+		1, 0,
+		1, 0,
+		splitSnapshot,
+		1,
+		"task1",
+		"db1",
+		"table1",
+	)
+
+	return &dataProcessorHarness{
+		dp:     dp,
+		sinker: sinker,
+		txnMgr: txnMgr,
+		update: updater,
+		mp:     mp,
+	}
+}
+
+func buildBatch(t *testing.T, mp *mpool.MPool, pkVals []int32, ts types.TS) *batch.Batch {
+	t.Helper()
+
+	if len(pkVals) == 0 {
+		return nil
+	}
+
+	bat := batch.New([]string{"pk", "ts"})
+	pkVec := vector.NewVec(types.T_int32.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+
+	for range pkVals {
+		if err := vector.AppendFixed(tsVec, ts, false, mp); err != nil {
+			t.Fatalf("append ts: %v", err)
+		}
+	}
+
+	for _, v := range pkVals {
+		if err := vector.AppendFixed(pkVec, v, false, mp); err != nil {
+			t.Fatalf("append pk: %v", err)
+		}
+	}
+
+	bat.Vecs[0] = pkVec
+	bat.Vecs[1] = tsVec
+	bat.SetRowCount(len(pkVals))
+	return bat
 }
 
 func TestNewDataProcessor(t *testing.T) {
@@ -415,4 +533,103 @@ func TestDataProcessor_GetAtmBatches(t *testing.T) {
 
 	assert.NotNil(t, dp.GetInsertAtmBatch())
 	assert.NotNil(t, dp.GetDeleteAtmBatch())
+}
+
+func TestDataProcessor_ProcessTailDone_BeginFailureRetainsBatches(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	beginErr := moerr.NewInternalError(ctx, "begin failure")
+	h.sinker.setBeginError(beginErr)
+
+	data := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
+	}
+
+	err := h.dp.ProcessChange(ctx, data)
+	require.ErrorIs(t, err, beginErr)
+
+	assert.NotNil(t, h.dp.insertAtmBatch)
+	assert.Equal(t, []string{"begin"}, h.sinker.opsSnapshot())
+	assert.Len(t, h.sinker.sinkCallsSnapshot(), 0)
+}
+
+func TestDataProcessor_ProcessTailDone_UpdatesActiveTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to1 := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to1)
+
+	data1 := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to1),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data1))
+
+	tracker := h.txnMgr.GetTracker()
+	require.NotNil(t, tracker)
+
+	to2 := types.BuildTS(3, 0)
+	h.dp.SetTransactionRange(to1, to2)
+	data2 := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{2}, to2),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data2))
+
+	require.Equal(t, to2, h.txnMgr.GetTracker().GetToTs())
+	assert.Equal(t, []string{"begin", "sink", "sink"}, h.sinker.opsSnapshot())
+}
+
+func TestDataProcessor_ProcessNoMoreData_CommitFailureRequiresRollback(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
+	}))
+
+	h.sinker.resetOps()
+	commitErr := moerr.NewInternalError(ctx, "commit failure")
+	h.sinker.setCommitError(commitErr)
+
+	to2 := types.BuildTS(3, 0)
+	h.dp.SetTransactionRange(to, to2)
+	err := h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData})
+	require.ErrorIs(t, err, commitErr)
+
+	assert.True(t, h.txnMgr.GetTracker().NeedsRollback())
+	assert.Equal(t, []string{"sink", "dummy", "commit", "dummy"}, h.sinker.opsSnapshot())
+}
+
+func TestDataProcessor_NoMoreData_HeartbeatUpdatesWatermark(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, true) // split snapshot, no txn
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+	h.txnMgr.Reset()
+
+	err := h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData})
+	require.NoError(t, err)
+
+	assert.True(t, h.update.updateCalled)
+
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 1)
+	assert.True(t, calls[0].noMoreData)
+	assert.Equal(t, []string{"sink", "dummy"}, h.sinker.opsSnapshot())
 }
