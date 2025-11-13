@@ -133,16 +133,6 @@ func ListSnapshotCheckpoint(
 	}
 	metaFiles := make([]ioutil.TSRangeFile, 0)
 	compactedFiles := make([]ioutil.TSRangeFile, 0)
-	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
-		// Find the global checkpoint with end == maxGlobalEnd
-		for i := range entries {
-			if entries[i].end.Equal(&maxGlobalEnd) &&
-				entries[i].entryType == ET_Global {
-				// Return only the global checkpoint, since snapshot ts == gckp.end
-				return []*CheckpointEntry{entries[i]}, nil
-			}
-		}
-	}
 	for name := range allFiles {
 		meta := ioutil.DecodeTSRangeFile(name)
 		if meta.IsCompactExt() {
@@ -154,6 +144,7 @@ func ListSnapshotCheckpoint(
 	}
 	return loadCheckpointMeta(
 		ctx, sid, getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot), fs,
+		&snapshot,
 	)
 }
 
@@ -162,6 +153,7 @@ func loadCheckpointMeta(
 	sid string,
 	metaFiles []ioutil.TSRangeFile,
 	fs fileservice.FileService,
+	snapshot *types.TS,
 ) (entries []*CheckpointEntry, err error) {
 	allEntries := make([]*CheckpointEntry, 0)
 
@@ -196,7 +188,7 @@ func loadCheckpointMeta(
 	}
 
 	// Apply the same logic as ListSnapshotCheckpointWithMeta
-	return filterSnapshotEntries(allEntries), nil
+	return filterSnapshotEntries(allEntries, snapshot), nil
 }
 
 // filterEntriesByTimestamp filters checkpoint entries that match the given start and end timestamps
@@ -213,7 +205,7 @@ func filterEntriesByTimestamp(entries []*CheckpointEntry, fileStart, fileEnd *ty
 }
 
 // filterSnapshotEntries implements the same logic as ListSnapshotCheckpointWithMeta
-func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
+func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*CheckpointEntry {
 	if len(entries) == 0 {
 		return entries
 	}
@@ -236,6 +228,16 @@ func filterSnapshotEntries(entries []*CheckpointEntry) []*CheckpointEntry {
 		return entries[i].end.LT(&entries[j].end)
 	})
 
+	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
+		// Find the global checkpoint with end == maxGlobalEnd
+		for i := range entries {
+			if entries[i].end.Equal(&maxGlobalEnd) &&
+				entries[i].entryType == ET_Global {
+				// Return only the global checkpoint, since snapshot ts == gckp.end
+				return []*CheckpointEntry{entries[i]}
+			}
+		}
+	}
 	// Find the appropriate truncation point
 	for i := range entries {
 		if entries[i] == nil {
