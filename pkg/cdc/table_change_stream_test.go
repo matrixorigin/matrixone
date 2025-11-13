@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -759,13 +760,47 @@ func (h *blockingChangesHandle) Next(ctx context.Context, _ *mpool.MPool) (*batc
 
 func (h *blockingChangesHandle) Close() error { return nil }
 
-type immediateChangesHandle struct{}
-
-func (immediateChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
-	return nil, nil, engine.ChangesHandle_Tail_done, nil
+type changeBatch struct {
+	insert *batch.Batch
+	delete *batch.Batch
+	hint   engine.ChangesHandle_Hint
 }
 
-func (immediateChangesHandle) Close() error { return nil }
+type immediateChangesHandle struct {
+	mu      sync.Mutex
+	batches []changeBatch
+	nextIdx int
+	closed  bool
+}
+
+func newImmediateChangesHandle(batches []changeBatch) *immediateChangesHandle {
+	return &immediateChangesHandle{batches: batches}
+}
+
+func (h *immediateChangesHandle) Next(ctx context.Context, _ *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.closed {
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}
+
+	if len(h.batches) == 0 || h.nextIdx >= len(h.batches) {
+		h.closed = true
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}
+
+	b := h.batches[h.nextIdx]
+	h.nextIdx++
+	return b.insert, b.delete, b.hint, nil
+}
+
+func (h *immediateChangesHandle) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.closed = true
+	return nil
+}
 
 // Test StaleRead retry logic
 func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
@@ -1470,7 +1505,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 			}),
 		gostub.Stub(&CollectChanges,
 			func(context.Context, engine.Relation, types.TS, types.TS, *mpool.MPool) (engine.ChangesHandle, error) {
-				return &immediateChangesHandle{}, nil
+				return newImmediateChangesHandle(nil), nil
 			}),
 		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
 		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
@@ -1590,7 +1625,7 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 			}),
 		gostub.Stub(&CollectChanges,
 			func(context.Context, engine.Relation, types.TS, types.TS, *mpool.MPool) (engine.ChangesHandle, error) {
-				return &immediateChangesHandle{}, nil
+				return newImmediateChangesHandle(nil), nil
 			}),
 		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
 		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
@@ -1763,9 +1798,9 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 					go func() {
 						secondCollectReady <- struct{}{}
 					}()
-					return &immediateChangesHandle{}, nil
+					return newImmediateChangesHandle(nil), nil
 				}
-				return &immediateChangesHandle{}, nil
+				return newImmediateChangesHandle(nil), nil
 			}
 			// Subsequent runs should return immediately but still signal readiness on first call.
 			if secondRunStarted.CompareAndSwap(false, true) {
@@ -1776,7 +1811,7 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 					}
 				}()
 			}
-			return &immediateChangesHandle{}, nil
+			return newImmediateChangesHandle(nil), nil
 		}),
 	}
 
@@ -1901,4 +1936,355 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 		t.Fatal("runningReaders still contains entry after second cleanup")
 	}
 
+}
+
+// Integration tests for TableChangeStream + DataProcessor + TransactionManager pipeline
+func TestTableChangeStream_DataProcessorSinkerError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id"},
+			{Name: "ts"},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
+	}
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	sinker := newTableStreamRecordingSinker()
+	sinker.setError(moerr.NewInternalError(ctx, "sinker error"))
+
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	stubs := []*gostub.Stubs{
+		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		}),
+		gostub.Stub(&FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {}),
+		gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
+		gostub.Stub(&GetRelationById, func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+			return "", "", nil, nil
+		}),
+		gostub.Stub(&GetSnapshotTS, func(client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{PhysicalTime: 100}
+		}),
+		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
+		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
+	}
+	t.Cleanup(func() {
+		for _, stub := range stubs {
+			stub.Reset()
+		}
+	})
+
+	var collectCalls atomic.Int32
+	collectStub := gostub.Stub(&CollectChanges, func(_ context.Context, _ engine.Relation, fromTs, toTs types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		callIdx := int(collectCalls.Add(1))
+		if callIdx == 1 {
+			bat := createTestBatch(t, mp, types.BuildTS(1, 0), []int32{1})
+			handle := newImmediateChangesHandle([]changeBatch{
+				{insert: bat, hint: engine.ChangesHandle_Snapshot},
+				{insert: nil, hint: engine.ChangesHandle_Tail_done},
+			})
+			return handle, nil
+		}
+		return newImmediateChangesHandle(nil), nil
+	})
+	defer collectStub.Reset()
+
+	stream := NewTableChangeStream(
+		nil, nil, mp, pool,
+		1, "task1", tableInfo,
+		sinker, updater, tableDef,
+		false, &sync.Map{},
+		types.TS{}, types.TS{},
+		false,
+		50*time.Millisecond,
+	)
+
+	ar := NewCdcActiveRoutine()
+	stream.Run(ctx, ar)
+
+	require.Error(t, stream.lastError)
+	require.Contains(t, stream.lastError.Error(), "sinker error")
+
+	ops := sinker.opsSnapshot()
+	require.NotContains(t, ops, "begin", "Begin should not be called when sinker already has an error")
+	require.NotContains(t, ops, "rollback", "No transaction started, rollback not expected")
+}
+
+func TestTableChangeStream_EnsureCleanupOnCollectorError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id"},
+			{Name: "ts"},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
+	}
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	sinker := newRecordingSinker()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	stubs := []*gostub.Stubs{
+		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		}),
+		gostub.Stub(&FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {}),
+		gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
+		gostub.Stub(&GetRelationById, func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+			return "", "", nil, nil
+		}),
+		gostub.Stub(&GetSnapshotTS, func(client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{PhysicalTime: 100}
+		}),
+		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
+		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
+	}
+	t.Cleanup(func() {
+		for _, stub := range stubs {
+			stub.Reset()
+		}
+	})
+
+	collectErr := moerr.NewInternalError(ctx, "collector error")
+	collectStub := gostub.Stub(&CollectChanges, func(_ context.Context, _ engine.Relation, _ types.TS, _ types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		return nil, collectErr
+	})
+	defer collectStub.Reset()
+
+	stream := NewTableChangeStream(
+		nil, nil, mp, pool,
+		1, "task1", tableInfo,
+		sinker, updater, tableDef,
+		false, &sync.Map{},
+		types.TS{}, types.TS{},
+		false,
+		50*time.Millisecond,
+	)
+
+	ar := NewCdcActiveRoutine()
+	stream.Run(ctx, ar)
+
+	require.Error(t, stream.lastError)
+	require.Equal(t, collectErr, stream.lastError)
+
+	// EnsureCleanup should not be called if no transaction was started
+	ops := sinker.opsSnapshot()
+	require.NotContains(t, ops, "rollback", "No transaction begun, so no rollback needed")
+}
+
+func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id"},
+			{Name: "ts"},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
+	}
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	sinker := newRecordingSinker()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	stubs := []*gostub.Stubs{
+		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		}),
+		gostub.Stub(&FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {}),
+		gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
+		gostub.Stub(&GetRelationById, func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+			return "", "", nil, nil
+		}),
+		gostub.Stub(&GetSnapshotTS, func(client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{PhysicalTime: 200}
+		}),
+		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
+		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
+	}
+	t.Cleanup(func() {
+		for _, stub := range stubs {
+			stub.Reset()
+		}
+	})
+
+	var collectCalls atomic.Int32
+	collectStub := gostub.Stub(&CollectChanges, func(_ context.Context, _ engine.Relation, fromTs, toTs types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		callIdx := int(collectCalls.Add(1))
+		if callIdx == 1 {
+			bat1 := createTestBatch(t, mp, types.BuildTS(100, 0), []int32{1})
+			bat2 := createTestBatch(t, mp, types.BuildTS(150, 0), []int32{2})
+			handle := newImmediateChangesHandle([]changeBatch{
+				{insert: bat1, hint: engine.ChangesHandle_Tail_done},
+				{insert: bat2, hint: engine.ChangesHandle_Tail_done},
+				{insert: nil, hint: engine.ChangesHandle_Tail_done}, // NoMoreData
+			})
+			return handle, nil
+		}
+		return newImmediateChangesHandle(nil), nil
+	})
+	defer collectStub.Reset()
+
+	stream := NewTableChangeStream(
+		nil, nil, mp, pool,
+		1, "task1", tableInfo,
+		sinker, updater, tableDef,
+		false, &sync.Map{},
+		types.TS{}, types.TS{},
+		false,
+		50*time.Millisecond,
+	)
+
+	ar := NewCdcActiveRoutine()
+	runDone := make(chan struct{})
+	go func() {
+		stream.Run(ctx, ar)
+		close(runDone)
+	}()
+
+	var ops []string
+	require.Eventually(t, func() bool {
+		ops = sinker.opsSnapshot()
+		beginCount := 0
+		hasCommit := false
+		for _, op := range ops {
+			if op == "begin" {
+				beginCount++
+			}
+			if op == "commit" {
+				hasCommit = true
+			}
+		}
+		return beginCount == 1 && hasCommit
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, stream.lastError)
+
+	// Verify only one BEGIN was called (transaction persisted across TailDone batches)
+	beginCount := 0
+	for _, op := range ops {
+		if op == "begin" {
+			beginCount++
+		}
+	}
+	require.Equal(t, 1, beginCount, "Should have only one BEGIN for multiple TailDone batches")
+
+	// Verify COMMIT was called
+	require.Contains(t, ops, "commit", "Should commit after NoMoreData")
+
+	cancel()
+	stream.Close()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not shut down")
+	}
+}
+
+// Helper types and functions for integration tests
+
+func createTestBatch(t *testing.T, mp *mpool.MPool, ts types.TS, ids []int32) *batch.Batch {
+	bat := batch.New([]string{"id", "ts"})
+	idVec := vector.NewVec(types.T_int32.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+
+	for _, id := range ids {
+		_ = vector.AppendFixed(idVec, id, false, mp)
+		_ = vector.AppendFixed(tsVec, ts, false, mp)
+	}
+
+	bat.Vecs[0] = idVec
+	bat.Vecs[1] = tsVec
+	bat.SetRowCount(len(ids))
+	return bat
+}
+
+type tableStreamRecordingSinker struct {
+	*recordingSinker
+	sinkCalls []*DecoderOutput
+}
+
+func newTableStreamRecordingSinker() *tableStreamRecordingSinker {
+	return &tableStreamRecordingSinker{recordingSinker: newRecordingSinker()}
+}
+
+func (s *tableStreamRecordingSinker) Sink(ctx context.Context, data *DecoderOutput) {
+	s.record("sink")
+	s.mu.Lock()
+	s.sinkCalls = append(s.sinkCalls, data)
+	s.mu.Unlock()
+}
+
+func (s *tableStreamRecordingSinker) reset() {
+	s.mu.Lock()
+	s.err = nil
+	s.rollbackErr = nil
+	s.commitErr = nil
+	s.beginErr = nil
+	s.sinkCalls = nil
+	s.mu.Unlock()
+	s.resetOps()
+}
+
+func (s *tableStreamRecordingSinker) sinkCallsSnapshot() []*DecoderOutput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copyCalls := make([]*DecoderOutput, len(s.sinkCalls))
+	copy(copyCalls, s.sinkCalls)
+	return copyCalls
 }
