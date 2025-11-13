@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,145 +42,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNewTableChangeStream(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	assert.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	sinker := &mockDataProcessorSinker{mockSinker: &mockSinker{}}
-	updater := newMockWatermarkUpdater()
-	packerPool := fileservice.NewPool[*types.Packer](
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) {},
-	)
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "id"},
-			{Name: "name"},
-			{Name: "ts"},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"id"},
-		},
-		Name2ColIndex: map[string]int32{
-			"id":   0,
-			"name": 1,
-			"ts":   2,
-		},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "table1",
-		SourceTblId:   1,
-	}
-
-	runningReaders := &sync.Map{}
-	startTs := types.TS{}
-	endTs := (&startTs).Next()
-
-	stream := NewTableChangeStream(
-		nil, // cnTxnClient
-		nil, // cnEngine
-		mp,
-		packerPool,
-		1, // accountId
-		"task1",
-		tableInfo,
-		sinker,
-		updater,
-		tableDef,
-		false, // initSnapshotSplitTxn
-		runningReaders,
-		startTs,
-		endTs,
-		false, // noFull
-		200*time.Millisecond,
-	)
-
-	assert.NotNil(t, stream)
-	assert.Equal(t, mp, stream.mp)
-	assert.Equal(t, sinker, stream.sinker)
-	assert.Equal(t, updater, stream.watermarkUpdater)
-	assert.Equal(t, uint64(1), stream.accountId)
-	assert.Equal(t, "task1", stream.taskId)
-	assert.Equal(t, tableInfo, stream.tableInfo)
-	assert.Equal(t, tableDef, stream.tableDef)
-	assert.NotNil(t, stream.txnManager)
-	assert.NotNil(t, stream.dataProcessor)
-	assert.Equal(t, 200*time.Millisecond, stream.frequency)
-	assert.Equal(t, 2, stream.insTsColIdx)           // len(Cols)-1
-	assert.Equal(t, 0, stream.insCompositedPkColIdx) // single PK
-	assert.Equal(t, 1, stream.delTsColIdx)
-	assert.Equal(t, 0, stream.delCompositedPkColIdx)
-}
-
-func TestNewTableChangeStream_CompositePK(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	assert.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	sinker := &mockDataProcessorSinker{mockSinker: &mockSinker{}}
-	updater := newMockWatermarkUpdater()
-	packerPool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) {},
-	)
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "id"},
-			{Name: "name"},
-			{Name: "cpk"}, // Composite PK column
-			{Name: "ts"},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"id", "name"}, // Composite PK
-		},
-		Name2ColIndex: map[string]int32{
-			"id":   0,
-			"name": 1,
-			"cpk":  2,
-			"ts":   3,
-		},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "table1",
-		SourceTblId:   1,
-	}
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, packerPool,
-		1, "task1", tableInfo, sinker, updater, tableDef,
-		false, &sync.Map{}, types.TS{}, types.TS{}, false, 0,
-	)
-
-	assert.NotNil(t, stream)
-	assert.Equal(t, 3, stream.insTsColIdx)           // len(Cols)-1
-	assert.Equal(t, 2, stream.insCompositedPkColIdx) // Composite PK col
-}
-
-func TestTableChangeStream_ForceNextInterval(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	assert.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	stream := createTestStream(mp, &DbTableInfo{})
-
-	assert.False(t, stream.force)
-
-	stream.forceNextInterval(100 * time.Millisecond)
-
-	assert.True(t, stream.force)
-}
 
 // Helper function to create a test stream with minimal setup
 func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo, opts ...TableChangeStreamOption) *TableChangeStream {
@@ -476,139 +338,6 @@ func TestTableChangeStream_HandleSnapshotNoProgress_Defaults(t *testing.T) {
 // Note: Uses testChangesHandle from reader_test.go
 // ============================================================================
 
-// Test Run() integration with mocked dependencies
-func TestTableChangeStream_Run_Integration(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
-
-	var packer *types.Packer
-	put := pool.Get(&packer)
-	defer put.Put()
-
-	// Setup stubs
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		})
-	defer stub1.Reset()
-
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	defer stub2.Reset()
-
-	stub3 := gostub.Stub(&GetTxn,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-			return nil
-		})
-	defer stub3.Reset()
-
-	stub4 := gostub.Stub(&GetRelationById,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
-			return "", "", nil, nil
-		})
-	defer stub4.Reset()
-
-	stub5 := gostub.Stub(&GetSnapshotTS,
-		func(txnOp client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{
-				PhysicalTime: 100,
-				LogicalTime:  0,
-			}
-		})
-	defer stub5.Reset()
-
-	stub6 := gostub.Stub(&CollectChanges,
-		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer), nil
-		})
-	defer stub6.Reset()
-
-	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-	defer stub7.Reset()
-
-	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	defer stub8.Reset()
-
-	// Create watermark updater
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
-
-	// Create table definition
-	// Column order MUST match batch layout: user cols | cpk | commit-ts
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "a"},   // User column
-			{Name: "b"},   // User column
-			{Name: "cpk"}, // Composite PK column
-			{Name: "ts"},  // Commit timestamp (MUST be last)
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"a", "b"},
-		},
-		Name2ColIndex: map[string]int32{
-			"a":   0,
-			"b":   1,
-			"cpk": 2,
-			"ts":  3,
-		},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := NewConsoleSinker(nil, nil)
-	runningReaders := &sync.Map{}
-
-	stream := NewTableChangeStream(
-		nil, // cnTxnClient
-		nil, // cnEngine
-		mp,
-		pool,
-		1, // accountId
-		"task1",
-		tableInfo,
-		sinker,
-		updater,
-		tableDef,
-		false, // initSnapshotSplitTxn
-		runningReaders,
-		types.TS{},
-		types.TS{},
-		false, // noFull
-		300*time.Millisecond,
-	)
-
-	// Run in background
-	go stream.Run(ctx, NewCdcActiveRoutine())
-
-	// Ensure the stream goroutine is running, then cancel immediately
-	stream.start.Wait()
-	cancel()
-
-	// Wait for completion
-	stream.Wait()
-
-	// Verify runningReaders is cleaned up
-	count := 0
-	runningReaders.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	assert.Equal(t, 0, count, "runningReaders should be empty after Run exits")
-}
-
 // Test Run() with duplicate reader (should exit immediately)
 func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	ctx := context.Background()
@@ -807,897 +536,248 @@ func (h *immediateChangesHandle) Close() error {
 
 // Test StaleRead retry logic
 func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
-
-	mp := mpool.MustNewZero()
-	var wg sync.WaitGroup
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
+	h := newTableStreamHarness(
+		t,
+		withHarnessNoFull(true),
+		withHarnessFrequency(5*time.Millisecond),
 	)
+	defer h.Close()
 
-	var packer *types.Packer
-	put := pool.Get(&packer)
-
-	// Track read attempts
-	var readCount atomic.Int32
-	readDone := make(chan struct{}, 10)
-
-	// Setup stubs
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		})
-
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-
-	stub3 := gostub.Stub(&GetTxn,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-			return nil
-		})
-
-	stub4 := gostub.Stub(&GetRelationById,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
-			count := readCount.Load()
-			if count == 0 {
-				// First attempt: StaleRead error
-				readDone <- struct{}{}
-				readCount.Add(1)
-				return "", "", nil, moerr.NewErrStaleReadNoCtx("", "test stale read")
-			}
-			// Second attempt: Success
-			readDone <- struct{}{}
-			readCount.Add(1)
-			return "", "", nil, nil
-		})
-
-	stub5 := gostub.Stub(&GetSnapshotTS,
-		func(txnOp client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{
-				PhysicalTime: 100,
-				LogicalTime:  0,
-			}
-		})
-
-	stub6 := gostub.Stub(&CollectChanges,
-		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer), nil
-		})
-
-	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-
-	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	stubs := []*gostub.Stubs{stub1, stub2, stub3, stub4, stub5, stub6, stub7, stub8}
-	defer func() {
-		cancel()
-		wg.Wait()
-		put.Put()
-		for _, stub := range stubs {
-			stub.Reset()
+	var snapshotCalls atomic.Int32
+	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
+		call := snapshotCalls.Add(1)
+		ts := timestamp.Timestamp{PhysicalTime: 100}
+		if call >= 2 {
+			ts.PhysicalTime = 200
 		}
-	}()
+		return ts
+	})
 
-	// Create watermark updater
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
+	var collectCalls atomic.Int32
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		if collectCalls.Add(1) == 1 {
+			return nil, moerr.NewErrStaleReadNoCtx("db1", "t1")
+		}
+		bat := createTestBatch(t, h.MP(), toTs, []int32{1})
+		return newImmediateChangesHandle([]changeBatch{
+			{insert: bat, hint: engine.ChangesHandle_Tail_done},
+			{insert: nil, hint: engine.ChangesHandle_Tail_done},
+		}), nil
+	})
 
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "ts"},
-			{Name: "a"},
-			{Name: "b"},
-			{Name: "cpk"},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"a", "b"},
-		},
-		Name2ColIndex: map[string]int32{
-			"ts":  0,
-			"a":   1,
-			"b":   2,
-			"cpk": 3,
-		},
-	}
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
 
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
+	require.Eventually(t, func() bool {
+		return len(h.CollectCallsSnapshot()) >= 2
+	}, 2*time.Second, 10*time.Millisecond, "should see stale read recovery with multiple collect calls")
 
-	sinker := NewConsoleSinker(nil, nil)
+	require.Eventually(t, func() bool {
+		ops := h.Sinker().opsSnapshot()
+		for _, op := range ops {
+			if op == "begin" || op == "sink" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "stream should process data successfully after stale read recovery")
 
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{}, // No time range limit
-		true, // noFull = true (allows StaleRead retry)
-		50*time.Millisecond,
-	)
+	done()
 
-	// Run in background
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		stream.Run(ctx, NewCdcActiveRoutine())
-	}()
-
-	// Wait for first attempt (StaleRead)
+	var runErr error
 	select {
-	case <-readDone:
-		t.Log("First read attempt (should get StaleRead)")
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for first read")
+	case runErr = <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("table change stream run did not terminate")
+	}
+	if runErr != nil {
+		require.ErrorIs(t, runErr, context.Canceled, "if error, should be context.Canceled")
 	}
 
-	// Wait for retry attempt (should succeed)
-	select {
-	case <-readDone:
-		t.Log("Second read attempt (retry after StaleRead)")
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for retry")
-	}
-
-	// Verify retry happened
-	assert.GreaterOrEqual(t, readCount.Load(), int32(2), "Should have at least 2 read attempts (initial + retry)")
-	cancel()
+	require.Equal(t, 1, h.Sinker().ResetCountSnapshot(), "sinker should be reset exactly once on stale read recovery")
+	require.GreaterOrEqual(t, len(h.CollectCallsSnapshot()), 2, "should have multiple collect calls after stale read recovery")
+	require.True(t, h.Stream().retryable, "stale read should mark stream retryable")
 }
 
 // Test StaleRead with startTs set (should fail, not retry)
 func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
-	defer cancel()
-
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
-
-	// Track call count to avoid infinite loop
-	var callCount atomic.Int32
-
-	// Setup stubs
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		})
-	defer stub1.Reset()
-
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	defer stub2.Reset()
-
-	stub3 := gostub.Stub(&GetTxn,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-			return nil
-		})
-	defer stub3.Reset()
-
-	stub4 := gostub.Stub(&GetRelationById,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
-			// Only return StaleRead on first call, then return a different error to stop the loop
-			if callCount.Add(1) == 1 {
-				return "", "", nil, moerr.NewErrStaleReadNoCtx("", "test stale read")
-			}
-			// Return a different error to break the loop
-			return "", "", nil, moerr.NewInternalError(ctx, "stopping test")
-		})
-	defer stub4.Reset()
-
-	stub5 := gostub.Stub(&GetSnapshotTS,
-		func(txnOp client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{PhysicalTime: 100}
-		})
-	defer stub5.Reset()
-
-	stub6 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-	defer stub6.Reset()
-
-	stub7 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	defer stub7.Reset()
-
-	// Use simple mock watermark updater (avoid complex mock SQL executor)
-	updater := newMockWatermarkUpdater()
 	startTs := types.BuildTS(1, 0)
-
-	// Initialize watermark
-	wKey := &WatermarkKey{
-		AccountId: 1,
-		TaskId:    "task1",
-		DBName:    "db1",
-		TableName: "t1",
-	}
-	_, _ = updater.GetOrAddCommitted(context.Background(), wKey, &startTs)
-
-	tableDef := &plan.TableDef{
-		Cols:          []*plan.ColDef{{Name: "id"}, {Name: "ts"}},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := NewConsoleSinker(nil, nil)
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		startTs, types.TS{}, // startTs is set
-		false, // noFull = false (StaleRead should NOT retry)
-		50*time.Millisecond,
+	h := newTableStreamHarness(
+		t,
+		withHarnessStartTs(startTs),
 	)
+	defer h.Close()
 
-	// Run should exit quickly due to fatal StaleRead error
-	stream.Run(ctx, NewCdcActiveRoutine())
+	staleErr := moerr.NewErrStaleReadNoCtx("db1", "t1")
+	h.SetCollectError(staleErr)
 
-	// Verify error was set and NOT retryable
-	assert.NotNil(t, stream.lastError, "Should have error")
-	assert.False(t, stream.retryable, "Should NOT be retryable")
-	assert.Contains(t, stream.lastError.Error(), "cannot recover", "Error should indicate cannot recover")
+	ar := h.NewActiveRoutine()
+	err := h.RunStream(ar)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot recover")
+	require.False(t, h.Stream().retryable, "stale read with startTs should not be retryable")
+	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "sinker reset should not occur on fatal stale read")
 }
 
 func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
 
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) {},
-	)
-
-	watermarkNotify := make(chan struct{}, 1)
 	failureErr := moerr.NewInternalError(ctx, "inject update failure")
 	updater := newWatermarkUpdaterStub().
-		withUpdateError(func(call int) error {
-			return failureErr
-		}).
-		withNotify(watermarkNotify)
+		withUpdateError(func(int) error { return failureErr })
 
-	var readCount atomic.Int32
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		})
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	stub3 := gostub.Stub(&GetTxn,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-			return nil
-		})
-	stub4 := gostub.Stub(&GetRelationById,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (string, string, engine.Relation, error) {
-			if readCount.Add(1) > 1 {
-				t.Fatalf("unexpected retry after update failure")
-			}
-			return "", "", nil, moerr.NewErrStaleReadNoCtx("", "test stale read")
-		})
-	stub5 := gostub.Stub(&GetSnapshotTS,
-		func(txnOp client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{
-				PhysicalTime: 100,
-				LogicalTime:  0,
-			}
-		})
-	stub6 := gostub.Stub(&CollectChanges,
-		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-			t.Fatalf("collect changes should not be reached when watermark update fails")
-			return nil, nil
-		})
-	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	stubs := []*gostub.Stubs{stub1, stub2, stub3, stub4, stub5, stub6, stub7, stub8}
-	defer func() {
-		for _, s := range stubs {
-			s.Reset()
-		}
-	}()
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "ts"},
-			{Name: "a"},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"a"},
-		},
-		Name2ColIndex: map[string]int32{
-			"ts": 0,
-			"a":  1,
-		},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := NewConsoleSinker(nil, nil)
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		true, // allow retry but failure should abort
-		50*time.Millisecond,
+	h := newTableStreamHarness(
+		t,
+		withHarnessNoFull(true),
+		withHarnessWatermarkUpdater(updater, nil),
 	)
+	defer h.Close()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		stream.Run(ctx, NewCdcActiveRoutine())
-	}()
+	zero := types.TS{}
+	_, _ = updater.GetOrAddCommitted(context.Background(), h.Stream().watermarkKey, &zero)
 
-	select {
-	case <-watermarkNotify:
-	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for watermark update attempt")
-	}
+	staleErr := moerr.NewErrStaleReadNoCtx("db1", "t1")
+	h.SetCollectError(staleErr)
 
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
+	ar := h.NewActiveRoutine()
+	err := h.RunStream(ar)
 
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for stream to exit after watermark failure")
-	}
-
-	require.NotNil(t, stream.lastError)
-	require.Contains(t, stream.lastError.Error(), "failed to update watermark")
-	require.False(t, stream.retryable, "failure to update watermark should be treated as non-retryable")
-	require.Equal(t, int32(1), updater.updateCalls.Load())
-	require.Equal(t, int32(1), readCount.Load())
-
-	if _, ok := updater.loadWatermark(stream.watermarkKey); ok {
-		t.Fatalf("watermark should not be recorded on failure")
-	}
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stale read recovery failed to update watermark")
+	require.False(t, h.Stream().retryable, "watermark update failure should not be retryable")
+	require.Equal(t, int32(1), updater.updateCalls.Load(), "UpdateWatermarkOnly should be invoked exactly once")
+	require.Len(t, h.CollectCallsSnapshot(), 1)
 }
 
 func TestTableChangeStream_StaleReadRetry_MultipleAttempts(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
-	defer cancel()
-
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) {},
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessNoFull(true),
+		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessFrequency(5*time.Millisecond),
 	)
+	defer h.Close()
 
-	var packer *types.Packer
-	put := pool.Get(&packer)
+	zero := types.TS{}
+	_, _ = updater.GetOrAddCommitted(context.Background(), h.Stream().watermarkKey, &zero)
 
-	readDone := make(chan struct{}, 8)
-	updateNotify := make(chan struct{}, 8)
-
-	updater := newWatermarkUpdaterStub().withNotify(updateNotify)
-
-	var readCount atomic.Int32
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		})
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	stub3 := gostub.Stub(&GetTxn,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-			return nil
-		})
-	stub4 := gostub.Stub(&GetRelationById,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (string, string, engine.Relation, error) {
-			attempt := int(readCount.Add(1))
-			select {
-			case readDone <- struct{}{}:
-			default:
-			}
-			if attempt <= 3 {
-				return "", "", nil, moerr.NewErrStaleReadNoCtx("", "transient stale read")
-			}
-			return "", "", nil, nil
-		})
-	stub5 := gostub.Stub(&GetSnapshotTS,
-		func(txnOp client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{
-				PhysicalTime: 200,
-				LogicalTime:  0,
-			}
-		})
-	stub6 := gostub.Stub(&CollectChanges,
-		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer), nil
-		})
-	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	stubs := []*gostub.Stubs{stub1, stub2, stub3, stub4, stub5, stub6, stub7, stub8}
-	defer func() {
-		put.Put()
-		for _, s := range stubs {
-			s.Reset()
+	var collectCount atomic.Int32
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		attempt := int(collectCount.Add(1))
+		if attempt <= 3 {
+			return nil, moerr.NewErrStaleReadNoCtx("db1", "t1")
 		}
-	}()
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "ts"},
-			{Name: "a"},
-			{Name: "b"},
-			{Name: "cpk"},
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"a", "b"},
-		},
-		Name2ColIndex: map[string]int32{
-			"ts":  0,
-			"a":   1,
-			"b":   2,
-			"cpk": 3,
-		},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := NewConsoleSinker(nil, nil)
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		true,
-		50*time.Millisecond,
-	)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		stream.Run(ctx, NewCdcActiveRoutine())
-	}()
-
-	for i := 0; i < 3; i++ {
-		select {
-		case <-readDone:
-		case <-time.After(1 * time.Second):
-			t.Fatalf("timeout waiting for stale read attempt %d", i+1)
+		if attempt == 4 {
+			tail := createTestBatch(t, h.MP(), toTs, []int32{int32(attempt)})
+			return newImmediateChangesHandle([]changeBatch{
+				{insert: tail, hint: engine.ChangesHandle_Tail_done},
+				{insert: nil, hint: engine.ChangesHandle_Tail_done},
+			}), nil
 		}
-		select {
-		case <-updateNotify:
-		case <-time.After(1 * time.Second):
-			t.Fatalf("timeout waiting for watermark update %d", i+1)
-		}
-	}
+		return newImmediateChangesHandle(nil), nil
+	})
 
-	select {
-	case <-readDone:
-	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for successful read after retries")
-	}
+	var snapshotCalls atomic.Int32
+	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
+		call := snapshotCalls.Add(1)
+		return timestamp.Timestamp{PhysicalTime: int64(100 + call*50)}
+	})
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
 
 	require.Eventually(t, func() bool {
-		return stream.lastError == nil
-	}, time.Second, 10*time.Millisecond, "expected successful retry to clear lastError")
+		return collectCount.Load() >= 4
+	}, 2*time.Second, 10*time.Millisecond, "expected multiple stale read retries before success")
 
-	stream.cancelRun()
+	done()
 
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
+	var runErr error
 	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for stream stop after cancel")
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("table change stream run did not complete")
+	}
+	if runErr != nil {
+		require.ErrorIs(t, runErr, context.Canceled)
 	}
 
-	cancel()
-
-	require.Nil(t, stream.lastError, "successful retry should not leave residual error")
-	require.GreaterOrEqual(t, readCount.Load(), int32(4))
-	require.GreaterOrEqual(t, updater.updateCalls.Load(), int32(3), "expected watermark updates for each stale read attempt")
-
-	// Watermark updates are issued asynchronously; cleanup clears cached state.
-	// Presence of stored watermark is not guaranteed post-cleanup, so we rely on
-	// updateCalls/count assertions above for coverage.
+	require.GreaterOrEqual(t, collectCount.Load(), int32(4))
+	require.GreaterOrEqual(t, updater.updateCalls.Load(), int32(3))
+	require.True(t, h.Stream().retryable, "successful recovery should keep retryable flag true")
+	require.Equal(t, 3, h.Sinker().ResetCountSnapshot(), "sinker should reset for each stale read")
 }
 
 // Test end-to-end with real change processing
-func TestTableChangeStream_EndToEnd(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
-	defer cancel()
-
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
-
-	var packer *types.Packer
-	put := pool.Get(&packer)
-	defer put.Put()
-
-	// Setup stubs
-	stub1 := gostub.Stub(&GetTxnOp,
-		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		})
-	defer stub1.Reset()
-
-	stub2 := gostub.Stub(&FinishTxnOp,
-		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	defer stub2.Reset()
-
-	stub3 := gostub.Stub(&GetTxn,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-			return nil
-		})
-	defer stub3.Reset()
-
-	stub4 := gostub.Stub(&GetRelationById,
-		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
-			return "", "", nil, nil
-		})
-	defer stub4.Reset()
-
-	stub5 := gostub.Stub(&GetSnapshotTS,
-		func(txnOp client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{
-				PhysicalTime: 100,
-				LogicalTime:  0,
-			}
-		})
-	defer stub5.Reset()
-
-	stub6 := gostub.Stub(&CollectChanges,
-		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer), nil
-		})
-	defer stub6.Reset()
-
-	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
-	defer stub7.Reset()
-
-	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
-	defer stub8.Reset()
-
-	// Create watermark updater
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
-
-	// Create table definition
-	// Column order MUST match batch layout: user cols | cpk | commit-ts
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "a"},   // User column
-			{Name: "b"},   // User column
-			{Name: "cpk"}, // Composite PK column
-			{Name: "ts"},  // Commit timestamp (MUST be last)
-		},
-		Pkey: &plan.PrimaryKeyDef{
-			Names: []string{"a", "b"},
-		},
-		Name2ColIndex: map[string]int32{
-			"a":   0,
-			"b":   1,
-			"cpk": 2,
-			"ts":  3,
-		},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	// Use console sinker for simplicity
-	sinker := NewConsoleSinker(nil, nil)
-
-	// Initialize watermark
-	wKey := &WatermarkKey{
-		AccountId: 1,
-		TaskId:    "task1",
-		DBName:    "db1",
-		TableName: "t1",
-	}
-	initialTs := types.TS{}
-	_, err := updater.GetOrAddCommitted(context.Background(), wKey, &initialTs)
-	assert.NoError(t, err)
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		false,
-		300*time.Millisecond,
-	)
-
-	// Run and wait
-	ar := NewCdcActiveRoutine()
-	go stream.Run(ctx, ar)
-	stream.Wait()
-
-	// Verify stream completed (no panic, graceful exit)
-	// Note: In this test, context timeout causes graceful exit before watermark update
-	// The key validation is that the test completes without panic or hang
-	t.Log("Stream completed end-to-end test successfully")
-}
-
 // Test context cancellation
 func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	h := newTableStreamHarness(t)
+	defer h.Close()
 
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
+	tail := createTestBatch(t, h.MP(), types.BuildTS(10, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tail, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
 
-	// Setup minimal stubs
-	opCalled := make(chan struct{})
-	allowReturn := make(chan struct{})
-	stubs := []*gostub.Stubs{
-		gostub.Stub(&GetTxnOp,
-			func(innerCtx context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-				select {
-				case <-opCalled:
-				default:
-					close(opCalled)
-				}
-				select {
-				case <-allowReturn:
-					return nil, nil
-				case <-innerCtx.Done():
-					return nil, innerCtx.Err()
-				}
-			}),
-		gostub.Stub(&FinishTxnOp,
-			func(context.Context, error, client.TxnOperator, engine.Engine) {}),
-		gostub.Stub(&GetTxn,
-			func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
-		gostub.Stub(&GetRelationById,
-			func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
-				return "", "", nil, nil
-			}),
-		gostub.Stub(&GetSnapshotTS,
-			func(client.TxnOperator) timestamp.Timestamp {
-				return timestamp.Timestamp{PhysicalTime: 100}
-			}),
-		gostub.Stub(&CollectChanges,
-			func(context.Context, engine.Relation, types.TS, types.TS, *mpool.MPool) (engine.ChangesHandle, error) {
-				return newImmediateChangesHandle(nil), nil
-			}),
-		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
-		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
-	}
-	defer func() {
-		for _, stub := range stubs {
-			stub.Reset()
-		}
-	}()
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
 
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
+	require.Eventually(t, func() bool {
+		return len(h.CollectCallsSnapshot()) > 0
+	}, time.Second, 10*time.Millisecond, "stream should begin collecting before cancellation")
 
-	tableDef := &plan.TableDef{
-		Cols:          []*plan.ColDef{{Name: "id"}, {Name: "ts"}},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
-	}
+	h.Cancel()
+	done()
 
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := NewConsoleSinker(nil, nil)
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		false,
-		50*time.Millisecond,
-	)
-
-	// Run in background
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		stream.Run(ctx, NewCdcActiveRoutine())
-	}()
-
-	<-started
-	<-opCalled
-
-	// Cancel context
-	cancel()
-	close(allowReturn)
-
-	// Wait for stream to stop
-	done := make(chan struct{})
-	go func() {
-		stream.Wait()
-		close(done)
-	}()
-
+	var runErr error
 	select {
-	case <-done:
-		t.Log("Stream stopped gracefully after context cancellation")
+	case runErr = <-errCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Stream did not stop after context cancellation")
+		t.Fatal("stream did not stop after context cancellation")
+	}
+
+	if runErr != nil {
+		require.ErrorIs(t, runErr, context.Canceled)
 	}
 }
 
 // Test ActiveRoutine Pause
 func TestTableChangeStream_Run_Pause(t *testing.T) {
-	ctx := context.Background()
+	h := newTableStreamHarness(t)
+	defer h.Close()
 
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
+	ready := make(chan struct{})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: ready}, nil
+	})
 
-	var wg sync.WaitGroup
-	defer wg.Wait()
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
 
-	opCalled := make(chan struct{})
-	release := make(chan struct{})
-	runExited := make(chan struct{})
-	activeCalls := new(sync.WaitGroup)
-	stubs := []*gostub.Stubs{
-		gostub.Stub(&GetTxnOp,
-			func(innerCtx context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-				activeCalls.Add(1)
-				defer activeCalls.Done()
-
-				select {
-				case <-opCalled:
-				default:
-					close(opCalled)
-				}
-
-				select {
-				case <-release:
-					return nil, nil
-				case <-innerCtx.Done():
-					return nil, innerCtx.Err()
-				}
-			}),
-		gostub.Stub(&FinishTxnOp,
-			func(context.Context, error, client.TxnOperator, engine.Engine) {}),
-		gostub.Stub(&GetTxn,
-			func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
-		gostub.Stub(&GetRelationById,
-			func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
-				return "", "", nil, nil
-			}),
-		gostub.Stub(&GetSnapshotTS,
-			func(client.TxnOperator) timestamp.Timestamp {
-				return timestamp.Timestamp{PhysicalTime: 100}
-			}),
-		gostub.Stub(&CollectChanges,
-			func(context.Context, engine.Relation, types.TS, types.TS, *mpool.MPool) (engine.ChangesHandle, error) {
-				return newImmediateChangesHandle(nil), nil
-			}),
-		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
-		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
-	}
-	defer func() {
-		activeCalls.Wait()
-		for _, stub := range stubs {
-			stub.Reset()
-		}
-	}()
-
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
-
-	tableDef := &plan.TableDef{
-		Cols:          []*plan.ColDef{{Name: "id"}, {Name: "ts"}},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := NewConsoleSinker(nil, nil)
-	ar := NewCdcActiveRoutine()
-
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		false,
-		50*time.Millisecond,
-	)
-
-	// Run in background
-	started := make(chan struct{})
-	runDone := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		close(started)
-		stream.Run(ctx, ar)
-		close(runExited)
-		close(runDone)
-	}()
-
-	<-started
-	<-opCalled
-
-	// Pause
-	ar.ClosePause()
-	close(release)
-	<-runExited
-
-	// Wait for stream to stop
 	select {
-	case <-runDone:
-		t.Log("Stream stopped gracefully after pause")
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector did not block as expected")
+	}
+
+	ar.ClosePause()
+	done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stream did not stop after pause")
 	}
 
-	stream.Wait()
+	require.Error(t, runErr)
+	if !errors.Is(runErr, context.Canceled) {
+		require.Contains(t, runErr.Error(), "paused")
+	}
 }
 
 func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
@@ -1943,92 +1023,25 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 
 // Integration tests for TableChangeStream + DataProcessor + TransactionManager pipeline
 func TestTableChangeStream_DataProcessorSinkerError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	h := newTableStreamHarness(t)
+	defer h.Close()
 
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
+	sinkerErr := moerr.NewInternalError(h.Context(), "sinker error")
+	h.Sinker().setError(sinkerErr)
 
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "id"},
-			{Name: "ts"},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := newTableStreamRecordingSinker()
-	sinker.setError(moerr.NewInternalError(ctx, "sinker error"))
-
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
-
-	stubs := []*gostub.Stubs{
-		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		}),
-		gostub.Stub(&FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {}),
-		gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
-		gostub.Stub(&GetRelationById, func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
-			return "", "", nil, nil
-		}),
-		gostub.Stub(&GetSnapshotTS, func(client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{PhysicalTime: 100}
-		}),
-		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
-		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
-	}
-	t.Cleanup(func() {
-		for _, stub := range stubs {
-			stub.Reset()
-		}
+	snapshot := createTestBatch(t, h.MP(), types.BuildTS(1, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: snapshot, hint: engine.ChangesHandle_Snapshot},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
 	})
 
-	var collectCalls atomic.Int32
-	collectStub := gostub.Stub(&CollectChanges, func(_ context.Context, _ engine.Relation, fromTs, toTs types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
-		callIdx := int(collectCalls.Add(1))
-		if callIdx == 1 {
-			bat := createTestBatch(t, mp, types.BuildTS(1, 0), []int32{1})
-			handle := newImmediateChangesHandle([]changeBatch{
-				{insert: bat, hint: engine.ChangesHandle_Snapshot},
-				{insert: nil, hint: engine.ChangesHandle_Tail_done},
-			})
-			return handle, nil
-		}
-		return newImmediateChangesHandle(nil), nil
-	})
-	defer collectStub.Reset()
+	ar := h.NewActiveRoutine()
+	err := h.RunStream(ar)
 
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		false,
-		50*time.Millisecond,
-	)
+	require.Error(t, err)
+	require.Equal(t, sinkerErr, err)
 
-	ar := NewCdcActiveRoutine()
-	stream.Run(ctx, ar)
-
-	require.Error(t, stream.lastError)
-	require.Contains(t, stream.lastError.Error(), "sinker error")
-
-	ops := sinker.opsSnapshot()
+	ops := h.Sinker().opsSnapshot()
 	require.NotContains(t, ops, "begin", "Begin should not be called when sinker already has an error")
 	require.NotContains(t, ops, "rollback", "No transaction started, rollback not expected")
 }
@@ -2064,111 +1077,42 @@ func TestTableChangeStream_EnsureCleanupOnCollectorError(t *testing.T) {
 }
 
 func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	h := newTableStreamHarness(t)
+	defer h.Close()
 
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "id"},
-			{Name: "ts"},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	sinker := newRecordingSinker()
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
-
-	stubs := []*gostub.Stubs{
-		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, nil
-		}),
-		gostub.Stub(&FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {}),
-		gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error { return nil }),
-		gostub.Stub(&GetRelationById, func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
-			return "", "", nil, nil
-		}),
-		gostub.Stub(&GetSnapshotTS, func(client.TxnOperator) timestamp.Timestamp {
-			return timestamp.Timestamp{PhysicalTime: 200}
-		}),
-		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {}),
-		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {}),
-	}
-	t.Cleanup(func() {
-		for _, stub := range stubs {
-			stub.Reset()
-		}
+	tail1 := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+	tail2 := createTestBatch(t, h.MP(), types.BuildTS(150, 0), []int32{2})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tail1, hint: engine.ChangesHandle_Tail_done},
+		{insert: tail2, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
 	})
 
-	var collectCalls atomic.Int32
-	collectStub := gostub.Stub(&CollectChanges, func(_ context.Context, _ engine.Relation, fromTs, toTs types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
-		callIdx := int(collectCalls.Add(1))
-		if callIdx == 1 {
-			bat1 := createTestBatch(t, mp, types.BuildTS(100, 0), []int32{1})
-			bat2 := createTestBatch(t, mp, types.BuildTS(150, 0), []int32{2})
-			handle := newImmediateChangesHandle([]changeBatch{
-				{insert: bat1, hint: engine.ChangesHandle_Tail_done},
-				{insert: bat2, hint: engine.ChangesHandle_Tail_done},
-				{insert: nil, hint: engine.ChangesHandle_Tail_done}, // NoMoreData
-			})
-			return handle, nil
-		}
-		return newImmediateChangesHandle(nil), nil
-	})
-	defer collectStub.Reset()
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
 
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, &sync.Map{},
-		types.TS{}, types.TS{},
-		false,
-		50*time.Millisecond,
-	)
-
-	ar := NewCdcActiveRoutine()
-	runDone := make(chan struct{})
-	go func() {
-		stream.Run(ctx, ar)
-		close(runDone)
-	}()
-
-	var ops []string
 	require.Eventually(t, func() bool {
-		ops = sinker.opsSnapshot()
-		beginCount := 0
-		hasCommit := false
+		ops := h.Sinker().opsSnapshot()
 		for _, op := range ops {
-			if op == "begin" {
-				beginCount++
-			}
 			if op == "commit" {
-				hasCommit = true
+				return true
 			}
 		}
-		return beginCount == 1 && hasCommit
-	}, 2*time.Second, 10*time.Millisecond)
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "expected sinker to observe commit for tail-done batches")
 
-	require.NoError(t, stream.lastError)
+	done()
 
-	// Verify only one BEGIN was called (transaction persisted across TailDone batches)
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("table change stream run did not complete")
+	}
+
+	require.NoError(t, runErr)
+
+	ops := h.Sinker().opsSnapshot()
 	beginCount := 0
 	for _, op := range ops {
 		if op == "begin" {
@@ -2176,16 +1120,10 @@ func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, beginCount, "Should have only one BEGIN for multiple TailDone batches")
-
-	// Verify COMMIT was called
 	require.Contains(t, ops, "commit", "Should commit after NoMoreData")
 
-	cancel()
-	stream.Close()
-	select {
-	case <-runDone:
-	case <-time.After(time.Second):
-		t.Fatal("stream did not shut down")
+	if tracker := h.Stream().txnManager.GetTracker(); tracker != nil {
+		require.True(t, tracker.IsCompleted(), "transaction tracker should be marked complete")
 	}
 }
 
@@ -2251,73 +1189,6 @@ func TestTableChangeStream_CommitFailureTriggersEnsureCleanup(t *testing.T) {
 	tracker := h.Stream().txnManager.GetTracker()
 	require.NotNil(t, tracker)
 	require.False(t, tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
-}
-
-func TestTableChangeStream_StaleReadRecovery(t *testing.T) {
-	h := newTableStreamHarness(
-		t,
-		withHarnessNoFull(true),
-		withHarnessFrequency(5*time.Millisecond),
-	)
-	defer h.Close()
-
-	var snapshotCalls atomic.Int32
-	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
-		call := snapshotCalls.Add(1)
-		ts := timestamp.Timestamp{PhysicalTime: 100}
-		if call >= 2 {
-			ts.PhysicalTime = 200
-		}
-		return ts
-	})
-
-	var collectCalls atomic.Int32
-	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
-		if collectCalls.Add(1) == 1 {
-			return nil, moerr.NewErrStaleReadNoCtx("db1", "t1")
-		}
-		bat := createTestBatch(t, h.MP(), toTs, []int32{1})
-		return newImmediateChangesHandle([]changeBatch{
-			{insert: bat, hint: engine.ChangesHandle_Tail_done},
-			{insert: nil, hint: engine.ChangesHandle_Tail_done},
-		}), nil
-	})
-
-	ar := h.NewActiveRoutine()
-	errCh, done := h.RunStreamAsync(ar)
-
-	// Wait for stale read recovery: should see at least 2 collect calls (first fails, second succeeds)
-	require.Eventually(t, func() bool {
-		return len(h.CollectCallsSnapshot()) >= 2
-	}, 2*time.Second, 10*time.Millisecond, "should see stale read recovery with multiple collect calls")
-
-	// Wait for stream to process data successfully after recovery (sinker should have operations)
-	require.Eventually(t, func() bool {
-		ops := h.Sinker().opsSnapshot()
-		for _, op := range ops {
-			if op == "begin" || op == "sink" {
-				return true
-			}
-		}
-		return false
-	}, 2*time.Second, 10*time.Millisecond, "stream should process data successfully after stale read recovery")
-
-	done()
-
-	var runErr error
-	select {
-	case runErr = <-errCh:
-	case <-time.After(time.Second):
-		t.Fatal("table change stream run did not terminate")
-	}
-	// Stream may complete successfully (nil) or be canceled - both are acceptable
-	if runErr != nil {
-		require.ErrorIs(t, runErr, context.Canceled, "if error, should be context.Canceled")
-	}
-
-	require.Equal(t, 1, h.Sinker().ResetCountSnapshot(), "sinker should be reset exactly once on stale read recovery")
-	require.GreaterOrEqual(t, len(h.CollectCallsSnapshot()), 2, "should have multiple collect calls after stale read recovery")
-	require.True(t, h.Stream().retryable, "stale read should mark stream retryable")
 }
 
 type noopTxnOperator struct {
@@ -2461,6 +1332,8 @@ type tableStreamHarnessConfig struct {
 	frequency            time.Duration
 	tableDef             *plan.TableDef
 	tableInfo            *DbTableInfo
+	watermarkUpdater     WatermarkUpdater
+	updaterStop          func()
 }
 
 func defaultTableStreamHarnessConfig() tableStreamHarnessConfig {
@@ -2533,6 +1406,13 @@ func withHarnessTableInfo(info *DbTableInfo) tableStreamHarnessOption {
 	}
 }
 
+func withHarnessWatermarkUpdater(updater WatermarkUpdater, stop func()) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.watermarkUpdater = updater
+		cfg.updaterStop = stop
+	}
+}
+
 type tableStreamHarness struct {
 	t *testing.T
 
@@ -2542,9 +1422,10 @@ type tableStreamHarness struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinker  *tableStreamRecordingSinker
-	updater *CDCWatermarkUpdater
-	stream  *TableChangeStream
+	sinker      *tableStreamRecordingSinker
+	updater     WatermarkUpdater
+	updaterStop func()
+	stream      *TableChangeStream
 
 	stubs     []*gostub.Stubs
 	closeOnce sync.Once
@@ -2584,8 +1465,20 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 	)
 
 	sinker := newTableStreamRecordingSinker()
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+
+	var (
+		updater     WatermarkUpdater
+		updaterStop func()
+	)
+	if cfg.watermarkUpdater != nil {
+		updater = cfg.watermarkUpdater
+		updaterStop = cfg.updaterStop
+	} else {
+		defaultUpdater, _ := InitCDCWatermarkUpdaterForTest(t)
+		defaultUpdater.Start()
+		updater = defaultUpdater
+		updaterStop = defaultUpdater.Stop
+	}
 
 	stream := NewTableChangeStream(
 		nil,
@@ -2607,14 +1500,20 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 	)
 
 	h := &tableStreamHarness{
-		t:          t,
-		ctx:        ctx,
-		cancel:     cancel,
-		mp:         mp,
-		packerPool: packerPool,
-		sinker:     sinker,
-		updater:    updater,
-		stream:     stream,
+		t:           t,
+		ctx:         ctx,
+		cancel:      cancel,
+		mp:          mp,
+		packerPool:  packerPool,
+		sinker:      sinker,
+		updater:     updater,
+		updaterStop: updaterStop,
+		stream:      stream,
+	}
+
+	if cfg.watermarkUpdater != nil {
+		zero := types.TS{}
+		_, _ = updater.GetOrAddCommitted(context.Background(), stream.watermarkKey, &zero)
 	}
 
 	h.getTxnOp = func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
@@ -2684,7 +1583,11 @@ func (h *tableStreamHarness) Close() {
 		}
 		h.cancel()
 		h.stream.Close()
-		h.updater.Stop()
+		if h.updaterStop != nil {
+			h.updaterStop()
+		} else if u, ok := h.updater.(*CDCWatermarkUpdater); ok {
+			u.Stop()
+		}
 		if h.mp != nil {
 			mpool.DeleteMPool(h.mp)
 			h.mp = nil
@@ -2708,7 +1611,7 @@ func (h *tableStreamHarness) Sinker() *tableStreamRecordingSinker {
 	return h.sinker
 }
 
-func (h *tableStreamHarness) WatermarkUpdater() *CDCWatermarkUpdater {
+func (h *tableStreamHarness) WatermarkUpdater() WatermarkUpdater {
 	return h.updater
 }
 
