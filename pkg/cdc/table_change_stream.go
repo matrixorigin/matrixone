@@ -596,7 +596,7 @@ func (s *TableChangeStream) processWithTxn(
 	txnOp client.TxnOperator,
 	packer *types.Packer,
 	ar *ActiveRoutine,
-) error {
+) (err error) {
 	// Get relation
 	s.progressTracker.SetState("reading")
 	_, _, rel, err := GetRelationById(ctx, s.cnEngine, txnOp, s.tableInfo.SourceTblId)
