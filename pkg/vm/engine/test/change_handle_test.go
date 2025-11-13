@@ -5389,7 +5389,7 @@ func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
 		readFromTS := t1.Prev()
 		readToTS := taeHandler.GetDB().TxnMgr.Now()
 
-		handle, err := rel.CollectChanges(ctx, readFromTS, readToTS, mp)
+		handle, err := rel.CollectChanges(ctx, readFromTS, readToTS, false, mp)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, handle)
