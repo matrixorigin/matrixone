@@ -730,6 +730,8 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 		return len(h.CollectCallsSnapshot()) > 0
 	}, time.Second, 10*time.Millisecond, "stream should begin collecting before cancellation")
 
+	opsBefore := h.Sinker().opsSnapshot()
+
 	h.Cancel()
 	done()
 
@@ -743,6 +745,9 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	if runErr != nil {
 		require.ErrorIs(t, runErr, context.Canceled)
 	}
+
+	require.False(t, h.Stream().retryable, "cancel should not mark stream retryable")
+	require.Equal(t, opsBefore, h.Sinker().opsSnapshot(), "cancel should not produce additional sink operations")
 }
 
 // Test ActiveRoutine Pause
@@ -778,6 +783,9 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 	if !errors.Is(runErr, context.Canceled) {
 		require.Contains(t, runErr.Error(), "paused")
 	}
+
+	require.False(t, h.Stream().retryable, "pause should not mark stream retryable")
+	require.Empty(t, h.Sinker().opsSnapshot(), "pause should abort before any sink operations")
 }
 
 func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
@@ -1121,6 +1129,7 @@ func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
 	}
 	require.Equal(t, 1, beginCount, "Should have only one BEGIN for multiple TailDone batches")
 	require.Contains(t, ops, "commit", "Should commit after NoMoreData")
+	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "no sinker resets expected for successful tail processing")
 
 	if tracker := h.Stream().txnManager.GetTracker(); tracker != nil {
 		require.True(t, tracker.IsCompleted(), "transaction tracker should be marked complete")
@@ -1185,7 +1194,6 @@ func TestTableChangeStream_CommitFailureTriggersEnsureCleanup(t *testing.T) {
 	}
 	require.Equal(t, 1, rollbackCount, "rollback should occur exactly once")
 	require.NoError(t, h.Sinker().Error())
-
 	tracker := h.Stream().txnManager.GetTracker()
 	require.NotNil(t, tracker)
 	require.False(t, tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
