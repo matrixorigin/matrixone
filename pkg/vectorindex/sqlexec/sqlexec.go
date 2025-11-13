@@ -268,7 +268,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 	}
 }
 
-func getTxn(
+func GetTxn(
 	ctx context.Context,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
@@ -306,7 +306,7 @@ func RunTxnWithSqlContext(ctx context.Context,
 	newctx, cancel := context.WithTimeout(newctx, duration)
 	defer cancel()
 
-	txnOp, err := getTxn(newctx, cnEngine, cnTxnClient, "runTxnWithSqlContext")
+	txnOp, err := GetTxn(newctx, cnEngine, cnTxnClient, "runTxnWithSqlContext")
 	if err != nil {
 		return err
 	}

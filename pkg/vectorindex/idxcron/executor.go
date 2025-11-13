@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -70,6 +71,8 @@ var (
 
 	// createdAt Delay update duration
 	createdAtDelay = 2 * 24 * time.Hour
+
+	getTableDef = getTableDefFunc
 )
 
 var running atomic.Bool
@@ -316,6 +319,27 @@ func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTa
 	return tasks, err
 }
 
+func getTableDefFunc(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbname string, tablename string) (tableDef *plan.TableDef, err error) {
+
+	sqlCtx := sqlproc.SqlCtx
+	txnOp := sqlCtx.Txn()
+
+	// get indexdef
+	db, err := txnEngine.Database(sqlproc.GetContext(), dbname, txnOp)
+	if err != nil {
+		return
+	}
+
+	rel, err := db.Relation(sqlproc.GetContext(), tablename, nil)
+	if err != nil {
+		return
+	}
+
+	fmt.Printf("table id %d\n", rel.GetTableID(sqlproc.GetContext()))
+	tableDef = rel.CopyTableDef(sqlproc.GetContext())
+	return
+}
+
 // return status as SQL to update mo_index_update
 func runIvfflatReindex(ctx context.Context,
 	txnEngine engine.Engine,
@@ -337,22 +361,12 @@ func runIvfflatReindex(ctx context.Context,
 		task.AccountId, 24*time.Hour, resolveVariableFunc, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) (err2 error) {
 
-			sqlCtx := sqlproc.SqlCtx
-			txnOp := sqlCtx.Txn()
-
-			// get indexdef
-			db, err2 := txnEngine.Database(sqlproc.GetContext(), task.DbName, txnOp)
+			tableDef, err2 := getTableDef(sqlproc, txnEngine, task.DbName, task.TableName)
 			if err2 != nil {
 				return
 			}
 
-			rel, err2 := db.Relation(sqlproc.GetContext(), task.TableName, nil)
-			if err2 != nil {
-				return
-			}
-
-			tableDef := rel.CopyTableDef(sqlproc.GetContext())
-			if rel.GetTableID(sqlproc.GetContext()) != task.TableId {
+			if tableDef.TblId != task.TableId {
 				return moerr.NewInternalErrorNoCtx("table id mimstach")
 			}
 
