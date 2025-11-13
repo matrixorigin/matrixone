@@ -1048,10 +1048,16 @@ func TestTableChangeStream_DataProcessorSinkerError(t *testing.T) {
 
 	require.Error(t, err)
 	require.Equal(t, sinkerErr, err)
+	require.Equal(t, sinkerErr, h.Sinker().Error(), "sinker error should remain set for inspection")
+	require.False(t, h.Stream().retryable, "fatal sinker error should not mark stream retryable")
+	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "no resets expected when error occurs before transaction start")
 
 	ops := h.Sinker().opsSnapshot()
 	require.NotContains(t, ops, "begin", "Begin should not be called when sinker already has an error")
 	require.NotContains(t, ops, "rollback", "No transaction started, rollback not expected")
+	require.Empty(t, ops, "sinker should not record operations when it starts with an error")
+
+	require.Nil(t, h.Stream().txnManager.GetTracker(), "tracker should remain nil when no transaction begins")
 }
 
 func TestTableChangeStream_EnsureCleanupOnCollectorError(t *testing.T) {
@@ -1082,6 +1088,7 @@ func TestTableChangeStream_EnsureCleanupOnCollectorError(t *testing.T) {
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot())
 
 	require.Nil(t, h.Stream().txnManager.GetTracker())
+	require.False(t, h.Stream().retryable, "collector error should not be retryable")
 }
 
 func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
