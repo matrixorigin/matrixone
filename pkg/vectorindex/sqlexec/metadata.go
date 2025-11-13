@@ -87,6 +87,10 @@ func NewMetadataFromJson(js string) (*Metadata, error) {
 	return &Metadata{bj: bj, typepath: typepath, valpath: valpath}, nil
 }
 
+func (m *Metadata) GetString() string {
+	return m.bj.String()
+}
+
 func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar bool) (any, error) {
 
 	if m.bj.IsNull() {

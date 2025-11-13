@@ -172,6 +172,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 	if err != nil {
 		// save error status column to mo_index_update
 
+		os.Stderr.WriteString(fmt.Sprintf("save Status error %v\n", err))
 		return nil
 	}
 
@@ -252,14 +253,15 @@ func getTasksFunc(
 	ctx context.Context,
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
-	cnUUID string) ([]IndexUpdateTaskInfo, error) {
+	cnUUID string) ([]*IndexUpdateTaskInfo, error) {
 
-	tasks := make([]IndexUpdateTaskInfo, 0, 16)
+	tasks := make([]*IndexUpdateTaskInfo, 0, 16)
 
 	err := runTxnWithSqlContext(ctx, txnEngine, cnTxnClient, cnUUID,
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
+			//tasks := data.([]*IndexUpdateTaskInfo)
 			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at, create_at from mo_catalog.mo_index_update"
 			res, err := runGetTasksSql(sqlproc, sql)
 			if err != nil {
@@ -291,7 +293,7 @@ func getTasksFunc(
 					lastupdate := (*types.Timestamp)(nil)
 
 					if !metavec.IsNull(uint64(i)) {
-						bytes := metavec.GetRawBytesAt(i)
+						bytes := metavec.CloneBytesAt(i)
 						metadata, err = sqlexec.NewMetadata(bytes)
 						if err != nil {
 							return err
@@ -303,7 +305,7 @@ func getTasksFunc(
 						lastupdate = &ts
 					}
 
-					tasks = append(tasks, IndexUpdateTaskInfo{DbName: dbname,
+					tasks = append(tasks, &IndexUpdateTaskInfo{DbName: dbname,
 						TableName:    tblname,
 						IndexName:    idxname,
 						Action:       action,
@@ -315,8 +317,6 @@ func getTasksFunc(
 
 				}
 			}
-
-			os.Stderr.WriteString(fmt.Sprintf("TASKS %v\n", tasks))
 
 			return nil
 		})
@@ -340,7 +340,7 @@ func getTableDefFunc(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbnam
 		return
 	}
 
-	fmt.Printf("table id %d\n", rel.GetTableID(sqlproc.GetContext()))
+	os.Stderr.WriteString(fmt.Sprintf("table id %d\n", rel.GetTableID(sqlproc.GetContext())))
 	tableDef = rel.CopyTableDef(sqlproc.GetContext())
 	return
 }
@@ -350,7 +350,7 @@ func runIvfflatReindex(ctx context.Context,
 	txnEngine engine.Engine,
 	txnClient client.TxnClient,
 	cnUUID string,
-	task IndexUpdateTaskInfo) (updated bool, err error) {
+	task *IndexUpdateTaskInfo) (updated bool, err error) {
 
 	if len(task.IndexName) == 0 {
 		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
@@ -439,7 +439,7 @@ func runIvfflatReindex(ctx context.Context,
 	return
 }
 
-func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task IndexUpdateTaskInfo) (updated bool, err error) {
+func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task *IndexUpdateTaskInfo) (updated bool, err error) {
 	return updated, moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
 }
 
@@ -450,6 +450,10 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	tasks, err := getTasks(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID)
 	if err != nil {
 		return err
+	}
+	os.Stderr.WriteString(fmt.Sprintf("RUN OUT TASKS %v\n", len(tasks)))
+	for _, t := range tasks {
+		os.Stderr.WriteString(fmt.Sprintf("RUN OUT TASKS %v\n", t.Metadata))
 	}
 
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete

@@ -17,12 +17,14 @@ package idxcron
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -229,7 +231,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 				IndexTableName:     "meta_tbl",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops"}`,
 			},
 			{
 				IndexName:          "ivf_idx",
@@ -238,7 +240,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 				IndexTableName:     "centriods",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops"}`,
 			},
 			{
 				IndexName:          "ivf_idx",
@@ -247,7 +249,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 				IndexTableName:     "entries",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops"}`,
 			},
 		},
 	}
@@ -331,7 +333,7 @@ func TestIvfflatReindex(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, info)
+			updated, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info)
 			fmt.Printf("updated = %v\n", updated)
 			require.NoError(t, err)
 			require.Equal(t, ta.expected, updated)
@@ -340,7 +342,7 @@ func TestIvfflatReindex(t *testing.T) {
 	}
 }
 
-func TestExecutorRun(t *testing.T) {
+func TestExecutorRunFakeTasks(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithCancel(ctx)
@@ -380,10 +382,10 @@ func TestExecutorRun(t *testing.T) {
 	defer stub3.Reset()
 
 	//getTasks
-	stub4 := gostub.Stub(&getTasks, func(ctx context.Context, txnEngine engine.Engine, cnTxnClient client.TxnClient, cnUUID string) ([]IndexUpdateTaskInfo, error) {
+	stub4 := gostub.Stub(&getTasks, func(ctx context.Context, txnEngine engine.Engine, cnTxnClient client.TxnClient, cnUUID string) ([]*IndexUpdateTaskInfo, error) {
 		tasks := getTestCases(t)
 
-		ret := make([]IndexUpdateTaskInfo, 0, len(tasks))
+		ret := make([]*IndexUpdateTaskInfo, 0, len(tasks))
 		for _, ta := range tasks {
 			m, err := sqlexec.NewMetadataFromJson(ta.jstr)
 			require.Nil(t, err)
@@ -400,10 +402,113 @@ func TestExecutorRun(t *testing.T) {
 				CreatedAt:    ta.createdAt,
 			}
 
-			ret = append(ret, info)
+			ret = append(ret, &info)
 		}
 
 		return ret, nil
+	})
+	defer stub4.Reset()
+
+	// runSavestatusSql
+	stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		fmt.Println(sql)
+		return executor.Result{}, nil
+	})
+	defer stub5.Reset()
+
+	exec, err := NewIndexUpdateTaskExecutor(ctx, cnUUID, cnEngine, cnClient, mp)
+	require.NoError(t, err)
+
+	err = exec.run(ctx)
+	require.NoError(t, err)
+}
+
+func TestExecutorRunFull(t *testing.T) {
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
+	cnUUID := "a-b-c-d"
+	tableid := uint64(1)
+	dbname := "test"
+	tablename := "test_orig_tbl"
+	indexname := "ivf_idx"
+
+	// getTableDef
+	stub1 := gostub.Stub(&getTableDef, func(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbname string, tablename string) (tableDef *plan.TableDef, err error) {
+		return newTestIvfTableDef("a", types.T_int64, "b", types.T_array_float32, 3), nil
+	})
+	defer stub1.Reset()
+
+	// runGetCountSql
+	stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
+		vector.AppendFixed[uint64](bat.Vecs[0], uint64(1000000), false, mp)
+		bat.SetRowCount(1)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+
+	})
+	defer stub2.Reset()
+
+	// runReindxSql
+	stub3 := gostub.Stub(&runReindexSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	})
+	defer stub3.Reset()
+
+	// runReindxSql
+	stub4 := gostub.Stub(&runGetTasksSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+
+		writer := sqlexec.NewMetadataWriter()
+		writer.AddFloat("kmeans_train_percent", 10)
+		writer.AddInt("kmeans_max_iteration", 20)
+		writer.AddInt("ivf_threads_build", 8)
+		writer.AddInt8("experimental_ivf_index", 1)
+
+		js, err := writer.Marshal()
+
+		os.Stderr.WriteString(fmt.Sprintf("js %v\n", string(js)))
+
+		bj, err := bytejson.ParseFromString(string(js))
+		require.NoError(t, err)
+
+		os.Stderr.WriteString(fmt.Sprintf("bj %v\n", bj.String()))
+
+		bat := batch.NewWithSize(9)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // db
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // table
+		bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // idxname
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // action
+		bat.Vecs[4] = vector.NewVec(types.New(types.T_uint32, 4, 0))    // acountid
+		bat.Vecs[5] = vector.NewVec(types.New(types.T_uint64, 8, 0))    // table id
+		bat.Vecs[6] = vector.NewVec(types.New(types.T_json, 1024, 0))   // metadata JSON
+		bat.Vecs[7] = vector.NewVec(types.New(types.T_timestamp, 8, 0)) // last_update_at timestamp
+		bat.Vecs[8] = vector.NewVec(types.New(types.T_timestamp, 8, 0)) // create_at timestamp
+
+		vector.AppendBytes(bat.Vecs[0], []byte(dbname), false, mp)
+		vector.AppendBytes(bat.Vecs[1], []byte(tablename), false, mp)
+		vector.AppendBytes(bat.Vecs[2], []byte(indexname), false, mp)
+		vector.AppendBytes(bat.Vecs[3], []byte(Action_Ivfflat_Reindex), false, mp)
+		vector.AppendFixed[uint32](bat.Vecs[4], catalog.System_Account, false, mp)
+		vector.AppendFixed[uint64](bat.Vecs[5], tableid, false, mp)
+		err = vector.AppendByteJson(bat.Vecs[6], bj, false, mp)
+		require.NoError(t, err)
+
+		now := time.Now()
+		created_at := now.Add(-4 * OneWeek)
+		last_update_at := now.Add(-2 * OneWeek)
+
+		vector.AppendFixed[types.Timestamp](bat.Vecs[7], types.UnixToTimestamp(last_update_at.Unix()), false, mp)
+		vector.AppendFixed[types.Timestamp](bat.Vecs[8], types.UnixToTimestamp(created_at.Unix()), false, mp)
+
+		bat.SetRowCount(1)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	})
 	defer stub4.Reset()
 
