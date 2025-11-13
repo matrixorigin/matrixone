@@ -73,6 +73,7 @@ var (
 	createdAtDelay = 2 * 24 * time.Hour
 
 	getTableDef = getTableDefFunc
+	getTasks    = getTasksFunc
 )
 
 var running atomic.Bool
@@ -247,11 +248,15 @@ func NewIndexUpdateTaskExecutor(
 	return exec, nil
 }
 
-func (e *IndexUpdateTaskExecutor) getTasks(ctx context.Context) ([]IndexUpdateTaskInfo, error) {
+func getTasksFunc(
+	ctx context.Context,
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string) ([]IndexUpdateTaskInfo, error) {
 
 	tasks := make([]IndexUpdateTaskInfo, 0, 16)
 
-	err := runTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
+	err := runTxnWithSqlContext(ctx, txnEngine, cnTxnClient, cnUUID,
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
@@ -442,7 +447,7 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
 	os.Stderr.WriteString("IndexUpdateTaskExecutor RUN TASK\n")
 
-	tasks, err := e.getTasks(ctx)
+	tasks, err := getTasks(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID)
 	if err != nil {
 		return err
 	}

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -337,4 +338,85 @@ func TestIvfflatReindex(t *testing.T) {
 
 		}()
 	}
+}
+
+func TestExecutorRun(t *testing.T) {
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
+	cnUUID := "a-b-c-d"
+	tableid := uint64(1)
+	dbname := "test"
+	tablename := "test_orig_tbl"
+	indexname := "ivf_idx"
+
+	// getTableDef
+	stub1 := gostub.Stub(&getTableDef, func(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbname string, tablename string) (tableDef *plan.TableDef, err error) {
+		return newTestIvfTableDef("a", types.T_int64, "b", types.T_array_float32, 3), nil
+	})
+	defer stub1.Reset()
+
+	// runGetCountSql
+	stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
+		vector.AppendFixed[uint64](bat.Vecs[0], uint64(1000000), false, mp)
+		bat.SetRowCount(1)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+
+	})
+	defer stub2.Reset()
+
+	// runReindxSql
+	stub3 := gostub.Stub(&runReindexSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	})
+	defer stub3.Reset()
+
+	//getTasks
+	stub4 := gostub.Stub(&getTasks, func(ctx context.Context, txnEngine engine.Engine, cnTxnClient client.TxnClient, cnUUID string) ([]IndexUpdateTaskInfo, error) {
+		tasks := getTestCases(t)
+
+		ret := make([]IndexUpdateTaskInfo, 0, len(tasks))
+		for _, ta := range tasks {
+			m, err := sqlexec.NewMetadataFromJson(ta.jstr)
+			require.Nil(t, err)
+
+			info := IndexUpdateTaskInfo{
+				DbName:       dbname,
+				TableName:    tablename,
+				IndexName:    indexname,
+				Action:       Action_Ivfflat_Reindex,
+				AccountId:    catalog.System_Account,
+				TableId:      tableid,
+				Metadata:     m,
+				LastUpdateAt: &ta.ts,
+				CreatedAt:    ta.createdAt,
+			}
+
+			ret = append(ret, info)
+		}
+
+		return ret, nil
+	})
+	defer stub4.Reset()
+
+	// runSavestatusSql
+	stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		fmt.Println(sql)
+		return executor.Result{}, nil
+	})
+	defer stub5.Reset()
+
+	exec, err := NewIndexUpdateTaskExecutor(ctx, cnUUID, cnEngine, cnClient, mp)
+	require.NoError(t, err)
+
+	err = exec.run(ctx)
+	require.NoError(t, err)
 }
