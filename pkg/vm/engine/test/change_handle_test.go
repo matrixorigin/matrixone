@@ -1862,6 +1862,10 @@ func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	require.Nil(t, txn.Commit(ctx))
 
+	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	require.NoError(t, err)
+	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	require.NoError(t, err)
 	// Force first global checkpoint (GCKP1)
 	gckp1TS := taeHandler.GetDB().TxnMgr.Now()
 	err = taeHandler.GetDB().ForceGlobalCheckpoint(ctx, gckp1TS, 0)
@@ -1871,6 +1875,10 @@ func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
 	gckp1End := gckp1.GetEnd()
 	t.Logf("GCKP1: %s", gckp1.String())
 
+	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	require.NoError(t, err)
+	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	require.NoError(t, err)
 	// Insert second batch
 	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	require.Nil(t, rel.Append(ctx, bats[1]))
@@ -1885,6 +1893,11 @@ func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
 	gckp2End := gckp2.GetEnd()
 	t.Logf("GCKP2: %s", gckp2.String())
 
+	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	require.NoError(t, err)
+	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	require.NoError(t, err)
+	
 	// Verify we have two different global checkpoints
 	require.True(t, gckp2End.GT(&gckp1End), "GCKP2 end should be greater than GCKP1 end")
 
