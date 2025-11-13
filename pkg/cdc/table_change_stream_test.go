@@ -1140,7 +1140,19 @@ func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
 
 	if tracker := h.Stream().txnManager.GetTracker(); tracker != nil {
 		require.True(t, tracker.IsCompleted(), "transaction tracker should be marked complete")
+		toTs := tracker.GetToTs()
+		require.False(t, (&toTs).IsEmpty(), "tracker toTs should be recorded")
 	}
+
+	calls := h.Sinker().sinkCallsSnapshot()
+	require.GreaterOrEqual(t, len(calls), 1)
+	finalToTs := calls[len(calls)-1].toTs
+
+	stats := h.Stream().progressTracker.GetStats()
+	require.Equal(t, "idle", stats["state"], "progress tracker should return to idle after completion")
+	require.Equal(t, finalToTs.ToString(), stats["current_watermark"])
+	require.EqualValues(t, initialSyncStateSuccess, stats["initial_sync_state"], "initial sync should complete successfully")
+	require.EqualValues(t, 1, stats["total_transactions"], "exactly one transaction should be committed")
 }
 
 func TestTableChangeStream_CommitFailureTriggersEnsureCleanup(t *testing.T) {
