@@ -1897,7 +1897,7 @@ func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
 	require.NoError(t, err)
 	err = taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
 	require.NoError(t, err)
-	
+
 	// Verify we have two different global checkpoints
 	require.True(t, gckp2End.GT(&gckp1End), "GCKP2 end should be greater than GCKP1 end")
 
