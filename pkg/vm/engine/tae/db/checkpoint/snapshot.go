@@ -133,6 +133,16 @@ func ListSnapshotCheckpoint(
 	}
 	metaFiles := make([]ioutil.TSRangeFile, 0)
 	compactedFiles := make([]ioutil.TSRangeFile, 0)
+	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
+		// Find the global checkpoint with end == maxGlobalEnd
+		for i := range entries {
+			if entries[i].end.Equal(&maxGlobalEnd) &&
+				entries[i].entryType == ET_Global {
+				// Return only the global checkpoint, since snapshot ts == gckp.end
+				return []*CheckpointEntry{entries[i]}, nil
+			}
+		}
+	}
 	for name := range allFiles {
 		meta := ioutil.DecodeTSRangeFile(name)
 		if meta.IsCompactExt() {
