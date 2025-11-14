@@ -777,6 +777,13 @@ message Node {
 		OUTERAPPLY = 1;
 	}
 
+    enum IndexScanFlag {
+        NO_INDEX = 0;
+        USE_FULLTEXT_INDEX = 1;
+        USE_VECTOR_INDEX = 2;
+        ORDER_BY_SCORE = 4;
+    }
+
 	NodeType node_type = 1;
 	int32 node_id = 2;
 	Stats stats = 3;
@@ -888,6 +895,8 @@ message Node {
 
     // compile time performance setting
     int64 spill_mem = 70;
+
+    int64 index_scan_flags = 71;
 }
 
 message SnapshotExtraInfo {

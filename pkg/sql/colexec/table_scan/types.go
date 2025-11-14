@@ -33,14 +33,18 @@ type container struct {
 	buf          *batch.Batch
 	msgReceiver  *message.MessageReceiver
 }
+
 type TableScan struct {
 	ctr            container
 	TopValueMsgTag int32
 	Reader         engine.Reader
+
 	// letter case: origin
 	Attrs   []string
 	Types   []plan.Type
 	TableID uint64
+
+	IndexScanFlags int64
 
 	vm.OperatorBase
 	colexec.Projection

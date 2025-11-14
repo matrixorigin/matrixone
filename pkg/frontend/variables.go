@@ -3602,6 +3602,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_agg_statement"),
 		Default:           int64(0),
 	},
+	"enable_index_scan": {
+		Name:              "enable_index_scan",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_index_scan"),
+		Default:           int64(0),
+	},
 	"experimental_fulltext_index": {
 		Name:              "experimental_fulltext_index",
 		Scope:             ScopeBoth,

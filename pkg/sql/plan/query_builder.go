@@ -94,6 +94,28 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	}
 }
 
+func (builder *QueryBuilder) CheckBooleanVariable(variableName string) bool {
+	variable, err := builder.compCtx.ResolveVariable(variableName, true, false)
+	if err != nil {
+		return false
+	}
+	if variableVal, ok := variable.(int8); ok {
+		return variableVal != 0
+	}
+	return false
+}
+
+func (builder *QueryBuilder) CheckInt64Variable(variableName string) int64 {
+	variable, err := builder.compCtx.ResolveVariable(variableName, true, false)
+	if err != nil {
+		return 0
+	}
+	if variableVal, ok := variable.(int64); ok {
+		return variableVal
+	}
+	return 0
+}
+
 // buildRemapErrorMessage constructs a human-readable error message for column remapping failures.
 // This function provides detailed context to help debug issues where a column reference cannot
 // be found in the remapping context.

@@ -56,6 +56,11 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
+	if builder.CheckBooleanVariable("enable_index_scan") {
+		return builder.applyIndicesForProjectionUsingIndexScan(nodeID, projNode, sortNode, scanNode,
+			filterids, filterIndexDefs, projids, projIndexDef, colRefCnt, idxColMap)
+	}
+
 	ctx := builder.ctxByNode[nodeID]
 
 	// check equal fulltext_match func and only compute once for equal function()
@@ -161,6 +166,12 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+
+	if builder.CheckBooleanVariable("enable_index_scan") {
+		return builder.applyIndicesForAggUsingIndexScan(nodeID, projNode, aggNode, scanNode,
+			filterids, filterIndexDefs, colRefCnt, idxColMap)
+	}
+
 	var err error
 
 	projids := make([]int32, 0)
@@ -560,4 +571,28 @@ func (builder *QueryBuilder) resolveAggNode(node *plan.Node, depth int32) *plan.
 	}
 
 	return nil
+}
+
+// collapsing the fulltext_match() functions into index_scan()
+func (builder *QueryBuilder) applyIndicesForProjectionUsingIndexScan(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	scanNode.IndexScanFlags = int64(plan.Node_USE_FULLTEXT_INDEX)
+	if sortNode == nil {
+		scanNode.IndexScanFlags |= int64(plan.Node_ORDER_BY_SCORE)
+		// move the limit and offset from projNode to scanNode
+		if projNode.Limit != nil {
+			scanNode.Limit = DeepCopyExpr(projNode.Limit)
+			scanNode.Offset = DeepCopyExpr(projNode.Offset)
+			projNode.Limit = nil
+			projNode.Offset = nil
+		}
+	}
+	return nodeID, nil
+}
+
+func (builder *QueryBuilder) applyIndicesForAggUsingIndexScan(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	scanNode.IndexScanFlags = int64(plan.Node_USE_FULLTEXT_INDEX)
+	return nodeID, nil
 }
