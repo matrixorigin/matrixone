@@ -22,25 +22,25 @@ import (
 )
 
 func init() {
-	reuse.CreatePool[ExplainStmt](
+	reuse.CreatePool(
 		func() *ExplainStmt { return &ExplainStmt{} },
 		func(e *ExplainStmt) { e.reset() },
 		reuse.DefaultOptions[ExplainStmt](), //.
 	) //WithEnableChecker()
 
-	reuse.CreatePool[ExplainAnalyze](
+	reuse.CreatePool(
 		func() *ExplainAnalyze { return &ExplainAnalyze{} },
 		func(e *ExplainAnalyze) { e.reset() },
 		reuse.DefaultOptions[ExplainAnalyze](), //.
 	) //WithEnableChecker()
 
-	reuse.CreatePool[ExplainFor](
+	reuse.CreatePool(
 		func() *ExplainFor { return &ExplainFor{} },
 		func(e *ExplainFor) { e.reset() },
 		reuse.DefaultOptions[ExplainFor](), //.
 	) //WithEnableChecker()
 
-	reuse.CreatePool[ExplainPhyPlan](
+	reuse.CreatePool(
 		func() *ExplainPhyPlan { return &ExplainPhyPlan{} },
 		func(e *ExplainPhyPlan) { e.reset() },
 		reuse.DefaultOptions[ExplainPhyPlan](), //.
@@ -106,7 +106,7 @@ func (node *ExplainStmt) GetQueryType() string     { return QueryTypeOth }
 // EXPLAIN FOR CONNECTION statement
 
 func (node *ExplainStmt) Free() {
-	reuse.Free[ExplainStmt](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *ExplainStmt) reset() {
@@ -165,7 +165,7 @@ func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze"
 func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeOth }
 
 func (node *ExplainAnalyze) Free() {
-	reuse.Free[ExplainAnalyze](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *ExplainAnalyze) reset() {
@@ -198,7 +198,7 @@ func (node *ExplainFor) GetStatementType() string { return "Explain Format" }
 func (node *ExplainFor) GetQueryType() string     { return QueryTypeOth }
 
 func (node *ExplainFor) Free() {
-	reuse.Free[ExplainFor](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *ExplainFor) reset() {
@@ -219,6 +219,15 @@ type OptionElem struct {
 	Value string
 }
 
+const (
+	PhyPlanOption = "phyplan"
+	AnalyzeOption = "analyze"
+	VerboseOption = "verbose"
+	ForceOption   = "force"
+	CheckOption   = "check"
+	FormatOption  = "format"
+)
+
 func MakeOptionElem(name string, value string) OptionElem {
 	return OptionElem{
 		Name:  name,
@@ -226,16 +235,12 @@ func MakeOptionElem(name string, value string) OptionElem {
 	}
 }
 
-func MakeOptions(elem OptionElem) []OptionElem {
-	var options = make([]OptionElem, 1)
-	options[0] = elem
-	return options
-}
-
-func IsContainAnalyze(options []OptionElem) bool {
+// OptionContains checks if the option is in the options list and
+// returns the value of the option
+func OptionContains(options []OptionElem, option string) bool {
 	if len(options) > 0 {
-		for _, option := range options {
-			if strings.EqualFold(option.Name, "analyze") && strings.EqualFold(option.Value, "true") {
+		for _, o := range options {
+			if strings.EqualFold(o.Name, option) {
 				return true
 			}
 		}
@@ -243,15 +248,20 @@ func IsContainAnalyze(options []OptionElem) bool {
 	return false
 }
 
-func IsContainPhyPlan(options []OptionElem) bool {
-	if len(options) > 0 {
-		for _, option := range options {
-			if strings.EqualFold(option.Name, "phyplan") && strings.EqualFold(option.Value, "true") {
-				return true
-			}
-		}
+func MakeExplainStmt(stmt Statement, options []OptionElem) Statement {
+	if OptionContains(options, PhyPlanOption) {
+		explainStmt := NewExplainPhyPlan(stmt, "text")
+		explainStmt.Options = options
+		return explainStmt
+	} else if OptionContains(options, AnalyzeOption) {
+		explainStmt := NewExplainAnalyze(stmt, "text")
+		explainStmt.Options = options
+		return explainStmt
+	} else {
+		explainStmt := NewExplainStmt(stmt, "text")
+		explainStmt.Options = options
+		return explainStmt
 	}
-	return false
 }
 
 // --------------------------------------------------------------------------------------
@@ -298,7 +308,7 @@ func (node *ExplainPhyPlan) GetStatementType() string { return "Explain PhyPlan"
 func (node *ExplainPhyPlan) GetQueryType() string     { return QueryTypeOth }
 
 func (node *ExplainPhyPlan) Free() {
-	reuse.Free[ExplainPhyPlan](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *ExplainPhyPlan) reset() {
