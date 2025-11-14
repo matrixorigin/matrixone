@@ -759,6 +759,24 @@ func Test_service_handleCtlReader(t *testing.T) {
 	}
 }
 
+func Test_service_handleCtlPrefetchOnSubscribed(t *testing.T) {
+	ctx := context.Background()
+
+	req := &query.Request{CtlPrefetchOnSubscribedRequest: &query.CtlPrefetchOnSubscribedRequest{
+		Patterns: []string{"^foo$"},
+	}}
+	resp := &query.Response{}
+	t.Cleanup(func() {
+		require.NoError(t, engine.SetPrefetchOnSubscribed(nil))
+	})
+	s := &service{}
+	err := s.handleCtlPrefetchOnSubscribed(ctx, req, resp, nil)
+	require.NoError(t, err)
+	require.Equal(t, &query.Response{CtlPrefetchOnSubscribedResponse: &query.CtlPrefetchOnSubscribedResponse{
+		Resp: "prefetch_on_subscribed updated, patterns: 1",
+	}}, resp)
+}
+
 func Test_service_handleRunTask(t *testing.T) {
 
 	ctx := context.Background()

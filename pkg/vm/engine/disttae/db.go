@@ -497,7 +497,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	snap := logtailreplay.NewPartition(
 		e.service, e.GetLatestCatalogCache(),
 		uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId,
-		e.config.prefetchOnSubscribed,
+		e.getPrefetchOnSubscribed(),
 	)
 	if tbl.tableId == catalog.MO_TABLES_ID ||
 		tbl.tableId == catalog.MO_DATABASE_ID ||
@@ -590,7 +590,7 @@ func (e *Engine) GetOrCreateLatestPart(
 		partition = logtailreplay.NewPartition(
 			e.service, e.GetLatestCatalogCache(),
 			accId, databaseId, tableId,
-			e.config.prefetchOnSubscribed,
+			e.getPrefetchOnSubscribed(),
 		)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
