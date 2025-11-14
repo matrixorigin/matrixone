@@ -132,7 +132,7 @@ func TestFilterSnapshotEntries(t *testing.T) {
 			},
 		}
 
-		result := filterSnapshotEntries(entries)
+		result := filterSnapshotEntries(entries, &types.TS{})
 
 		// Should return entries from the global checkpoint onwards
 		assert.Equal(t, 2, len(result))
@@ -142,7 +142,7 @@ func TestFilterSnapshotEntries(t *testing.T) {
 
 	t.Run("EmptyEntries", func(t *testing.T) {
 		entries := []*CheckpointEntry{}
-		result := filterSnapshotEntries(entries)
+		result := filterSnapshotEntries(entries, &types.TS{})
 		assert.Equal(t, 0, len(result))
 	})
 
@@ -160,7 +160,7 @@ func TestFilterSnapshotEntries(t *testing.T) {
 			},
 		}
 
-		result := filterSnapshotEntries(entries)
+		result := filterSnapshotEntries(entries, &types.TS{})
 		// Should return all entries if no global checkpoint
 		assert.Equal(t, 2, len(result))
 	})
@@ -184,7 +184,7 @@ func TestFilterSnapshotEntries(t *testing.T) {
 			},
 		}
 
-		result := filterSnapshotEntries(entries)
+		result := filterSnapshotEntries(entries, &types.TS{})
 		// Should return entries from the latest global checkpoint onwards
 		assert.Equal(t, 2, len(result))
 		assert.Equal(t, ET_Global, result[0].entryType)
