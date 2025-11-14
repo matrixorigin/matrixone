@@ -77,10 +77,6 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		var orderByScore []*OrderBySpec
 		for _, id := range filter_node_ids {
 			ftnode := builder.qry.Nodes[id]
-			if ftnode.Limit != nil {
-				// if pushdown limt, skip the sort node
-				continue
-			}
 			orderByScore = append(orderByScore, &OrderBySpec{
 				Expr: &Expr{
 					Typ: ftnode.TableDef.Cols[1].Typ, // score column
@@ -102,11 +98,6 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			}
 
 			ftnode := builder.qry.Nodes[id]
-			if ftnode.Limit != nil {
-				// if pushdown limt, skip the sort node
-				continue
-			}
-
 			orderByScore = append(orderByScore, &OrderBySpec{
 				Expr: &Expr{
 					Typ: ftnode.TableDef.Cols[1].Typ, // score column
@@ -121,27 +112,19 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			})
 		}
 
-		if len(orderByScore) == 0 {
-			projNode.Children[0] = idxID
+		sortByID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{idxID},
+			OrderBy:  orderByScore,
+			Limit:    DeepCopyExpr(scanNode.Limit),
+			Offset:   DeepCopyExpr(scanNode.Offset),
+		}, ctx)
 
-			// remove scanNode.Limit
-			scanNode.Limit = nil
-			scanNode.Offset = nil
-		} else {
-			sortByID := builder.appendNode(&plan.Node{
-				NodeType: plan.Node_SORT,
-				Children: []int32{idxID},
-				OrderBy:  orderByScore,
-				Limit:    DeepCopyExpr(scanNode.Limit),
-				Offset:   DeepCopyExpr(scanNode.Offset),
-			}, ctx)
+		// move scanNode.Limit to sortNode
+		scanNode.Limit = nil
+		scanNode.Offset = nil
 
-			// move scanNode.Limit to sortNode
-			scanNode.Limit = nil
-			scanNode.Offset = nil
-
-			projNode.Children[0] = sortByID
-		}
+		projNode.Children[0] = sortByID
 	}
 
 	// replace the project with ColRef
