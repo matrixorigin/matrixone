@@ -518,10 +518,10 @@ func Test_service_handleUnsubscribeTable(t *testing.T) {
 	err := dummyErr
 	ctl := gomock.NewController(t)
 	mockEng := mock_frontend.NewMockEngine(ctl)
-	mockEng.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockEng.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	mockEngErr := mock_frontend.NewMockEngine(ctl)
-	mockEngErr.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(err).AnyTimes()
+	mockEngErr.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(err).AnyTimes()
 
 	respWithErr := &query.Response{}
 	respWithErr.WrapError(err)
