@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1214,6 +1216,14 @@ type forceShuffleReaderConfig struct {
 
 var forceShuffleReader forceShuffleReaderConfig
 
+type prefetchOnSubscribedConfig struct {
+	sync.RWMutex
+	overridden bool
+	regexps    []*regexp.Regexp
+}
+
+var prefetchOnSubscribed prefetchOnSubscribedConfig
+
 func SetForceBuildRemoteDS(force bool, tbls []string) {
 	forceBuildRemoteDS.Lock()
 	defer forceBuildRemoteDS.Unlock()
@@ -1263,6 +1273,44 @@ func GetForceShuffleReader() (bool, []uint64, int) {
 	defer forceShuffleReader.Unlock()
 
 	return forceShuffleReader.force, forceShuffleReader.tblIds, forceShuffleReader.blkCnt
+}
+
+func SetPrefetchOnSubscribed(patterns []string) error {
+	if patterns == nil {
+		prefetchOnSubscribed.Lock()
+		prefetchOnSubscribed.overridden = false
+		prefetchOnSubscribed.regexps = nil
+		prefetchOnSubscribed.Unlock()
+		return nil
+	}
+
+	regexps := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		r, err := regexp.Compile(pattern)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("compile pattern %q: %w", pattern, err)
+		}
+		regexps = append(regexps, r)
+	}
+
+	prefetchOnSubscribed.Lock()
+	prefetchOnSubscribed.regexps = regexps
+	prefetchOnSubscribed.overridden = true
+	prefetchOnSubscribed.Unlock()
+	return nil
+}
+
+func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
+	prefetchOnSubscribed.RLock()
+	defer prefetchOnSubscribed.RUnlock()
+
+	if !prefetchOnSubscribed.overridden {
+		return false, nil
+	}
+
+	regexps := make([]*regexp.Regexp, len(prefetchOnSubscribed.regexps))
+	copy(regexps, prefetchOnSubscribed.regexps)
+	return true, regexps
 }
 
 type FilterHint struct {

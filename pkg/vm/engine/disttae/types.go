@@ -293,6 +293,13 @@ type Engine struct {
 	cloneTxnCache *CloneTxnCache
 }
 
+func (e *Engine) getPrefetchOnSubscribed() []*regexp.Regexp {
+	if overridden, regs := engine.GetPrefetchOnSubscribed(); overridden {
+		return regs
+	}
+	return e.config.prefetchOnSubscribed
+}
+
 func (e *Engine) SetService(svr string) {
 	e.service = svr
 }
