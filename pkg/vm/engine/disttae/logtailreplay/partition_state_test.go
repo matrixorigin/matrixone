@@ -28,7 +28,7 @@ import (
 )
 
 func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
-	partition := NewPartition("", 42)
+	partition := NewPartition("", nil, 0, 0, 42, nil)
 	end := make(chan struct{})
 	defer func() {
 		close(end)
@@ -60,7 +60,7 @@ func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 }
 
 func TestTruncate(t *testing.T) {
-	partition := NewPartitionState("", true, 42)
+	partition := NewPartitionState("", true, 42, false)
 	partition.UpdateDuration(types.BuildTS(0, 0), types.MaxTs())
 	addObject(partition, types.BuildTS(1, 0), types.BuildTS(2, 0))
 	addObject(partition, types.BuildTS(1, 0), types.BuildTS(3, 0))
@@ -101,7 +101,7 @@ func addObject(p *PartitionState, create, delete types.TS) {
 }
 
 func TestHasTombstoneChanged(t *testing.T) {
-	state := NewPartitionState("", true, 42)
+	state := NewPartitionState("", true, 42, false)
 	require.False(t, state.HasTombstoneChanged(types.BuildTS(13, 0), types.BuildTS(15, 0)))
 
 	roid := func() objectio.ObjectStats {
@@ -131,7 +131,7 @@ func TestHasTombstoneChanged(t *testing.T) {
 
 func TestScanRows(t *testing.T) {
 	packer := types.NewPacker()
-	state := NewPartitionState("", true, 42)
+	state := NewPartitionState("", true, 42, false)
 	for i := uint32(0); i < 10; i++ {
 		rid := types.BuildTestRowid(rand.Int63(), rand.Int63())
 		state.rows.Set(&RowEntry{
