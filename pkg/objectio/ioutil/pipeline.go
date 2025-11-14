@@ -348,6 +348,8 @@ func (p *IoPipeline) Stop() {
 		p.fetch.scheduler.Stop()
 
 		p.waitQ.Stop()
+
+		p.pool.ReleaseTimeout(time.Second)
 	})
 }
 
