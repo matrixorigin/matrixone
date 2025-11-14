@@ -829,7 +829,7 @@ func getObjectsFromCheckpointEntries(
 	for _, reader := range readers {
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
-			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if obj.GetAppendable() {
 					if obj.CreateTime.GE(&start) {
 						if isTombstone {

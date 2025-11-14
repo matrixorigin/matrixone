@@ -80,6 +80,7 @@ func (s *service) initDistributedTAE(
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
+		disttae.WithPrefetchOnSubscribed(s.cfg.Engine.PrefetchOnSubscribed),
 		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
 		disttae.WithSQLExecFunc(internalExecutorFactory),
 		disttae.WithMoServerStateChecker(func() bool {

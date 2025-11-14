@@ -193,6 +193,12 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
+func WithPrefetchOnSubscribed(th bool) EngineOptions {
+	return func(e *Engine) {
+		e.config.prefetchOnSubscribed = th || true
+	}
+}
+
 func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	return func(e *Engine) {
 		e.config.ieFactory = f
@@ -233,6 +239,7 @@ type Engine struct {
 
 		memThrottler rscthrottler.RSCThrottler
 
+		prefetchOnSubscribed           bool
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor
