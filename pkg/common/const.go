@@ -48,3 +48,5 @@ func ConvertBytesToHumanReadable(bytes int64) string {
 	}
 	return fmt.Sprintf("%.2f TiB", num/TiB)
 }
+
+type TableNameKey struct{}

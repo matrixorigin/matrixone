@@ -298,11 +298,11 @@ func (e *Engine) init(ctx context.Context) error {
 
 	{
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] =
-			logtailreplay.NewPartition(e.service, 1)
+			logtailreplay.NewPartition(e.service, 1, false)
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] =
-			logtailreplay.NewPartition(e.service, 2)
+			logtailreplay.NewPartition(e.service, 2, false)
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] =
-			logtailreplay.NewPartition(e.service, 3)
+			logtailreplay.NewPartition(e.service, 3, false)
 	}
 
 	err := initSysTable(
@@ -494,7 +494,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	}
 
 	//new snapshot partition and apply checkpoints into it.
-	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
+	snap := logtailreplay.NewPartition(e.service, tbl.tableId, e.config.prefetchOnSubscribed)
 	if tbl.tableId == catalog.MO_TABLES_ID ||
 		tbl.tableId == catalog.MO_DATABASE_ID ||
 		tbl.tableId == catalog.MO_COLUMNS_ID {
@@ -579,7 +579,7 @@ func (e *Engine) GetOrCreateLatestPart(
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition(e.service, tableId)
+		partition = logtailreplay.NewPartition(e.service, tableId, e.config.prefetchOnSubscribed)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition

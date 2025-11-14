@@ -168,6 +168,7 @@ func New(
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
 		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
+		zap.Bool("PrefetchOnSubscribed", e.config.prefetchOnSubscribed),
 	)
 
 	return e

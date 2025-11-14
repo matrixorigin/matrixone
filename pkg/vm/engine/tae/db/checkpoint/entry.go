@@ -476,6 +476,7 @@ func (e *CheckpointEntry) GetTableByID(
 		ctx,
 		func(
 			ctx context.Context,
+			fs fileservice.FileService,
 			obj objectio.ObjectEntry,
 			isTombstone bool,
 		) (err error) {

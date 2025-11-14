@@ -50,13 +50,14 @@ type TableInfo struct {
 func NewPartition(
 	service string,
 	id uint64,
+	prefetch bool,
 ) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
 	ret := &Partition{
 		lock: lock,
 	}
-	ret.state.Store(NewPartitionState(service, false, id))
+	ret.state.Store(NewPartitionState(service, false, id, prefetch))
 	return ret
 }
 
