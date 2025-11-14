@@ -1218,6 +1218,38 @@ func TestTableChangeStream_CommitFailureTriggersEnsureCleanup(t *testing.T) {
 	require.False(t, tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
 }
 
+func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
+	h := newTableStreamHarness(t)
+	defer h.Close()
+
+	beginErr := moerr.NewInternalError(h.Context(), "begin failure")
+	h.Sinker().setBeginError(beginErr)
+
+	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	ar := h.NewActiveRoutine()
+	err := h.RunStream(ar)
+
+	require.Error(t, err)
+	require.Equal(t, beginErr, err)
+	require.Equal(t, beginErr, h.Sinker().Error(), "sinker error should remain set after begin failure")
+	require.False(t, h.Stream().retryable, "begin failure should not mark stream retryable")
+
+	ops := h.Sinker().opsSnapshot()
+	require.Contains(t, ops, "begin", "Begin should be attempted even though it fails")
+	require.NotContains(t, ops, "commit", "Commit should not be attempted after begin failure")
+	require.NotContains(t, ops, "rollback", "Rollback should not occur when begin fails before start")
+
+	tracker := h.Stream().txnManager.GetTracker()
+	require.NotNil(t, tracker, "tracker should be created even if begin fails")
+	require.False(t, tracker.NeedsRollback(), "tracker should not require rollback when begin fails")
+	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
+}
+
 type noopTxnOperator struct {
 	meta      txnpb.TxnMeta
 	options   txnpb.TxnOptions
