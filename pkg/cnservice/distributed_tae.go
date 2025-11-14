@@ -79,8 +79,11 @@ func (s *service) initDistributedTAE(
 		s.cfg.LogtailUpdateWorkerFactor,
 
 		disttae.WithCNTransferTxnLifespanThreshold(
-			s.cfg.Engine.CNTransferTxnLifespanThreshold),
-		disttae.WithPrefetchOnSubscribed(s.cfg.Engine.PrefetchOnSubscribed),
+			s.cfg.Engine.CNTransferTxnLifespanThreshold,
+		),
+		disttae.WithPrefetchOnSubscribed(
+			s.cfg.Engine.PrefetchOnSubscribed,
+		),
 		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
 		disttae.WithSQLExecFunc(internalExecutorFactory),
 		disttae.WithMoServerStateChecker(func() bool {

@@ -408,7 +408,7 @@ func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request
 	if req.UnsubscribeTable == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
-	err := s.storeEngine.UnsubscribeTable(ctx, req.UnsubscribeTable.DatabaseID, req.UnsubscribeTable.TableID)
+	err := s.storeEngine.UnsubscribeTable(ctx, 0, req.UnsubscribeTable.DatabaseID, req.UnsubscribeTable.TableID)
 	if err != nil {
 		resp.WrapError(err)
 		return nil

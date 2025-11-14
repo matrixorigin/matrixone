@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	common2 "github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -530,17 +529,8 @@ func (r *reader) Read(
 
 	r.tryUpdateColumns(cols)
 
-	newCtx := ctx
-
-	if r.tableDef != nil {
-		newCtx = context.WithValue(
-			ctx, common2.TableNameKey{},
-			fmt.Sprintf("%s.%s", r.tableDef.DbName, r.tableDef.Name),
-		)
-	}
-
 	blkInfo, state, err := r.source.Next(
-		newCtx,
+		ctx,
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
