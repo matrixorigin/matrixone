@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
 	pathpkg "path"
@@ -27,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -470,6 +472,18 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+
+	readFrom := ""
+	tblName := ctx.Value(common.TableNameKey{})
+	defer func() {
+		if tblName != nil && strings.Contains(tblName.(string), "test") {
+			logutil.Info(fmt.Sprintf("Read From %v", readFrom),
+				zap.String("table-name", fmt.Sprintf("%v", tblName)),
+				zap.String("file-path", vector.FilePath),
+			)
+		}
+	}()
+
 	// Record S3 IO and netwokIO(un memory IO) time Consumption
 	stats := statistic.StatsInfoFromContext(ctx)
 	ioStart := time.Now()
@@ -503,6 +517,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			return err
 		}
 		if vector.allDone() {
+			readFrom = "Vector Caches"
 			return nil
 		}
 
@@ -530,6 +545,7 @@ read_memory_cache:
 			return err
 		}
 		if vector.allDone() {
+			readFrom = "Memory Cache"
 			return nil
 		}
 
@@ -557,6 +573,7 @@ read_disk_cache:
 			return err
 		}
 		if vector.allDone() {
+			readFrom = "Disk Cache"
 			return nil
 		}
 
@@ -586,6 +603,7 @@ read_disk_cache:
 			return err
 		}
 		if vector.allDone() {
+			readFrom = "Remote Cache"
 			return nil
 		}
 	}
@@ -613,6 +631,11 @@ read_disk_cache:
 				goto read_disk_cache
 			}
 		}
+	}
+
+	readFrom = "S3"
+	if tblName != nil && strings.Contains(tblName.(string), "test") {
+		time.Sleep(time.Second * 5)
 	}
 
 	if err := s.read(ctx, vector); err != nil {

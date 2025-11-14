@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
 
 	"github.com/tidwall/btree"
@@ -49,7 +50,8 @@ const (
 )
 
 type PartitionState struct {
-	service string
+	service         string
+	prefetchObjects bool
 
 	// also modify the Copy method if adding fields
 	tid uint64
@@ -128,15 +130,24 @@ func (p *PartitionState) String() string {
 	return p.Desc(false)
 }
 
-func (p *PartitionState) HandleObjectEntry(ctx context.Context, objectEntry objectio.ObjectEntry, isTombstone bool) (err error) {
+func (p *PartitionState) HandleObjectEntry(
+	ctx context.Context,
+	fs fileservice.FileService,
+	objectEntry objectio.ObjectEntry,
+	isTombstone bool,
+) (err error) {
 	if isTombstone {
-		return p.handleTombstoneObjectEntry(ctx, objectEntry)
+		return p.handleTombstoneObjectEntry(ctx, fs, objectEntry)
 	} else {
-		return p.handleDataObjectEntry(ctx, objectEntry)
+		return p.handleDataObjectEntry(ctx, fs, objectEntry)
 	}
 }
 
-func (p *PartitionState) handleDataObjectEntry(ctx context.Context, objEntry objectio.ObjectEntry) (err error) {
+func (p *PartitionState) handleDataObjectEntry(
+	ctx context.Context,
+	fs fileservice.FileService,
+	objEntry objectio.ObjectEntry,
+) (err error) {
 	commitTS := objEntry.CreateTime
 	if !objEntry.DeleteTime.IsEmpty() {
 		commitTS = objEntry.DeleteTime
@@ -255,9 +266,17 @@ func (p *PartitionState) handleDataObjectEntry(ctx context.Context, objEntry obj
 		})
 	}
 
+	if p.prefetchObjects {
+		ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
+	}
+
 	return
 }
-func (p *PartitionState) handleTombstoneObjectEntry(ctx context.Context, objEntry objectio.ObjectEntry) (err error) {
+func (p *PartitionState) handleTombstoneObjectEntry(
+	ctx context.Context,
+	fs fileservice.FileService,
+	objEntry objectio.ObjectEntry,
+) (err error) {
 	commitTS := objEntry.CreateTime
 	if !objEntry.DeleteTime.IsEmpty() {
 		commitTS = objEntry.DeleteTime
@@ -337,6 +356,10 @@ func (p *PartitionState) handleTombstoneObjectEntry(ctx context.Context, objEntr
 				Time:       deletedRow.Time,
 			})
 		}
+	}
+
+	if p.prefetchObjects {
+		ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -535,6 +558,10 @@ func (p *PartitionState) HandleDataObjectList(
 			//	p.dirtyBlocks.Delete(*blkID)
 			//}
 		}
+
+		if p.prefetchObjects {
+			ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
+		}
 	}
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
@@ -648,6 +675,10 @@ func (p *PartitionState) HandleTombstoneObjectList(
 					Time:       deletedRow.Time,
 				})
 			}
+		}
+
+		if p.prefetchObjects {
+			ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
 		}
 	}
 
@@ -842,6 +873,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		lastFlushTimestamp:        p.lastFlushTimestamp,
 		start:                     p.start,
 		end:                       p.end,
+		prefetchObjects:           p.prefetchObjects,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -884,11 +916,13 @@ func NewPartitionState(
 	service string,
 	noData bool,
 	tid uint64,
+	prefetch bool,
 ) *PartitionState {
 	opts := btree.Options{
 		Degree:  32, // may good for heap alloc
 		NoLocks: true,
 	}
+
 	ps := &PartitionState{
 		service:                   service,
 		tid:                       tid,
@@ -902,6 +936,7 @@ func NewPartitionState(
 		tombstoneObjectDTSIndex:   btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectDTSIndexLess, opts),
 		shared:                    new(sharedStates),
 		start:                     types.MaxTs(),
+		prefetchObjects:           prefetch,
 	}
 	logutil.Info(
 		"PS-CREATED",
