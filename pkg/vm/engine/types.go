@@ -1288,7 +1288,7 @@ func SetPrefetchOnSubscribed(patterns []string) error {
 	for _, pattern := range patterns {
 		r, err := regexp.Compile(pattern)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtxf("compile pattern %q: %w", pattern, err)
+			return moerr.NewInternalErrorNoCtxf("compile pattern %q: %v", pattern, err)
 		}
 		regexps = append(regexps, r)
 	}
