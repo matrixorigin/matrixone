@@ -1824,31 +1824,31 @@ func (m *MockLogtailEngine) EXPECT() *MockLogtailEngineMockRecorder {
 }
 
 // TryToSubscribeTable mocks base method.
-func (m *MockLogtailEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64, arg3, arg4 string) error {
+func (m *MockLogtailEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2, arg3 uint64, arg4, arg5 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2, arg3, arg4)
+	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2, arg3, arg4, arg5)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // TryToSubscribeTable indicates an expected call of TryToSubscribeTable.
-func (mr *MockLogtailEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+func (mr *MockLogtailEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockLogtailEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2, arg3, arg4)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockLogtailEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
 // UnsubscribeTable mocks base method.
-func (m *MockLogtailEngine) UnsubscribeTable(arg0 context.Context, arg1, arg2 uint64) error {
+func (m *MockLogtailEngine) UnsubscribeTable(arg0 context.Context, arg1, arg2, arg3 uint64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnsubscribeTable", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "UnsubscribeTable", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UnsubscribeTable indicates an expected call of UnsubscribeTable.
-func (mr *MockLogtailEngineMockRecorder) UnsubscribeTable(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockLogtailEngineMockRecorder) UnsubscribeTable(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnsubscribeTable", reflect.TypeOf((*MockLogtailEngine)(nil).UnsubscribeTable), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnsubscribeTable", reflect.TypeOf((*MockLogtailEngine)(nil).UnsubscribeTable), arg0, arg1, arg2, arg3)
 }
 
 // MockEngine is a mock of Engine interface.
@@ -2122,31 +2122,31 @@ func (mr *MockEngineMockRecorder) Stats(ctx, key, sync interface{}) *gomock.Call
 }
 
 // TryToSubscribeTable mocks base method.
-func (m *MockEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64, arg3, arg4 string) error {
+func (m *MockEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2, arg3 uint64, arg4, arg5 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2, arg3, arg4)
+	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2, arg3, arg4, arg5)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // TryToSubscribeTable indicates an expected call of TryToSubscribeTable.
-func (mr *MockEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2, arg3, arg4)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
 // UnsubscribeTable mocks base method.
-func (m *MockEngine) UnsubscribeTable(arg0 context.Context, arg1, arg2 uint64) error {
+func (m *MockEngine) UnsubscribeTable(arg0 context.Context, arg1, arg2, arg3 uint64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnsubscribeTable", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "UnsubscribeTable", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UnsubscribeTable indicates an expected call of UnsubscribeTable.
-func (mr *MockEngineMockRecorder) UnsubscribeTable(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) UnsubscribeTable(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnsubscribeTable", reflect.TypeOf((*MockEngine)(nil).UnsubscribeTable), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnsubscribeTable", reflect.TypeOf((*MockEngine)(nil).UnsubscribeTable), arg0, arg1, arg2, arg3)
 }
 
 // MockVectorPool is a mock of VectorPool interface.
