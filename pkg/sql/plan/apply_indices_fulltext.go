@@ -71,11 +71,16 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		sortNode.Children[0] = idxID
 
 	} else {
+
 		// create sort node with order by score DESC
 
 		var orderByScore []*OrderBySpec
 		for _, id := range filter_node_ids {
 			ftnode := builder.qry.Nodes[id]
+			if ftnode.Limit != nil {
+				// if pushdown limt, skip the sort node
+				continue
+			}
 			orderByScore = append(orderByScore, &OrderBySpec{
 				Expr: &Expr{
 					Typ: ftnode.TableDef.Cols[1].Typ, // score column
@@ -97,6 +102,11 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			}
 
 			ftnode := builder.qry.Nodes[id]
+			if ftnode.Limit != nil {
+				// if pushdown limt, skip the sort node
+				continue
+			}
+
 			orderByScore = append(orderByScore, &OrderBySpec{
 				Expr: &Expr{
 					Typ: ftnode.TableDef.Cols[1].Typ, // score column
@@ -111,19 +121,23 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			})
 		}
 
-		sortByID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_SORT,
-			Children: []int32{idxID},
-			OrderBy:  orderByScore,
-			Limit:    DeepCopyExpr(scanNode.Limit),
-			Offset:   DeepCopyExpr(scanNode.Offset),
-		}, ctx)
+		if len(orderByScore) == 0 {
+			projNode.Children[0] = idxID
+		} else {
+			sortByID := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_SORT,
+				Children: []int32{idxID},
+				OrderBy:  orderByScore,
+				Limit:    DeepCopyExpr(scanNode.Limit),
+				Offset:   DeepCopyExpr(scanNode.Offset),
+			}, ctx)
 
-		// move scanNode.Limit to sortNode
-		scanNode.Limit = nil
-		scanNode.Offset = nil
+			// move scanNode.Limit to sortNode
+			scanNode.Limit = nil
+			scanNode.Offset = nil
 
-		projNode.Children[0] = sortByID
+			projNode.Children[0] = sortByID
+		}
 	}
 
 	// replace the project with ColRef
@@ -202,6 +216,12 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := len(filterids) - 1; i >= 0; i-- {
 		ftid := filterids[i]
 		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
+	}
+
+	// apply pushdown limit when no filter
+	var limitExpr *plan.Expr
+	if len(scanNode.FilterList) == 0 && scanNode.Limit != nil {
+		limitExpr = scanNode.Limit
 	}
 
 	indexDefs = append(indexDefs, filter_indexDefs...)
@@ -302,6 +322,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 					ColPos: 0,               // idxTbl.pk
 				},
 			},
+		}
+
+		// pushdown limit
+		if limitExpr != nil {
+			curr_ftnode.Limit = DeepCopyExpr(limitExpr)
 		}
 
 		// change doc_id type to the primary type here
