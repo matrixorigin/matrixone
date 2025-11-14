@@ -416,4 +416,3 @@ func TestGreatest(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
-
