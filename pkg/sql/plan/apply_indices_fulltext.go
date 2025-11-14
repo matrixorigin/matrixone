@@ -123,6 +123,10 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 		if len(orderByScore) == 0 {
 			projNode.Children[0] = idxID
+
+			// remove scanNode.Limit
+			scanNode.Limit = nil
+			scanNode.Offset = nil
 		} else {
 			sortByID := builder.appendNode(&plan.Node{
 				NodeType: plan.Node_SORT,
