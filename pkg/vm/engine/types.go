@@ -1114,9 +1114,9 @@ type Database interface {
 
 type LogtailEngine interface {
 	// TryToSubscribeTable tries to subscribe a table.
-	TryToSubscribeTable(context.Context, uint64, uint64, string, string) error
+	TryToSubscribeTable(context.Context, uint64, uint64, uint64, string, string) error
 	// UnsubscribeTable unsubscribes a table from logtail client.
-	UnsubscribeTable(context.Context, uint64, uint64) error
+	UnsubscribeTable(context.Context, uint64, uint64, uint64) error
 }
 
 type Engine interface {

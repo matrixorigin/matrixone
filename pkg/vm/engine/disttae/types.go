@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync"
@@ -193,9 +194,19 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
-func WithPrefetchOnSubscribed(th bool) EngineOptions {
+func WithPrefetchOnSubscribed(th []string) EngineOptions {
 	return func(e *Engine) {
-		e.config.prefetchOnSubscribed = th || true
+		for i := range th {
+			r, err := regexp.Compile(th[i])
+			if err != nil {
+				logutil.Error("Compile-PrefetchOnSubscribed",
+					zap.Error(err),
+					zap.String("input", th[i]),
+				)
+				continue
+			}
+			e.config.prefetchOnSubscribed = append(e.config.prefetchOnSubscribed, r)
+		}
 	}
 }
 
@@ -239,7 +250,7 @@ type Engine struct {
 
 		memThrottler rscthrottler.RSCThrottler
 
-		prefetchOnSubscribed           bool
+		prefetchOnSubscribed           []*regexp.Regexp
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor

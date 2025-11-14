@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
 )
@@ -49,15 +51,33 @@ type TableInfo struct {
 
 func NewPartition(
 	service string,
-	id uint64,
-	prefetch bool,
+	cache *cache.CatalogCache,
+	accId uint64,
+	dbId uint64,
+	tblId uint64,
+	prefetchConfig []*regexp.Regexp,
 ) *Partition {
+
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
 	ret := &Partition{
 		lock: lock,
 	}
-	ret.state.Store(NewPartitionState(service, false, id, prefetch))
+
+	prefetch := false
+	if cache != nil && len(prefetchConfig) > 0 {
+		if item := cache.GetTableById(uint32(accId), dbId, tblId); item != nil {
+			name := fmt.Sprintf("%v.%v", item.DatabaseName, item.Name)
+			for i := range prefetchConfig {
+				if prefetchConfig[i].MatchString(name) {
+					prefetch = true
+					fmt.Println("AAA", name)
+				}
+			}
+		}
+	}
+
+	ret.state.Store(NewPartitionState(service, false, tblId, prefetch))
 	return ret
 }
 
