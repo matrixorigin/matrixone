@@ -7152,7 +7152,7 @@ func TestSnapshotGC(t *testing.T) {
 		assert.NoError(t, err)
 		reader.ConsumeCheckpointWithTableID(
 			ctx,
-			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if isTombstone {
 					tombstones[obj.ObjectName().String()] = struct{}{}
 				} else {
@@ -9702,7 +9702,7 @@ func TestSnapshotCheckpoint(t *testing.T) {
 				assert.NoError(t, err)
 				reader.ConsumeCheckpointWithTableID(
 					ctx,
-					func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+					func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 						if isTombstone {
 							tombstones[obj.ObjectName().String()] = struct{}{}
 						} else {
@@ -11592,7 +11592,7 @@ func TestCheckpointV2(t *testing.T) {
 	err = reader.ConsumeCheckpointWithTableID(
 		ctx,
 		func(
-			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
+			ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool,
 		) (err error) {
 			if isTombstone {
 				tombstoneCnt3++
@@ -11738,7 +11738,7 @@ func TestCheckpointCompatibility(t *testing.T) {
 	err = reader.ConsumeCheckpointWithTableID(
 		ctx,
 		func(
-			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
+			ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool,
 		) (err error) {
 			objCount++
 			return nil
