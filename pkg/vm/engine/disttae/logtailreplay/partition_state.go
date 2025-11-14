@@ -50,8 +50,8 @@ const (
 )
 
 type PartitionState struct {
-	service         string
-	prefetchObjects bool
+	service  string
+	prefetch bool
 
 	// also modify the Copy method if adding fields
 	tid uint64
@@ -266,9 +266,7 @@ func (p *PartitionState) handleDataObjectEntry(
 		})
 	}
 
-	if p.prefetchObjects {
-		ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
-	}
+	p.prefetchObject(fs, objEntry)
 
 	return
 }
@@ -358,9 +356,7 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 		}
 	}
 
-	if p.prefetchObjects {
-		ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
-	}
+	p.prefetchObject(fs, objEntry)
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
@@ -559,13 +555,17 @@ func (p *PartitionState) HandleDataObjectList(
 			//}
 		}
 
-		if p.prefetchObjects {
-			ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
-		}
+		p.prefetchObject(fs, objEntry)
 	}
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
 	})
+}
+
+func (p *PartitionState) prefetchObject(fs fileservice.FileService, obj objectio.ObjectEntry) {
+	if p.prefetch && fs != nil {
+		ioutil.Prefetch(p.service, fs, obj.BlockLocation(uint16(0), objectio.BlockMaxRows))
+	}
 }
 
 func (p *PartitionState) HandleTombstoneObjectList(
@@ -677,9 +677,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			}
 		}
 
-		if p.prefetchObjects {
-			ioutil.Prefetch(p.service, fs, objEntry.BlockLocation(uint16(0), objectio.BlockMaxRows))
-		}
+		p.prefetchObject(fs, objEntry)
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -873,7 +871,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		lastFlushTimestamp:        p.lastFlushTimestamp,
 		start:                     p.start,
 		end:                       p.end,
-		prefetchObjects:           p.prefetchObjects,
+		prefetch:                  p.prefetch,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -936,7 +934,7 @@ func NewPartitionState(
 		tombstoneObjectDTSIndex:   btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectDTSIndexLess, opts),
 		shared:                    new(sharedStates),
 		start:                     types.MaxTs(),
-		prefetchObjects:           prefetch,
+		prefetch:                  prefetch,
 	}
 	logutil.Info(
 		"PS-CREATED",
