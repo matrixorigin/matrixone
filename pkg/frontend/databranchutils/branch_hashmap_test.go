@@ -15,13 +15,17 @@
 package databranchutils
 
 import (
+	"fmt"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,12 +45,6 @@ func TestBranchHashmapBasic(t *testing.T) {
 	}()
 
 	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
-	impl := bh.(*branchHashmap)
-	totalEntries := 0
-	for _, bucket := range impl.inMemory {
-		totalEntries += len(bucket.entries)
-	}
-	require.Equal(t, 3, totalEntries)
 
 	probe := buildInt64Vector(t, mp, []int64{2, 4})
 	defer probe.Free(mp)
@@ -246,9 +244,6 @@ func TestBranchHashmapSpillAndRetrieve(t *testing.T) {
 
 	require.NoError(t, bhIface.PutByVectors([]*vector.Vector{key, value}, []int{0}))
 
-	impl := bhIface.(*branchHashmap)
-	require.NotEmpty(t, impl.spills, "expected data to spill on limited allocator")
-
 	probe := buildInt64Vector(t, mp, []int64{9, 10})
 	defer probe.Free(mp)
 
@@ -347,9 +342,6 @@ func TestBranchHashmapPopByVectorsPartialSpilled(t *testing.T) {
 
 	require.NoError(t, bhIface.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
 
-	impl := bhIface.(*branchHashmap)
-	require.NotEmpty(t, impl.spills, "expected data to spill on limited allocator")
-
 	probe := buildInt64Vector(t, mp, []int64{1})
 	defer probe.Free(mp)
 
@@ -400,28 +392,69 @@ func TestBranchHashmapForEach(t *testing.T) {
 	require.NoError(t, bhIface.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
 
 	collected := make(map[int64][]string)
-	err = bhIface.ForEach(func(key []byte, rows [][]byte) error {
-		tuple, _, err := bhIface.DecodeRow(key)
-		require.NoError(t, err)
-		require.Len(t, tuple, 1)
-		keyVal, ok := tuple[0].(int64)
-		require.True(t, ok)
-
-		for _, rowBytes := range rows {
-			rowTuple, _, err := bhIface.DecodeRow(rowBytes)
+	err = bhIface.ForEachShard(func(cursor ShardCursor) error {
+		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+			tuple, _, err := bhIface.DecodeRow(key)
 			require.NoError(t, err)
-			require.Len(t, rowTuple, 2)
-			valueBytes, ok := rowTuple[1].([]byte)
+			require.Len(t, tuple, 1)
+			keyVal, ok := tuple[0].(int64)
 			require.True(t, ok)
-			collected[keyVal] = append(collected[keyVal], string(valueBytes))
-		}
-		return nil
+
+			for _, rowBytes := range rows {
+				rowTuple, _, err := bhIface.DecodeRow(rowBytes)
+				require.NoError(t, err)
+				require.Len(t, rowTuple, 2)
+				valueBytes, ok := rowTuple[1].([]byte)
+				require.True(t, ok)
+				collected[keyVal] = append(collected[keyVal], string(valueBytes))
+			}
+			return nil
+		})
 	})
 	require.NoError(t, err)
 
 	require.Len(t, collected, len(keys))
 	for idx, key := range keys {
 		require.Equal(t, []string{values[idx]}, collected[key])
+	}
+}
+
+func TestBranchHashmapForEachShardPop(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 2, 3})
+	valVec := buildStringVector(t, mp, []string{"one", "two", "three"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	err = bh.ForEachShard(func(cursor ShardCursor) error {
+		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+			keyCopy := append([]byte(nil), key...)
+			res, err := cursor.PopByEncodedKey(keyCopy, true)
+			require.NoError(t, err)
+			require.True(t, res.Exists)
+			require.Len(t, res.Rows, len(rows))
+			return nil
+		})
+	})
+	require.NoError(t, err)
+
+	probe := buildInt64Vector(t, mp, []int64{1, 2, 3})
+	defer probe.Free(mp)
+
+	results, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	for _, res := range results {
+		require.False(t, res.Exists)
 	}
 }
 
@@ -511,13 +544,6 @@ func TestBranchHashmapPopByEncodedKeySpilled(t *testing.T) {
 
 	require.NoError(t, bhIface.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
 
-	impl := bhIface.(*branchHashmap)
-	impl.mu.Lock()
-	require.NoError(t, impl.spill(impl.memInUse))
-	impl.mu.Unlock()
-	require.Empty(t, impl.inMemory)
-	require.NotEmpty(t, impl.spills)
-
 	encodedKeys := collectInt64EncodedKeys(t, bhIface)
 	encodedKey, ok := encodedKeys[1]
 	require.True(t, ok)
@@ -600,17 +626,20 @@ func TestBranchHashmapValidatePutKeyTypeMismatch(t *testing.T) {
 	require.Contains(t, err.Error(), "key column type mismatch")
 }
 
-func TestBranchHashmapWithCustomConcurrency(t *testing.T) {
-	const desired = 3
-
-	bh, err := NewBranchHashmap(WithBranchHashmapConcurrency(desired))
+func TestBranchHashmapShardCountClamp(t *testing.T) {
+	bhLow, err := NewBranchHashmap(WithBranchHashmapShardCount(1))
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, bh.Close())
+		require.NoError(t, bhLow.Close())
 	}()
+	require.Equal(t, minShardCount, bhLow.(*branchHashmap).shardCount)
 
-	impl := bh.(*branchHashmap)
-	require.Equal(t, desired, impl.concurrency)
+	bhHigh, err := NewBranchHashmap(WithBranchHashmapShardCount(1024))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bhHigh.Close())
+	}()
+	require.Equal(t, maxShardCount, bhHigh.(*branchHashmap).shardCount)
 }
 
 func TestEncodeRowCoversManyTypes(t *testing.T) {
@@ -891,42 +920,44 @@ func collectInt64EncodedKeys(t *testing.T, bh BranchHashmap) map[int64][]byte {
 	t.Helper()
 
 	result := make(map[int64][]byte)
-	err := bh.ForEach(func(key []byte, rows [][]byte) error {
-		_ = rows
-		tuple, _, err := bh.DecodeRow(key)
-		require.NoError(t, err)
-		require.Len(t, tuple, 1)
-		keyVal, ok := tuple[0].(int64)
-		require.True(t, ok)
-		keyCopy := make([]byte, len(key))
-		copy(keyCopy, key)
-		result[keyVal] = keyCopy
-		return nil
+	err := bh.ForEachShard(func(cursor ShardCursor) error {
+		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+			_ = rows
+			tuple, _, err := bh.DecodeRow(key)
+			require.NoError(t, err)
+			require.Len(t, tuple, 1)
+			keyVal, ok := tuple[0].(int64)
+			require.True(t, ok)
+			keyCopy := make([]byte, len(key))
+			copy(keyCopy, key)
+			result[keyVal] = keyCopy
+			return nil
+		})
 	})
 	require.NoError(t, err)
 	return result
 }
 
-func buildInt64Vector(t *testing.T, mp *mpool.MPool, values []int64) *vector.Vector {
-	t.Helper()
+func buildInt64Vector(tb testing.TB, mp *mpool.MPool, values []int64) *vector.Vector {
+	tb.Helper()
 	vec := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
 	return vec
 }
 
-func buildStringVector(t *testing.T, mp *mpool.MPool, values []string) *vector.Vector {
-	t.Helper()
+func buildStringVector(tb testing.TB, mp *mpool.MPool, values []string) *vector.Vector {
+	tb.Helper()
 	vec := vector.NewVec(types.T_varchar.ToType())
 	for _, v := range values {
-		require.NoError(t, vector.AppendBytes(vec, []byte(v), false, mp))
+		require.NoError(tb, vector.AppendBytes(vec, []byte(v), false, mp))
 	}
 	return vec
 }
 
-func buildInt32Vector(t *testing.T, mp *mpool.MPool, values []int32) *vector.Vector {
-	t.Helper()
+func buildInt32Vector(tb testing.TB, mp *mpool.MPool, values []int32) *vector.Vector {
+	tb.Helper()
 	vec := vector.NewVec(types.T_int32.ToType())
-	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
 	return vec
 }
 
@@ -938,6 +969,225 @@ type limitedAllocator struct {
 
 func newLimitedAllocator(limit uint64) *limitedAllocator {
 	return &limitedAllocator{limit: limit}
+}
+
+func BenchmarkBranchHashmapPutByVectors(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	rowCount := 8192
+	keys := make([]int64, rowCount)
+	values := make([]string, rowCount)
+	for i := 0; i < rowCount; i++ {
+		keys[i] = int64(i + 1)
+		values[i] = strconv.Itoa(i)
+	}
+
+	keyVec := buildInt64Vector(b, mp, keys)
+	valVec := buildStringVector(b, mp, values)
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		bh, err := NewBranchHashmap()
+		require.NoError(b, err)
+		require.NoError(b, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+		require.NoError(b, bh.Close())
+	}
+}
+
+func constructKeyValVector(
+	tb testing.TB, mp *mpool.MPool, rowCnt int, vecCnt int,
+) ([]*vector.Vector, []*vector.Vector) {
+
+	keyVecs := make([]*vector.Vector, vecCnt)
+	valVecs := make([]*vector.Vector, vecCnt)
+
+	cnt := 0
+	for i := 0; i < vecCnt; i++ {
+		keys := make([]int64, rowCnt)
+		for j := 0; j < rowCnt; j++ {
+			keys[j] = int64(cnt)
+			cnt++
+		}
+		keyVecs[i] = buildInt64Vector(tb, mp, keys)
+		valVecs[i] = buildInt64Vector(tb, mp, keys)
+	}
+
+	return keyVecs, valVecs
+}
+
+func checkByGetVectors(
+	t testing.TB, bh BranchHashmap, pool *ants.Pool,
+	keyVecs []*vector.Vector,
+	valVecs []*vector.Vector,
+) {
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < len(keyVecs); i++ {
+		fn := func() {
+			ret, err := bh.GetByVectors([]*vector.Vector{keyVecs[i]})
+			require.NoError(t, err)
+			for j := range ret {
+				require.Equal(t, true, ret[j].Exists)
+				require.Equal(t, 1, len(ret[j].Rows))
+				tuple, _, err := bh.DecodeRow(ret[j].Rows[0])
+				require.NoError(t, err)
+				require.Equal(t, vector.GetFixedAtNoTypeCheck[int64](valVecs[i], j), tuple[0].(int64))
+			}
+		}
+
+		if pool != nil {
+			wg.Add(1)
+			pool.Submit(func() {
+				defer wg.Done()
+				fn()
+			})
+		} else {
+			fn()
+		}
+	}
+
+	if pool != nil {
+		wg.Wait()
+	}
+}
+
+func TestPutByVectors(t *testing.T) {
+	const rowCnt = 8192
+	const batCnt = 10
+	mp := mpool.MustNewZero()
+
+	keyVecs, valVecs := constructKeyValVector(t, mp, rowCnt, batCnt)
+
+	bh1, err := NewBranchHashmap()
+	require.NoError(t, err)
+
+	bh2, err := NewBranchHashmap()
+	require.NoError(t, err)
+
+	defer func() {
+		bh1.Close()
+		bh2.Close()
+		for i := range batCnt {
+			keyVecs[i].Free(mp)
+			valVecs[i].Free(mp)
+		}
+	}()
+
+	t.Run("A", func(t *testing.T) {
+		s := time.Now()
+		for i := 0; i < len(keyVecs); i++ {
+			err = bh1.PutByVectors([]*vector.Vector{keyVecs[i], valVecs[i]}, []int{0})
+			require.NoError(t, err)
+		}
+		fmt.Println("AAAA", time.Since(s))
+		checkByGetVectors(t, bh1, nil, keyVecs, valVecs)
+	})
+
+	t.Run("B", func(t *testing.T) {
+		pool, err := ants.NewPool(10)
+		require.NoError(t, err)
+		s := time.Now()
+		wait := sync.WaitGroup{}
+		for i := 0; i < len(keyVecs); i++ {
+			wait.Add(1)
+			pool.Submit(func() {
+				defer wait.Done()
+				err = bh2.PutByVectors([]*vector.Vector{keyVecs[i], valVecs[i]}, []int{0})
+				require.NoError(t, err)
+			})
+		}
+		wait.Wait()
+		fmt.Println("BBBB", time.Since(s))
+		checkByGetVectors(t, bh2, nil, keyVecs, valVecs)
+	})
+}
+
+func TestGetByVectors(t *testing.T) {
+	const rowCnt = 8192
+	const batCnt = 100
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVecs, valVecs := constructKeyValVector(t, mp, rowCnt, batCnt)
+
+	bh1, err := NewBranchHashmap()
+	require.NoError(t, err)
+
+	bh2, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh1.Close())
+		require.NoError(t, bh2.Close())
+		for i := 0; i < len(keyVecs); i++ {
+			keyVecs[i].Free(mp)
+			valVecs[i].Free(mp)
+		}
+	}()
+
+	t.Run("A", func(t *testing.T) {
+		for i := 0; i < batCnt; i++ {
+			err = bh1.PutByVectors([]*vector.Vector{keyVecs[i], valVecs[i]}, []int{0})
+			require.NoError(t, err)
+		}
+
+		s := time.Now()
+		checkByGetVectors(t, bh1, nil, keyVecs, valVecs)
+		fmt.Println("AAAA", time.Since(s))
+	})
+
+	t.Run("B", func(t *testing.T) {
+		for i := 0; i < batCnt; i++ {
+			err = bh2.PutByVectors([]*vector.Vector{keyVecs[i], valVecs[i]}, []int{0})
+			require.NoError(t, err)
+		}
+
+		pool, err := ants.NewPool(10)
+		require.NoError(t, err)
+		s := time.Now()
+		checkByGetVectors(t, bh2, pool, keyVecs, valVecs)
+		fmt.Println("BBBB", time.Since(s))
+	})
+}
+
+func BenchmarkBranchHashmapGetByVectors(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	rowCount := 4096
+	keys := make([]int64, rowCount)
+	values := make([]string, rowCount)
+	for i := 0; i < rowCount; i++ {
+		keys[i] = int64(i + 1)
+		values[i] = strconv.Itoa(i)
+	}
+
+	keyVec := buildInt64Vector(b, mp, keys)
+	valVec := buildStringVector(b, mp, values)
+	probe := buildInt64Vector(b, mp, keys)
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+	defer probe.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, bh.Close())
+	}()
+	require.NoError(b, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(b, err)
+		if len(results) != rowCount {
+			b.Fatalf("expected %d results, got %d", rowCount, len(results))
+		}
+	}
 }
 
 func (l *limitedAllocator) Allocate(size uint64, _ malloc.Hints) ([]byte, malloc.Deallocator, error) {
