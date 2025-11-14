@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
+	"github.com/panjf2000/ants/v2"
 )
 
 var (
@@ -270,6 +271,8 @@ type IoPipeline struct {
 		prefetchDropStats stats.Counter
 	}
 	printer *stopper.Stopper
+
+	pool *ants.Pool
 }
 
 func NewIOPipeline(
@@ -300,6 +303,8 @@ func NewIOPipeline(
 	p.prefetchFunc = noopPrefetch
 
 	p.printer = stopper.NewStopper("IOPrinter")
+
+	p.pool, _ = ants.NewPool(p.options.fetchParallism)
 	return p
 }
 
@@ -459,11 +464,17 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 			p.schedulerPrefetch(job)
 		}
 	}
+
 	if len(metaProcesses) > 0 {
-		go schedulerJobs(metaProcesses, prefetchMetaJob)
+		p.pool.Submit(func() {
+			schedulerJobs(metaProcesses, prefetchMetaJob)
+		})
 	}
+
 	if len(filesProcesses) > 0 {
-		go schedulerJobs(filesProcesses, prefetchJob)
+		p.pool.Submit(func() {
+			schedulerJobs(filesProcesses, prefetchJob)
+		})
 	}
 }
 

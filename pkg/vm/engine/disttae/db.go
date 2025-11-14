@@ -298,11 +298,11 @@ func (e *Engine) init(ctx context.Context) error {
 
 	{
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] =
-			logtailreplay.NewPartition(e.service, 1, false)
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 1, nil)
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] =
-			logtailreplay.NewPartition(e.service, 2, false)
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 2, nil)
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] =
-			logtailreplay.NewPartition(e.service, 3, false)
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 3, nil)
 	}
 
 	err := initSysTable(
@@ -494,7 +494,11 @@ func (e *Engine) getOrCreateSnapPartBy(
 	}
 
 	//new snapshot partition and apply checkpoints into it.
-	snap := logtailreplay.NewPartition(e.service, tbl.tableId, e.config.prefetchOnSubscribed)
+	snap := logtailreplay.NewPartition(
+		e.service, e.GetLatestCatalogCache(),
+		uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId,
+		e.config.prefetchOnSubscribed,
+	)
 	if tbl.tableId == catalog.MO_TABLES_ID ||
 		tbl.tableId == catalog.MO_DATABASE_ID ||
 		tbl.tableId == catalog.MO_COLUMNS_ID {
@@ -573,13 +577,21 @@ func (e *Engine) getOrCreateSnapPartBy(
 }
 
 func (e *Engine) GetOrCreateLatestPart(
+	ctx context.Context,
+	accId uint64,
 	databaseId,
-	tableId uint64) *logtailreplay.Partition {
+	tableId uint64,
+) *logtailreplay.Partition {
+
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition(e.service, tableId, e.config.prefetchOnSubscribed)
+		partition = logtailreplay.NewPartition(
+			e.service, e.GetLatestCatalogCache(),
+			accId, databaseId, tableId,
+			e.config.prefetchOnSubscribed,
+		)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition
@@ -587,12 +599,13 @@ func (e *Engine) GetOrCreateLatestPart(
 
 func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
+	accId uint64,
 	tableID uint64,
 	tableName string,
 	dbID uint64,
 	dbName string) (*logtailreplay.Partition, error) {
 
-	part := e.GetOrCreateLatestPart(dbID, tableID)
+	part := e.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
