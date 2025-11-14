@@ -780,10 +780,12 @@ greatest(3, 2, 1)
 select least(3, 2, 1);
 least(3, 2, 1)
 1
-select greatest(i, j, k), least(i, j, k) from order by least(i, j, k) limit 2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " order by least(i, j, k) limit 2;";
-select greatest(i, j, t), least(i, j, t) from order by greatest(i, j, k) limit 2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " order by greatest(i, j, k) limit 2;";
+select greatest(i, j, k), least(i, j, k) from testt order by least(i, j, k) limit 2;
+greatest(i, j, k)    least(i, j, k)
+8    0
+15    0
+select greatest(i, j, t), least(i, j, t) from testt order by greatest(i, j, k) limit 2;
+invalid argument function greatest, bad value [INT INT VARCHAR]
 select max(greatest(d1, d2)), max(least(d1, d2)) from testt;
 max(greatest(d1, d2))    max(least(d1, d2))
 103.14    102.72
