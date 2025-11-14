@@ -498,4 +498,17 @@ select trim(null from b) from t1;
 select trim('a' from null) from t1;
 select trim(null from null) from t1;
 drop table t1;
+
+create table testt(i int, j int, k int, d1 decimal(10, 2), d2 decimal(10, 2), ts1 timestamp, ts2 timestamp, t varchar(100));
+insert into testt select result, result % 7, result + 1, result + 3.14, result + 2.72, current_timestamp, current_timestamp, 'foo' || result from generate_series(1, 100) tmpt;
+select greatest(1, 2, 3);
+select least(1, 2, 3);
+select greatest(3, 2, 1);
+select least(3, 2, 1);
+select greatest(i, j, k), least(i, j, k) from order by least(i, j, k) limit 2;
+select greatest(i, j, t), least(i, j, t) from order by greatest(i, j, k) limit 2;
+select max(greatest(d1, d2)), max(least(d1, d2)) from testt;
+select count(*) from testt where greatest(ts1, ts2) = least(ts1, ts3);
+drop table testt;
+
 drop database test01;
