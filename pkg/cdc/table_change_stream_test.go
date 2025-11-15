@@ -1458,6 +1458,77 @@ func TestTableChangeStream_EnsureCleanup_GetFromCacheFails(t *testing.T) {
 	require.False(t, tracker.NeedsRollback(), "tracker should be clean after rollback")
 }
 
+func TestTableChangeStream_RollbackFailure(t *testing.T) {
+	h := newTableStreamHarness(t)
+	defer h.Close()
+
+	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
+	rollbackErr := moerr.NewInternalError(h.Context(), "rollback failure")
+	h.Sinker().setCommitError(commitErr)
+	h.Sinker().setRollbackError(rollbackErr)
+
+	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(200, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+	defer done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("table change stream run did not complete")
+	}
+
+	require.Error(t, runErr)
+	require.Equal(t, commitErr, runErr, "original commit error should propagate even if rollback fails")
+	require.False(t, h.Stream().retryable, "rollback failure should not mark stream retryable")
+
+	var ops []string
+	require.Eventually(t, func() bool {
+		ops = h.Sinker().opsSnapshot()
+		hasBegin := false
+		hasCommit := false
+		hasClear := false
+		hasRollback := false
+		hasDummy := false
+		for _, op := range ops {
+			switch op {
+			case "begin":
+				hasBegin = true
+			case "commit":
+				hasCommit = true
+			case "clear":
+				hasClear = true
+			case "rollback":
+				hasRollback = true
+			case "dummy":
+				hasDummy = true
+			}
+		}
+		return hasBegin && hasCommit && hasClear && hasRollback && hasDummy
+	}, time.Second, 10*time.Millisecond, "EnsureCleanup should attempt rollback even if it fails")
+
+	require.Equal(t, rollbackErr, h.Sinker().Error(), "sinker should retain rollback error for inspection")
+
+	rollbackCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+	require.Equal(t, 1, rollbackCount, "rollback should still be invoked exactly once")
+
+	tracker := h.Stream().txnManager.GetTracker()
+	require.NotNil(t, tracker)
+	require.False(t, tracker.NeedsRollback(), "tracker should consider rollback done even if sinker failed")
+	require.True(t, tracker.IsCompleted(), "tracker should mark transaction as completed after rollback attempt")
+}
+
 type noopTxnOperator struct {
 	meta      txnpb.TxnMeta
 	options   txnpb.TxnOptions

@@ -125,6 +125,12 @@ func (s *recordingSinker) setCommitError(err error) {
 	s.mu.Unlock()
 }
 
+func (s *recordingSinker) setRollbackError(err error) {
+	s.mu.Lock()
+	s.rollbackErr = err
+	s.mu.Unlock()
+}
+
 func (s *recordingSinker) setBeginError(err error) {
 	s.mu.Lock()
 	s.beginErr = err
