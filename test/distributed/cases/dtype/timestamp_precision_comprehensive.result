@@ -1,0 +1,191 @@
+SET time_zone = '+00:00';
+DROP DATABASE IF EXISTS test_timestamp_precision;
+CREATE DATABASE test_timestamp_precision;
+USE test_timestamp_precision;
+DROP TABLE IF EXISTS t_timestamp_update;
+CREATE TABLE t_timestamp_update (
+id INT PRIMARY KEY,
+ts0 TIMESTAMP(0),
+ts3 TIMESTAMP(3),
+ts6 TIMESTAMP(6)
+);
+INSERT INTO t_timestamp_update VALUES (1, '2024-01-15 12:00:00', '2024-01-15 12:00:00.000', '2024-01-15 12:00:00.000000');
+UPDATE t_timestamp_update SET ts0 = '2024-01-15 12:34:56.789012' WHERE id = 1;
+UPDATE t_timestamp_update SET ts3 = '2024-01-15 12:34:56.789012' WHERE id = 1;
+UPDATE t_timestamp_update SET ts6 = '2024-01-15 12:34:56.789012' WHERE id = 1;
+SELECT id, ts0, ts3, ts6,
+EXTRACT(MICROSECOND FROM ts0) AS ts0_micro,
+EXTRACT(MICROSECOND FROM ts3) AS ts3_micro,
+EXTRACT(MICROSECOND FROM ts6) AS ts6_micro
+FROM t_timestamp_update;
+id    ts0    ts3    ts6    ts0_micro    ts3_micro    ts6_micro
+1    2024-01-15 12:34:57    2024-01-15 12:34:56.789000000    2024-01-15 12:34:56.789012000    0    789000    789012
+DROP TABLE t_timestamp_update;
+SELECT TIMESTAMPDIFF(MICROSECOND,
+CAST('2024-01-15 10:20:30.123456' AS TIMESTAMP(0)),
+CAST('2024-01-15 10:20:31.789012' AS TIMESTAMP(0))) AS diff_micro_scale0;
+diff_micro_scale0
+2000000
+SELECT TIMESTAMPDIFF(MICROSECOND,
+CAST('2024-01-15 10:20:30.123456' AS TIMESTAMP(6)),
+CAST('2024-01-15 10:20:31.789012' AS TIMESTAMP(6))) AS diff_micro_scale6;
+diff_micro_scale6
+1665556
+SELECT TIMESTAMPDIFF(SECOND,
+CAST('2024-01-15 10:20:30.999999' AS TIMESTAMP(0)),
+CAST('2024-01-15 10:20:32.100000' AS TIMESTAMP(0))) AS diff_sec;
+diff_sec
+1
+SELECT FROM_UNIXTIME(1705319696) AS ts_from_int,
+EXTRACT(MICROSECOND FROM FROM_UNIXTIME(1705319696)) AS microseconds;
+ts_from_int    microseconds
+2024-01-15 11:54:56    0
+SELECT FROM_UNIXTIME(1705319696.123456) AS ts_from_decimal,
+EXTRACT(MICROSECOND FROM FROM_UNIXTIME(1705319696.123456)) AS microseconds;
+ts_from_decimal    microseconds
+2024-01-15 11:54:56.123456000    123456
+SELECT UNIX_TIMESTAMP('2024-01-15 12:34:56.123456') AS unix_ts;
+unix_ts
+1705322096.123456
+SELECT UNIX_TIMESTAMP('2024-01-15 12:34:56.000000') AS unix_ts_0,
+UNIX_TIMESTAMP('2024-01-15 12:34:56.500000') AS unix_ts_500000;
+unix_ts_0    unix_ts_500000
+1705322096.000000    1705322096.500000
+SELECT CAST(CAST('2024-01-15 12:34:56.999999' AS TIMESTAMP(6)) AS DATETIME(0)) AS ts6_to_dt0;
+ts6_to_dt0
+2024-01-15 12:34:57
+SELECT CAST(CAST('2024-01-15 12:34:56' AS TIMESTAMP(0)) AS DATETIME(6)) AS ts0_to_dt6;
+ts0_to_dt6
+2024-01-15 12:34:56
+SELECT CAST(CAST('2024-01-15 12:34:56.999999' AS DATETIME(6)) AS TIMESTAMP(0)) AS dt6_to_ts0;
+dt6_to_ts0
+2024-01-15 12:34:57
+SELECT CAST(CAST('2024-01-15 12:34:56.789456' AS DATETIME(3)) AS TIMESTAMP(3)) AS dt3_to_ts3,
+EXTRACT(MICROSECOND FROM CAST(CAST('2024-01-15 12:34:56.789456' AS DATETIME(3)) AS TIMESTAMP(3))) AS microseconds;
+dt3_to_ts3    microseconds
+2024-01-15 12:34:56.789000000    789000
+DROP TABLE IF EXISTS t_current_ts;
+CREATE TABLE t_current_ts (
+id INT,
+ts0 TIMESTAMP(0),
+ts3 TIMESTAMP(3)
+);
+INSERT INTO t_current_ts VALUES (1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+SELECT id,
+EXTRACT(MICROSECOND FROM ts0) AS ts0_micro,
+EXTRACT(MICROSECOND FROM ts3) % 1000 AS ts3_sub_milli
+FROM t_current_ts;
+id    ts0_micro    ts3_sub_milli
+1    0    0
+DROP TABLE t_current_ts;
+DROP TABLE IF EXISTS t_timestamp_where;
+CREATE TABLE t_timestamp_where (
+id INT,
+ts3 TIMESTAMP(3)
+);
+INSERT INTO t_timestamp_where VALUES (1, '2024-01-15 12:34:56.789456');
+SELECT COUNT(*) AS match_with_rounded
+FROM t_timestamp_where
+WHERE ts3 = '2024-01-15 12:34:56.789';
+match_with_rounded
+1
+SELECT COUNT(*) AS match_with_original
+FROM t_timestamp_where
+WHERE ts3 = '2024-01-15 12:34:56.789456';
+match_with_original
+1
+DROP TABLE t_timestamp_where;
+DROP TABLE IF EXISTS t_timestamp_distinct;
+CREATE TABLE t_timestamp_distinct (
+id INT,
+ts0 TIMESTAMP(0)
+);
+INSERT INTO t_timestamp_distinct VALUES (1, '2024-01-15 12:34:56.100000');
+INSERT INTO t_timestamp_distinct VALUES (2, '2024-01-15 12:34:56.200000');
+INSERT INTO t_timestamp_distinct VALUES (3, '2024-01-15 12:34:56.300000');
+INSERT INTO t_timestamp_distinct VALUES (4, '2024-01-15 12:34:56.400000');
+SELECT COUNT(*) AS total_count,
+COUNT(DISTINCT ts0) AS distinct_count
+FROM t_timestamp_distinct;
+total_count    distinct_count
+4    1
+SELECT COUNT(*) AS match_count
+FROM t_timestamp_distinct
+WHERE ts0 = '2024-01-15 12:34:56';
+match_count
+4
+DROP TABLE t_timestamp_distinct;
+SELECT CAST('2024-01-15 12:34:56' AS TIMESTAMP(0)) = CAST('2024-01-15 12:34:56.000000' AS TIMESTAMP(6)) AS ts_0_eq_6_same;
+ts_0_eq_6_same
+true
+SELECT CAST('2024-01-15 12:34:56' AS TIMESTAMP(0)) = CAST('2024-01-15 12:34:56.123456' AS TIMESTAMP(6)) AS ts_0_eq_6_diff;
+ts_0_eq_6_diff
+false
+DROP TABLE IF EXISTS t_timestamp_half;
+CREATE TABLE t_timestamp_half (
+id INT,
+description VARCHAR(50),
+ts0 TIMESTAMP(0),
+ts1 TIMESTAMP(1),
+ts2 TIMESTAMP(2)
+);
+INSERT INTO t_timestamp_half VALUES (1, 'scale 0 half', CAST('2024-01-15 12:34:56.500000' AS TIMESTAMP(0)), NULL, NULL);
+INSERT INTO t_timestamp_half VALUES (2, 'scale 1 half', NULL, CAST('2024-01-15 12:34:56.150000' AS TIMESTAMP(1)), NULL);
+INSERT INTO t_timestamp_half VALUES (3, 'scale 2 half', NULL, NULL, CAST('2024-01-15 12:34:56.125000' AS TIMESTAMP(2)));
+SELECT id, description, ts0, ts1, ts2
+FROM t_timestamp_half
+ORDER BY id;
+id    description    ts0    ts1    ts2
+1    scale 0 half    2024-01-15 12:34:57    null    null
+2    scale 1 half    null    2024-01-15 12:34:56.200000000    null
+3    scale 2 half    null    null    2024-01-15 12:34:56.130000000
+DROP TABLE t_timestamp_half;
+DROP TABLE IF EXISTS t_timestamp_dateadd;
+CREATE TABLE t_timestamp_dateadd (
+id INT PRIMARY KEY,
+ts0 TIMESTAMP(0),
+ts3 TIMESTAMP(3),
+ts6 TIMESTAMP(6)
+);
+INSERT INTO t_timestamp_dateadd VALUES
+(1, '2024-01-15 12:34:56', '2024-01-15 12:34:56.789', '2024-01-15 12:34:56.123456');
+SELECT
+id,
+DATE_ADD(ts0, INTERVAL 1 MINUTE) AS ts0_add_min,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 MINUTE)) AS ts0_micro,
+DATE_ADD(ts3, INTERVAL 1 HOUR) AS ts3_add_hour,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts3, INTERVAL 1 HOUR)) AS ts3_micro,
+DATE_ADD(ts6, INTERVAL 1 DAY) AS ts6_add_day,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts6, INTERVAL 1 DAY)) AS ts6_micro
+FROM t_timestamp_dateadd;
+id    ts0_add_min    ts0_micro    ts3_add_hour    ts3_micro    ts6_add_day    ts6_micro
+1    2024-01-15 12:35:56    0    2024-01-15 13:34:56.789000000    789000    2024-01-16 12:34:56.123456000    123456
+SELECT
+id,
+DATE_ADD(ts0, INTERVAL 1 MICROSECOND) AS ts0_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 MICROSECOND)) AS ts0_result_micro,
+DATE_SUB(ts0, INTERVAL 1 MICROSECOND) AS ts0_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(ts0, INTERVAL 1 MICROSECOND)) AS ts0_sub_result_micro
+FROM t_timestamp_dateadd;
+id    ts0_add_micro    ts0_result_micro    ts0_sub_micro    ts0_sub_result_micro
+1    2024-01-15 12:34:56.000001000    1    2024-01-15 12:34:55.999999000    999999
+SELECT
+id,
+DATE_ADD(ts6, INTERVAL 999 MICROSECOND) AS ts6_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts6, INTERVAL 999 MICROSECOND)) AS result_micro,
+DATE_SUB(ts6, INTERVAL 456 MICROSECOND) AS ts6_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(ts6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_timestamp_dateadd;
+id    ts6_add_micro    result_micro    ts6_sub_micro    sub_result_micro
+1    2024-01-15 12:34:56.124455000    124455    2024-01-15 12:34:56.123000000    123000
+SELECT
+id,
+DATE_ADD(ts0, INTERVAL 1 SECOND) AS ts0_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts0, INTERVAL 1 SECOND)) AS ts0_sec_micro,
+DATE_ADD(ts3, INTERVAL 2 SECOND) AS ts3_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(ts3, INTERVAL 2 SECOND)) AS ts3_sec_micro
+FROM t_timestamp_dateadd;
+id    ts0_add_sec    ts0_sec_micro    ts3_add_sec    ts3_sec_micro
+1    2024-01-15 12:34:57    0    2024-01-15 12:34:58.789000000    789000
+DROP TABLE t_timestamp_dateadd;
+DROP DATABASE test_timestamp_precision;
