@@ -77,13 +77,15 @@ func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo, opts ...TableChan
 }
 
 type watermarkUpdaterStub struct {
-	mu             sync.Mutex
-	watermarks     map[string]types.TS
-	errMsgs        []string
-	updateErrFn    func(call int) error
-	removeErr      error
-	updateCalls    atomic.Int32
-	updateNotifies chan struct{}
+	mu               sync.Mutex
+	watermarks       map[string]types.TS
+	errMsgs          []string
+	updateErrFn      func(call int) error
+	removeErr        error
+	skipRemove       bool
+	getFromCacheHook func() error
+	updateCalls      atomic.Int32
+	updateNotifies   chan struct{}
 }
 
 func newWatermarkUpdaterStub() *watermarkUpdaterStub {
@@ -104,6 +106,9 @@ func (m *watermarkUpdaterStub) withNotify(ch chan struct{}) *watermarkUpdaterStu
 }
 
 func (m *watermarkUpdaterStub) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+	if m.skipRemove {
+		return nil
+	}
 	if err := m.removeErr; err != nil {
 		return err
 	}
@@ -121,6 +126,11 @@ func (m *watermarkUpdaterStub) UpdateWatermarkErrMsg(ctx context.Context, key *W
 }
 
 func (m *watermarkUpdaterStub) GetFromCache(ctx context.Context, key *WatermarkKey) (types.TS, error) {
+	if hook := m.getFromCacheHook; hook != nil {
+		if err := hook(); err != nil {
+			return types.TS{}, err
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ts, ok := m.watermarks[m.keyString(key)]
@@ -128,6 +138,20 @@ func (m *watermarkUpdaterStub) GetFromCache(ctx context.Context, key *WatermarkK
 		return types.TS{}, moerr.NewInternalError(ctx, "watermark not found")
 	}
 	return ts, nil
+}
+
+func (m *watermarkUpdaterStub) setGetFromCacheError(err error) {
+	m.getFromCacheHook = func() error {
+		return err
+	}
+}
+
+func (m *watermarkUpdaterStub) setGetFromCacheHook(fn func() error) {
+	m.getFromCacheHook = fn
+}
+
+func (m *watermarkUpdaterStub) setSkipRemove(skip bool) {
+	m.skipRemove = skip
 }
 
 func (m *watermarkUpdaterStub) GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (types.TS, error) {
@@ -1250,6 +1274,190 @@ func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
 	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
 }
 
+func TestTableChangeStream_EnsureCleanup_WatermarkMismatch(t *testing.T) {
+	// Create a custom watermark updater stub that returns a different watermark
+	// than what the tracker expects, simulating a watermark mismatch scenario
+	updaterStub := newWatermarkUpdaterStub()
+	updaterStub.setSkipRemove(true)
+
+	// Create harness with custom watermark updater
+	h := newTableStreamHarness(
+		t,
+		withHarnessWatermarkUpdater(updaterStub, func() {}),
+	)
+	defer h.Close()
+
+	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
+		ts := timestamp.Timestamp{PhysicalTime: 200}
+		if noop, ok := op.(*noopTxnOperator); ok {
+			noop.snapshot = ts
+		}
+		return ts
+	})
+
+	ctx := context.Background()
+	initialWatermark := types.BuildTS(100, 0)
+	key := h.Stream().watermarkKey
+	require.NoError(t, updaterStub.UpdateWatermarkOnly(ctx, key, &initialWatermark))
+
+	// Set up commit failure
+	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
+	h.Sinker().setCommitError(commitErr)
+
+	// Create batch with toTs = 200, but watermark in cache is still 100
+	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(200, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	// Run stream - commit will fail, and EnsureCleanup should detect watermark mismatch
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+	defer done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("table change stream run did not complete")
+	}
+
+	require.Error(t, runErr)
+	require.Equal(t, commitErr, runErr)
+
+	// Wait for EnsureCleanup to complete
+	var ops []string
+	require.Eventually(t, func() bool {
+		ops = h.Sinker().opsSnapshot()
+		hasBegin := false
+		hasCommit := false
+		hasRollback := false
+		for _, op := range ops {
+			switch op {
+			case "begin":
+				hasBegin = true
+			case "commit":
+				hasCommit = true
+			case "rollback":
+				hasRollback = true
+			}
+		}
+		return hasBegin && hasCommit && hasRollback
+	}, time.Second, 10*time.Millisecond, "EnsureCleanup should detect watermark mismatch and trigger rollback")
+
+	// Verify rollback occurred due to watermark mismatch
+	rollbackCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+	require.GreaterOrEqual(t, rollbackCount, 1, "rollback should occur due to watermark mismatch")
+
+	// Verify tracker is cleaned up
+	tracker := h.Stream().txnManager.GetTracker()
+	require.NotNil(t, tracker, "tracker should exist after EnsureCleanup")
+	require.False(t, tracker.NeedsRollback(), "tracker should be clean after rollback")
+
+	// Verify watermark in cache is still 100 (not updated due to commit failure)
+	cachedWatermark, err := updaterStub.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, initialWatermark.ToString(), cachedWatermark.ToString(), "watermark should remain unchanged after commit failure")
+}
+
+func TestTableChangeStream_EnsureCleanup_GetFromCacheFails(t *testing.T) {
+	// Create a custom watermark updater stub that fails on GetFromCache
+	updaterStub := newWatermarkUpdaterStub()
+	getFromCacheErr := moerr.NewInternalError(context.Background(), "cache error")
+	updaterStub.setSkipRemove(true)
+
+	// Create harness with custom watermark updater
+	h := newTableStreamHarness(
+		t,
+		withHarnessWatermarkUpdater(updaterStub, func() {}),
+	)
+	defer h.Close()
+
+	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
+		ts := timestamp.Timestamp{PhysicalTime: 200}
+		if noop, ok := op.(*noopTxnOperator); ok {
+			noop.snapshot = ts
+		}
+		return ts
+	})
+
+	// Set up commit failure
+	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
+	h.Sinker().setCommitError(commitErr)
+
+	var callCount atomic.Int32
+	updaterStub.setGetFromCacheHook(func() error {
+		call := callCount.Add(1)
+		if call >= 3 {
+			return getFromCacheErr
+		}
+		return nil
+	})
+
+	// Create batch
+	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(200, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	// Run stream - commit will fail, and EnsureCleanup should handle GetFromCache failure
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+	defer done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("table change stream run did not complete")
+	}
+
+	require.Error(t, runErr)
+	require.Equal(t, commitErr, runErr)
+
+	// Wait for EnsureCleanup to complete
+	// When GetFromCache fails, EnsureCleanup should fallback to tracker state
+	var ops []string
+	require.Eventually(t, func() bool {
+		ops = h.Sinker().opsSnapshot()
+		hasBegin := false
+		hasCommit := false
+		hasRollback := false
+		for _, op := range ops {
+			switch op {
+			case "begin":
+				hasBegin = true
+			case "commit":
+				hasCommit = true
+			case "rollback":
+				hasRollback = true
+			}
+		}
+		return hasBegin && hasCommit && hasRollback
+	}, time.Second, 10*time.Millisecond, "EnsureCleanup should fallback to tracker state when GetFromCache fails")
+
+	// Verify rollback occurred (fallback to tracker state)
+	rollbackCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+	require.GreaterOrEqual(t, rollbackCount, 1, "rollback should occur when GetFromCache fails and tracker needs rollback")
+
+	// Verify tracker is cleaned up
+	tracker := h.Stream().txnManager.GetTracker()
+	require.NotNil(t, tracker, "tracker should exist after EnsureCleanup")
+	require.False(t, tracker.NeedsRollback(), "tracker should be clean after rollback")
+}
+
 type noopTxnOperator struct {
 	meta      txnpb.TxnMeta
 	options   txnpb.TxnOptions
@@ -1637,11 +1845,12 @@ func (h *tableStreamHarness) addStub(stub *gostub.Stubs) {
 
 func (h *tableStreamHarness) Close() {
 	h.closeOnce.Do(func() {
+		h.cancel()
+		h.stream.Close()
+		h.stream.Wait()
 		for _, stub := range h.stubs {
 			stub.Reset()
 		}
-		h.cancel()
-		h.stream.Close()
 		if h.updaterStop != nil {
 			h.updaterStop()
 		} else if u, ok := h.updater.(*CDCWatermarkUpdater); ok {
