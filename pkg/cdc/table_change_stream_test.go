@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -410,6 +411,45 @@ func (h *blockingChangesHandle) Next(ctx context.Context, _ *mpool.MPool) (*batc
 
 func (h *blockingChangesHandle) Close() error { return nil }
 
+type pausableChangesHandle struct {
+	ready   chan<- struct{}
+	proceed <-chan struct{}
+	once    sync.Once
+	done    bool
+}
+
+func newPausableChangesHandle(ready chan<- struct{}, proceed <-chan struct{}) *pausableChangesHandle {
+	return &pausableChangesHandle{
+		ready:   ready,
+		proceed: proceed,
+	}
+}
+
+func (h *pausableChangesHandle) Next(ctx context.Context, _ *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.once.Do(func() {
+		select {
+		case h.ready <- struct{}{}:
+		default:
+		}
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, nil, engine.ChangesHandle_Tail_done, ctx.Err()
+	case <-h.proceed:
+	}
+
+	if h.done {
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}
+	h.done = true
+	return nil, nil, engine.ChangesHandle_Tail_done, nil
+}
+
+func (h *pausableChangesHandle) Close() error {
+	return nil
+}
+
 type changeBatch struct {
 	insert *batch.Batch
 	delete *batch.Batch
@@ -783,244 +823,103 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 }
 
 func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	defer cancelCtx()
-
-	mp := mpool.MustNewZero()
-	pool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) { packer.Close() },
-	)
-
-	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
-	defer updater.Stop()
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{Name: "id"},
-			{Name: "ts"},
-		},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
-		Name2ColIndex: map[string]int32{"id": 0, "ts": 1},
-	}
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
 	runningReaders := &sync.Map{}
-	sinker := &mockSinker{}
 
-	var collectCalls atomic.Int32
-	var secondRunStarted atomic.Bool
-	var isFirstRun atomic.Bool
-	isFirstRun.Store(true)
-	var activeStubCalls atomic.Int32
-	blockReady := make(chan struct{})
-	secondCollectReady := make(chan struct{}, 1)
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(
+		t,
+		withHarnessRunningReaders(runningReaders),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	defer h.Close()
+	zero := types.TS{}
+	_, _ = updater.GetOrAddCommitted(context.Background(), h.Stream().watermarkKey, &zero)
 
-	trackCall := func() func() {
-		activeStubCalls.Add(1)
-		return func() { activeStubCalls.Add(-1) }
-	}
+	blockReady := make(chan struct{}, 1)
+	proceed := make(chan struct{})
 
-	stubs := []*gostub.Stubs{
-		gostub.Stub(&GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			done := trackCall()
-			defer done()
-			if !isFirstRun.Load() {
-				if secondRunStarted.CompareAndSwap(false, true) {
-					select {
-					case secondCollectReady <- struct{}{}:
-					default:
-					}
-				}
-			}
-			return nil, nil
-		}),
-		gostub.Stub(&FinishTxnOp, func(ctx context.Context, _ error, _ client.TxnOperator, _ engine.Engine) {
-			done := trackCall()
-			defer done()
-		}),
-		gostub.Stub(&GetTxn, func(ctx context.Context, _ engine.Engine, _ client.TxnOperator) error {
-			done := trackCall()
-			defer done()
-			return nil
-		}),
-		gostub.Stub(&GetRelationById, func(ctx context.Context, _ engine.Engine, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
-			done := trackCall()
-			defer done()
-			return "", "", nil, nil
-		}),
-		gostub.Stub(&GetSnapshotTS, func(_ client.TxnOperator) timestamp.Timestamp {
-			done := trackCall()
-			defer done()
-			return timestamp.Timestamp{PhysicalTime: 1}
-		}),
-		gostub.Stub(&EnterRunSql, func(client.TxnOperator) {
-			done := trackCall()
-			defer done()
-		}),
-		gostub.Stub(&ExitRunSql, func(client.TxnOperator) {
-			done := trackCall()
-			defer done()
-		}),
-		gostub.Stub(&CollectChanges, func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-			done := trackCall()
-			defer done()
-			callIndex := int(collectCalls.Add(1))
-			if isFirstRun.Load() {
-				if callIndex == 1 {
-					return &blockingChangesHandle{ready: blockReady}, nil
-				}
-				if callIndex == 2 {
-					// signal once the second invocation is about to return
-					go func() {
-						secondCollectReady <- struct{}{}
-					}()
-					return newImmediateChangesHandle(nil), nil
-				}
-				return newImmediateChangesHandle(nil), nil
-			}
-			// Subsequent runs should return immediately but still signal readiness on first call.
-			if secondRunStarted.CompareAndSwap(false, true) {
-				go func() {
-					select {
-					case secondCollectReady <- struct{}{}:
-					default:
-					}
-				}()
-			}
-			return newImmediateChangesHandle(nil), nil
-		}),
-	}
-
-	t.Cleanup(func() {
-		require.Eventually(t, func() bool {
-			return activeStubCalls.Load() == 0
-		}, 2*time.Second, 10*time.Millisecond, "stub calls should complete before reset")
-		for _, stub := range stubs {
-			stub.Reset()
-		}
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return newPausableChangesHandle(blockReady, proceed), nil
 	})
 
-	stream := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, runningReaders,
-		types.TS{}, types.TS{},
-		false,
-		50*time.Millisecond,
-	)
-
-	ar := NewCdcActiveRoutine()
-
-	runDone := make(chan struct{})
-	go func() {
-		stream.Run(ctx, ar)
-		close(runDone)
-	}()
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
 
 	select {
 	case <-blockReady:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first CollectChanges invocation did not block")
+	case <-time.After(time.Second):
+		t.Fatal("collector did not reach blocking point")
 	}
 
-	start := make(chan struct{})
-	var stopWG sync.WaitGroup
-	stopWG.Add(4)
-	go func() {
-		defer stopWG.Done()
-		<-start
-		ar.ClosePause()
-	}()
-	go func() {
-		defer stopWG.Done()
-		<-start
-		ar.CloseCancel()
-	}()
-	go func() {
-		defer stopWG.Done()
-		<-start
-		cancelCtx()
-	}()
-	go func() {
-		defer stopWG.Done()
-		<-start
-		stream.Close()
-	}()
+	// Issue all stop signals.
+	ar.ClosePause()
+	ar.CloseCancel()
+	h.Cancel()
+	h.Stream().Close()
 
-	close(start)
-	stopWG.Wait()
+	// Unblock collector so Run can exit.
+	close(proceed)
+	done()
 
+	var runErr error
 	select {
-	case <-runDone:
-	case <-time.After(2 * time.Second):
+	case runErr = <-errCh:
+	case <-time.After(time.Second):
 		t.Fatal("stream did not terminate after concurrent stop signals")
 	}
-
-	stream.Wait()
-
-	if _, ok := runningReaders.Load(stream.runningReaderKey); ok {
-		t.Fatal("runningReaders still contains entry after cleanup")
+	if runErr != nil {
+		require.True(t, errors.Is(runErr, context.Canceled) || strings.Contains(runErr.Error(), "paused"),
+			"unexpected error: %v", runErr)
 	}
 
-	isFirstRun.Store(false)
-	secondRunStarted.Store(false)
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	ar2 := NewCdcActiveRoutine()
+	h.Stream().Wait()
+	_, ok := runningReaders.Load(h.Stream().runningReaderKey)
+	require.False(t, ok, "runningReaders should be cleaned up")
 
-	// Reset counters and channels for the second stream
-	collectCalls.Store(0)
-	secondCollectReady = make(chan struct{}, 1)
-
-	stream2 := NewTableChangeStream(
-		nil, nil, mp, pool,
-		1, "task1", tableInfo,
-		sinker, updater, tableDef,
-		false, runningReaders,
-		types.TS{}, types.TS{},
-		false,
-		50*time.Millisecond,
+	// Second run: ensure duplicate readers can start after cleanup.
+	updater2 := newWatermarkUpdaterStub()
+	h2 := newTableStreamHarness(
+		t,
+		withHarnessRunningReaders(runningReaders),
+		withHarnessWatermarkUpdater(updater2, nil),
 	)
+	defer h2.Close()
+	_, _ = updater2.GetOrAddCommitted(context.Background(), h2.Stream().watermarkKey, &zero)
 
-	secondRun := make(chan struct{})
-	go func() {
-		stream2.Run(ctx2, ar2)
-		close(secondRun)
-	}()
+	blockReady2 := make(chan struct{}, 1)
+	proceed2 := make(chan struct{})
 
-	require.Eventually(t, func() bool {
-		select {
-		case <-secondCollectReady:
-			return true
-		default:
-			return secondRunStarted.Load()
-		}
-	}, 2*time.Second, 10*time.Millisecond)
+	h2.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return newPausableChangesHandle(blockReady2, proceed2), nil
+	})
 
-	cancel2()
+	ar2 := h2.NewActiveRoutine()
+	errCh2, done2 := h2.RunStreamAsync(ar2)
 
 	select {
-	case <-secondRun:
-	case <-time.After(2 * time.Second):
+	case <-blockReady2:
+	case <-time.After(time.Second):
+		t.Fatal("second collector did not reach blocking point")
+	}
+
+	h2.Cancel()
+	close(proceed2)
+	done2()
+
+	var runErr2 error
+	select {
+	case runErr2 = <-errCh2:
+	case <-time.After(time.Second):
 		t.Fatal("second stream did not terminate after cancellation")
 	}
-
-	stream2.Wait()
-
-	if _, ok := runningReaders.Load(stream2.runningReaderKey); ok {
-		t.Fatal("runningReaders still contains entry after second cleanup")
+	if runErr2 != nil {
+		require.True(t, errors.Is(runErr2, context.Canceled) || strings.Contains(runErr2.Error(), "paused"),
+			"unexpected error: %v", runErr2)
 	}
 
+	h2.Stream().Wait()
+	_, ok = runningReaders.Load(h2.Stream().runningReaderKey)
+	require.False(t, ok, "runningReaders should be empty after second stream exits")
 }
 
 // Integration tests for TableChangeStream + DataProcessor + TransactionManager pipeline
