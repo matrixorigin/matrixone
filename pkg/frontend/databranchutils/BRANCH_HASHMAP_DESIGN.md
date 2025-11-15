@@ -11,14 +11,14 @@ This document captures the design decisions for the sharded `branchHashmap`. All
 ## Architecture Overview
 1. **Shard-per-lock structure**: The hashmap is split into `N` shards, configured via `NewBranchHashmap` options. `N` must satisfy `4 <= N <= 64`. Defaults use `runtime.NumCPU() * 4` clamped into that range. Each shard owns its buckets, spill state, and accounting.
 2. **Strictly serial shard operations**: Each shard exposes `putBatch`, `probe`, `pop`, and `iterate` routines guarded by its mutex. No goroutines run inside shards; serialization happens at the shard boundary while callers gain concurrency by hashing onto different shards.
-3. **ForEachShard API**: Callers iterate shard-by-shard. The callback receives a `ShardCursor` that offers read-only iteration and helper mutations (`PopByEncodedKey`). Because the cursor operates under the shard lock, same-shard writes serialize, but other shards progress independently.
+3. **ForEachShardParallel API**: Callers iterate shard-by-shard by invoking `ForEachShardParallel(fn, parallelism)`. The callback receives a `ShardCursor` that offers read-only iteration and helper mutations (`PopByEncodedKey`). Internally the hashmap fans work out to a goroutine pool so different shards progress concurrently while each shard still executes serially.
 4. **Read-only return data**: Data slices returned from public APIs alias internal buffers and must be treated as read-only. Callers copy if they need to retain data after the next hashmap call.
 
 ## Key APIs & Semantics
 - `PutByVectors` encodes up to 8,192 rows per call, allocates once per chunk, and dispatches entries to shards based on hash.
 - `GetByVectors` / `PopByVectors` encode keys sequentially inside the calling goroutine and rely on shard-level parallelism plus caller-driven concurrency rather than spawning worker pools.
 - `PopByEncodedKey` remains O(1) when provided a pre-encoded key. Calls targeting the same shard serialize; different shards operate concurrently.
-- `ForEachShard` replaces the old `ForEach`. `PopByEncodedKey` must be invoked via `ShardCursor` while holding the shard lock to avoid blocking other shards.
+- `ForEachShardParallel` replaces the old `ForEach`. `PopByEncodedKey` must be invoked via `ShardCursor` while holding the shard lock to avoid blocking other shards. `parallelism <= 0` uses `min(runtime.NumCPU(), shardCount)`; positive values are clamped to `[1, shardCount]`.
 - Returned rows still decode via `DecodeRow` without changing tuple order.
 
 ## Memory Management
@@ -33,7 +33,7 @@ This document captures the design decisions for the sharded `branchHashmap`. All
 - Adding or removing keys within a shard during iteration is only legal via the provided cursor helpers. This keeps iteration deterministic.
 
 ## Testing & Benchmarking
-- Unit tests cover sharding defaults, concurrent `Put/Get/Pop`, `ForEachShard` semantics, spill handling, and read-only guarantees.
+- Unit tests cover sharding defaults, concurrent `Put/Get/Pop`, `ForEachShardParallel` semantics, spill handling, and read-only guarantees.
 - Benchmarks focus on multi-shard `Put` throughput and `Get` latency to verify batching efficiency.
 
 ## Observability
@@ -42,6 +42,6 @@ This document captures the design decisions for the sharded `branchHashmap`. All
 ## Implementation Order
 1. Introduce configuration, shard structs, and options.
 2. Route Put/Get/Pop through shards.
-3. Implement `ForEachShard` and update iteration call sites.
+3. Implement `ForEachShardParallel` and update iteration call sites.
 4. Add tests/benchmarks for concurrency, spill, and iteration paths.
 5. Wire monitoring once metrics infrastructure is available.

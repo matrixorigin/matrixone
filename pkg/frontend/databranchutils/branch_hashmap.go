@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/panjf2000/ants/v2"
 )
 
 // BranchHashmap exposes the operations supported by the adaptive hashmap.
@@ -48,19 +49,20 @@ type BranchHashmap interface {
 	// detached copies because the underlying entries have been removed.
 	PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error)
 	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
-	// from ForEachShard. It mirrors PopByVectors semantics.
+	// from ForEachShardParallel. It mirrors PopByVectors semantics.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
-	// ForEachShard provides exclusive access to each shard. The callback receives
-	// a cursor offering read-only iteration plus mutation helpers that avoid
-	// blocking other shards.
-	ForEachShard(fn func(cursor ShardCursor) error) error
+	// ForEachShardParallel provides exclusive access to each shard. The callback
+	// receives a cursor offering read-only iteration plus mutation helpers that
+	// avoid blocking other shards. parallelism <= 0 selects the default value:
+	// min(runtime.NumCPU(), shardCount), clamped to [1, shardCount].
+	ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error
 	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
 	// tuple of column values in the same order that was originally supplied.
 	DecodeRow(data []byte) (types.Tuple, []types.Type, error)
 	Close() error
 }
 
-// ShardCursor exposes shard-scoped helpers when iterating via ForEachShard.
+// ShardCursor exposes shard-scoped helpers when iterating via ForEachShardParallel.
 type ShardCursor interface {
 	// ShardID returns the zero-based shard identifier.
 	ShardID() int
@@ -439,7 +441,7 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 	result.Exists = len(rows) > 0
 	return result, nil
 }
-func (bh *branchHashmap) ForEachShard(fn func(cursor ShardCursor) error) error {
+func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error {
 	if fn == nil {
 		return nil
 	}
@@ -450,20 +452,67 @@ func (bh *branchHashmap) ForEachShard(fn func(cursor ShardCursor) error) error {
 	}
 	bh.metaMu.RUnlock()
 
+	shardCount := len(bh.shards)
+	if shardCount == 0 {
+		return nil
+	}
+
+	if parallelism <= 0 {
+		parallelism = runtime.NumCPU()
+	}
+	if parallelism <= 0 {
+		parallelism = 1
+	}
+	if parallelism > shardCount {
+		parallelism = shardCount
+	}
+
+	pool, err := ants.NewPool(parallelism)
+	if err != nil {
+		return err
+	}
+	defer pool.Release()
+
+	var (
+		wg      sync.WaitGroup
+		firstMu sync.Mutex
+		first   error
+	)
+
+	setError := func(err error) {
+		if err == nil {
+			return
+		}
+		firstMu.Lock()
+		if first == nil {
+			first = err
+		}
+		firstMu.Unlock()
+	}
+
 	for _, shard := range bh.shards {
 		if shard == nil {
 			continue
 		}
-		if err := func(hs *hashShard) error {
+		hs := shard
+		wg.Add(1)
+		if err := pool.Submit(func() {
+			defer wg.Done()
 			hs.beginIteration()
 			defer hs.endIteration()
 			cursor := shardCursor{shard: hs}
-			return fn(&cursor)
-		}(shard); err != nil {
-			return err
+			if err := fn(&cursor); err != nil {
+				setError(err)
+			}
+		}); err != nil {
+			wg.Done()
+			setError(err)
+			break
 		}
 	}
-	return nil
+
+	wg.Wait()
+	return first
 }
 
 type shardCursor struct {
