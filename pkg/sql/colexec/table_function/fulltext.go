@@ -157,7 +157,7 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResu
 		srif := heap.Pop(&u.minheap).(vectorindex.SearchResultIf)
 		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
 		if !ok {
-			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", sr))
+			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
 		}
 
 		// doc_id returned
