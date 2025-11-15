@@ -343,33 +343,56 @@ func TestTableChangeStream_HandleSnapshotNoProgress_WarningThrottle(t *testing.T
 
 // Test Run() with duplicate reader (should exit immediately)
 func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
-	ctx := context.Background()
-	mp := mpool.MustNewZero()
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-	}
-
 	runningReaders := &sync.Map{}
 
-	stream1 := createTestStream(mp, tableInfo)
-	stream1.runningReaders = runningReaders
+	h1 := newTableStreamHarness(t, withHarnessRunningReaders(runningReaders))
+	defer h1.Close()
 
-	stream2 := createTestStream(mp, tableInfo)
-	stream2.runningReaders = runningReaders
+	ready := make(chan struct{})
+	h1.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: ready}, nil
+	})
 
-	// Start first stream
-	key := GenDbTblKey(tableInfo.SourceDbName, tableInfo.SourceTblName)
-	runningReaders.Store(key, stream1)
+	ar1 := h1.NewActiveRoutine()
+	errCh1, done1 := h1.RunStreamAsync(ar1)
+	defer done1()
 
-	// Second stream should exit immediately
-	ar := NewCdcActiveRoutine()
-	stream2.Run(ctx, ar)
+	require.Eventually(t, func() bool {
+		select {
+		case <-ready:
+			return true
+		default:
+			_, ok := runningReaders.Load(h1.Stream().runningReaderKey)
+			return ok
+		}
+	}, time.Second, 10*time.Millisecond, "first stream should register as running")
 
-	// Verify first stream is still in runningReaders
-	_, exists := runningReaders.Load(key)
-	assert.True(t, exists)
+	stored, ok := runningReaders.Load(h1.Stream().runningReaderKey)
+	require.True(t, ok, "first stream should occupy running readers slot")
+	require.Equal(t, h1.Stream(), stored)
+
+	h2 := newTableStreamHarness(t, withHarnessRunningReaders(runningReaders))
+	defer h2.Close()
+
+	ar2 := h2.NewActiveRoutine()
+	err := h2.RunStream(ar2)
+	require.NoError(t, err, "duplicate reader should exit gracefully without error")
+
+	stored, ok = runningReaders.Load(h1.Stream().runningReaderKey)
+	require.True(t, ok, "running reader entry should remain owned by first stream")
+	require.Equal(t, h1.Stream(), stored, "duplicate reader must not replace existing entry")
+
+	done1()
+
+	var runErr error
+	select {
+	case runErr = <-errCh1:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first stream did not exit after cancellation")
+	}
+	if runErr != nil {
+		require.ErrorIs(t, runErr, context.Canceled)
+	}
 }
 
 type blockingChangesHandle struct {
@@ -1619,6 +1642,7 @@ type tableStreamHarnessConfig struct {
 	tableInfo            *DbTableInfo
 	watermarkUpdater     WatermarkUpdater
 	updaterStop          func()
+	runningReaders       *sync.Map
 }
 
 func defaultTableStreamHarnessConfig() tableStreamHarnessConfig {
@@ -1628,6 +1652,7 @@ func defaultTableStreamHarnessConfig() tableStreamHarnessConfig {
 		startTs:              types.TS{},
 		endTs:                types.TS{},
 		frequency:            50 * time.Millisecond,
+		runningReaders:       &sync.Map{},
 		tableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
 				{Name: "id"},
@@ -1698,6 +1723,12 @@ func withHarnessWatermarkUpdater(updater WatermarkUpdater, stop func()) tableStr
 	}
 }
 
+func withHarnessRunningReaders(readers *sync.Map) tableStreamHarnessOption {
+	return func(cfg *tableStreamHarnessConfig) {
+		cfg.runningReaders = readers
+	}
+}
+
 type tableStreamHarness struct {
 	t *testing.T
 
@@ -1765,6 +1796,11 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		updaterStop = defaultUpdater.Stop
 	}
 
+	runningReaders := cfg.runningReaders
+	if runningReaders == nil {
+		runningReaders = &sync.Map{}
+	}
+
 	stream := NewTableChangeStream(
 		nil,
 		nil,
@@ -1777,7 +1813,7 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		updater,
 		cfg.tableDef,
 		cfg.initSnapshotSplitTxn,
-		&sync.Map{},
+		runningReaders,
 		cfg.startTs,
 		cfg.endTs,
 		cfg.noFull,
