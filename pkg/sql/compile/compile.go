@@ -632,6 +632,7 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 			}, nil
 		}
 		scopes, err := c.compileQuery(qry.Query)
+
 		if err != nil {
 			return nil, err
 		}
@@ -2189,6 +2190,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		op = constructRestrict(n, plan2.DeepCopyExprList(n.FilterList))
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
+		c.rewriteForIndexScan(op, nil)
 	}
 	c.anal.isFirst = false
 	return ss
@@ -2262,6 +2264,7 @@ func (c *Compile) setProjection(n *plan.Node, s *Scope) {
 	op := constructProjection(n)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 	s.setRootOperator(op)
+	c.rewriteForIndexScan(op, nil)
 }
 
 func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {

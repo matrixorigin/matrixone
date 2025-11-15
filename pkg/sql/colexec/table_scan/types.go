@@ -45,6 +45,7 @@ type TableScan struct {
 	TableID uint64
 
 	IndexScanFlags int64
+	IndexScanExprs []*plan.Expr
 
 	vm.OperatorBase
 	colexec.Projection

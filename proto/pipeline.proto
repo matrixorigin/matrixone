@@ -456,6 +456,7 @@ message StreamScan {
 message TableScan {
   repeated plan.Type  types = 1 [(gogoproto.nullable) = false];
   int64 indexScanFlags = 2;
+  repeated plan.Expr indexScanExprs = 3;
 }
 
 message ValueScan {

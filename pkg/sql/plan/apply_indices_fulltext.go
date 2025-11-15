@@ -389,7 +389,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
 
-func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
+func (builder *QueryBuilder) EqualsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	nargs1 := len(fn1.Args)
 	nargs2 := len(fn2.Args)
@@ -431,7 +431,7 @@ func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, sca
 		prexpr := projNode.ProjectList[projid]
 		for j, fid := range filterids {
 			fexpr := scanNode.FilterList[fid]
-			eq := builder.equalsFullTextMatchFunc(prexpr.GetF(), fexpr.GetF())
+			eq := builder.EqualsFullTextMatchFunc(prexpr.GetF(), fexpr.GetF())
 			if eq {
 				eqmap[int32(i)] = int32(j)
 			}
@@ -590,12 +590,14 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndexScan(nod
 		}
 	}
 
-	if err := builder.fixFulltextIndexColRef(scanNode, projNode.ProjectList, colRefCnt, idxColMap); err != nil {
-		return -1, err
-	}
+	if false {
+		if err := builder.fixFulltextIndexColRef(scanNode, projNode.ProjectList, colRefCnt, idxColMap); err != nil {
+			return -1, err
+		}
 
-	if err := builder.fixFulltextIndexColRef(scanNode, scanNode.FilterList, colRefCnt, idxColMap); err != nil {
-		return -1, err
+		if err := builder.fixFulltextIndexColRef(scanNode, scanNode.FilterList, colRefCnt, idxColMap); err != nil {
+			return -1, err
+		}
 	}
 
 	return nodeID, nil
@@ -604,8 +606,10 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndexScan(nod
 func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndexScan(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	scanNode.IndexScanFlags = int64(plan.Node_USE_FULLTEXT_INDEX)
-	if err := builder.fixFulltextIndexColRef(scanNode, scanNode.FilterList, colRefCnt, idxColMap); err != nil {
-		return -1, err
+	if false {
+		if err := builder.fixFulltextIndexColRef(scanNode, scanNode.FilterList, colRefCnt, idxColMap); err != nil {
+			return -1, err
+		}
 	}
 	return nodeID, nil
 }
@@ -614,7 +618,7 @@ func (builder *QueryBuilder) fixFulltextIndexColRef(scanNode *plan.Node, exprs [
 	// this function build the scanNode target list and replace the exprs colrel
 	// with scanNode target colref.
 	for _, expr := range exprs {
-		err := visitExpr(expr, func(expr *plan.Expr) (bool, error) {
+		err := VisitExpr(expr, func(expr *plan.Expr) (bool, error) {
 			if colRef := expr.GetCol(); colRef != nil {
 				if colRef.RelPos != scanNode.BindingTags[0] {
 					// not the same table, skip
@@ -654,11 +658,11 @@ func (builder *QueryBuilder) fixFulltextIndexColRef(scanNode *plan.Node, exprs [
 
 			if fn := expr.GetF(); fn != nil {
 				// this is NOT a fulltext function, recursive down.
-				if !isFulltextFunction(fn) {
+				if !IsFulltextFunction(fn) {
 					return true, nil
 				}
 
-				if pos := builder.funcInList(fn, scanNode.ProjectList); pos >= 0 {
+				if pos := builder.FtFuncInList(fn, scanNode.ProjectList); pos >= 0 {
 					// replace the function with the target list position
 					expr.Expr = &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -690,7 +694,7 @@ func (builder *QueryBuilder) fixFulltextIndexColRef(scanNode *plan.Node, exprs [
 	return nil
 }
 
-func isFulltextFunction(fn *plan.Function) bool {
+func IsFulltextFunction(fn *plan.Function) bool {
 	return strings.EqualFold(fn.Func.ObjName, "fulltext_match")
 }
 
@@ -707,13 +711,13 @@ func (builder *QueryBuilder) colRefInList(colRef *plan.ColRef, list []*plan.Expr
 	return -1
 }
 
-func (builder *QueryBuilder) funcInList(fn *plan.Function, list []*Expr) int32 {
+func (builder *QueryBuilder) FtFuncInList(fn *plan.Function, list []*Expr) int32 {
 	for i, expr := range list {
 		ifn := expr.GetF()
 		if ifn == nil {
 			continue
 		}
-		if builder.equalsFullTextMatchFunc(fn, ifn) {
+		if builder.EqualsFullTextMatchFunc(fn, ifn) {
 			return int32(i)
 		}
 	}

@@ -16,11 +16,12 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"

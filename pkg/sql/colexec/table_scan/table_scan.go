@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -73,7 +74,8 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if tableScan.IndexScanFlags != 0 {
-		return vm.CallResult{Batch: nil, Status: vm.ExecNext}, moerr.NewNotSupported(proc.Ctx, "index scan is not supported yet")
+		logutil.Infof("index scan is not supported yet")
+		// return vm.CallResult{Batch: nil, Status: vm.ExecNext}, moerr.NewNotSupported(proc.Ctx, "index scan is not supported yet")
 	}
 
 	trace.GetService(proc.GetService()).AddTxnDurationAction(
@@ -155,6 +157,14 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 	analyzer.Input(tableScan.ctr.buf)
 	retBatch := tableScan.ctr.buf
+
+	// TODO: do the real work.
+	if len(tableScan.IndexScanExprs) > 0 {
+		for range tableScan.IndexScanExprs {
+			vec, _ := vector.NewConstFixed(types.T_float32.ToType(), float32(3.14), retBatch.RowCount(), proc.Mp())
+			retBatch.Vecs = append(retBatch.Vecs, vec)
+		}
+	}
 
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 }
