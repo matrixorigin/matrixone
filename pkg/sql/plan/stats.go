@@ -1875,8 +1875,12 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
 			ret = ExecTypeAP_ONECN
 		}
+
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
+			// XXX FIXME:
+			// This check WILL RETURN before we see all children nodes.   So all the other checks
+			// are not guaranteed to be enforced.   This is crazy.
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1892,14 +1896,21 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN &&
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			// XXX FIXME:
+			// force fulltext index scan to tp.
+			if node.IndexScanFlags&int64(plan.Node_USE_FULLTEXT_INDEX) != 0 {
+				return ExecTypeTP
+			}
+
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
-			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
-			stats.Rowsize > RowSizeThreshold &&
-			stats.BlockNum > LargeBlockThresholdForOneCN {
-			ret = ExecTypeAP_ONECN
-			if stats.BlockNum > LargeBlockThresholdForMultiCN {
-				ret = ExecTypeAP_MULTICN
+			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
+				stats.Rowsize > RowSizeThreshold &&
+				stats.BlockNum > LargeBlockThresholdForOneCN {
+				ret = ExecTypeAP_ONECN
+				if stats.BlockNum > LargeBlockThresholdForMultiCN {
+					ret = ExecTypeAP_MULTICN
+				}
 			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {

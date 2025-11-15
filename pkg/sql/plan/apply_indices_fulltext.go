@@ -57,7 +57,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if builder.CheckBooleanVariable("enable_index_scan") {
-		return builder.applyIndicesForProjectionUsingIndexScan(nodeID, projNode, sortNode, scanNode,
+		return builder.applyIndicesForProjectionUsingFullTextIndexScan(nodeID, projNode, sortNode, scanNode,
 			filterids, filterIndexDefs, projids, projIndexDef, colRefCnt, idxColMap)
 	}
 
@@ -168,7 +168,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if builder.CheckBooleanVariable("enable_index_scan") {
-		return builder.applyIndicesForAggUsingIndexScan(nodeID, projNode, aggNode, scanNode,
+		return builder.applyIndicesForAggUsingFullTextIndexScan(nodeID, projNode, aggNode, scanNode,
 			filterids, filterIndexDefs, colRefCnt, idxColMap)
 	}
 
@@ -574,10 +574,11 @@ func (builder *QueryBuilder) resolveAggNode(node *plan.Node, depth int32) *plan.
 }
 
 // collapsing the fulltext_match() functions into index_scan()
-func (builder *QueryBuilder) applyIndicesForProjectionUsingIndexScan(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
+func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndexScan(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	scanNode.IndexScanFlags = int64(plan.Node_USE_FULLTEXT_INDEX)
+
 	if sortNode == nil {
 		scanNode.IndexScanFlags |= int64(plan.Node_ORDER_BY_SCORE)
 		// move the limit and offset from projNode to scanNode
@@ -588,11 +589,133 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingIndexScan(nodeID int3
 			projNode.Offset = nil
 		}
 	}
+
+	if err := builder.fixFulltextIndexColRef(scanNode, projNode.ProjectList, colRefCnt, idxColMap); err != nil {
+		return -1, err
+	}
+
+	if err := builder.fixFulltextIndexColRef(scanNode, scanNode.FilterList, colRefCnt, idxColMap); err != nil {
+		return -1, err
+	}
+
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) applyIndicesForAggUsingIndexScan(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
+func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndexScan(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	scanNode.IndexScanFlags = int64(plan.Node_USE_FULLTEXT_INDEX)
+	if err := builder.fixFulltextIndexColRef(scanNode, scanNode.FilterList, colRefCnt, idxColMap); err != nil {
+		return -1, err
+	}
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) fixFulltextIndexColRef(scanNode *plan.Node, exprs []*plan.Expr, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) error {
+	// this function build the scanNode target list and replace the exprs colrel
+	// with scanNode target colref.
+	for _, expr := range exprs {
+		err := visitExpr(expr, func(expr *plan.Expr) (bool, error) {
+			if colRef := expr.GetCol(); colRef != nil {
+				if colRef.RelPos != scanNode.BindingTags[0] {
+					// not the same table, skip
+					return false, nil
+				}
+
+				if pos := builder.colRefInList(colRef, scanNode.ProjectList); pos >= 0 {
+					// replace the colref with the target list position
+					expr.Expr = &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: scanNode.NodeId,
+							ColPos: pos,
+						},
+					}
+				} else {
+					// add the colref to the target list, and replace the colref
+					// with the new target list position
+					oldColRef := *colRef
+					scanNode.ProjectList = append(scanNode.ProjectList,
+						&Expr{
+							Typ: expr.Typ,
+							Expr: &plan.Expr_Col{
+								Col: &oldColRef,
+							},
+						})
+					pos := int32(len(scanNode.ProjectList) - 1)
+					newColRef := &plan.ColRef{
+						RelPos: scanNode.NodeId,
+						ColPos: pos,
+					}
+					expr.Expr = &plan.Expr_Col{
+						Col: newColRef,
+					}
+				}
+				return false, nil
+			}
+
+			if fn := expr.GetF(); fn != nil {
+				// this is NOT a fulltext function, recursive down.
+				if !isFulltextFunction(fn) {
+					return true, nil
+				}
+
+				if pos := builder.funcInList(fn, scanNode.ProjectList); pos >= 0 {
+					// replace the function with the target list position
+					expr.Expr = &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: scanNode.NodeId,
+							ColPos: pos,
+						},
+					}
+				} else {
+					copyExpr := DeepCopyExpr(expr)
+					scanNode.ProjectList = append(scanNode.ProjectList, copyExpr)
+					pos := int32(len(scanNode.ProjectList) - 1)
+					newColRef := &plan.ColRef{
+						RelPos: scanNode.NodeId,
+						ColPos: pos,
+					}
+					expr.Expr = &plan.Expr_Col{
+						Col: newColRef,
+					}
+				}
+				return false, nil
+			}
+
+			return false, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isFulltextFunction(fn *plan.Function) bool {
+	return strings.EqualFold(fn.Func.ObjName, "fulltext_match")
+}
+
+func (builder *QueryBuilder) colRefInList(colRef *plan.ColRef, list []*plan.Expr) int32 {
+	for i, expr := range list {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if col.RelPos == colRef.RelPos {
+			return int32(i)
+		}
+	}
+	return -1
+}
+
+func (builder *QueryBuilder) funcInList(fn *plan.Function, list []*Expr) int32 {
+	for i, expr := range list {
+		ifn := expr.GetF()
+		if ifn == nil {
+			continue
+		}
+		if builder.equalsFullTextMatchFunc(fn, ifn) {
+			return int32(i)
+		}
+	}
+	return -1
 }

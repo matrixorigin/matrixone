@@ -597,7 +597,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.TableScan:
 		t := sourceOp.(*table_scan.TableScan)
-		op := table_scan.NewArgument().WithTypes(t.Types)
+		op := table_scan.NewArgument().WithTypes(t.Types, t.IndexScanFlags)
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -2267,7 +2267,8 @@ func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	for j, col := range n.TableDef.Cols {
 		types[j] = col.Typ
 	}
-	return table_scan.NewArgument().WithTypes(types)
+	scan := table_scan.NewArgument().WithTypes(types, n.IndexScanFlags)
+	return scan
 }
 
 func constructValueScan(proc *process.Process, n *plan.Node) (*value_scan.ValueScan, error) {

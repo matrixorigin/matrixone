@@ -3032,3 +3032,23 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 	pk := tableDef.GetPkey()
 	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
 }
+
+func visitExpr(expr *plan.Expr, visitor func(expr *plan.Expr) (bool, error)) error {
+	down, err := visitor(expr)
+	if err != nil {
+		return err
+	}
+
+	if down {
+		f := expr.GetF()
+		if f != nil {
+			for _, arg := range f.Args {
+				err = visitExpr(arg, visitor)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}

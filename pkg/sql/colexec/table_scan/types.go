@@ -75,14 +75,15 @@ func NewArgument() *TableScan {
 	return reuse.Alloc[TableScan](nil)
 }
 
-func (tableScan *TableScan) WithTypes(types []plan.Type) *TableScan {
+func (tableScan *TableScan) WithTypes(types []plan.Type, indexScanFlags int64) *TableScan {
 	tableScan.Types = types
+	tableScan.IndexScanFlags = indexScanFlags
 	return tableScan
 }
 
 func (tableScan *TableScan) Release() {
 	if tableScan != nil {
-		reuse.Free[TableScan](tableScan, nil)
+		reuse.Free(tableScan, nil)
 	}
 }
 

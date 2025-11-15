@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -69,6 +70,10 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
+	}
+
+	if tableScan.IndexScanFlags != 0 {
+		return vm.CallResult{Batch: nil, Status: vm.ExecNext}, moerr.NewNotSupported(proc.Ctx, "index scan is not supported yet")
 	}
 
 	trace.GetService(proc.GetService()).AddTxnDurationAction(

@@ -1021,7 +1021,12 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileProjection(node, c.compileRestrict(node, ss))
+		// it is almost ALWAYS better to compile restrict first.
+		ss = c.compileRestrict(node, ss)
+
+		// whether to compile projection first or limit/offset first
+		// is up to debate.   Keep existing behavior for now.
+		ss = c.compileProjection(node, ss)
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)
 		}
@@ -1985,6 +1990,10 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+	if n.IndexScanFlags&int64(plan.Node_USE_FULLTEXT_INDEX) != 0 {
+		logutil.Infof("compileTableScan: fulltext index scan is used")
+	}
+
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	compileStart := time.Now()
 	defer func() {
