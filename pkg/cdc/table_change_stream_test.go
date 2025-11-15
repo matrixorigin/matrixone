@@ -623,6 +623,82 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 	require.True(t, h.Stream().retryable, "stale read should mark stream retryable")
 }
 
+func TestTableChangeStream_SinkerResetRecovery(t *testing.T) {
+	h := newTableStreamHarness(
+		t,
+		withHarnessNoFull(true),
+		withHarnessFrequency(5*time.Millisecond),
+	)
+	defer h.Close()
+
+	var snapshotCalls atomic.Int32
+	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
+		call := snapshotCalls.Add(1)
+		ts := timestamp.Timestamp{PhysicalTime: 100}
+		if call >= 2 {
+			ts.PhysicalTime = 200
+		}
+		return ts
+	})
+
+	var collectCalls atomic.Int32
+	initialSinkerErr := moerr.NewInternalError(h.Context(), "sinker failure")
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		if collectCalls.Add(1) == 1 {
+			h.Sinker().setError(initialSinkerErr)
+			return nil, moerr.NewErrStaleReadNoCtx("db1", "t1")
+		}
+		bat := createTestBatch(t, h.MP(), toTs, []int32{1})
+		return newImmediateChangesHandle([]changeBatch{
+			{insert: bat, hint: engine.ChangesHandle_Tail_done},
+			{insert: nil, hint: engine.ChangesHandle_Tail_done},
+		}), nil
+	})
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+
+	require.Eventually(t, func() bool {
+		return collectCalls.Load() >= 2
+	}, 2*time.Second, 10*time.Millisecond, "stale read should trigger another collect attempt")
+
+	require.Eventually(t, func() bool {
+		ops := h.Sinker().opsSnapshot()
+		hasBegin := false
+		hasCommit := false
+		for _, op := range ops {
+			switch op {
+			case "begin":
+				hasBegin = true
+			case "commit":
+				hasCommit = true
+			}
+		}
+		return hasBegin && hasCommit
+	}, 2*time.Second, 10*time.Millisecond, "stream should process data successfully after reset")
+
+	done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("table change stream run did not terminate")
+	}
+	if runErr != nil {
+		require.ErrorIs(t, runErr, context.Canceled, "context cancellation is acceptable after shutdown")
+	}
+
+	require.Equal(t, 1, h.Sinker().ResetCountSnapshot(), "sinker should reset exactly once after stale read recovery")
+	require.NoError(t, h.Sinker().Error(), "sinker error should be cleared by reset")
+	require.GreaterOrEqual(t, len(h.CollectCallsSnapshot()), 2, "multiple collect attempts expected")
+	require.True(t, h.Stream().retryable, "recovery should keep stream retryable")
+
+	tracker := h.Stream().txnManager.GetTracker()
+	require.NotNil(t, tracker)
+	require.True(t, tracker.IsCompleted(), "tracker should reach completed state after recovery")
+}
+
 // Test StaleRead with startTs set (should fail, not retry)
 func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 	startTs := types.BuildTS(1, 0)
@@ -2135,6 +2211,7 @@ func (s *tableStreamRecordingSinker) Sink(ctx context.Context, data *DecoderOutp
 
 func (s *tableStreamRecordingSinker) Reset() {
 	s.recordingSinker.Reset()
+	s.recordingSinker.ClearError()
 	s.mu.Lock()
 	s.resetCnt++
 	s.mu.Unlock()
