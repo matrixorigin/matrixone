@@ -674,6 +674,77 @@ func TestDataProcessor_NoMoreData_HeartbeatUpdatesWatermark(t *testing.T) {
 	assert.Equal(t, []string{"sink", "dummy"}, h.sinker.opsSnapshot())
 }
 
+// TestDataProcessor_CommitFail_EnsureCleanup_ThenRecover verifies that when commit fails
+// and tracker requires rollback, EnsureCleanup performs rollback and the next round succeeds.
+func TestDataProcessor_CommitFail_EnsureCleanup_ThenRecover(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	// Round 1: begin transaction with a TailDone
+	from := types.BuildTS(1, 0)
+	to1 := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to1)
+	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to1),
+	}))
+	require.NotNil(t, h.txnMgr.GetTracker())
+
+	// Inject commit failure on NoMoreData
+	h.sinker.resetOps()
+	commitErr := moerr.NewInternalError(ctx, "commit failure")
+	h.sinker.setCommitError(commitErr)
+	to2 := types.BuildTS(3, 0)
+	h.dp.SetTransactionRange(to1, to2)
+	err := h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData})
+	require.ErrorIs(t, err, commitErr)
+	require.True(t, h.txnMgr.GetTracker().NeedsRollback())
+	// No rollback yet; EnsureCleanup will handle it
+
+	// EnsureCleanup should rollback and clear NeedsRollback
+	require.NoError(t, h.txnMgr.EnsureCleanup(ctx))
+	require.False(t, h.txnMgr.GetTracker().NeedsRollback())
+	ops := h.sinker.opsSnapshot()
+	require.Contains(t, ops, "clear")
+	require.Contains(t, ops, "rollback")
+	require.Contains(t, ops, "dummy")
+
+	// Round 2: clear error and confirm recovery path succeeds
+	h.sinker.resetOps()
+	h.sinker.setError(nil)
+	h.sinker.setCommitError(nil)
+	// Reset transaction manager state to start a fresh transaction in next round
+	h.txnMgr.Reset()
+
+	// Start a fresh range and process TailDone then NoMoreData
+	to3 := types.BuildTS(4, 0)
+	h.dp.SetTransactionRange(to2, to3)
+	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{2}, to3),
+	}))
+	require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+
+	// Verify we saw a begin and a commit, and no rollback in this successful round
+	ops = h.sinker.opsSnapshot()
+	hasBegin := false
+	hasCommit := false
+	hasRollback := false
+	for _, op := range ops {
+		switch op {
+		case "begin":
+			hasBegin = true
+		case "commit":
+			hasCommit = true
+		case "rollback":
+			hasRollback = true
+		}
+	}
+	require.True(t, hasBegin, "recovery round should begin")
+	require.True(t, hasCommit, "recovery round should commit")
+	require.False(t, hasRollback, "recovery round should not rollback")
+}
+
 // TestDataProcessor_RandomizedSequence_WithDelays_NoDeadlock verifies that with
 // randomized sequence of Snapshot/TailWip/TailDone/NoMoreData and a slow sinker,
 // the processor finishes quickly without deadlocks and preserves basic invariants.
