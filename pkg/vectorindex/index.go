@@ -86,17 +86,17 @@ type SearchResultHeap []SearchResultIf
 func (h SearchResultHeap) Len() int { return len(h) }
 
 func (h SearchResultHeap) Less(i, j int) bool {
-	// defensive: avoid panic if nil slips in
+	// defensive: avoid panic if nil or typed-nil slips in
 	li := h[i]
 	lj := h[j]
-	if li == nil && lj == nil {
+	if isNilSearchResultIf(li) && isNilSearchResultIf(lj) {
 		return false
 	}
-	if li == nil {
+	if isNilSearchResultIf(li) {
 		// nil considered greater so it sinks
 		return false
 	}
-	if lj == nil {
+	if isNilSearchResultIf(lj) {
 		return true
 	}
 	return li.GetDistance() < lj.GetDistance()
@@ -121,7 +121,24 @@ func (h *SearchResultHeap) Push(x any) {
 		}
 		return
 	}
+	// skip typed-nil values (interface with nil concrete pointer)
+	if isNilSearchResultIf(item) {
+		logutil.Warnf("SearchResultHeap.Push typed-nil: %T", item)
+		return
+	}
 	*h = append(*h, item)
+}
+
+// isNilSearchResultIf detects typed-nil concrete pointers stored in the interface
+func isNilSearchResultIf(x SearchResultIf) bool {
+	switch v := x.(type) {
+	case *SearchResultAnyKey:
+		return v == nil
+	case *SearchResult:
+		return v == nil
+	default:
+		return x == nil
+	}
 }
 
 func (h *SearchResultHeap) Pop() any {

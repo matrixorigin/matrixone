@@ -150,6 +150,7 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp *vectorin
 		n = blocksz
 	}
 
+	appended := 0
 	for range n {
 		srif := heap.Pop(hp)
 		if srif == nil {
@@ -171,12 +172,14 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp *vectorin
 			if u.batch.VectorCount() > 1 {
 				vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
 			}
+			appended++
 		case *vectorindex.SearchResult:
 			// accept int64 key as well
 			vector.AppendAny(u.batch.Vecs[0], any(sr.Id), false, proc.Mp())
 			if u.batch.VectorCount() > 1 {
 				vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
 			}
+			appended++
 		default:
 			// try unbox once if it's SearchResultIf inside interface{}
 			if sri, ok := srif.(vectorindex.SearchResultIf); ok {
@@ -191,11 +194,13 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp *vectorin
 					if u.batch.VectorCount() > 1 {
 						vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr2.GetDistance()), false, proc.Mp())
 					}
+					appended++
 				case *vectorindex.SearchResult:
 					vector.AppendAny(u.batch.Vecs[0], any(sr2.Id), false, proc.Mp())
 					if u.batch.VectorCount() > 1 {
 						vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr2.GetDistance()), false, proc.Mp())
 					}
+					appended++
 				default:
 					return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key has unexpected type: %T", srif))
 				}
@@ -204,8 +209,8 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp *vectorin
 			}
 		}
 	}
-	u.batch.SetRowCount(n)
-	u.n_result += uint64(n)
+	u.batch.SetRowCount(appended)
+	u.n_result += uint64(appended)
 	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
 	}
@@ -238,16 +243,14 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 	} else {
 		// build minheap
-		hp := u.minheap
-		if hp == nil {
-			hp, err = sort_topk(u, proc, u.sacc, u.limit)
+		if u.minheap == nil {
+			_, err = sort_topk(u, proc, u.sacc, u.limit)
 			if err != nil {
 				return vm.CancelResult, err
 			}
 		}
-
-		if hp != nil {
-			return u.returnResultFromHeap(proc, &hp)
+		if u.minheap != nil && u.minheap.Len() > 0 {
+			return u.returnResultFromHeap(proc, &u.minheap)
 		}
 		return vm.CancelResult, nil
 	}
