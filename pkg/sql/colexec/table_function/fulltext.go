@@ -141,7 +141,7 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 
 // return (doc_id, score) as result
 // when scoremap is empty, return result end.
-func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp vectorindex.SearchResultHeap) (vm.CallResult, error) {
+func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp *vectorindex.SearchResultHeap) (vm.CallResult, error) {
 
 	blocksz := 8192
 	n := hp.Len()
@@ -150,7 +150,11 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp vectorind
 	}
 
 	for range n {
-		srif := hp.Pop()
+		srif := heap.Pop(hp)
+		if srif == nil {
+			// skip unexpected nil entries
+			continue
+		}
 		// handle possible interface boxing: srif may be a concrete *SearchResult...,
 		// or a vectorindex.SearchResultIf wrapped in any.
 		switch sr := srif.(type) {
@@ -241,7 +245,7 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 		}
 
 		if hp != nil {
-			return u.returnResultFromHeap(proc, hp)
+			return u.returnResultFromHeap(proc, &hp)
 		}
 		return vm.CancelResult, nil
 	}
@@ -382,6 +386,8 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (minheap vectorindex.SearchResultHeap, err error) {
 	aggcnt := u.aggcnt
 	u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
+	// initialize container/heap structure before pushes
+	heap.Init(&u.minheap)
 
 	for doc_id, addr := range u.agghtab {
 
@@ -408,7 +414,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 					heap.Fix(&u.minheap, 0)
 				}
 			} else {
-				u.minheap.Push(&vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
 			}
 		}
 	}
