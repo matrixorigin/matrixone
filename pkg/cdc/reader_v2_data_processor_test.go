@@ -745,6 +745,71 @@ func TestDataProcessor_CommitFail_EnsureCleanup_ThenRecover(t *testing.T) {
 	require.False(t, hasRollback, "recovery round should not rollback")
 }
 
+// TestDataProcessor_RepeatedCommitFailures_EnsureCleanup_Idempotent runs multiple cycles
+// of commit failure -> EnsureCleanup -> recovery, to verify cleanup remains correct and idempotent.
+func TestDataProcessor_RepeatedCommitFailures_EnsureCleanup_Idempotent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+
+	for i := 0; i < 3; i++ {
+		// Begin via TailDone
+		h.dp.SetTransactionRange(from, to)
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeTailDone,
+			InsertBatch: buildBatch(t, h.mp, []int32{int32(i + 1)}, to),
+		}))
+		require.NotNil(t, h.txnMgr.GetTracker())
+
+		// Inject commit failure on NoMoreData
+		h.sinker.resetOps()
+		commitErr := moerr.NewInternalError(ctx, "commit failure")
+		h.sinker.setCommitError(commitErr)
+		next := (&to).Next()
+		h.dp.SetTransactionRange(to, next)
+		err := h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData})
+		require.ErrorIs(t, err, commitErr)
+
+		// EnsureCleanup must rollback once
+		require.NoError(t, h.txnMgr.EnsureCleanup(ctx))
+		require.False(t, h.txnMgr.GetTracker().NeedsRollback())
+		ops := h.sinker.opsSnapshot()
+		rollbackCount := 0
+		for _, op := range ops {
+			if op == "rollback" {
+				rollbackCount++
+			}
+		}
+		require.Equal(t, 1, rollbackCount, "each failure cycle should trigger exactly one rollback")
+
+		// Clear errors and reset transaction manager
+		h.sinker.resetOps()
+		h.sinker.setCommitError(nil)
+		h.txnMgr.Reset()
+
+		// Recovery round
+		h.dp.SetTransactionRange(to, next)
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+			Type:        ChangeTypeTailDone,
+			InsertBatch: buildBatch(t, h.mp, []int32{9}, next),
+		}))
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
+
+		ops = h.sinker.opsSnapshot()
+		// Recovery round should not trigger rollback
+		for _, op := range ops {
+			require.NotEqual(t, "rollback", op, "recovery round should not rollback")
+		}
+
+		// Bump to next window
+		from = to
+		to = next
+	}
+}
+
 // TestDataProcessor_RandomizedSequence_WithDelays_NoDeadlock verifies that with
 // randomized sequence of Snapshot/TailWip/TailDone/NoMoreData and a slow sinker,
 // the processor finishes quickly without deadlocks and preserves basic invariants.
