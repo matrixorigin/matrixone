@@ -151,21 +151,26 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp vectorind
 
 	for range n {
 		srif := hp.Pop()
-		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
-		if !ok {
+		switch sr := srif.(type) {
+		case *vectorindex.SearchResultAnyKey:
+			// doc_id returned
+			doc_id := sr.Id
+			if str, ok := sr.Id.(string); ok {
+				bytes := []byte(str)
+				doc_id = bytes
+			}
+			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+			if u.batch.VectorCount() > 1 {
+				vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
+			}
+		case *vectorindex.SearchResult:
+			// accept int64 key as well
+			vector.AppendAny(u.batch.Vecs[0], any(sr.Id), false, proc.Mp())
+			if u.batch.VectorCount() > 1 {
+				vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
+			}
+		default:
 			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "heap return key is not SearchResultAnyKey")
-		}
-
-		// doc_id returned
-		doc_id := sr.Id
-		if str, ok := sr.Id.(string); ok {
-			bytes := []byte(str)
-			doc_id = bytes
-		}
-		vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
-
-		if u.batch.VectorCount() > 1 {
-			vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
 		}
 	}
 	u.batch.SetRowCount(n)
