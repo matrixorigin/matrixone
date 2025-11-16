@@ -151,6 +151,8 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp vectorind
 
 	for range n {
 		srif := hp.Pop()
+		// handle possible interface boxing: srif may be a concrete *SearchResult...,
+		// or a vectorindex.SearchResultIf wrapped in any.
 		switch sr := srif.(type) {
 		case *vectorindex.SearchResultAnyKey:
 			// doc_id returned
@@ -170,7 +172,30 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp vectorind
 				vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
 			}
 		default:
-			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "heap return key is not SearchResultAnyKey")
+			// try unbox once if it's SearchResultIf inside interface{}
+			if sri, ok := srif.(vectorindex.SearchResultIf); ok {
+				switch sr2 := sri.(type) {
+				case *vectorindex.SearchResultAnyKey:
+					doc_id := sr2.Id
+					if str, ok := sr2.Id.(string); ok {
+						bytes := []byte(str)
+						doc_id = bytes
+					}
+					vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+					if u.batch.VectorCount() > 1 {
+						vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr2.GetDistance()), false, proc.Mp())
+					}
+				case *vectorindex.SearchResult:
+					vector.AppendAny(u.batch.Vecs[0], any(sr2.Id), false, proc.Mp())
+					if u.batch.VectorCount() > 1 {
+						vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr2.GetDistance()), false, proc.Mp())
+					}
+				default:
+					return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key has unexpected type: %T", srif))
+				}
+			} else {
+				return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey (got %T)", srif))
+			}
 		}
 	}
 	u.batch.SetRowCount(n)
