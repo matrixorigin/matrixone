@@ -24,7 +24,7 @@ import (
 )
 
 func TestAsyncSQLExecutorSuccess(t *testing.T) {
-	exec, err := newAsyncSQLExecutor(2)
+	exec, err := newAsyncTaskExecutor(2)
 	require.NoError(t, err)
 	defer exec.Close()
 
@@ -46,7 +46,7 @@ func TestAsyncSQLExecutorSuccess(t *testing.T) {
 }
 
 func TestAsyncSQLExecutorPropagatesError(t *testing.T) {
-	exec, err := newAsyncSQLExecutor(1)
+	exec, err := newAsyncTaskExecutor(1)
 	require.NoError(t, err)
 	defer exec.Close()
 

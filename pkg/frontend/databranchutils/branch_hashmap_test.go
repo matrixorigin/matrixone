@@ -168,6 +168,38 @@ func TestBranchHashmapPopByVectorsPartial(t *testing.T) {
 	require.Empty(t, final[0].Rows)
 }
 
+func TestBranchHashmapItemCountInMemory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1, 2})
+	valVec := buildStringVector(t, mp, []string{"one", "uno", "two"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.Equal(t, int64(0), bh.ItemCount())
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+	require.Equal(t, int64(3), bh.ItemCount())
+
+	probeDup := buildInt64Vector(t, mp, []int64{1})
+	defer probeDup.Free(mp)
+	_, err = bh.PopByVectors([]*vector.Vector{probeDup}, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), bh.ItemCount())
+
+	probeSingle := buildInt64Vector(t, mp, []int64{2})
+	defer probeSingle.Free(mp)
+	_, err = bh.PopByVectors([]*vector.Vector{probeSingle}, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), bh.ItemCount())
+}
+
 func TestBranchHashmapCompositeKey(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -365,6 +397,40 @@ func TestBranchHashmapPopByVectorsPartialSpilled(t *testing.T) {
 	require.Len(t, final, 1)
 	require.False(t, final[0].Exists)
 	require.Empty(t, final[0].Rows)
+}
+
+func TestBranchHashmapItemCountSpilled(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newLimitedAllocator(80)
+	bhIface, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(t.TempDir()),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bhIface.Close())
+	}()
+
+	keys := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	vals := []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
+
+	keyVec := buildInt64Vector(t, mp, keys)
+	valVec := buildStringVector(t, mp, vals)
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	require.Equal(t, int64(0), bhIface.ItemCount())
+	require.NoError(t, bhIface.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+	require.Equal(t, int64(len(keys)), bhIface.ItemCount())
+
+	probe := buildInt64Vector(t, mp, []int64{3, 10})
+	defer probe.Free(mp)
+
+	_, err = bhIface.PopByVectors([]*vector.Vector{probe}, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(keys)-2), bhIface.ItemCount())
 }
 
 func TestBranchHashmapForEach(t *testing.T) {
