@@ -569,3 +569,59 @@ func TestChangeCollector_GetToTs(t *testing.T) {
 
 	assert.Equal(t, toTs, cc.GetToTs())
 }
+
+// TestChangeCollector_Next_ConcurrentCloseAndCancel ensures that when Next is blocked,
+// concurrent Close and context cancellation do not deadlock and Next returns deterministically.
+func TestChangeCollector_Next_ConcurrentCloseAndCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	handle := newCollectorBlockingHandle()
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+	cc := NewChangeCollector(handle, mp, fromTs, toTs, 1, "task1", "db1", "table1")
+
+	resultCh := make(chan struct {
+		data *ChangeData
+		err  error
+	}, 1)
+
+	go func() {
+		data, err := cc.Next(ctx)
+		resultCh <- struct {
+			data *ChangeData
+			err  error
+		}{data, err}
+	}()
+
+	// Wait until Next has started and is blocked
+	select {
+	case <-handle.nextCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next did not start")
+	}
+
+	// Concurrently cancel and close; order is intentionally racy
+	cancel()
+	require.NoError(t, cc.Close())
+
+	select {
+	case res := <-resultCh:
+		// Either returns context.Canceled error or NoMoreData if close wins the race
+		if res.err != nil {
+			assert.ErrorIs(t, res.err, context.Canceled)
+			assert.Nil(t, res.data)
+		} else {
+			require.NotNil(t, res.data)
+			assert.Equal(t, ChangeTypeNoMoreData, res.data.Type)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Next did not return after concurrent close and cancel")
+	}
+}
