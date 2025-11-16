@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -153,6 +154,7 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp *vectorin
 		srif := heap.Pop(hp)
 		if srif == nil {
 			// skip unexpected nil entries
+			logutil.Warnf("fulltext: heap.Pop returned nil; remaining=%d", hp.Len())
 			continue
 		}
 		// handle possible interface boxing: srif may be a concrete *SearchResult...,

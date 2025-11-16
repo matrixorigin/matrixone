@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -85,7 +86,20 @@ type SearchResultHeap []SearchResultIf
 func (h SearchResultHeap) Len() int { return len(h) }
 
 func (h SearchResultHeap) Less(i, j int) bool {
-	return h[i].GetDistance() < h[j].GetDistance()
+	// defensive: avoid panic if nil slips in
+	li := h[i]
+	lj := h[j]
+	if li == nil && lj == nil {
+		return false
+	}
+	if li == nil {
+		// nil considered greater so it sinks
+		return false
+	}
+	if lj == nil {
+		return true
+	}
+	return li.GetDistance() < lj.GetDistance()
 }
 
 func (h SearchResultHeap) Swap(i, j int) {
@@ -93,7 +107,20 @@ func (h SearchResultHeap) Swap(i, j int) {
 }
 
 func (h *SearchResultHeap) Push(x any) {
-	item := x.(SearchResultIf)
+	// defensive: skip nil pushes
+	if x == nil {
+		logutil.Warnf("SearchResultHeap.Push received nil")
+		return
+	}
+	item, ok := x.(SearchResultIf)
+	if !ok || item == nil {
+		if !ok {
+			logutil.Warnf("SearchResultHeap.Push unexpected type: %T", x)
+		} else {
+			logutil.Warnf("SearchResultHeap.Push underlying item is nil")
+		}
+		return
+	}
 	*h = append(*h, item)
 }
 
