@@ -23,6 +23,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -56,6 +57,8 @@ type BranchHashmap interface {
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
 	// min(runtime.NumCPU(), shardCount), clamped to [1, shardCount].
 	ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error
+	// ItemCount reports the number of rows currently stored in the hashmap.
+	ItemCount() int64
 	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
 	// tuple of column values in the same order that was originally supplied.
 	DecodeRow(data []byte) (types.Tuple, []types.Type, error)
@@ -223,7 +226,7 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 	defer bh.putPacker(valuePacker)
 
 	batchSize := putBatchSize
-	if batchSize <= 0 || batchSize > rowCount {
+	if batchSize > rowCount {
 		batchSize = rowCount
 	}
 	shardBuckets := make([][]*hashEntry, bh.shardCount)
@@ -515,6 +518,25 @@ func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error,
 	return first
 }
 
+func (bh *branchHashmap) ItemCount() int64 {
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0
+	}
+	shards := bh.shards
+	bh.metaMu.RUnlock()
+
+	var total int64
+	for _, shard := range shards {
+		if shard == nil {
+			continue
+		}
+		total += shard.itemCount()
+	}
+	return total
+}
+
 type shardCursor struct {
 	shard *hashShard
 }
@@ -587,6 +609,8 @@ type hashShard struct {
 	spills   []*spillPartition
 	spillDir string
 
+	items int64
+
 	mu        sync.Mutex
 	cond      *sync.Cond
 	iterating bool
@@ -641,6 +665,7 @@ func (hs *hashShard) insertEntryLocked(entry *hashEntry) {
 		hs.order.MoveToBack(bucket.orderNode)
 	}
 	hs.memInUse += uint64(len(entry.buf))
+	atomic.AddInt64(&hs.items, 1)
 	// TODO(monitoring): track shard-level insertion metrics.
 }
 func (hs *hashShard) getRows(hash uint64, key []byte) ([][]byte, error) {
@@ -675,6 +700,9 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 	plan := newRemovalPlan(removeAll)
 	rows := hs.collectFromMemory(hash, key, nil, plan, true)
 	if len(hs.spills) == 0 {
+		if removed := len(rows); removed > 0 {
+			atomic.AddInt64(&hs.items, -int64(removed))
+		}
 		return rows, nil
 	}
 	var scratch []byte
@@ -685,6 +713,9 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 		if err := part.collect(hash, key, &rows, &scratch, plan); err != nil {
 			return nil, err
 		}
+	}
+	if removed := len(rows); removed > 0 {
+		atomic.AddInt64(&hs.items, -int64(removed))
 	}
 	return rows, nil
 }
@@ -867,6 +898,7 @@ func (hs *hashShard) close() error {
 		}
 		hs.spillDir = ""
 	}
+	atomic.StoreInt64(&hs.items, 0)
 	return firstErr
 }
 func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator, error) {
@@ -1379,4 +1411,8 @@ func (hs *hashShard) iterateUnsafe(fn func(key []byte, rows [][]byte) error) err
 		delete(groups, keyStr)
 	}
 	return nil
+}
+
+func (hs *hashShard) itemCount() int64 {
+	return atomic.LoadInt64(&hs.items)
 }
