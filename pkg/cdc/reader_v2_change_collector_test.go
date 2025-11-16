@@ -396,6 +396,54 @@ func TestChangeCollector_Next_ContextCancel(t *testing.T) {
 	}
 }
 
+func TestChangeCollector_Next_ConcurrentCancelAfterData(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	handle := newCollectorBlockingHandle()
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+	cc := NewChangeCollector(handle, mp, fromTs, toTs, 1, "task1", "db1", "table1")
+	resultCh := make(chan struct {
+		data *ChangeData
+		err  error
+	}, 1)
+
+	go func() {
+		data, err := cc.Next(ctx)
+		resultCh <- struct {
+			data *ChangeData
+			err  error
+		}{data, err}
+	}()
+
+	select {
+	case <-handle.nextCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not start")
+	}
+
+	cancel()
+
+	select {
+	case res := <-resultCh:
+		require.Error(t, res.err)
+		assert.ErrorIs(t, res.err, context.Canceled)
+		assert.Nil(t, res.data)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not unblock after concurrent cancellation")
+	}
+
+	require.NoError(t, cc.Close())
+	require.True(t, cc.IsClosed())
+}
+
 func TestChangeCollector_Next_AfterClose(t *testing.T) {
 	ctx := context.Background()
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
