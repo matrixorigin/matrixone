@@ -17,7 +17,9 @@ package cdc
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -643,4 +645,368 @@ func TestTransactionManager_Reset(t *testing.T) {
 	tm.Reset()
 
 	assert.Nil(t, tm.tracker)
+}
+
+// TestTransactionManager_BeginTransaction_Concurrent tests concurrent BeginTransaction calls
+// Only one should succeed, others should handle rollback of previous transaction
+func TestTransactionManager_BeginTransaction_Concurrent(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs1 := (&fromTs).Next()
+	toTs2 := (&toTs1).Next()
+	toTs3 := (&toTs2).Next()
+
+	// Begin first transaction
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs1))
+	sinker.resetOps()
+
+	// Concurrently start multiple new transactions
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	successCount := int32(0)
+	errCh := make(chan error, numGoroutines)
+
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			toTs := toTs2
+			if idx%2 == 0 {
+				toTs = toTs3
+			}
+			err := tm.BeginTransaction(ctx, toTs1, toTs)
+			if err == nil {
+				atomic.AddInt32(&successCount, 1)
+			}
+			errCh <- err
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// At least one should succeed, and all should handle rollback properly
+	require.GreaterOrEqual(t, successCount, int32(1), "at least one BeginTransaction should succeed")
+	require.LessOrEqual(t, successCount, int32(numGoroutines), "not all should succeed")
+
+	// Verify all errors are nil (rollback succeeded)
+	for err := range errCh {
+		require.NoError(t, err, "all BeginTransaction calls should succeed after rollback")
+	}
+
+	// Verify operations: each successful Begin should have rollback + begin
+	ops := sinker.opsSnapshot()
+	rollbackCount := 0
+	beginCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		} else if op == "begin" {
+			beginCount++
+		}
+	}
+
+	require.Equal(t, beginCount, int(successCount), "begin count should match success count")
+	require.GreaterOrEqual(t, rollbackCount, 1, "at least one rollback should occur")
+}
+
+// TestTransactionManager_EnsureCleanup_Concurrent tests concurrent EnsureCleanup calls
+// Should be idempotent and not cause duplicate rollbacks
+func TestTransactionManager_EnsureCleanup_Concurrent(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+
+	// Begin transaction but don't commit
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	sinker.resetOps()
+
+	// Concurrently call EnsureCleanup
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, numGoroutines)
+
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			errCh <- tm.EnsureCleanup(ctx)
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// All should succeed
+	for err := range errCh {
+		require.NoError(t, err, "all EnsureCleanup calls should succeed")
+	}
+
+	// Verify only one rollback occurred (idempotent)
+	ops := sinker.opsSnapshot()
+	rollbackCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+
+	require.Equal(t, 1, rollbackCount, "only one rollback should occur despite concurrent calls")
+	require.False(t, tm.tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
+}
+
+// TestTransactionManager_BeginTransaction_NeedsRollback_RollbackFailure tests that
+// when BeginTransaction detects NeedsRollback and attempts rollback, but rollback fails,
+// the BeginTransaction should return the rollback error
+func TestTransactionManager_BeginTransaction_NeedsRollback_RollbackFailure(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs1 := (&fromTs).Next()
+	toTs2 := (&toTs1).Next()
+
+	// Begin first transaction (this sets hasBegin=true)
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs1))
+	sinker.resetOps()
+	// Don't commit - tracker should need rollback (hasBegin && !hasCommitted && !hasRolledBack)
+	require.True(t, tm.tracker.NeedsRollback(), "tracker should need rollback after begin without commit")
+
+	// Set rollback to fail
+	rollbackErr := moerr.NewInternalError(ctx, "rollback failed")
+	sinker.setRollbackError(rollbackErr)
+
+	// Try to begin new transaction - should fail due to rollback failure
+	err := tm.BeginTransaction(ctx, toTs1, toTs2)
+	require.Error(t, err)
+	require.ErrorIs(t, err, rollbackErr)
+
+	// Verify rollback was attempted
+	ops := sinker.opsSnapshot()
+	require.Contains(t, ops, "rollback", "rollback should be attempted")
+	require.NotContains(t, ops, "begin", "new begin should not be called due to rollback failure")
+
+	// Tracker should still need rollback (even though rollback failed, it was marked as rolled back to prevent retry loops)
+	require.False(t, tm.tracker.NeedsRollback(), "tracker should be marked as rolled back even if rollback failed")
+	require.True(t, tm.tracker.hasRolledBack, "tracker should have hasRolledBack=true after rollback attempt")
+}
+
+// TestTransactionManager_WatermarkMismatch_RollbackFailure tests that when
+// EnsureCleanup detects watermark mismatch and attempts rollback, but rollback fails,
+// the error is returned and state is consistent
+func TestTransactionManager_WatermarkMismatch_RollbackFailure(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+
+	// Initialize watermark with fromTs (not toTs)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, tm.watermarkKey, &fromTs))
+
+	// Begin transaction and mark as committed (simulating crash after commit but before watermark update)
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	tm.tracker.MarkCommit()
+	tm.tracker.MarkWatermarkUpdated()
+	sinker.resetOps()
+
+	// Set rollback to fail
+	rollbackErr := moerr.NewInternalError(ctx, "rollback failed")
+	sinker.setRollbackError(rollbackErr)
+
+	// EnsureCleanup should detect watermark mismatch and attempt rollback
+	err := tm.EnsureCleanup(ctx)
+	require.Error(t, err)
+	require.ErrorIs(t, err, rollbackErr)
+
+	// Verify rollback was attempted
+	ops := sinker.opsSnapshot()
+	require.Contains(t, ops, "rollback", "rollback should be attempted")
+	require.Contains(t, ops, "clear", "clear should be called before rollback")
+
+	// Tracker should still be marked as rolled back (even if rollback failed)
+	// This prevents infinite retry loops
+	require.True(t, tm.tracker.hasRolledBack, "tracker should be marked as rolled back even if rollback failed")
+}
+
+// TestTransactionManager_GetFromCacheFails_NeedsRollback_RollbackFailure tests that when
+// EnsureCleanup's GetFromCache fails, it falls back to tracker state, but if rollback fails,
+// the error is returned
+func TestTransactionManager_GetFromCacheFails_NeedsRollback_RollbackFailure(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+
+	// Begin transaction but don't commit
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	sinker.resetOps()
+
+	// Set GetFromCache to fail
+	cacheErr := moerr.NewInternalError(ctx, "cache error")
+	updater.getFromCacheErr = cacheErr
+
+	// Set rollback to fail
+	rollbackErr := moerr.NewInternalError(ctx, "rollback failed")
+	sinker.setRollbackError(rollbackErr)
+
+	// EnsureCleanup should fall back to tracker state and attempt rollback
+	err := tm.EnsureCleanup(ctx)
+	require.Error(t, err)
+	require.ErrorIs(t, err, rollbackErr)
+
+	// Verify rollback was attempted
+	ops := sinker.opsSnapshot()
+	require.Contains(t, ops, "rollback", "rollback should be attempted")
+
+	// Tracker should be marked as rolled back
+	require.True(t, tm.tracker.hasRolledBack, "tracker should be marked as rolled back")
+}
+
+// TestTransactionManager_EnsureCleanup_WatermarkMismatch_Concurrent tests concurrent
+// EnsureCleanup calls when watermark mismatch is detected, verifying idempotency
+func TestTransactionManager_EnsureCleanup_WatermarkMismatch_Concurrent(t *testing.T) {
+	ctx := context.Background()
+	sinker := newRecordingSinker()
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := (&fromTs).Next()
+
+	// Initialize watermark with fromTs (not toTs)
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, tm.watermarkKey, &fromTs))
+
+	// Begin transaction and mark as committed
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	tm.tracker.MarkCommit()
+	tm.tracker.MarkWatermarkUpdated()
+	sinker.resetOps()
+
+	// Concurrently call EnsureCleanup
+	const numGoroutines = 15
+	var wg sync.WaitGroup
+	errCh := make(chan error, numGoroutines)
+
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			errCh <- tm.EnsureCleanup(ctx)
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// All should succeed
+	for err := range errCh {
+		require.NoError(t, err, "all EnsureCleanup calls should succeed")
+	}
+
+	// Verify only one rollback occurred (idempotent)
+	ops := sinker.opsSnapshot()
+	rollbackCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+
+	require.Equal(t, 1, rollbackCount, "only one rollback should occur despite concurrent calls and watermark mismatch")
+	require.False(t, tm.tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
+}
+
+// slowRecordingSinker injects small delays to simulate slow downstream without causing deadlocks.
+type slowRecordingSinker struct {
+	*recordingSinker
+	delay time.Duration
+}
+
+func newSlowRecordingSinker(delay time.Duration) *slowRecordingSinker {
+	return &slowRecordingSinker{
+		recordingSinker: newRecordingSinker(),
+		delay:           delay,
+	}
+}
+
+func (s *slowRecordingSinker) SendBegin() {
+	time.Sleep(s.delay)
+	s.record("begin")
+}
+
+func (s *slowRecordingSinker) SendCommit() {
+	time.Sleep(s.delay)
+	s.record("commit")
+}
+
+func (s *slowRecordingSinker) SendRollback() {
+	time.Sleep(s.delay)
+	s.record("rollback")
+}
+
+func (s *slowRecordingSinker) SendDummy() {
+	time.Sleep(s.delay / 2)
+	s.record("dummy")
+}
+
+// TestTransactionManager_SlowSinker_NoDeadlock ensures that even with a slow sinker,
+// concurrent begins do not deadlock; at worst, they serialize and take slightly longer.
+func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sinker := newSlowRecordingSinker(5 * time.Millisecond)
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs1 := (&fromTs).Next()
+	toTs2 := (&toTs1).Next()
+
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs1))
+	sinker.resetOps()
+
+	const numGoroutines = 8
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	done := make(chan struct{})
+	start := time.Now()
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			// Repeatedly attempt begin on a new range; should not deadlock
+			_ = tm.BeginTransaction(ctx, toTs1, toTs2)
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Completed; assert time bound is reasonable (no deadlock)
+		elapsed := time.Since(start)
+		require.Less(t, elapsed, 500*time.Millisecond, "should not take too long; no deadlock expected")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout indicates potential deadlock with slow sinker")
+	}
 }

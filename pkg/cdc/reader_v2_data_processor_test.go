@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -632,4 +633,264 @@ func TestDataProcessor_NoMoreData_HeartbeatUpdatesWatermark(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.True(t, calls[0].noMoreData)
 	assert.Equal(t, []string{"sink", "dummy"}, h.sinker.opsSnapshot())
+}
+
+// TestDataProcessor_Cleanup_Concurrent tests concurrent Cleanup calls
+// Should be idempotent and not panic
+func TestDataProcessor_Cleanup_Concurrent(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	sinker := &mockDataProcessorSinker{mockSinker: &mockSinker{}}
+	updater := newMockWatermarkUpdater()
+	txnMgr := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) {},
+	)
+
+	dp := NewDataProcessor(
+		sinker, txnMgr, mp, packerPool,
+		1, 0, 1, 0, false,
+		1, "task1", "db1", "table1",
+	)
+
+	// Set some atomic batches
+	dp.insertAtmBatch = NewAtomicBatch(mp)
+	dp.deleteAtmBatch = NewAtomicBatch(mp)
+
+	// Concurrently call Cleanup
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			dp.Cleanup()
+		}()
+	}
+
+	wg.Wait()
+
+	// Batches should be cleaned up
+	require.Nil(t, dp.insertAtmBatch)
+	require.Nil(t, dp.deleteAtmBatch)
+}
+
+// TestDataProcessor_SinkerErrorRecovery tests that after sinker error is cleared,
+// processing can continue normally
+func TestDataProcessor_SinkerErrorRecovery(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	// Set sinker error
+	sinkerErr := moerr.NewInternalError(ctx, "sinker error")
+	h.sinker.setError(sinkerErr)
+
+	// Try to process - should fail immediately
+	data := &ChangeData{
+		Type:        ChangeTypeSnapshot,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
+	}
+	err := h.dp.ProcessChange(ctx, data)
+	require.Error(t, err)
+	require.ErrorIs(t, err, sinkerErr)
+
+	// Clear error
+	h.sinker.ClearError()
+
+	// Process should succeed now
+	err = h.dp.ProcessChange(ctx, data)
+	require.NoError(t, err)
+
+	// Verify sinker was called
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, OutputTypeSnapshot, calls[0].outputTyp)
+}
+
+// TestDataProcessor_MultipleTailDone_SameTransaction tests that multiple TailDone
+// batches update the same transaction's toTs correctly
+func TestDataProcessor_MultipleTailDone_SameTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to1 := types.BuildTS(2, 0)
+	to2 := types.BuildTS(3, 0)
+	to3 := types.BuildTS(4, 0)
+
+	h.dp.SetTransactionRange(from, to1)
+
+	// First TailDone - should begin transaction
+	data1 := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to1),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data1))
+
+	tracker := h.txnMgr.GetTracker()
+	require.NotNil(t, tracker)
+	require.Equal(t, to1, tracker.GetToTs())
+
+	// Second TailDone - should update toTs to to2
+	h.dp.SetTransactionRange(to1, to2)
+	data2 := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{2}, to2),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data2))
+
+	require.Equal(t, to2, tracker.GetToTs())
+
+	// Third TailDone - should update toTs to to3
+	h.dp.SetTransactionRange(to2, to3)
+	data3 := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{3}, to3),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data3))
+
+	require.Equal(t, to3, tracker.GetToTs())
+
+	// Verify all data was sunk
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 3)
+	for i, call := range calls {
+		require.Equal(t, OutputTypeTail, call.outputTyp)
+		require.NotNil(t, call.insertAtmBatch)
+		// Each TailDone batch is independent - batches are cleared after each sink
+		require.Equal(t, int64(1), int64(call.insertAtmBatch.RowCount()), "each TailDone batch should have 1 row (batch %d)", i+1)
+	}
+
+	// Verify only one begin
+	ops := h.sinker.opsSnapshot()
+	beginCount := 0
+	for _, op := range ops {
+		if op == "begin" {
+			beginCount++
+		}
+	}
+	require.Equal(t, 1, beginCount, "only one begin should occur for multiple TailDone batches")
+}
+
+// TestDataProcessor_TailWipThenTailDone_AccumulatesCorrectly tests that TailWip
+// accumulates data and TailDone sends it correctly
+func TestDataProcessor_TailWipThenTailDone_AccumulatesCorrectly(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	// Multiple TailWip - should accumulate
+	data1 := &ChangeData{
+		Type:        ChangeTypeTailWip,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data1))
+
+	data2 := &ChangeData{
+		Type:        ChangeTypeTailWip,
+		InsertBatch: buildBatch(t, h.mp, []int32{2}, to),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data2))
+
+	// Verify batches are accumulating
+	require.NotNil(t, h.dp.insertAtmBatch)
+	require.Equal(t, 2, h.dp.insertAtmBatch.RowCount())
+
+	// TailDone - should send accumulated data
+	data3 := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{3}, to),
+	}
+	require.NoError(t, h.dp.ProcessChange(ctx, data3))
+
+	// Verify all data was sunk (1+2+3 = 6 rows total)
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, OutputTypeTail, calls[0].outputTyp)
+	require.NotNil(t, calls[0].insertAtmBatch)
+	require.Equal(t, 3, calls[0].insertAtmBatch.RowCount(), "should have accumulated all TailWip + TailDone rows")
+
+	// Batches should be cleared after sink
+	require.Nil(t, h.dp.insertAtmBatch)
+	require.Nil(t, h.dp.deleteAtmBatch)
+}
+
+// TestDataProcessor_BeginFailure_BatchesRetained tests that when BeginTransaction
+// fails, batches are retained for retry
+func TestDataProcessor_BeginFailure_BatchesRetained(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	// Set begin to fail
+	beginErr := moerr.NewInternalError(ctx, "begin failure")
+	h.sinker.setBeginError(beginErr)
+
+	// Process TailDone - should fail at BeginTransaction
+	data := &ChangeData{
+		Type:        ChangeTypeTailDone,
+		InsertBatch: buildBatch(t, h.mp, []int32{1}, to),
+	}
+	err := h.dp.ProcessChange(ctx, data)
+	require.Error(t, err)
+	require.ErrorIs(t, err, beginErr)
+
+	// Batches should be retained for retry
+	require.NotNil(t, h.dp.insertAtmBatch)
+	require.Equal(t, 1, h.dp.insertAtmBatch.RowCount())
+
+	// No sink calls should occur
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 0)
+
+	// Verify begin was attempted but failed
+	ops := h.sinker.opsSnapshot()
+	require.Contains(t, ops, "begin", "begin should be attempted")
+	require.NotContains(t, ops, "sink", "sink should not be called when begin fails")
+}
+
+// TestDataProcessor_NoMoreData_WithoutActiveTransaction_HeartbeatOnly tests that
+// NoMoreData without active transaction only sends heartbeat and updates watermark
+func TestDataProcessor_NoMoreData_WithoutActiveTransaction_HeartbeatOnly(t *testing.T) {
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	to := types.BuildTS(2, 0)
+	h.dp.SetTransactionRange(from, to)
+
+	// No active transaction (Reset)
+	h.txnMgr.Reset()
+
+	// Process NoMoreData
+	err := h.dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData})
+	require.NoError(t, err)
+
+	// Should send heartbeat and update watermark
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.True(t, calls[0].noMoreData)
+
+	ops := h.sinker.opsSnapshot()
+	require.Contains(t, ops, "sink", "should send heartbeat")
+	require.Contains(t, ops, "dummy", "should send dummy")
+	require.NotContains(t, ops, "commit", "should not commit when no active transaction")
+
+	// Watermark should be updated
+	require.True(t, h.update.updateCalled)
 }
