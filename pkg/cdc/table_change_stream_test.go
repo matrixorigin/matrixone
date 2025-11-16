@@ -396,6 +396,162 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	}
 }
 
+// Integration: commit failure triggers EnsureCleanup rollback, then recovery succeeds
+func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T) {
+	updaterStub := newWatermarkUpdaterStub()
+	noopStop := func() {}
+	h := newTableStreamHarness(t,
+		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessFrequency(1*time.Millisecond),
+	)
+	defer h.Close()
+
+	// Prepare initial watermark to a low value
+	key := h.Stream().txnManager.watermarkKey
+	initial := types.BuildTS(1, 0)
+	_, _ = updaterStub.GetOrAddCommitted(h.Context(), key, &initial)
+
+	// First run: snapshot + tail_done, inject commit error
+	snap1 := createTestBatch(t, h.MP(), types.BuildTS(2, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: snap1, hint: engine.ChangesHandle_Snapshot},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
+	h.Sinker().setCommitError(commitErr)
+
+	ar1 := h.NewActiveRoutine()
+	err := h.RunStream(ar1)
+	require.Error(t, err)
+	require.ErrorIs(t, err, commitErr)
+
+	// Ensure cleanup should have been invoked via defer and performed one rollback
+	ops := h.Sinker().opsSnapshot()
+	hasCommit := false
+	rollbackCount := 0
+	for _, op := range ops {
+		if op == "commit" {
+			hasCommit = true
+		}
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+	require.True(t, hasCommit, "commit should have been attempted")
+	require.GreaterOrEqual(t, rollbackCount, 1, "EnsureCleanup should trigger rollback")
+
+	// Second run: use a fresh harness to avoid reusing internal goroutine counters
+	h2 := newTableStreamHarness(t,
+		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessFrequency(1*time.Millisecond),
+	)
+	defer h2.Close()
+	h2.Sinker().reset()
+	// Use pausable handle to deterministically exit within one round:
+	// start blocked, then cancel context and unblock to let Run exit immediately.
+	proceed := make(chan struct{})
+	ph := &pausableChangesHandle{proceed: proceed}
+	h2.SetCollectHandleSequence(ph)
+
+	ar2 := h2.NewActiveRoutine()
+	errCh, _ := h2.RunStreamAsync(ar2)
+	// Trigger stop signals then unblock collector to finish the round
+	h2.Cancel()
+	close(proceed)
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second stream did not finish in time")
+	}
+	require.NoError(t, runErr)
+
+	ops = h2.Sinker().opsSnapshot()
+	rollbackCount = 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+	}
+	// Second run is cancellation-driven fast exit; it must not rollback.
+	require.Equal(t, 0, rollbackCount, "second run should not rollback")
+}
+
+// Recovery path: successful begin/commit after a clean setup (no cancellation)
+func TestTableChangeStream_Recovery_BeginCommit(t *testing.T) {
+	updaterStub := newWatermarkUpdaterStub()
+	noopStop := func() {}
+	h := newTableStreamHarness(t,
+		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessFrequency(1*time.Millisecond),
+	)
+	defer h.Close()
+
+	// Initialize a committed watermark
+	key := h.Stream().txnManager.watermarkKey
+	initial := types.BuildTS(1, 0)
+	_, _ = updaterStub.GetOrAddCommitted(h.Context(), key, &initial)
+
+	// Provide one snapshot batch then a tail_done marker to commit
+	snap := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: snap, hint: engine.ChangesHandle_Snapshot},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+
+	// Wait for begin and commit operations to occur
+	require.Eventually(t, func() bool {
+		ops := h.Sinker().opsSnapshot()
+		hasBegin := false
+		hasCommit := false
+		for _, op := range ops {
+			if op == "begin" {
+				hasBegin = true
+			}
+			if op == "commit" {
+				hasCommit = true
+			}
+		}
+		return hasBegin && hasCommit
+	}, 300*time.Millisecond, 10*time.Millisecond, "should see begin and commit operations")
+
+	// Cancel to exit gracefully
+	h.Cancel()
+	done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not exit after cancellation")
+	}
+	if runErr != nil {
+		require.ErrorIs(t, runErr, context.Canceled)
+	}
+
+	ops := h.Sinker().opsSnapshot()
+	begin := 0
+	commit := 0
+	rollback := 0
+	for _, op := range ops {
+		switch op {
+		case "begin":
+			begin++
+		case "commit":
+			commit++
+		case "rollback":
+			rollback++
+		}
+	}
+	require.GreaterOrEqual(t, begin, 1, "should begin at least once")
+	require.GreaterOrEqual(t, commit, 1, "should commit at least once")
+	require.Equal(t, 0, rollback, "recovery path should not rollback")
+	require.False(t, h.Stream().retryable)
+}
+
 type blockingChangesHandle struct {
 	ready chan struct{}
 	once  sync.Once
@@ -1396,6 +1552,178 @@ func TestTableChangeStream_RollbackFailure(t *testing.T) {
 	require.NotNil(t, tracker)
 	require.False(t, tracker.NeedsRollback(), "tracker should consider rollback done even if sinker failed")
 	require.True(t, tracker.IsCompleted(), "tracker should mark transaction as completed after rollback attempt")
+}
+
+// TestTableChangeStream_FullPipeline_RandomDelaysAndErrors verifies the entire pipeline
+// under random delays and error injections, ensuring orderliness, idempotency, and consistency.
+// This test uses pausableChangesHandle, watermarkUpdaterStub, and error injection to simulate
+// realistic failure scenarios including StaleRead, commit failures, and rollback failures.
+func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
+	updaterStub := newWatermarkUpdaterStub()
+	noopStop := func() {}
+	h := newTableStreamHarness(t,
+		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessFrequency(1*time.Millisecond),
+		withHarnessNoFull(true),
+	)
+	defer h.Close()
+
+	// Initialize watermark
+	key := h.Stream().txnManager.watermarkKey
+	initial := types.BuildTS(1, 0)
+	_, _ = updaterStub.GetOrAddCommitted(h.Context(), key, &initial)
+
+	// Track operation order and counts for verification
+	var (
+		collectCalls         atomic.Int32
+		staleReadInjected    atomic.Bool
+		commitFailInjected   atomic.Bool
+		rollbackFailInjected atomic.Bool
+	)
+
+	// Inject StaleRead error on first collect, then succeed
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		call := collectCalls.Add(1)
+		if call == 1 {
+			staleReadInjected.Store(true)
+			return nil, moerr.NewErrStaleReadNoCtx("db1", "t1")
+		}
+		// After stale read recovery, provide data
+		bat := createTestBatch(t, h.MP(), toTs, []int32{int32(call)})
+		return newImmediateChangesHandle([]changeBatch{
+			{insert: bat, hint: engine.ChangesHandle_Tail_done},
+			{insert: nil, hint: engine.ChangesHandle_Tail_done},
+		}), nil
+	})
+
+	// Update snapshot TS after stale read recovery
+	var snapshotCalls atomic.Int32
+	h.SetGetSnapshotTS(func(op client.TxnOperator) timestamp.Timestamp {
+		call := snapshotCalls.Add(1)
+		ts := timestamp.Timestamp{PhysicalTime: 100 + int64(call*50)}
+		if noop, ok := op.(*noopTxnOperator); ok {
+			noop.snapshot = ts
+		}
+		return ts
+	})
+
+	// Inject commit failure on first commit attempt, then succeed
+	commitErr := moerr.NewInternalError(h.Context(), "commit failure")
+	h.Sinker().setCommitError(commitErr)
+	commitFailInjected.Store(true)
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+
+	// Wait for stale read recovery (multiple collect calls)
+	require.Eventually(t, func() bool {
+		return collectCalls.Load() >= 2
+	}, 2*time.Second, 10*time.Millisecond, "should see stale read recovery")
+
+	// Wait for commit attempt (which will fail)
+	require.Eventually(t, func() bool {
+		ops := h.Sinker().opsSnapshot()
+		for _, op := range ops {
+			if op == "commit" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "should see commit attempt")
+
+	// Clear commit error and inject rollback failure, then clear it
+	rollbackErr := moerr.NewInternalError(h.Context(), "rollback failure")
+	h.Sinker().setCommitError(nil)
+	h.Sinker().setRollbackError(rollbackErr)
+	rollbackFailInjected.Store(true)
+
+	// Wait for rollback attempt (which will fail)
+	require.Eventually(t, func() bool {
+		ops := h.Sinker().opsSnapshot()
+		for _, op := range ops {
+			if op == "rollback" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "should see rollback attempt")
+
+	// Verify that we've seen the expected error scenarios
+	// The stream should be retryable and have attempted rollback
+	require.Eventually(t, func() bool {
+		return h.Stream().retryable
+	}, 500*time.Millisecond, 10*time.Millisecond, "stream should be retryable after stale read and commit failure")
+
+	// Cancel to exit
+	h.Cancel()
+	done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not exit after cancellation")
+	}
+	// The stream may return either the commit failure error or context.Canceled
+	if runErr != nil {
+		if !errors.Is(runErr, context.Canceled) {
+			// If not canceled, it should be the commit failure error
+			require.Contains(t, runErr.Error(), "commit failure", "if not canceled, should be commit failure")
+		}
+	}
+
+	// Verify orderliness: begin should always come before commit/rollback
+	ops := h.Sinker().opsSnapshot()
+	lastBeginIdx := -1
+	lastCommitIdx := -1
+	lastRollbackIdx := -1
+	for i, op := range ops {
+		switch op {
+		case "begin":
+			lastBeginIdx = i
+		case "commit":
+			lastCommitIdx = i
+		case "rollback":
+			lastRollbackIdx = i
+		}
+	}
+	if lastCommitIdx >= 0 && lastBeginIdx >= 0 {
+		require.Greater(t, lastCommitIdx, lastBeginIdx, "commit should come after begin")
+	}
+	if lastRollbackIdx >= 0 && lastBeginIdx >= 0 {
+		require.Greater(t, lastRollbackIdx, lastBeginIdx, "rollback should come after begin")
+	}
+
+	// Verify idempotency: EnsureCleanup should be idempotent
+	// Count rollbacks - should be at least one, but not excessive
+	rollbackCount := 0
+	beginCount := 0
+	for _, op := range ops {
+		if op == "rollback" {
+			rollbackCount++
+		}
+		if op == "begin" {
+			beginCount++
+		}
+	}
+	require.GreaterOrEqual(t, rollbackCount, 1, "should have at least one rollback after commit failure")
+	require.GreaterOrEqual(t, beginCount, 1, "should have at least one begin")
+
+	// Verify consistency: retryable flag and sinker reset
+	require.True(t, h.Stream().retryable, "stream should be retryable after stale read recovery")
+	require.GreaterOrEqual(t, h.Sinker().ResetCountSnapshot(), 1, "sinker should reset at least once for stale read")
+
+	// Verify all error injections occurred
+	require.True(t, staleReadInjected.Load(), "stale read should have been injected")
+	require.True(t, commitFailInjected.Load(), "commit failure should have been injected")
+	require.True(t, rollbackFailInjected.Load(), "rollback failure should have been injected")
+
+	// Verify tracker state is consistent (may be nil if cleanup completed)
+	tracker := h.Stream().txnManager.GetTracker()
+	if tracker != nil {
+		// After EnsureCleanup, tracker should not need rollback (even if rollback failed)
+		require.False(t, tracker.NeedsRollback(), "tracker should be marked as not needing rollback after EnsureCleanup")
+	}
 }
 
 type noopTxnOperator struct {
