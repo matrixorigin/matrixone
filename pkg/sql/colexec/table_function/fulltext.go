@@ -141,19 +141,23 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 
 // return (doc_id, score) as result
 // when scoremap is empty, return result end.
-func (u *fulltextState) returnResultFromHeap(proc *process.Process, hp vectorindex.SearchResultHeap) (vm.CallResult, error) {
+func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResult, error) {
 
 	blocksz := 8192
-	n := hp.Len()
+
+	if u.minheap == nil {
+		return vm.CancelResult, nil
+	}
+	n := u.minheap.Len()
 	if n > blocksz {
 		n = blocksz
 	}
 
 	for range n {
-		srif := hp.Pop()
+		srif := heap.Pop(&u.minheap).(vectorindex.SearchResultIf)
 		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
 		if !ok {
-			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "heap return key is not SearchResultAnyKey")
+			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
 		}
 
 		// doc_id returned
@@ -202,16 +206,15 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 	} else {
 		// build minheap
-		hp := u.minheap
-		if hp == nil {
-			hp, err = sort_topk(u, proc, u.sacc, u.limit)
+		if u.minheap == nil {
+			err = sort_topk(u, proc, u.sacc, u.limit)
 			if err != nil {
 				return vm.CancelResult, err
 			}
 		}
 
-		if hp != nil {
-			return u.returnResultFromHeap(proc, hp)
+		if u.minheap != nil {
+			return u.returnResultFromHeap(proc)
 		}
 		return vm.CancelResult, nil
 	}
@@ -349,15 +352,16 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	return scoremap, nil
 }
 
-func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (minheap vectorindex.SearchResultHeap, err error) {
+func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
 	aggcnt := u.aggcnt
 	u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
+	heap.Init(&u.minheap)
 
 	for doc_id, addr := range u.agghtab {
 
 		docvec, err := u.mpool.GetItem(addr)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		docLen := int64(0)
@@ -367,7 +371,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 
 		score, err := s.Eval(docvec, docLen, aggcnt)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if len(score) > 0 {
@@ -378,7 +382,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 					heap.Fix(&u.minheap, 0)
 				}
 			} else {
-				u.minheap.Push(&vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
 			}
 		}
 	}
@@ -387,7 +391,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	u.mpool.Close()
 	clear(u.agghtab)
 
-	return u.minheap, nil
+	return nil
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))
