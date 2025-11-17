@@ -231,6 +231,8 @@ func (r *router) Connect(
 	// Creates a server connection.
 	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
 	if err != nil {
+		// Connection failed, remove the placeholder that was added in selectOne.
+		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)
 		return nil, nil, err
 	}
 
@@ -246,6 +248,8 @@ func (r *router) Connect(
 	resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
 	if err != nil {
 		_ = sc.Close()
+		// Handshake failed, remove the placeholder that was added in selectOne.
+		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.
