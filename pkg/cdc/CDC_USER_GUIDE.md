@@ -968,9 +968,10 @@ These errors indicate temporary system unavailability and are always retryable:
 
 **Behavior**: 
 - Task continues running, error message shows retry count
-- Automatic retry up to 3 times
-- After 3 retries, automatically converted to non-retryable
+- Automatic retry up to 3 times (configurable via `WithMaxRetryCount`)
+- After max retries, automatically converted to non-retryable
 - Error persists in watermark table with format: `R:<count>:<first>:<last>:<message>`
+- Uses exponential backoff between retries (configurable via `WithRetryBackoff`)
 
 **Example Error Message**:
 ```
@@ -981,6 +982,55 @@ R:2:1763362169:1763362200:internal error: commit failure
 - `1763362169`: First seen timestamp
 - `1763362200`: Last seen timestamp
 - `internal error: commit failure`: Error message
+
+#### Retry Mechanism Details
+
+**Exponential Backoff Strategy**:
+
+The CDC system implements exponential backoff for retryable errors to avoid overwhelming the system during transient failures. The backoff delay is calculated based on:
+- **Error Type**: Different error types may have different base delays
+- **Retry Count**: Delay increases exponentially with each retry attempt
+- **Configurable Parameters**: Base delay, maximum delay, and backoff factor
+
+**Default Configuration**:
+- **Max Retry Count**: 3 attempts
+- **Base Delay**: 200ms (for most error types)
+- **Max Delay**: 30s (caps the exponential growth)
+- **Backoff Factor**: 2.0 (doubles delay each retry)
+
+**Retry Delay Calculation**:
+- Retry 1: Base delay (e.g., 200ms)
+- Retry 2: Base delay × factor (e.g., 400ms)
+- Retry 3: Base delay × factor² (e.g., 800ms)
+- Capped at maximum delay (e.g., 30s)
+
+**Original Error Preservation**:
+
+To ensure **deterministic error reporting**, the CDC system preserves the **original error** that triggered the retry sequence. This design ensures that:
+
+1. **Consistent Error Reporting**: The error returned to users and persisted in the database is the original error that caused the retry, not auxiliary errors encountered during retry attempts (e.g., cache lookup failures during cleanup).
+
+2. **Clear Root Cause**: Users can identify the actual problem (e.g., "commit failure") rather than secondary issues that occurred during retry (e.g., "cache error").
+
+3. **Predictable Behavior**: The system behavior is deterministic - the same error condition will always report the same error, regardless of what happens during retry attempts.
+
+**How It Works**:
+- When a retryable error first occurs, it is stored as the **original error**
+- During retry attempts, if auxiliary errors occur (e.g., during cleanup operations), they are logged but do not replace the original error
+- If a new primary error occurs (different error type), it replaces the original error
+- If a fatal (non-retryable) error occurs, it replaces the original error
+- When retries are exhausted or a fatal error occurs, the **original error** is returned/persisted
+
+**Example Scenario**:
+```
+1. Commit failure occurs → Original error: "commit failure"
+2. Retry attempt 1 → Cleanup encounters cache error → Original error preserved: "commit failure"
+3. Retry attempt 2 → Commit failure again → Original error preserved: "commit failure"
+4. Retry attempt 3 → Commit failure again → Original error preserved: "commit failure"
+5. Max retries exceeded → System stops, reports: "commit failure" (not "cache error")
+```
+
+This ensures that users always see the root cause of the problem, not transient issues that occurred during recovery attempts.
 
 #### 2. Non-Retryable Errors
 

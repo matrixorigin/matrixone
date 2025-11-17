@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,14 @@ type TableChangeStream struct {
 	cleanupRollbackErr error       // Set by processWithTxn defer if rollback fails (protected by stateMu)
 	hasSucceeded       atomic.Bool // Tracks if reader has successfully processed data at least once
 
+	// Retry state with exponential backoff
+	retryCount      int           // Current retry count for the same error type
+	lastErrorType   string        // Last error type for tracking consecutive errors
+	nextRetryDelay  time.Duration // Next retry delay (exponential backoff)
+	lastErrorTime   time.Time     // When last error occurred
+	originalError   error         // Original error that triggered retry (preserved during retries)
+	originalErrType string        // Type of original error (for error type consistency check)
+
 	// Observability
 	progressTracker *ProgressTracker
 
@@ -103,6 +112,12 @@ type TableChangeStream struct {
 	lastWatermarkAdvance      time.Time
 	noProgressSince           time.Time
 	lastNoProgressWarning     time.Time
+
+	// Retry configuration
+	maxRetryCount      int           // Max retry count before converting to non-retryable
+	retryBackoffBase   time.Duration // Base delay for exponential backoff
+	retryBackoffMax    time.Duration // Max delay for exponential backoff
+	retryBackoffFactor float64       // Factor for exponential backoff
 }
 
 type TableChangeStreamOption func(*tableChangeStreamOptions)
@@ -110,11 +125,19 @@ type TableChangeStreamOption func(*tableChangeStreamOptions)
 type tableChangeStreamOptions struct {
 	watermarkStallThreshold   time.Duration
 	noProgressWarningInterval time.Duration
+	maxRetryCount             int           // Max retry count before converting to non-retryable
+	retryBackoffBase          time.Duration // Base delay for exponential backoff
+	retryBackoffMax           time.Duration // Max delay for exponential backoff
+	retryBackoffFactor        float64       // Factor for exponential backoff
 }
 
 const (
 	defaultWatermarkStallThreshold   = time.Minute
 	defaultNoProgressWarningInterval = 10 * time.Second
+	defaultMaxRetryCount             = 3
+	defaultRetryBackoffBase          = 200 * time.Millisecond
+	defaultRetryBackoffMax           = 30 * time.Second
+	defaultRetryBackoffFactor        = 2.0
 )
 
 func defaultTableChangeStreamOptions() *tableChangeStreamOptions {
@@ -130,6 +153,18 @@ func (opts *tableChangeStreamOptions) fillDefaults() {
 	if opts.noProgressWarningInterval <= 0 {
 		opts.noProgressWarningInterval = defaultNoProgressWarningInterval
 	}
+	if opts.maxRetryCount <= 0 {
+		opts.maxRetryCount = defaultMaxRetryCount
+	}
+	if opts.retryBackoffBase <= 0 {
+		opts.retryBackoffBase = defaultRetryBackoffBase
+	}
+	if opts.retryBackoffMax <= 0 {
+		opts.retryBackoffMax = defaultRetryBackoffMax
+	}
+	if opts.retryBackoffFactor <= 1.0 {
+		opts.retryBackoffFactor = defaultRetryBackoffFactor
+	}
 }
 
 // WithWatermarkStallThreshold configures how long snapshot stagnation is tolerated before surfacing an error.
@@ -143,6 +178,22 @@ func WithWatermarkStallThreshold(threshold time.Duration) TableChangeStreamOptio
 func WithNoProgressWarningInterval(interval time.Duration) TableChangeStreamOption {
 	return func(opts *tableChangeStreamOptions) {
 		opts.noProgressWarningInterval = interval
+	}
+}
+
+// WithMaxRetryCount configures the maximum retry count before converting retryable errors to non-retryable.
+func WithMaxRetryCount(count int) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.maxRetryCount = count
+	}
+}
+
+// WithRetryBackoff configures exponential backoff parameters for retryable errors.
+func WithRetryBackoff(base, max time.Duration, factor float64) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.retryBackoffBase = base
+		opts.retryBackoffMax = max
+		opts.retryBackoffFactor = factor
 	}
 }
 
@@ -269,6 +320,11 @@ var NewTableChangeStream = func(
 		watermarkStallThreshold:   opts.watermarkStallThreshold,
 		noProgressWarningInterval: opts.noProgressWarningInterval,
 		lastWatermarkAdvance:      time.Now(),
+		// Retry configuration (stored for access in retry logic)
+		maxRetryCount:      opts.maxRetryCount,
+		retryBackoffBase:   opts.retryBackoffBase,
+		retryBackoffMax:    opts.retryBackoffMax,
+		retryBackoffFactor: opts.retryBackoffFactor,
 	}
 
 	tableLabel := progressTracker.tableKey()
@@ -398,6 +454,9 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 				s.retryable = false
 			}
 			retryable := s.retryable
+			retryCount := s.retryCount
+			nextRetryDelay := s.nextRetryDelay
+			errType := s.lastErrorType
 			s.stateMu.Unlock()
 
 			s.progressTracker.SetState("error")
@@ -408,11 +467,61 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 				"cdc.table_stream.process_failed",
 				zap.String("table", s.tableInfo.String()),
 				zap.Bool("retryable", retryable),
+				zap.Int("retry-count", retryCount),
+				zap.String("error-type", errType),
+				zap.Duration("next-retry-delay", nextRetryDelay),
 				zap.Duration("round-duration", time.Since(roundStart)),
 				zap.Error(err),
 			)
-			return
+
+			// If non-retryable or exceeded max retry count, stop processing
+			if !retryable || retryCount > s.maxRetryCount {
+				// Ensure cleanup is called before stopping (processWithTxn's defer should have already called it,
+				// but we call it again here to be safe, especially for the case where retryCount > maxRetryCount)
+				// This ensures sinker errors are cleared even if we stop due to exceeding max retry count
+				_ = s.txnManager.EnsureCleanup(streamCtx)
+
+				// Preserve original error for deterministic error reporting
+				// This ensures the error that triggered retry is preserved in lastError,
+				// not auxiliary errors encountered during retry attempts
+				s.stateMu.Lock()
+				if s.originalError != nil {
+					// Restore original error to lastError for final error reporting
+					s.lastError = s.originalError
+				}
+				s.stateMu.Unlock()
+				return
+			}
+
+			// Apply exponential backoff: wait before next retry
+			// Use nextRetryDelay if calculated, otherwise use frequency
+			backoffDelay := nextRetryDelay
+			if backoffDelay <= 0 {
+				backoffDelay = s.frequency
+			}
+
+			logutil.Info(
+				"cdc.table_stream.retry_with_backoff",
+				zap.String("table", s.tableInfo.String()),
+				zap.Int("retry-count", retryCount),
+				zap.String("error-type", errType),
+				zap.Duration("backoff-delay", backoffDelay),
+			)
+
+			// Reset tick with backoff delay
+			s.tick.Reset(backoffDelay)
+			// Continue loop to wait for next tick
+			continue
 		}
+
+		// Success: reset retry state and use normal frequency
+		s.stateMu.Lock()
+		s.retryCount = 0
+		s.lastErrorType = ""
+		s.nextRetryDelay = 0
+		s.originalError = nil  // Clear original error on success
+		s.originalErrType = "" // Clear original error type on success
+		s.stateMu.Unlock()
 
 		logutil.Debug(
 			"cdc.table_stream.process_round_done",
@@ -626,23 +735,111 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 }
 
 // updateErrorState updates lastError and retryable atomically
+// Also tracks retry count and error type for exponential backoff
+// Design: Preserves original error during retries to ensure deterministic error reporting
 func (s *TableChangeStream) updateErrorState(err error) {
 	if err == nil {
 		return
 	}
 	retryable := s.determineRetryable(err)
+	errType := s.classifyErrorType(err)
+
 	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
 	// If retryable is already true (e.g., from successful StaleRead recovery),
 	// and new error is a control signal (pause/cancel), preserve the retryable state.
 	// This ensures that successful recovery states are not overwritten by control signals.
 	if s.retryable && IsPauseOrCancelError(err.Error()) {
 		// Preserve retryable = true, but still update lastError
 		s.lastError = err
-	} else {
+		return
+	}
+
+	// Preserve original error during retries to ensure deterministic error reporting
+	// Only update originalError if:
+	// 1. No original error exists (first error)
+	// 2. Current error is non-retryable (new fatal error, should replace original)
+	// 3. Error type changed from retryable to different retryable type (new primary error)
+	isAuxiliaryError := s.isAuxiliaryError(err, errType)
+	if s.originalError == nil {
+		// First error: set as original
+		s.originalError = err
+		s.originalErrType = errType
+	} else if !retryable {
+		// Non-retryable error: replace original (fatal error takes precedence)
+		s.originalError = err
+		s.originalErrType = errType
+	} else if isAuxiliaryError {
+		// Auxiliary error during retry: preserve original error, don't update originalError
+		// But still update lastError for logging and state tracking
 		s.lastError = err
 		s.retryable = retryable
+		// Don't update retry count for auxiliary errors
+		return
+	} else if s.originalErrType != errType {
+		// Different error type: new primary error, replace original
+		s.originalError = err
+		s.originalErrType = errType
+		s.retryCount = 1
+		s.lastErrorType = errType
+		s.lastErrorTime = time.Now()
+		s.nextRetryDelay = s.calculateBackoffDelay(errType, s.retryCount)
+		s.lastError = err
+		s.retryable = retryable
+		return
 	}
-	s.stateMu.Unlock()
+	// Same error type as original: continue retry with same original error
+
+	// Update error state
+	s.lastError = err
+	s.retryable = retryable
+
+	// Track retry count and error type for exponential backoff
+	if retryable {
+		// If same error type, increment retry count
+		if s.lastErrorType == errType {
+			s.retryCount++
+		} else {
+			// Different error type, reset retry count
+			s.retryCount = 1
+			s.lastErrorType = errType
+		}
+		s.lastErrorTime = time.Now()
+
+		// Calculate next retry delay based on error type and retry count
+		s.nextRetryDelay = s.calculateBackoffDelay(errType, s.retryCount)
+	} else {
+		// Non-retryable error, reset retry state
+		s.retryCount = 0
+		s.lastErrorType = ""
+		s.nextRetryDelay = 0
+	}
+}
+
+// isAuxiliaryError checks if an error is an auxiliary error that occurs during cleanup/retry
+// and should not replace the original error. Examples: GetFromCache failures during EnsureCleanup
+func (s *TableChangeStream) isAuxiliaryError(err error, errType string) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+
+	// Errors that occur during cleanup/auxiliary operations should not replace original error
+	// These are typically infrastructure errors that happen during retry attempts
+	auxiliaryPatterns := []string{
+		"get_from_cache",
+		"cache error",
+		"ensure_cleanup",
+	}
+
+	for _, pattern := range auxiliaryPatterns {
+		if strings.Contains(strings.ToLower(errMsg), pattern) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // determineRetryable determines if an error is retryable based on error type and context
@@ -735,6 +932,108 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 
 	// Default: non-retryable for unknown errors
 	return false
+}
+
+// classifyErrorType classifies error into categories for different retry strategies
+func (s *TableChangeStream) classifyErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errMsg := err.Error()
+
+	// Network/system errors - fast retry with shorter backoff
+	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrTNShardNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrRpcError) ||
+		moerr.IsMoErrCode(err, moerr.ErrClientClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(errMsg, "connection") ||
+		strings.Contains(errMsg, "timeout") ||
+		strings.Contains(errMsg, "network") ||
+		strings.Contains(errMsg, "unavailable") ||
+		strings.Contains(errMsg, "rpc") ||
+		strings.Contains(errMsg, "backend") {
+		return "network"
+	}
+
+	// Commit errors - medium retry with moderate backoff
+	if strings.Contains(errMsg, "commit") {
+		return "commit"
+	}
+
+	// StaleRead errors - fast retry (usually resolves quickly)
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+		return "stale_read"
+	}
+
+	// Table relation errors - slow retry (may need table recreation)
+	if strings.Contains(errMsg, "relation") || strings.Contains(errMsg, "truncated") {
+		return "table_relation"
+	}
+
+	// Watermark stall errors - slow retry (may need time for data availability)
+	if strings.Contains(errMsg, "stuck") || strings.Contains(errMsg, "stall") {
+		return "watermark_stall"
+	}
+
+	// Sinker errors with context - medium retry
+	if strings.Contains(errMsg, "sinker") {
+		if strings.Contains(errMsg, "circuit") || strings.Contains(errMsg, "timeout") {
+			return "sinker_transient"
+		}
+		return "sinker"
+	}
+
+	// Default category
+	return "unknown"
+}
+
+// calculateBackoffDelay calculates exponential backoff delay based on error type and retry count
+// Different error types use different backoff strategies
+func (s *TableChangeStream) calculateBackoffDelay(errType string, retryCount int) time.Duration {
+	base := s.retryBackoffBase
+	max := s.retryBackoffMax
+	factor := s.retryBackoffFactor
+
+	// Adjust base delay based on error type
+	switch errType {
+	case "network":
+		// Network errors: fast retry (shorter base delay)
+		base = base / 2 // 100ms default
+		max = max / 2   // 15s default
+	case "stale_read":
+		// StaleRead errors: very fast retry (usually resolves quickly)
+		base = base / 4 // 50ms default
+		max = max / 4   // 7.5s default
+	case "commit":
+		// Commit errors: medium retry (standard backoff)
+		// Use default values
+	case "table_relation", "watermark_stall":
+		// Table/watermark errors: slow retry (longer backoff, may need time)
+		base = base * 2 // 400ms default
+		max = max * 2   // 60s default
+	case "sinker_transient":
+		// Sinker transient errors: medium retry
+		// Use default values
+	default:
+		// Unknown errors: standard backoff
+		// Use default values
+	}
+
+	// Calculate exponential backoff: base * (factor ^ (retryCount - 1))
+	delay := float64(base) * math.Pow(factor, float64(retryCount-1))
+	result := time.Duration(delay)
+
+	// Cap at max
+	if result > max {
+		result = max
+	}
+
+	return result
 }
 
 // clearErrorOnFirstSuccess clears error message on first successful data processing

@@ -195,6 +195,9 @@ func (s *recordingSinker) Error() error {
 func (s *recordingSinker) ClearError() {
 	s.record("clear")
 	s.setError(nil)
+	// Note: We don't clear commitErr/rollbackErr/beginErr here because
+	// these are test-injected errors that should persist across retries.
+	// Only the current error state (s.err) is cleared.
 }
 
 // mockWatermarkUpdater for testing

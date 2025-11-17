@@ -1493,15 +1493,18 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
 	)
 	assert.NoError(t, err)
-	assert.Len(t, tuple, 5)
+	// Table now has 6 columns: account_id, task_id, db_name, table_name, watermark, err_msg
+	assert.Len(t, tuple, 6)
 	assert.Equal(t, fmt.Sprintf("%d", key.AccountId), tuple[0])
 	assert.Equal(t, key.TaskId, tuple[1])
 	assert.Equal(t, key.DBName, tuple[2])
 	assert.Equal(t, key.TableName, tuple[3])
+	// tuple[4] is watermark
+	// tuple[5] is err_msg
 
 	// Error message is now formatted as "N:timestamp:message" (non-retryable)
 	// Note: In "N:timestamp:message" format, retry count is always 0 (not tracked for non-retryable)
-	formattedErrMsg := tuple[4]
+	formattedErrMsg := tuple[5]
 	metadata := ParseErrorMetadata(formattedErrMsg)
 	require.NotNil(t, metadata)
 	assert.False(t, metadata.IsRetryable)
