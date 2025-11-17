@@ -70,6 +70,7 @@ type Options struct {
 	forceRebuildPlan        bool
 	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	adjustTableExtraFunc    func(*api.SchemaExtra) error
+	keepTxnAlive            bool
 }
 
 // StatementOption statement execute option.
