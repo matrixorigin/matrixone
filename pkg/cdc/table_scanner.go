@@ -492,7 +492,7 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	defer func() {
 		if r := recover(); r != nil {
 			panicVal = r
-			err = fmt.Errorf("callback panic: %v", r)
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("callback panic: %v", r))
 			logutil.Error(
 				"cdc.table_detector.callback_panic",
 				zap.Any("panic", r),

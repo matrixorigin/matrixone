@@ -155,7 +155,7 @@ func TestTableDetectorRegisterStartsScanAsync(t *testing.T) {
 	registered := make(chan struct{})
 	go func() {
 		if !td.RegisterIfAbsent("async-task", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil }) {
-			errCh <- fmt.Errorf("RegisterIfAbsent failed for async-task")
+			errCh <- moerr.NewInternalErrorNoCtx("RegisterIfAbsent failed for async-task")
 		}
 		close(registered)
 	}()
@@ -391,7 +391,7 @@ func TestTableDetectorProcessCallbackErrorResetsState(t *testing.T) {
 	var count atomic.Int32
 	cb := func(map[uint32]TblMap) error {
 		count.Add(1)
-		return fmt.Errorf("boom")
+		return moerr.NewInternalErrorNoCtx("boom")
 	}
 
 	require.True(t, d.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, cb))
@@ -547,7 +547,7 @@ func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
 			defer wg.Done()
 			id := fmt.Sprintf("task-%d", idx)
 			if !td.RegisterIfAbsent(id, uint32(idx+1), []string{fmt.Sprintf("db%d", idx)}, []string{fmt.Sprintf("tbl%d", idx)}, func(map[uint32]TblMap) error { return nil }) {
-				errCh <- fmt.Errorf("register failed for %s", id)
+				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("register failed for %s", id))
 				return
 			}
 			time.Sleep(time.Duration(idx%4) * 5 * time.Millisecond)
@@ -629,7 +629,7 @@ func TestTableDetectorConcurrentRegister(t *testing.T) {
 			if !td.RegisterIfAbsent(taskID, uint32(idx+1), []string{db}, []string{table}, func(map[uint32]TblMap) error {
 				return nil
 			}) {
-				errCh <- fmt.Errorf("duplicate registration for %s", taskID)
+				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("duplicate registration for %s", taskID))
 			}
 		}(i)
 	}
