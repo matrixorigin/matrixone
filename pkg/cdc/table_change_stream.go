@@ -87,7 +87,7 @@ type TableChangeStream struct {
 
 	// State
 	lastError    error
-	retryable    bool
+	retryable    atomic.Bool
 	hasSucceeded atomic.Bool // Tracks if reader has successfully processed data at least once
 
 	// Observability
@@ -392,7 +392,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			logutil.Error(
 				"cdc.table_stream.process_failed",
 				zap.String("table", s.tableInfo.String()),
-				zap.Bool("retryable", s.retryable),
+				zap.Bool("retryable", s.retryable.Load()),
 				zap.Duration("round-duration", time.Since(roundStart)),
 				zap.Error(err),
 			)
@@ -451,7 +451,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	// Persist error message if any
 	if s.lastError != nil {
 		errorCtx := &ErrorContext{
-			IsRetryable:     s.retryable,
+			IsRetryable:     s.retryable.Load(),
 			IsPauseOrCancel: IsPauseOrCancelError(s.lastError.Error()),
 		}
 
@@ -602,7 +602,7 @@ func (s *TableChangeStream) processWithTxn(
 	_, _, rel, err := GetRelationById(ctx, s.cnEngine, txnOp, s.tableInfo.SourceTblId)
 	if err != nil {
 		// Table may have been truncated
-		s.retryable = true
+		s.retryable.Store(true)
 		return err
 	}
 
@@ -820,7 +820,7 @@ func (s *TableChangeStream) handleSnapshotNoProgress(ctx context.Context, fromTs
 	}
 
 	if stalledFor >= s.watermarkStallThreshold {
-		s.retryable = true
+		s.retryable.Store(true)
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s snapshot timestamp stuck for %v (threshold %v)",
@@ -856,7 +856,7 @@ func (s *TableChangeStream) onWatermarkAdvanced() {
 func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
 	// If startTs is set and noFull is false, StaleRead is fatal
 	if !s.noFull && !s.startTs.IsEmpty() {
-		s.retryable = false
+		s.retryable.Store(false)
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s stale read with startTs %s set, cannot recover",
@@ -882,7 +882,7 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 			zap.String("watermark", watermark.ToString()),
 			zap.Error(err),
 		)
-		s.retryable = false
+		s.retryable.Store(false)
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s stale read recovery failed to update watermark: %v",
@@ -901,7 +901,7 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 	s.forceNextInterval(DefaultFrequency)
 
 	// Mark as retryable and swallow error
-	s.retryable = true
+	s.retryable.Store(true)
 	return nil
 }
 
