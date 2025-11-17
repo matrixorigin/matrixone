@@ -153,3 +153,43 @@ func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	x := heap.Pop(&h.resheap).(SearchResultIf)
 	return x
 }
+
+// Thread-safe Heap struct
+type SearchTopKResultSafeMinHeap struct {
+	mutex   sync.Mutex
+	resheap SearchResultHeap
+}
+
+func NewSearchTopKResultSafeMinHeap(size int) *SearchTopKResultSafeMinHeap {
+	h := &SearchTopKResultSafeMinHeap{}
+	h.resheap = make(SearchResultHeap, 0, size)
+	heap.Init(&h.resheap)
+	return h
+}
+
+func (h *SearchTopKResultSafeMinHeap) Len() int {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	return h.resheap.Len()
+}
+
+func (h *SearchTopKResultSafeMinHeap) Push(srif SearchResultIf) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	if len(h.resheap) >= cap(h.resheap) {
+		if h.resheap[0].GetDistance() < srif.GetDistance() {
+			h.resheap[0] = srif
+			heap.Fix(&h.resheap, 0)
+		}
+	} else {
+		heap.Push(&h.resheap, srif)
+	}
+}
+
+func (h *SearchTopKResultSafeMinHeap) Pop() SearchResultIf {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	x := heap.Pop(&h.resheap).(SearchResultIf)
+	return x
+}

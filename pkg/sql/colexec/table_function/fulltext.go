@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"container/heap"
 	"context"
 	"fmt"
 	"sync"
@@ -57,7 +56,7 @@ type fulltextState struct {
 	mpool     *fulltext.FixedBytePool
 	param     fulltext.FullTextParserParam
 	docLenMap map[any]int32
-	minheap   vectorindex.SearchResultHeap
+	minheap   *vectorindex.SearchTopKResultSafeMinHeap
 
 	// holding output batch
 	batch *batch.Batch
@@ -154,7 +153,7 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResu
 	}
 
 	for range n {
-		srif := heap.Pop(&u.minheap).(vectorindex.SearchResultIf)
+		srif := u.minheap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
 		if !ok {
 			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
@@ -354,43 +353,62 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
 	aggcnt := u.aggcnt
-	u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
-	heap.Init(&u.minheap)
+	u.minheap = vectorindex.NewSearchTopKResultSafeMinHeap(int(limit))
 
-	for doc_id, addr := range u.agghtab {
+	errch := make(chan error)
+	var wg sync.WaitGroup
+	nthread := vectorindex.GetConcurrency(0)
 
-		docvec, err := u.mpool.GetItem(addr)
-		if err != nil {
-			return err
-		}
-
-		docLen := int64(0)
-		if len, ok := u.docLenMap[doc_id]; ok {
-			docLen = int64(len)
-		}
-
-		score, err := s.Eval(docvec, docLen, aggcnt)
-		if err != nil {
-			return err
-		}
-
-		if len(score) > 0 {
-			scoref64 := float64(score[0])
-			if len(u.minheap) >= int(limit) {
-				if u.minheap[0].GetDistance() < scoref64 {
-					u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
-					heap.Fix(&u.minheap, 0)
-				}
-			} else {
-				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
-			}
-		}
+	if len(u.agghtab) < int(nthread) {
+		nthread = int64(len(u.agghtab))
 	}
+	for i := int64(0); i < nthread; i++ {
+		wg.Add(1)
+		go func(tid int64) {
+			defer wg.Done()
+
+			j := int64(0)
+			for doc_id, addr := range u.agghtab {
+
+				if j%nthread != tid {
+					continue
+				}
+				docvec, err := u.mpool.GetItem(addr)
+				if err != nil {
+					errch <- err
+					return
+				}
+
+				docLen := int64(0)
+				if len, ok := u.docLenMap[doc_id]; ok {
+					docLen = int64(len)
+				}
+
+				score, err := s.Eval(docvec, docLen, aggcnt)
+				if err != nil {
+					errch <- err
+					return
+				}
+
+				if len(score) > 0 {
+					scoref64 := float64(score[0])
+					u.minheap.Push(&vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+				}
+
+				j++
+			}
+		}(i)
+	}
+
+	wg.Wait()
 
 	// close the pool
 	u.mpool.Close()
 	clear(u.agghtab)
 
+	if len(errch) > 0 {
+		return <-errch
+	}
 	return nil
 }
 
