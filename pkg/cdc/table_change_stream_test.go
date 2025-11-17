@@ -1495,12 +1495,12 @@ func TestTableChangeStream_EnsureCleanup_GetFromCacheFails(t *testing.T) {
 	}
 
 	require.Error(t, runErr)
-	// Note: With retry mechanism, GetFromCache may be called multiple times during retries.
-	// If GetFromCache fails during a retry, the error may be returned instead of the original commit error.
-	// This is acceptable behavior - the test verifies that EnsureCleanup handles GetFromCache failure gracefully.
-	// The error could be either commitErr or getFromCacheErr depending on when GetFromCache fails.
-	require.True(t, runErr == commitErr || runErr == getFromCacheErr,
-		"error should be either commit failure or cache error, got: %v", runErr)
+	// With the original error preservation mechanism, the system should always return
+	// the original error (commit failure) that triggered the retry, not auxiliary errors
+	// (like cache error) encountered during retry attempts. This ensures deterministic
+	// error reporting.
+	require.Equal(t, commitErr, runErr,
+		"error should be the original commit failure, not auxiliary cache error, got: %v", runErr)
 
 	// Wait for EnsureCleanup to complete
 	// When GetFromCache fails, EnsureCleanup should fallback to tracker state

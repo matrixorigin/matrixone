@@ -1559,6 +1559,10 @@ avg(mo_cdc_batch_size_rows)
 | `mo_cdc_table_stream_round_duration_seconds` | Histogram | `table` | Duration of processing rounds |
 | `mo_cdc_table_stuck` | Gauge | `table` | Whether a table stream is currently flagged as stalled (1 = stuck, 0 = healthy) |
 | `mo_cdc_table_last_activity_timestamp` | Gauge | `table` | Unix timestamp when the table stream last made forward progress |
+| `mo_cdc_table_stream_retry_total` | Counter | `table`, `error_type`, `outcome` | Count of retry attempts by error type and outcome (`attempted`, `succeeded`, `exhausted`, `failed`) |
+| `mo_cdc_table_stream_retry_delay_seconds` | Histogram | `table`, `error_type` | Retry backoff delay duration (exponential backoff) |
+| `mo_cdc_table_stream_auxiliary_error_total` | Counter | `table`, `auxiliary_error_type` | Count of auxiliary errors encountered during retries (preserved original error) |
+| `mo_cdc_table_stream_original_error_preserved_total` | Counter | `table`, `original_error_type` | Count of times original error was preserved during retries (ensures deterministic error reporting) |
 
 **Example Queries**:
 ```promql
@@ -1578,6 +1582,25 @@ mo_cdc_table_stuck == 1
 
 # Minutes since last successful progress
 (time() - mo_cdc_table_last_activity_timestamp) / 60
+
+# Retry attempt rate by error type
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry success rate (retries that eventually succeeded)
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="succeeded"}[5m])) /
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry exhaustion (retries exceeded max count)
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="exhausted"}[5m]))
+
+# Average retry backoff delay (P50)
+histogram_quantile(0.50, rate(mo_cdc_table_stream_retry_delay_seconds_bucket[5m]))
+
+# Auxiliary errors (infrastructure errors during retries)
+sum by (table, auxiliary_error_type) (rate(mo_cdc_table_stream_auxiliary_error_total[5m]))
+
+# Original error preservation (ensures deterministic error reporting)
+sum by (table, original_error_type) (rate(mo_cdc_table_stream_original_error_preserved_total[5m]))
 ```
 
 #### Sinker Metrics
@@ -1680,6 +1703,29 @@ sum(mo_cdc_sinker_transaction_total{status="error"})
 sum by (sql_type) (rate(mo_cdc_sinker_sql_total{status="error"}[5m]))
 ```
 
+#### Retry Monitoring
+
+```promql
+# Retry Attempt Rate by Error Type
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry Success Rate
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="succeeded"}[5m])) /
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry Exhaustion Rate (retries exceeded max count)
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="exhausted"}[5m]))
+
+# Auxiliary Errors (errors that don't replace original errors)
+sum by (table, auxiliary_error_type) (rate(mo_cdc_table_stream_auxiliary_error_total[5m]))
+
+# Original Error Preservation (ensures deterministic error reporting)
+sum by (table, original_error_type) (rate(mo_cdc_table_stream_original_error_preserved_total[5m]))
+
+# Average Retry Backoff Delay
+histogram_quantile(0.50, rate(mo_cdc_table_stream_retry_delay_seconds_bucket[5m]))
+```
+
 ### Alert Rules
 
 #### Critical Alerts
@@ -1710,7 +1756,21 @@ These alerts indicate immediate action required:
 #   severity: critical
 #   description: "Watermark lag is 5x higher than expected"
 
-# 3. Watermark Stuck (Current Recommended Approach: Group-based)
+# 3. High Retry Exhaustion Rate
+- alert: CDCHighRetryExhaustion
+  expr: sum by (table) (rate(mo_cdc_table_stream_retry_total{outcome="exhausted"}[5m])) > 0.1
+  for: 5m
+  severity: warning
+  description: "Table {{ $labels.table }} has high retry exhaustion rate (>0.1/s). Retries are exceeding max count."
+
+# 4. Frequent Auxiliary Errors
+- alert: CDCFrequentAuxiliaryErrors
+  expr: sum by (table) (rate(mo_cdc_table_stream_auxiliary_error_total[5m])) > 1
+  for: 5m
+  severity: warning
+  description: "Table {{ $labels.table }} has frequent auxiliary errors (>1/s). May indicate infrastructure issues during retries."
+
+# 5. Watermark Stuck (Current Recommended Approach: Group-based)
 # Use separate rules for different task frequencies if you have task groups
 # Example for real-time tasks (Frequency < 1 minute):
 - alert: CDCWatermarkStuck_Realtime
@@ -1775,7 +1835,14 @@ These alerts indicate potential issues:
   severity: warning
   description: "High error rate detected (>0.01/s)"
 
-# 3. Slow SQL Execution
+# 3. High Retry Rate (indicates transient issues)
+- alert: CDCHighRetryRate
+  expr: sum by (table) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m])) > 5
+  for: 5m
+  severity: warning
+  description: "Table {{ $labels.table }} has high retry rate (>5/s). May indicate transient infrastructure issues."
+
+# 4. Slow SQL Execution
 - alert: CDCSQLSlow
   expr: histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket) > 1
   for: 5m

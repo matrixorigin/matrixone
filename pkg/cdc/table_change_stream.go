@@ -474,6 +474,13 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 				zap.Error(err),
 			)
 
+			// Record retry metrics
+			tableLabel := s.tableInfo.String()
+			v2.CdcTableStreamRetryCounter.WithLabelValues(tableLabel, errType, "attempted").Inc()
+			if nextRetryDelay > 0 {
+				v2.CdcTableStreamRetryDelayHistogram.WithLabelValues(tableLabel, errType).Observe(nextRetryDelay.Seconds())
+			}
+
 			// If non-retryable or exceeded max retry count, stop processing
 			if !retryable || retryCount > s.maxRetryCount {
 				// Ensure cleanup is called before stopping (processWithTxn's defer should have already called it,
@@ -485,11 +492,24 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 				// This ensures the error that triggered retry is preserved in lastError,
 				// not auxiliary errors encountered during retry attempts
 				s.stateMu.Lock()
-				if s.originalError != nil {
+				originalErr := s.originalError
+				originalErrType := s.originalErrType
+				if originalErr != nil {
 					// Restore original error to lastError for final error reporting
-					s.lastError = s.originalError
+					s.lastError = originalErr
+					// Record that original error was preserved
+					tableLabel := s.tableInfo.String()
+					v2.CdcTableStreamOriginalErrorPreservedCounter.WithLabelValues(tableLabel, originalErrType).Inc()
 				}
 				s.stateMu.Unlock()
+
+				// Record retry exhaustion
+				tableLabel := s.tableInfo.String()
+				if retryCount > s.maxRetryCount {
+					v2.CdcTableStreamRetryCounter.WithLabelValues(tableLabel, errType, "exhausted").Inc()
+				} else {
+					v2.CdcTableStreamRetryCounter.WithLabelValues(tableLabel, errType, "failed").Inc()
+				}
 				return
 			}
 
@@ -516,12 +536,20 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 
 		// Success: reset retry state and use normal frequency
 		s.stateMu.Lock()
+		hadRetries := s.retryCount > 0
+		lastErrType := s.lastErrorType
 		s.retryCount = 0
 		s.lastErrorType = ""
 		s.nextRetryDelay = 0
 		s.originalError = nil  // Clear original error on success
 		s.originalErrType = "" // Clear original error type on success
 		s.stateMu.Unlock()
+
+		// Record successful retry if there were previous retries
+		if hadRetries && lastErrType != "" {
+			tableLabel := s.tableInfo.String()
+			v2.CdcTableStreamRetryCounter.WithLabelValues(tableLabel, lastErrType, "succeeded").Inc()
+		}
 
 		logutil.Debug(
 			"cdc.table_stream.process_round_done",
@@ -757,26 +785,32 @@ func (s *TableChangeStream) updateErrorState(err error) {
 	}
 
 	// Preserve original error during retries to ensure deterministic error reporting
-	// Only update originalError if:
-	// 1. No original error exists (first error)
-	// 2. Current error is non-retryable (new fatal error, should replace original)
-	// 3. Error type changed from retryable to different retryable type (new primary error)
+	// Priority order:
+	// 1. Check if it's an auxiliary error first (should never replace original, even if non-retryable)
+	// 2. If no original error exists, set as original
+	// 3. If non-retryable and not auxiliary, replace original (fatal error takes precedence)
+	// 4. If different error type (new primary error), replace original
 	isAuxiliaryError := s.isAuxiliaryError(err, errType)
+	if isAuxiliaryError {
+		// Auxiliary error: preserve original error, don't update originalError
+		// But still update lastError for logging and state tracking
+		s.lastError = err
+		s.retryable = retryable
+		// Don't update retry count for auxiliary errors
+		// Record auxiliary error metric
+		tableLabel := s.tableInfo.String()
+		v2.CdcTableStreamAuxiliaryErrorCounter.WithLabelValues(tableLabel, errType).Inc()
+		return
+	}
+
 	if s.originalError == nil {
 		// First error: set as original
 		s.originalError = err
 		s.originalErrType = errType
 	} else if !retryable {
-		// Non-retryable error: replace original (fatal error takes precedence)
+		// Non-retryable error (and not auxiliary): replace original (fatal error takes precedence)
 		s.originalError = err
 		s.originalErrType = errType
-	} else if isAuxiliaryError {
-		// Auxiliary error during retry: preserve original error, don't update originalError
-		// But still update lastError for logging and state tracking
-		s.lastError = err
-		s.retryable = retryable
-		// Don't update retry count for auxiliary errors
-		return
 	} else if s.originalErrType != errType {
 		// Different error type: new primary error, replace original
 		s.originalError = err
