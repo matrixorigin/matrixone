@@ -453,18 +453,42 @@ resume cdc task task3;
 
 ### Error Clearing
 
-`resume cdc task` automatically clears error messages for all tables, allowing fresh retry attempts.
+**`resume cdc task` automatically clears ALL error messages for all tables in the task**, regardless of error type (retryable or non-retryable). This allows fresh retry attempts after fixing underlying issues.
 
+**Behavior:**
+- Clears all errors in `mo_catalog.mo_cdc_watermark.err_msg` for the task
+- Resets error state for all tables
+- Allows system to retry from last watermark
+- Works for both retryable and non-retryable errors
+
+**Use Cases:**
+- After fixing network issues
+- After restoring downstream MySQL service
+- After fixing schema mismatches
+- After resolving authentication problems
+- After any manual intervention to fix root causes
+
+**Example:**
 ```sql
 -- Before RESUME: check for errors
 show cdc task replicate_orders;
+-- Shows: table1 has error "N:1763362169:rollback failure"
+
+-- Fix the underlying issue (e.g., restore service, fix schema)
 
 -- Resume clears errors and restarts
 resume cdc task replicate_orders;
 
--- After RESUME: errors are cleared
+-- After RESUME: errors are cleared, processing resumes
 show cdc task replicate_orders;
+-- Shows: table1 has no error, processing continues
 ```
+
+**Important Notes:**
+- Resume clears **all** errors, not just non-retryable ones
+- Always fix underlying issues before resuming
+- System will retry from last watermark after resume
+- If issue persists, error will occur again (can be cleared again)
 
 ---
 
@@ -561,31 +585,281 @@ resume cdc task task2 'restart';
 
 ### Error Types
 
+The CDC system automatically classifies errors as **retryable** or **non-retryable** based on error type and context. This classification determines whether the system will automatically retry or require manual intervention.
+
 #### 1. Retryable Errors
 
-Automatically retried up to 3 times:
-- Network timeouts
-- Transient connection failures
-- Stale read errors
+**Automatically retried up to 3 times** before requiring manual intervention.
 
-**Behavior**: Task continues running, error message shows retry count
+**MatrixOne System/Network Errors (Highest Priority):**
+These errors indicate temporary system unavailability and are always retryable:
+- **RPC Timeout**: MatrixOne RPC calls timed out
+- **No Available Backend**: No backend services available
+- **Backend Cannot Connect**: Cannot connect to remote backend
+- **TN Shard Not Found**: Transaction node shard not found (temporary)
+- **RPC Error**: Generic RPC communication errors
+- **Client/Backend Closed**: Connection closed unexpectedly
+- **Context Timeout**: Operation timeout due to system delays
+
+**Network/Connection Issues:**
+- Connection timeouts, connection resets, network errors
+- Service unavailable errors
+- Network-related begin transaction failures
+
+**Transaction Errors:**
+- **Commit Failures**: Transient network issues during transaction commit
+- **Begin Failures (Network-related)**: Network issues when starting transactions
+
+**Data Source Errors:**
+- **Table Relation Errors**: Table truncated or temporarily unavailable (table may be recreated)
+- **Watermark Stall Errors**: Snapshot timestamp stuck (temporary condition)
+- **StaleRead Errors**: If recovery is possible (watermark reset succeeds)
+
+**Sinker Errors (Transient):**
+- Circuit breaker errors (indicates temporary overload)
+- Timeout errors from downstream MySQL
+
+**Behavior**: 
+- Task continues running, error message shows retry count
+- Automatic retry up to 3 times
+- After 3 retries, automatically converted to non-retryable
+- Error persists in watermark table with format: `R:<count>:<first>:<last>:<message>`
 
 **Example Error Message**:
 ```
-retryable error: timeout connecting to target (retry 2/3)
+R:2:1763362169:1763362200:internal error: commit failure
 ```
+- `R`: Retryable
+- `2`: Retry count (current attempt)
+- `1763362169`: First seen timestamp
+- `1763362200`: Last seen timestamp
+- `internal error: commit failure`: Error message
 
 #### 2. Non-Retryable Errors
 
-Require manual intervention:
-- Target table not found
-- Schema mismatch
-- Authentication failures
-- Syntax errors
+**Require manual intervention** - no automatic retry.
 
-**Behavior**: Task remains in `running` state but sync is blocked for affected tables
+**System State Errors:**
+- **Rollback Failures**: System state may be inconsistent after rollback failure
+- **Begin Failures (State-related)**: Cannot start transaction due to state issues (e.g., "transaction already active")
 
-**Resolution**: Fix the issue, then `resume cdc task <task_name>` to clear errors
+**Fatal Errors:**
+- **Simple Sinker Errors**: Fatal errors before transaction starts (no context indicating transient issue)
+- **StaleRead with startTs**: Cannot recover (startTs is set, cannot reset watermark)
+- **Target Table Not Found**: Schema mismatch or table deleted permanently
+- **Authentication Failures**: Invalid credentials (requires configuration fix)
+- **Syntax Errors**: SQL construction failures (requires code fix)
+
+**Control Signals:**
+- Pause/cancel signals (intentional stops)
+
+**Unknown Errors:**
+- Errors that don't match any known pattern (default to non-retryable for safety)
+
+**Behavior**: 
+- Task remains in `running` state but sync is blocked for affected tables
+- Error persists until manually cleared via `resume cdc task`
+- No automatic retry
+- Error persists in watermark table with format: `N:<first>:<message>`
+
+**Example Error Message**:
+```
+N:1763362169:internal error: rollback failure
+```
+- `N`: Non-retryable
+- `1763362169`: First seen timestamp
+- `internal error: rollback failure`: Error message
+
+**Max Retry Exceeded Format**:
+```
+N:1763362169:max retry exceeded (4): connection timeout
+```
+- Auto-converted from retryable after exceeding 3 retries
+- Requires manual intervention via `resume cdc task`
+
+### Error Classification Logic
+
+The system uses a **priority-based classification** approach to determine if errors are retryable:
+
+**Classification Priority (Checked in Order):**
+
+1. **Control Signals** (Non-retryable)
+   - Pause/cancel signals are always non-retryable (intentional stops)
+
+2. **MatrixOne System Errors** (Retryable)
+   - System checks for specific MatrixOne error codes first
+   - All system/network errors (RPC timeout, backend unavailable, shard not found, etc.) are automatically retryable
+   - This ensures resilience during temporary MatrixOne system unavailability or network fluctuations
+
+3. **Context Timeout Errors** (Retryable)
+   - Operation timeouts due to system delays are retryable
+
+4. **Error Message Pattern Matching** (Retryable/Non-retryable)
+   - **Retryable Patterns**: `commit`, `connection`, `timeout`, `network`, `unavailable`, `rpc`, `backend`, `shard`, `relation`, `truncated`, `stuck`, `stall`
+   - **Non-Retryable Patterns**: `rollback`, `begin` (without network context), simple `sinker error` (without context)
+
+5. **Default** (Non-retryable)
+   - Unknown errors default to non-retryable for safety
+
+**Special Handling:**
+
+- **Begin Failures**: 
+  - Network-related (contains `connection`, `timeout`, `network`, `unavailable`, `rpc`, `backend`) → **Retryable**
+  - State-related (e.g., "transaction already active") → **Non-retryable**
+
+- **Sinker Errors**:
+  - With transient context (`circuit`, `timeout`) → **Retryable**
+  - Simple "sinker error" without context → **Non-retryable**
+
+- **StaleRead Errors**:
+  - Recovery attempted automatically
+  - If recovery succeeds → Error is swallowed, processing continues
+  - If recovery fails → **Non-retryable**
+
+**Why This Matters:**
+
+This classification ensures that:
+- **Temporary system issues** (network抖动, service unavailability, MatrixOne node failures) are automatically retried
+- **Permanent errors** (state inconsistencies, fatal configuration issues) require manual intervention
+- **Users can always recover** by using `resume cdc task` to clear any error and retry
+
+### Error Storage
+
+Errors are stored in two places for different purposes:
+
+1. **In-Memory (Runtime)**:
+   - Tracks the last error that occurred during processing
+   - Maintains retryable flag for current processing round
+   - Updated atomically to ensure consistency
+   - Used for immediate retry decisions
+
+2. **Persistent (Database)**:
+   - Stored in `mo_catalog.mo_cdc_watermark.err_msg` column
+   - Format: `R:<count>:<first>:<last>:<message>` (retryable) or `N:<first>:<message>` (non-retryable)
+   - Persisted asynchronously to avoid blocking data processing
+   - Used by task scheduler to decide whether to start table processing
+   - Survives system restarts
+
+### Error Consumption
+
+Errors are consumed at two levels:
+
+1. **Runtime (During Processing)**:
+   - When an error occurs, processing round stops immediately
+   - Error state is persisted to database
+   - If retryable: Stream waits for next tick interval and retries automatically
+   - If non-retryable: Stream stops processing, waits for manual intervention
+
+2. **Startup (Task Scheduler)**:
+   - Before starting table stream, scheduler checks persisted error in watermark table
+   - Uses retry decision logic:
+     - **No error** → Start processing
+     - **Retryable error with count ≤ 3** → Start processing (continue retrying)
+     - **Retryable error with count > 3** → Skip table (converted to non-retryable, requires manual clear)
+     - **Non-retryable error** → Skip table (requires manual clear)
+
+**Retry Decision Logic:**
+- System automatically allows retry for retryable errors up to 3 attempts
+- After 3 retries, retryable errors are converted to non-retryable
+- Non-retryable errors always require manual intervention via `resume cdc task`
+
+### Error Lifecycle
+
+**Stage 1: Error Occurs**
+- Error is detected during processing (network issue, commit failure, etc.)
+- System immediately classifies error as retryable or non-retryable
+
+**Stage 2: Error State Update**
+- Error state updated atomically (ensures consistency)
+- Error persisted to watermark table with metadata (retry count, timestamps)
+
+**Stage 3: Retry Decision**
+- **Retryable errors**: 
+  - Retry count incremented
+  - If count ≤ 3: Continue processing, retry on next tick
+  - If count > 3: Convert to non-retryable, stop processing
+- **Non-retryable errors**: 
+  - Stop processing immediately
+  - Require manual intervention
+
+**Stage 4: Manual Recovery (if needed)**
+- User fixes underlying issue (network restored, service back online, etc.)
+- User runs `resume cdc task <task_name>` to clear error
+- System clears all errors for the task
+- Processing resumes from last watermark
+
+**Key Points:**
+- All errors (retryable and non-retryable) can be cleared via `resume cdc task`
+- System always allows recovery through manual intervention
+- Errors persist across system restarts until manually cleared
+
+### Multi-Level Retry
+
+The CDC system implements retry at multiple levels for maximum resilience:
+
+1. **Executor Level (Sinker - Downstream MySQL)**:
+   - Automatic retry with exponential backoff for SQL execution
+   - Circuit breaker prevents retry storms
+   - Retries network errors, MySQL connection issues, and transient SQL errors
+   - Handles downstream service unavailability
+
+2. **TableChangeStream Level (Data Processing)**:
+   - Tick-based retry for retryable errors
+   - Automatic StaleRead recovery (resets watermark if possible)
+   - Error state tracking and persistence
+   - Handles MatrixOne system errors and data source issues
+
+3. **Task Scheduler Level (Task Management)**:
+   - Startup check before starting table processing
+   - Skips tables with non-retryable errors (requires manual intervention)
+   - Allows retryable errors to continue processing
+   - Manual recovery via `resume cdc task`
+
+**Benefits:**
+- Network fluctuations are handled automatically at executor level
+- System unavailability is handled at table stream level
+- Permanent errors are caught early and require manual fix
+- Users can always recover via `resume cdc task`
+
+### Error Resolution
+
+**For Retryable Errors:**
+- Usually resolve automatically within 3 retries
+- Monitor retry count in error message (format: `R:<count>:...`)
+- If error persists after 3 retries:
+  - Check underlying cause (network, service availability)
+  - Fix the issue if possible
+  - Use `resume cdc task` to clear error and retry
+
+**For Non-Retryable Errors:**
+1. **Identify the root cause**:
+   - Check error message in `show cdc task` output
+   - Review logs for detailed error context
+   - Common causes: missing tables, schema mismatches, authentication failures, state inconsistencies
+
+2. **Fix the underlying issue**:
+   - Create missing tables
+   - Fix schema mismatches
+   - Update credentials
+   - Resolve state inconsistencies
+
+3. **Clear error and retry**:
+   - Run `resume cdc task <task_name>` to clear all errors
+   - System will automatically retry on next scan
+   - Processing resumes from last watermark
+
+**Important: All Errors Can Be Cleared**
+
+- `resume cdc task` clears **all errors** (both retryable and non-retryable) for all tables in the task
+- This ensures users can always recover from any error state
+- After clearing errors, system will retry from last watermark
+- If underlying issue is fixed, processing will succeed
+- If underlying issue persists, error will occur again and can be cleared again
+
+**Best Practice:**
+- Always fix the underlying issue before clearing errors
+- Monitor error messages to understand root causes
+- Use `resume cdc task` as a recovery mechanism after fixing issues
 
 ### Debugging with Logs
 

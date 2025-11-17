@@ -282,7 +282,7 @@ func TestTableChangeStream_HandleSnapshotNoProgress_ThresholdExceeded(t *testing
 	fromTs := types.BuildTS(200, 0)
 	err := stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
 	assert.Error(t, err)
-	assert.True(t, stream.retryable.Load(), "stalled snapshot should mark stream retryable")
+	require.True(t, stream.GetRetryable(), "stalled snapshot should mark stream retryable")
 	assert.Contains(t, err.Error(), "snapshot timestamp stuck")
 
 	// Clean up metric state for subsequent tests
@@ -549,7 +549,7 @@ func TestTableChangeStream_Recovery_BeginCommit(t *testing.T) {
 	require.GreaterOrEqual(t, begin, 1, "should begin at least once")
 	require.GreaterOrEqual(t, commit, 1, "should commit at least once")
 	require.Equal(t, 0, rollback, "recovery path should not rollback")
-	require.False(t, h.Stream().retryable.Load())
+	require.False(t, h.Stream().GetRetryable())
 }
 
 type blockingChangesHandle struct {
@@ -710,7 +710,7 @@ func TestTableChangeStream_StaleRead_Retry(t *testing.T) {
 
 	require.Equal(t, 1, h.Sinker().ResetCountSnapshot(), "sinker should be reset exactly once on stale read recovery")
 	require.GreaterOrEqual(t, len(h.CollectCallsSnapshot()), 2, "should have multiple collect calls after stale read recovery")
-	require.True(t, h.Stream().retryable.Load(), "stale read should mark stream retryable")
+	require.True(t, h.Stream().GetRetryable(), "stale read should mark stream retryable")
 }
 
 func TestTableChangeStream_SinkerResetRecovery(t *testing.T) {
@@ -782,7 +782,7 @@ func TestTableChangeStream_SinkerResetRecovery(t *testing.T) {
 	require.Equal(t, 1, h.Sinker().ResetCountSnapshot(), "sinker should reset exactly once after stale read recovery")
 	require.NoError(t, h.Sinker().Error(), "sinker error should be cleared by reset")
 	require.GreaterOrEqual(t, len(h.CollectCallsSnapshot()), 2, "multiple collect attempts expected")
-	require.True(t, h.Stream().retryable.Load(), "recovery should keep stream retryable")
+	require.True(t, h.Stream().GetRetryable(), "recovery should keep stream retryable")
 
 	tracker := h.Stream().txnManager.GetTracker()
 	require.NotNil(t, tracker)
@@ -806,7 +806,7 @@ func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cannot recover")
-	require.False(t, h.Stream().retryable.Load(), "stale read with startTs should not be retryable")
+	require.False(t, h.Stream().GetRetryable(), "stale read with startTs should not be retryable")
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "sinker reset should not occur on fatal stale read")
 }
 
@@ -836,7 +836,7 @@ func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "stale read recovery failed to update watermark")
-	require.False(t, h.Stream().retryable.Load(), "watermark update failure should not be retryable")
+	require.False(t, h.Stream().GetRetryable(), "watermark update failure should not be retryable")
 	require.Equal(t, int32(1), updater.updateCalls.Load(), "UpdateWatermarkOnly should be invoked exactly once")
 	require.Len(t, h.CollectCallsSnapshot(), 1)
 }
@@ -897,7 +897,7 @@ func TestTableChangeStream_StaleReadRetry_MultipleAttempts(t *testing.T) {
 
 	require.GreaterOrEqual(t, collectCount.Load(), int32(4))
 	require.GreaterOrEqual(t, updater.updateCalls.Load(), int32(3))
-	require.True(t, h.Stream().retryable.Load(), "successful recovery should keep retryable flag true")
+	require.True(t, h.Stream().GetRetryable(), "successful recovery should keep retryable flag true")
 	require.Equal(t, 3, h.Sinker().ResetCountSnapshot(), "sinker should reset for each stale read")
 }
 
@@ -936,7 +936,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 		require.ErrorIs(t, runErr, context.Canceled)
 	}
 
-	require.False(t, h.Stream().retryable.Load(), "cancel should not mark stream retryable")
+	require.False(t, h.Stream().GetRetryable(), "cancel should not mark stream retryable")
 	require.Equal(t, opsBefore, h.Sinker().opsSnapshot(), "cancel should not produce additional sink operations")
 }
 
@@ -974,7 +974,7 @@ func TestTableChangeStream_Run_Pause(t *testing.T) {
 		require.Contains(t, runErr.Error(), "paused")
 	}
 
-	require.False(t, h.Stream().retryable.Load(), "pause should not mark stream retryable")
+	require.False(t, h.Stream().GetRetryable(), "pause should not mark stream retryable")
 	require.Empty(t, h.Sinker().opsSnapshot(), "pause should abort before any sink operations")
 }
 
@@ -1098,7 +1098,7 @@ func TestTableChangeStream_DataProcessorSinkerError(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, sinkerErr, err)
 	require.Equal(t, sinkerErr, h.Sinker().Error(), "sinker error should remain set for inspection")
-	require.False(t, h.Stream().retryable.Load(), "fatal sinker error should not mark stream retryable")
+	require.False(t, h.Stream().GetRetryable(), "fatal sinker error should not mark stream retryable")
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "no resets expected when error occurs before transaction start")
 
 	ops := h.Sinker().opsSnapshot()
@@ -1137,7 +1137,7 @@ func TestTableChangeStream_EnsureCleanupOnCollectorError(t *testing.T) {
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot())
 
 	require.Nil(t, h.Stream().txnManager.GetTracker())
-	require.False(t, h.Stream().retryable.Load(), "collector error should not be retryable")
+	require.False(t, h.Stream().GetRetryable(), "collector error should not be retryable")
 }
 
 func TestTableChangeStream_TailDoneUpdatesTransactionToTs(t *testing.T) {
@@ -1286,7 +1286,8 @@ func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, beginErr, err)
 	require.Equal(t, beginErr, h.Sinker().Error(), "sinker error should remain set after begin failure")
-	require.False(t, h.Stream().retryable.Load(), "begin failure should not mark stream retryable")
+	// "begin failure" without network context is non-retryable (state-related)
+	require.False(t, h.Stream().GetRetryable(), "state-related begin failure should not mark stream retryable")
 
 	ops := h.Sinker().opsSnapshot()
 	require.Contains(t, ops, "begin", "Begin should be attempted even though it fails")
@@ -1297,6 +1298,52 @@ func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
 	require.NotNil(t, tracker, "tracker should be created even if begin fails")
 	require.False(t, tracker.NeedsRollback(), "tracker should not require rollback when begin fails")
 	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
+}
+
+func TestTableChangeStream_BeginFailure_NetworkError_Retryable(t *testing.T) {
+	h := newTableStreamHarness(t)
+	defer h.Close()
+
+	// Network-related begin failure should be retryable
+	beginErr := moerr.NewInternalError(h.Context(), "begin transaction failed: connection timeout")
+	h.Sinker().setBeginError(beginErr)
+
+	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	ar := h.NewActiveRoutine()
+	err := h.RunStream(ar)
+
+	require.Error(t, err)
+	require.Equal(t, beginErr, err)
+	// Network-related begin failure should be retryable
+	require.True(t, h.Stream().GetRetryable(), "network-related begin failure should mark stream retryable")
+}
+
+func TestTableChangeStream_BeginFailure_ServiceUnavailable_Retryable(t *testing.T) {
+	h := newTableStreamHarness(t)
+	defer h.Close()
+
+	// Service unavailable begin failure should be retryable
+	beginErr := moerr.NewInternalError(h.Context(), "begin transaction failed: service unavailable")
+	h.Sinker().setBeginError(beginErr)
+
+	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+	h.SetCollectBatches([]changeBatch{
+		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
+		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	})
+
+	ar := h.NewActiveRoutine()
+	err := h.RunStream(ar)
+
+	require.Error(t, err)
+	require.Equal(t, beginErr, err)
+	// Service unavailable begin failure should be retryable
+	require.True(t, h.Stream().GetRetryable(), "service unavailable begin failure should mark stream retryable")
 }
 
 func TestTableChangeStream_EnsureCleanup_WatermarkMismatch(t *testing.T) {
@@ -1511,7 +1558,7 @@ func TestTableChangeStream_RollbackFailure(t *testing.T) {
 
 	require.Error(t, runErr)
 	require.Equal(t, commitErr, runErr, "original commit error should propagate even if rollback fails")
-	require.False(t, h.Stream().retryable.Load(), "rollback failure should not mark stream retryable")
+	require.False(t, h.Stream().GetRetryable(), "rollback failure should not mark stream retryable")
 
 	var ops []string
 	require.Eventually(t, func() bool {
@@ -1651,7 +1698,7 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 	// Verify that we've seen the expected error scenarios
 	// The stream should be retryable and have attempted rollback
 	require.Eventually(t, func() bool {
-		return h.Stream().retryable.Load()
+		return h.Stream().GetRetryable()
 	}, 500*time.Millisecond, 10*time.Millisecond, "stream should be retryable after stale read and commit failure")
 
 	// Cancel to exit
@@ -1710,7 +1757,7 @@ func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
 	require.GreaterOrEqual(t, beginCount, 1, "should have at least one begin")
 
 	// Verify consistency: retryable flag and sinker reset
-	require.True(t, h.Stream().retryable.Load(), "stream should be retryable after stale read recovery")
+	require.True(t, h.Stream().GetRetryable(), "stream should be retryable after stale read recovery")
 	require.GreaterOrEqual(t, h.Sinker().ResetCountSnapshot(), 1, "sinker should reset at least once for stale read")
 
 	// Verify all error injections occurred
@@ -2412,7 +2459,7 @@ func TestTableChangeStream_GetRelationByIdFailure(t *testing.T) {
 	errCh, done := h.RunStreamAsync(ar)
 
 	require.Eventually(t, func() bool {
-		return h.Stream().retryable.Load()
+		return h.Stream().GetRetryable()
 	}, 2*time.Second, 10*time.Millisecond, "stream should be marked retryable on relation error")
 
 	h.Cancel()
@@ -2426,7 +2473,7 @@ func TestTableChangeStream_GetRelationByIdFailure(t *testing.T) {
 	}
 
 	require.Error(t, runErr)
-	require.True(t, h.Stream().retryable.Load(), "relation error should mark stream retryable")
+	require.True(t, h.Stream().GetRetryable(), "relation error should mark stream retryable")
 }
 
 // TestTableChangeStream_ReachedEndTs verifies graceful termination when endTs is reached
@@ -2474,7 +2521,7 @@ func TestTableChangeStream_ReachedEndTs(t *testing.T) {
 	if runErr != nil {
 		require.ErrorIs(t, runErr, context.Canceled)
 	}
-	require.False(t, h.Stream().retryable.Load(), "reaching endTs should not mark stream retryable")
+	require.False(t, h.Stream().GetRetryable(), "reaching endTs should not mark stream retryable")
 }
 
 // TestTableChangeStream_CalculateInitialDelay_GetLastSyncTimeFailure verifies

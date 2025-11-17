@@ -16,6 +16,8 @@ package cdc
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,9 +88,11 @@ type TableChangeStream struct {
 	delCompositedPkColIdx int
 
 	// State
-	lastError    error
-	retryable    atomic.Bool
-	hasSucceeded atomic.Bool // Tracks if reader has successfully processed data at least once
+	stateMu            sync.Mutex // Protects lastError, retryable, and cleanupRollbackErr for consistency
+	lastError          error
+	retryable          bool        // Protected by stateMu, updated together with lastError
+	cleanupRollbackErr error       // Set by processWithTxn defer if rollback fails (protected by stateMu)
+	hasSucceeded       atomic.Bool // Tracks if reader has successfully processed data at least once
 
 	// Observability
 	progressTracker *ProgressTracker
@@ -384,7 +388,18 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 		err := s.processOneRound(streamCtx, ar)
 
 		if err != nil {
-			s.lastError = err
+			// Update lastError and retryable atomically for consistency
+			s.updateErrorState(err)
+
+			// Check if cleanup failed with rollback error (set by processWithTxn defer)
+			// If so, override retryable to false even if main error is retryable
+			s.stateMu.Lock()
+			if s.cleanupRollbackErr != nil {
+				s.retryable = false
+			}
+			retryable := s.retryable
+			s.stateMu.Unlock()
+
 			s.progressTracker.SetState("error")
 			s.progressTracker.RecordError(err)
 			s.progressTracker.EndRound(false, err)
@@ -392,7 +407,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			logutil.Error(
 				"cdc.table_stream.process_failed",
 				zap.String("table", s.tableInfo.String()),
-				zap.Bool("retryable", s.retryable.Load()),
+				zap.Bool("retryable", retryable),
 				zap.Duration("round-duration", time.Since(roundStart)),
 				zap.Error(err),
 			)
@@ -449,13 +464,19 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	}
 
 	// Persist error message if any
-	if s.lastError != nil {
+	// Read lastError and retryable atomically for consistency
+	s.stateMu.Lock()
+	lastError := s.lastError
+	retryable := s.retryable
+	s.stateMu.Unlock()
+
+	if lastError != nil {
 		errorCtx := &ErrorContext{
-			IsRetryable:     s.retryable.Load(),
-			IsPauseOrCancel: IsPauseOrCancelError(s.lastError.Error()),
+			IsRetryable:     retryable,
+			IsPauseOrCancel: IsPauseOrCancelError(lastError.Error()),
 		}
 
-		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, s.lastError.Error(), errorCtx); err != nil {
+		if err := s.watermarkUpdater.UpdateWatermarkErrMsg(ctx, s.watermarkKey, lastError.Error(), errorCtx); err != nil {
 			logutil.Error(
 				"cdc.table_stream.update_watermark_errmsg_failed",
 				zap.String("table", s.tableInfo.String()),
@@ -542,6 +563,11 @@ func (s *TableChangeStream) forceNextInterval(wait time.Duration) {
 
 // processOneRound processes one round of change streaming
 func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRoutine) error {
+	// Clear previous cleanup rollback error
+	s.stateMu.Lock()
+	s.cleanupRollbackErr = nil
+	s.stateMu.Unlock()
+
 	// Create transaction operator
 	txnOp, err := GetTxnOp(ctx, s.cnEngine, s.cnTxnClient, "tableChangeStream")
 	if err != nil {
@@ -562,14 +588,153 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	defer put.Put()
 
 	// Process with transaction
+	// Note: processWithTxn's defer will set cleanupRollbackErr if rollback fails
 	err = s.processWithTxn(ctx, txnOp, packer, ar)
+
+	// Check if cleanup failed with rollback error (set by processWithTxn's defer)
+	s.stateMu.Lock()
+	cleanupRollbackErr := s.cleanupRollbackErr
+	s.stateMu.Unlock()
 
 	// Handle StaleRead error
 	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-		return s.handleStaleRead(ctx, txnOp)
+		recoveryErr := s.handleStaleRead(ctx, txnOp)
+		// If recovery succeeded (nil), mark as retryable and continue
+		if recoveryErr == nil {
+			// Recovery succeeded - mark as retryable for scheduler to retry
+			s.stateMu.Lock()
+			s.retryable = true
+			s.stateMu.Unlock()
+			return nil // Swallow error, continue processing
+		}
+		// Recovery failed - return error (will be marked non-retryable in determineRetryable)
+		return recoveryErr
+	}
+
+	// If cleanup failed with rollback error, mark as non-retryable but return original error
+	// (test expects original error to be returned, but retryable should be false)
+	if cleanupRollbackErr != nil {
+		// Update error state to mark as non-retryable, but keep original error
+		s.stateMu.Lock()
+		s.retryable = false
+		s.stateMu.Unlock()
+		// Return original error (not cleanup error) as expected by tests
+		return err
 	}
 
 	return err
+}
+
+// updateErrorState updates lastError and retryable atomically
+func (s *TableChangeStream) updateErrorState(err error) {
+	if err == nil {
+		return
+	}
+	retryable := s.determineRetryable(err)
+	s.stateMu.Lock()
+	// If retryable is already true (e.g., from successful StaleRead recovery),
+	// and new error is a control signal (pause/cancel), preserve the retryable state.
+	// This ensures that successful recovery states are not overwritten by control signals.
+	if s.retryable && IsPauseOrCancelError(err.Error()) {
+		// Preserve retryable = true, but still update lastError
+		s.lastError = err
+	} else {
+		s.lastError = err
+		s.retryable = retryable
+	}
+	s.stateMu.Unlock()
+}
+
+// determineRetryable determines if an error is retryable based on error type and context
+func (s *TableChangeStream) determineRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := err.Error()
+
+	// Control signals (pause/cancel) are not retryable
+	if IsPauseOrCancelError(errMsg) {
+		return false
+	}
+
+	// Check for MatrixOne system/network errors first (before string matching)
+	// These errors indicate temporary system unavailability and should be retryable
+	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrTNShardNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrRpcError) ||
+		moerr.IsMoErrCode(err, moerr.ErrClientClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+		return true
+	}
+
+	// Check for context timeout errors (system/network issues)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// StaleRead errors are retryable if recovery is possible
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+		// If startTs is set and noFull is false, StaleRead is fatal (handled in handleStaleRead)
+		// If handleStaleRead returns nil, recovery succeeded (retryable)
+		// If handleStaleRead returns error, recovery failed (non-retryable)
+		return false // Will be updated in handleStaleRead, but default to false for safety
+	}
+
+	// Table relation errors (table truncated, etc.) are retryable
+	if strings.Contains(errMsg, "relation") || strings.Contains(errMsg, "truncated") {
+		return true
+	}
+
+	// Watermark stall errors are retryable
+	if strings.Contains(errMsg, "stuck") || strings.Contains(errMsg, "stall") {
+		return true
+	}
+
+	// Commit failures are retryable (usually transient network issues)
+	if strings.Contains(errMsg, "commit") {
+		return true
+	}
+
+	// Connection issues are retryable (check before begin/rollback to catch network errors)
+	if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "timeout") ||
+		strings.Contains(errMsg, "network") || strings.Contains(errMsg, "unavailable") ||
+		strings.Contains(errMsg, "rpc") || strings.Contains(errMsg, "backend") ||
+		strings.Contains(errMsg, "shard") {
+		return true
+	}
+
+	// Begin failures: retryable if network-related, non-retryable if state-related
+	if strings.Contains(errMsg, "begin") {
+		// Network-related begin failures are retryable
+		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "timeout") ||
+			strings.Contains(errMsg, "network") || strings.Contains(errMsg, "unavailable") ||
+			strings.Contains(errMsg, "rpc") || strings.Contains(errMsg, "backend") {
+			return true
+		}
+		// State-related begin failures (e.g., "transaction already active") are non-retryable
+		return false
+	}
+
+	// Rollback failures are non-retryable (system state may be inconsistent)
+	// These are handled by default case (non-retryable)
+
+	// Simple "sinker error" without context (usually fatal, occurs before transaction starts)
+	// is non-retryable. Only retryable if it has more context indicating transient issues.
+	if strings.Contains(errMsg, "sinker") {
+		// If it's just "sinker error" without more context, it's likely fatal
+		// But if it has context like "circuit breaker", it might be retryable
+		if strings.Contains(errMsg, "circuit") || strings.Contains(errMsg, "timeout") {
+			return true
+		}
+		// Default: simple sinker error is non-retryable (fatal)
+		return false
+	}
+
+	// Default: non-retryable for unknown errors
+	return false
 }
 
 // clearErrorOnFirstSuccess clears error message on first successful data processing
@@ -601,8 +766,7 @@ func (s *TableChangeStream) processWithTxn(
 	s.progressTracker.SetState("reading")
 	_, _, rel, err := GetRelationById(ctx, s.cnEngine, txnOp, s.tableInfo.SourceTblId)
 	if err != nil {
-		// Table may have been truncated
-		s.retryable.Store(true)
+		// Table may have been truncated - retryable will be determined in processOneRound
 		return err
 	}
 
@@ -690,6 +854,13 @@ func (s *TableChangeStream) processWithTxn(
 					zap.String("table", s.tableInfo.String()),
 					zap.Error(cleanupErr),
 				)
+				// Rollback failure makes the error non-retryable (system state may be inconsistent)
+				// Store it for processOneRound to return
+				if strings.Contains(cleanupErr.Error(), "rollback") {
+					s.stateMu.Lock()
+					s.cleanupRollbackErr = cleanupErr
+					s.stateMu.Unlock()
+				}
 			}
 		}
 	}()
@@ -820,14 +991,16 @@ func (s *TableChangeStream) handleSnapshotNoProgress(ctx context.Context, fromTs
 	}
 
 	if stalledFor >= s.watermarkStallThreshold {
-		s.retryable.Store(true)
-		return moerr.NewInternalErrorf(
+		err := moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s snapshot timestamp stuck for %v (threshold %v)",
 			s.tableInfo.String(),
 			stalledFor,
 			s.watermarkStallThreshold,
 		)
+		// Update error state atomically (for both direct calls and through processOneRound)
+		s.updateErrorState(err)
+		return err
 	}
 
 	return nil
@@ -853,10 +1026,10 @@ func (s *TableChangeStream) onWatermarkAdvanced() {
 }
 
 // handleStaleRead handles StaleRead error by resetting watermark
+// Returns error with retryable flag determined by recoverability
 func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
-	// If startTs is set and noFull is false, StaleRead is fatal
+	// If startTs is set and noFull is false, StaleRead is fatal (non-retryable)
 	if !s.noFull && !s.startTs.IsEmpty() {
-		s.retryable.Store(false)
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s stale read with startTs %s set, cannot recover",
@@ -882,7 +1055,7 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 			zap.String("watermark", watermark.ToString()),
 			zap.Error(err),
 		)
-		s.retryable.Store(false)
+		// Recovery failed - non-retryable
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s stale read recovery failed to update watermark: %v",
@@ -900,9 +1073,16 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 	// Force next interval
 	s.forceNextInterval(DefaultFrequency)
 
-	// Mark as retryable and swallow error
-	s.retryable.Store(true)
+	// Recovery succeeded - return nil to swallow error
+	// retryable will be set to true in processOneRound
 	return nil
+}
+
+// GetRetryable returns the retryable flag in a thread-safe way
+func (s *TableChangeStream) GetRetryable() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.retryable
 }
 
 // Close closes the change stream
