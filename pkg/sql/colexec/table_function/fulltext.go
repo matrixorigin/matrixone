@@ -15,11 +15,12 @@
 package table_function
 
 import (
+	"container/heap"
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -55,6 +57,7 @@ type fulltextState struct {
 	mpool     *fulltext.FixedBytePool
 	param     fulltext.FullTextParserParam
 	docLenMap map[any]int32
+	minheap   vectorindex.SearchResultHeap
 
 	// holding output batch
 	batch *batch.Batch
@@ -136,8 +139,52 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 
 }
 
+// return (doc_id, score) as result
+// when scoremap is empty, return result end.
+func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResult, error) {
+
+	blocksz := 8192
+
+	if u.minheap == nil {
+		return vm.CancelResult, nil
+	}
+	n := u.minheap.Len()
+	if n > blocksz {
+		n = blocksz
+	}
+
+	for range n {
+		srif := heap.Pop(&u.minheap).(vectorindex.SearchResultIf)
+		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
+		if !ok {
+			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
+		}
+
+		// doc_id returned
+		doc_id := sr.Id
+		if str, ok := sr.Id.(string); ok {
+			bytes := []byte(str)
+			doc_id = bytes
+		}
+		vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+
+		if u.batch.VectorCount() > 1 {
+			vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
+		}
+	}
+	u.batch.SetRowCount(n)
+	u.n_result += uint64(n)
+	if u.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
+
+	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+
+}
+
 func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 
+	var err error
 	u.batch.CleanOnlyData()
 
 	// number of result more than pushdown limit and exit
@@ -145,16 +192,32 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 		return vm.CancelResult, nil
 	}
 
-	// array is empty, try to get batch from SQL executor
-	scoremap, err := evaluate(u, proc, u.sacc)
-	if err != nil {
-		return vm.CancelResult, err
-	}
+	if u.limit == 0 {
+		// array is empty, try to get batch from SQL executor
+		scoremap, err := evaluate(u, proc, u.sacc)
+		if err != nil {
+			return vm.CancelResult, err
+		}
 
-	if scoremap != nil {
-		return u.returnResult(proc, scoremap)
+		if scoremap != nil {
+			return u.returnResult(proc, scoremap)
+		}
+		return vm.CancelResult, nil
+
+	} else {
+		// build minheap
+		if u.minheap == nil {
+			err = sort_topk(u, proc, u.sacc, u.limit)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+		}
+
+		if u.minheap != nil {
+			return u.returnResultFromHeap(proc)
+		}
+		return vm.CancelResult, nil
 	}
-	return vm.CancelResult, nil
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
@@ -163,7 +226,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
-			err := json.Unmarshal([]byte(tf.Params), &u.param)
+			err := sonic.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
 				return err
 			}
@@ -287,6 +350,48 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	}
 
 	return scoremap, nil
+}
+
+func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
+	aggcnt := u.aggcnt
+	u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
+	heap.Init(&u.minheap)
+
+	for doc_id, addr := range u.agghtab {
+
+		docvec, err := u.mpool.GetItem(addr)
+		if err != nil {
+			return err
+		}
+
+		docLen := int64(0)
+		if len, ok := u.docLenMap[doc_id]; ok {
+			docLen = int64(len)
+		}
+
+		score, err := s.Eval(docvec, docLen, aggcnt)
+		if err != nil {
+			return err
+		}
+
+		if len(score) > 0 {
+			scoref64 := float64(score[0])
+			if len(u.minheap) >= int(limit) {
+				if u.minheap[0].GetDistance() < scoref64 {
+					u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
+					heap.Fix(&u.minheap, 0)
+				}
+			} else {
+				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+			}
+		}
+	}
+
+	// close the pool
+	u.mpool.Close()
+	clear(u.agghtab)
+
+	return nil
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))
