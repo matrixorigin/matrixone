@@ -110,6 +110,50 @@ func (s *SearchAccum) Eval(docvec []uint8, docLen int64, aggcnt []int64) ([]floa
 	return result, nil
 }
 
+// ranking mode -- OR mode
+func (s *SearchAccum) EvalRankingMode(docvec []uint8, docLen int64, aggcnt []int64) (float32, error) {
+
+	var result float32
+	weight := float32(1)
+	for _, p := range s.Pattern {
+
+		if p.Operator != TEXT {
+			return 0, moerr.NewInternalErrorNoCtx("Ranking mode: pattern must be TEXT")
+		}
+
+		index := p.Index
+		cnt := docvec[index]
+
+		if cnt == 0 {
+			continue
+		}
+
+		var score float32
+		switch s.ScoreAlgo {
+		case ALGO_TFIDF:
+			nmatch := float64(aggcnt[index])
+			idf := math.Log10(float64(s.Nrow) / nmatch)
+			idfSq := float32(idf * idf)
+			tf := float32(docvec[index])
+			score = weight * tf * idfSq
+
+		case ALGO_BM25:
+			//@see https://zhuanlan.zhihu.com/p/670322092
+			nmatch := float64(aggcnt[index])
+			idf := math.Log10(float64(s.Nrow) / nmatch) //use old tfidf algo
+			idfSq := float32(idf * idf)
+
+			tf := float32(docvec[index])
+			tfSq := tf * (BM25_K1 + 1) / (tf + BM25_K1*float32(1.0-BM25_B+BM25_B*(float64(docLen)/s.AvgDocLen)))
+			score = weight * idfSq * tfSq
+		}
+
+		result += score
+	}
+
+	return result, nil
+}
+
 // Pattern
 func (p *Pattern) String() string {
 	if p.Operator == TEXT || p.Operator == STAR {

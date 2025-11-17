@@ -331,6 +331,62 @@ func TestFullTextOr(t *testing.T) {
 
 }
 
+func TestFullTextRanking(t *testing.T) {
+
+	pattern := "apple banana"
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	require.Nil(t, err)
+
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
+
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+
+	s.Nrow = 100
+	s.AvgDocLen = 10
+
+	test_result := make(map[any]float32, 4)
+	// eval
+	i := 0
+	for key := range agghtab {
+		var result []float32
+		docvec := agghtab[key]
+		for _, p := range s.Pattern {
+			result, err = p.Eval(s, docvec, 0, aggcnt, float32(1.0), result)
+			require.Nil(t, err)
+		}
+
+		if len(result) > 0 {
+			test_result[key] = result[0]
+		}
+		i++
+	}
+
+	var ok bool
+	_, ok = test_result[0]
+	assert.Equal(t, ok, true)
+	_, ok = test_result[1]
+	assert.Equal(t, ok, true)
+	_, ok = test_result[11]
+	assert.Equal(t, ok, true)
+	_, ok = test_result[12]
+	assert.Equal(t, ok, true)
+
+	fmt.Printf("result %v\n", test_result)
+	for key := range agghtab {
+		docvec := agghtab[key]
+		result, err := s.EvalRankingMode(docvec, 0, aggcnt)
+		require.NoError(t, err)
+		fmt.Printf("ranking key %v, %v\n", key, result)
+	}
+}
+
 func TestFullTextPlusPlus(t *testing.T) {
 
 	pattern := "+apple -orange"
