@@ -9,20 +9,25 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Quick Start](#quick-start)
-3. [CREATE CDC - Creating a CDC Task](#create-cdc---creating-a-cdc-task)
-4. [SHOW CDC - Viewing CDC Tasks](#show-cdc---viewing-cdc-tasks)
-5. [PAUSE CDC - Pausing a CDC Task](#pause-cdc---pausing-a-cdc-task)
-6. [RESUME CDC - Resuming a CDC Task](#resume-cdc---resuming-a-cdc-task)
-7. [DROP CDC - Dropping a CDC Task](#drop-cdc---dropping-a-cdc-task)
-8. [RESTART CDC - Restarting a CDC Task](#restart-cdc---restarting-a-cdc-task)
-9. [Monitoring and Error Handling](#monitoring-and-error-handling)
-10. [Metrics and Observability](#metrics-and-observability)
-11. [Configuration Options Reference](#configuration-options-reference)
-12. [Best Practices](#best-practices)
-13. [Troubleshooting](#troubleshooting)
-14. [Test Scenarios](#test-scenarios)
-15. [FAQ](#faq)
+2. [System Architecture](#system-architecture)
+   - [Core Components](#core-components)
+   - [Component Collaboration](#component-collaboration)
+   - [Task Lifecycle](#task-lifecycle)
+   - [Design Intentions](#design-intentions)
+3. [Quick Start](#quick-start)
+4. [CREATE CDC - Creating a CDC Task](#create-cdc---creating-a-cdc-task)
+5. [SHOW CDC - Viewing CDC Tasks](#show-cdc---viewing-cdc-tasks)
+6. [PAUSE CDC - Pausing a CDC Task](#pause-cdc---pausing-a-cdc-task)
+7. [RESUME CDC - Resuming a CDC Task](#resume-cdc---resuming-a-cdc-task)
+8. [DROP CDC - Dropping a CDC Task](#drop-cdc---dropping-a-cdc-task)
+9. [RESTART CDC - Restarting a CDC Task](#restart-cdc---restarting-a-cdc-task)
+10. [Monitoring and Error Handling](#monitoring-and-error-handling)
+11. [Metrics and Observability](#metrics-and-observability)
+12. [Configuration Options Reference](#configuration-options-reference)
+13. [Best Practices](#best-practices)
+14. [Troubleshooting](#troubleshooting)
+15. [Test Scenarios](#test-scenarios)
+16. [FAQ](#faq)
 
 ---
 
@@ -47,6 +52,343 @@ Change Data Capture (CDC) is a data replication feature that captures and synchr
 - MySQL 5.7+
 - MySQL 8.0+
 - MatrixOne (inter-cluster replication)
+
+---
+
+## System Architecture
+
+### Overview
+
+The CDC system is built on a **pipeline architecture** that processes data changes through multiple stages: reading from source, processing changes, and writing to target. The system is designed for **high reliability**, **automatic recovery**, and **precise state management**.
+
+### Core Components
+
+The CDC system consists of five main components that work together to achieve reliable data replication:
+
+#### 1. TableChangeStream (Stream)
+
+**Purpose**: The main orchestrator that coordinates the entire data replication pipeline for a single table.
+
+**Responsibilities**:
+- Orchestrates the data replication lifecycle for one table
+- Manages tick-based polling intervals (frequency control)
+- Coordinates between Reader, Processor, and Sinker components
+- Handles error classification and retry decisions
+- Manages watermark progression and state persistence
+- Implements StaleRead recovery mechanism
+- Provides pause/cancel control signal handling
+
+**Key Behaviors**:
+- Runs in a continuous loop, processing one round at a time
+- Each round: reads changes → processes → writes → updates watermark
+- Automatically retries on retryable errors
+- Stops processing on non-retryable errors (requires manual intervention)
+- Persists error state to database for recovery after restarts
+
+**Lifecycle**:
+- Created per table when task starts
+- Runs until task is paused, dropped, or encounters fatal error
+- Cleans up resources on shutdown
+
+#### 2. Reader (ChangeReader)
+
+**Purpose**: Reads change data from MatrixOne source database.
+
+**Responsibilities**:
+- Creates transactions to read changes from source tables
+- Collects changes within a timestamp range (fromTs to toTs)
+- Handles table schema changes and truncation
+- Provides change batches (snapshot + incremental) to processor
+- Manages transaction lifecycle (begin, read, commit/rollback)
+
+**Key Behaviors**:
+- Uses MatrixOne transaction API to read changes
+- Returns changes in batches (snapshot data + incremental changes)
+- Handles StaleRead errors (data not yet available at requested timestamp)
+- Supports table relation lookups and schema validation
+
+**Components**:
+- **TransactionManager**: Manages transaction lifecycle, coordinates with Sinker for BEGIN/COMMIT/ROLLBACK
+- **ChangeCollector**: Collects changes from source tables within timestamp ranges
+- **DataProcessor**: Processes change batches and coordinates with Sinker
+
+#### 3. Sinker (mysqlSinker2)
+
+**Purpose**: Writes data changes to downstream MySQL-compatible database.
+
+**Responsibilities**:
+- Executes SQL commands (INSERT, UPDATE, DELETE) on target database
+- Manages transaction lifecycle on target (BEGIN, COMMIT, ROLLBACK)
+- Implements retry mechanism with exponential backoff
+- Provides circuit breaker to prevent retry storms
+- Handles connection management and reconnection
+- Tracks transaction state (IDLE, ACTIVE, COMMITTED, ROLLED_BACK)
+
+**Key Behaviors**:
+- Uses command channel pattern: commands are sent asynchronously, executed by consumer goroutine
+- Once error occurs, all subsequent commands are skipped until `ClearError()`
+- Producer (Reader) polls `Error()` to detect async failures
+- Supports SQL batching and reuse query buffer optimization
+- Automatic retry for transient errors (network, timeout, circuit breaker)
+
+**Transaction State Machine**:
+```
+IDLE --SendBegin--> ACTIVE --SendCommit--> COMMITTED --cleanup--> IDLE
+                    ACTIVE --SendRollback--> ROLLED_BACK --cleanup--> IDLE
+```
+
+#### 4. WatermarkUpdater
+
+**Purpose**: Manages watermark state (checkpoint) and error persistence.
+
+**Responsibilities**:
+- Maintains per-table watermark (last synchronized timestamp)
+- Persists error messages with metadata (retryable flag, retry count, timestamps)
+- Provides in-memory cache for fast watermark lookups
+- Implements asynchronous job queue for watermark updates (preserves batch processing design)
+- Manages circuit breaker state for commit failures
+- Clears errors on successful processing
+
+**Key Behaviors**:
+- Watermark represents the last successfully synchronized timestamp
+- Errors are persisted with structured format: `R:<count>:<first>:<last>:<message>` or `N:<first>:<message>`
+- Uses lazy batch processing: updates are queued and processed asynchronously
+- Cache provides fast reads without synchronous SQL queries
+- Circuit breaker tracks commit failure patterns
+
+**Storage**:
+- In-memory cache: fast lookups during processing
+- Database (`mo_catalog.mo_cdc_watermark`): persistent state, survives restarts
+
+**Watermark Persistence Design - At-Least-Once Semantics**:
+
+The watermark persistence is **asynchronous by design** to preserve batch processing performance. This design choice has important implications:
+
+1. **Asynchronous Persistence**:
+   - Watermark updates are queued and processed asynchronously via job queue
+   - This avoids blocking data processing with synchronous database writes
+   - Improves overall throughput and reduces latency
+
+2. **Watermark May Lag Behind Actual Progress**:
+   - The persisted watermark in database may be **lower than the actual synchronized position**
+   - This is **intentional and safe** due to idempotency guarantees
+
+3. **Idempotency Guarantee**:
+   - CDC operations (INSERT, UPDATE, DELETE) are **idempotent** on the target database
+   - If system restarts before watermark is persisted, it will re-sync from the last persisted watermark
+   - Re-syncing the same data multiple times is safe and does not cause data corruption
+   - This ensures **at-least-once delivery** semantics
+
+4. **Recovery Behavior**:
+   - On restart, system resumes from the last persisted watermark (which may be lower than actual)
+   - System will re-process some data that was already synchronized
+   - This is acceptable because operations are idempotent
+   - Better to have slight duplication than to lose data
+
+5. **Error Handling for Watermark Stalls**:
+   - If watermark cannot advance (e.g., due to persistent errors), system detects this condition
+   - Watermark stall errors are logged and tracked via metrics
+   - System will retry and eventually recover when underlying issues are resolved
+   - See "Watermark Stall Errors" in Error Handling section for details
+
+**Why This Design**:
+- **Performance**: Asynchronous updates avoid blocking the critical data path
+- **Reliability**: At-least-once semantics ensure no data loss
+- **Simplicity**: Idempotent operations simplify error recovery
+- **Trade-off**: Accepts slight data duplication in exchange for better performance and simpler recovery
+
+#### 5. Task Scheduler (Frontend)
+
+**Purpose**: Manages task lifecycle and coordinates multiple table streams.
+
+**Responsibilities**:
+- Creates and manages CDC tasks
+- Starts/stops table streams based on task state
+- Checks error state before starting streams (uses `ShouldRetry` logic)
+- Handles task-level operations (pause, resume, restart, drop)
+- Monitors task health and state transitions
+- Clears errors on resume/restart
+
+**Key Behaviors**:
+- Scans for new tables and creates streams dynamically
+- Before starting stream, checks persisted error in watermark table
+- Skips tables with non-retryable errors (requires manual intervention)
+- Allows retryable errors to continue processing
+- Clears all table errors when task is resumed
+
+### Component Collaboration
+
+The components work together in a **producer-consumer pipeline**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Task Scheduler                            │
+│  - Creates/manages tasks                                     │
+│  - Starts/stops table streams                                │
+│  - Checks error state before starting                        │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              TableChangeStream (per table)                  │
+│  - Orchestrates pipeline                                    │
+│  - Manages tick-based polling                               │
+│  - Coordinates components                                   │
+└──────┬───────────────────────────────┬──────────────────────┘
+       │                               │
+       ▼                               ▼
+┌──────────────────┐          ┌──────────────────┐
+│     Reader       │          │   WatermarkUpdater│
+│  - Read changes  │          │  - Manage state   │
+│  - Collect data  │          │  - Persist errors │
+└──────┬───────────┘          └──────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              TransactionManager + DataProcessor             │
+│  - Coordinate transaction lifecycle                        │
+│  - Process change batches                                   │
+│  - Send commands to Sinker                                  │
+└──────┬──────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Sinker (mysqlSinker2)                    │
+│  - Execute SQL on target                                    │
+│  - Manage target transactions                               │
+│  - Retry on transient errors                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Data Flow**:
+
+1. **TableChangeStream** starts a processing round (tick-based)
+2. **Reader** creates transaction and collects changes from source (fromTs to toTs)
+3. **DataProcessor** processes change batches:
+   - Sends BEGIN to Sinker
+   - Sends INSERT/UPDATE/DELETE commands for each change
+   - Sends COMMIT to Sinker
+4. **Sinker** executes commands on target database:
+   - Receives commands asynchronously via channel
+   - Executes SQL with retry mechanism
+   - Reports errors back to producer
+5. **WatermarkUpdater** updates watermark on success:
+   - Updates in-memory cache
+   - Queues database update (asynchronous)
+6. **TableChangeStream** waits for next tick interval and repeats
+
+**Error Handling Flow**:
+
+1. Error occurs in any component (Reader, Sinker, etc.)
+2. Error propagates to **TableChangeStream**
+3. **TableChangeStream** classifies error (retryable/non-retryable)
+4. Error state updated atomically (lastError + retryable flag)
+5. Error persisted to **WatermarkUpdater** (with metadata)
+6. If retryable: Stream waits for next tick and retries
+7. If non-retryable: Stream stops, requires manual intervention
+8. On restart: **Task Scheduler** checks persisted error, decides whether to start stream
+
+### Task Lifecycle
+
+A CDC task goes through the following states:
+
+```
+CREATED → STARTING → RUNNING → [PAUSED] → [RUNNING] → CANCELLED
+                              ↓
+                           [FAILED] → [RUNNING] (after resume)
+```
+
+**State Transitions**:
+
+1. **CREATED**: Task is created via `CREATE CDC` command
+   - Metadata stored in `mo_catalog.mo_cdc_task`
+   - Initial watermark entries created in `mo_catalog.mo_cdc_watermark`
+
+2. **STARTING**: Task is being initialized
+   - Task scheduler scans for tables
+   - Creates TableChangeStream for each table
+   - Checks error state before starting streams
+
+3. **RUNNING**: Task is actively replicating data
+   - TableChangeStream processes changes in rounds
+   - Watermarks are updated on successful rounds
+   - Errors are handled automatically (retryable) or block processing (non-retryable)
+
+4. **PAUSED**: Task is temporarily stopped
+   - All table streams are stopped gracefully
+   - State is preserved (watermarks, errors)
+   - Can be resumed via `RESUME CDC` command
+
+5. **FAILED**: Task encountered non-retryable error
+   - Task remains in RUNNING state but sync is blocked
+   - Error persists until manually cleared
+   - Can be recovered via `RESUME CDC` (clears errors)
+
+6. **CANCELLED**: Task is dropped
+   - All resources are cleaned up
+   - Metadata and watermarks are deleted
+   - Cannot be recovered
+
+**Control Operations**:
+
+- **PAUSE**: Gracefully stops all table streams, preserves state
+- **RESUME**: Clears all errors, restarts streams from last watermark
+- **RESTART**: Stops and immediately restarts, clears errors
+- **DROP**: Permanently deletes task and all metadata
+
+### Design Intentions
+
+The CDC system is designed with the following principles:
+
+1. **Reliability First**:
+   - All state is persisted (watermarks, errors)
+   - Errors are classified and handled appropriately
+   - System can recover from any error state via manual intervention
+
+2. **Automatic Recovery**:
+   - Transient errors (network, system unavailability) are automatically retried
+   - Retry mechanism with exponential backoff prevents retry storms
+   - Circuit breaker protects against persistent failures
+
+3. **Precise State Management**:
+   - Watermark represents exact synchronization point
+   - Errors are tracked with metadata (retryable, count, timestamps)
+   - State survives system restarts
+
+4. **Performance Optimization**:
+   - Asynchronous processing (command channel pattern)
+   - Batch processing for watermark updates
+   - SQL reuse query buffer optimization
+   - In-memory cache for fast watermark lookups
+
+5. **Flexibility**:
+   - Supports multiple replication levels (account, database, table)
+   - Configurable frequency, time ranges, filters
+   - Optional initial snapshot
+
+6. **Observability**:
+   - Structured logging with consistent keys
+   - Metrics for monitoring and alerting
+   - Progress tracking per table
+
+7. **User Control**:
+   - Manual intervention always possible (resume clears all errors)
+   - Clear error messages guide troubleshooting
+   - Task operations (pause/resume/restart) provide full control
+
+### Component Isolation
+
+Each component is designed to be **loosely coupled**:
+
+- **TableChangeStream** doesn't know about downstream MySQL details
+- **Sinker** doesn't know about source MatrixOne details
+- **WatermarkUpdater** is a shared service, used by all streams
+- **Reader** components are independent per table
+
+This design allows:
+- Easy testing (components can be mocked)
+- Independent scaling (each table stream is independent)
+- Clear error boundaries (errors are contained and handled appropriately)
 
 ---
 
@@ -613,6 +955,11 @@ These errors indicate temporary system unavailability and are always retryable:
 **Data Source Errors:**
 - **Table Relation Errors**: Table truncated or temporarily unavailable (table may be recreated)
 - **Watermark Stall Errors**: Snapshot timestamp stuck (temporary condition)
+  - Occurs when watermark cannot advance for extended period (default threshold: 1 minute)
+  - System detects this condition and logs warning: `cdc.table_stream.snapshot_not_advanced`
+  - Error is retryable - system will continue attempting to advance watermark
+  - Tracked via metrics for monitoring
+  - Usually resolves automatically when source data becomes available
 - **StaleRead Errors**: If recovery is possible (watermark reset succeeds)
 
 **Sinker Errors (Transient):**
