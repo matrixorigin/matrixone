@@ -195,7 +195,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
 			s.ScopeAnalyzer.Stop()
-			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
+
+			indexReaders, err := s.buildIndexReaders(c)
+			if err != nil {
+				return err
+			}
+			_, err = p.RunWithReader(s.DataSource.R, indexReaders, tag, s.Proc)
 		}
 	}
 	select {
@@ -1015,6 +1020,108 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 		}
 	}
 	return findMergeGroup(op.GetOperatorBase().GetChildren(0))
+}
+
+func (s *Scope) buildIndexReaders(c *Compile) (indexReaders []engine.Reader, err error) {
+	if tableScanOperator, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+		// let's build index readers for index scan.
+		for _, e := range tableScanOperator.IndexScanExprs {
+			if !isFulltextFunction(e) {
+				return nil, moerr.NewNYI(c.proc.Ctx, "index scan with non-fulltext function is not supported")
+			}
+			// next, find index def.  the fulltext index MUST be build on the table of DataSource.
+			// srcTblName := s.DataSource.node.TableDef.Name
+			colPos := e.GetF().Args[2].GetCol().GetColPos()
+			colName := s.DataSource.node.TableDef.Cols[colPos].Name
+
+			var idxDef *plan.IndexDef
+			for _, idx := range s.DataSource.node.TableDef.Indexes {
+				for _, p := range idx.Parts {
+					if idx.IndexAlgo == "fulltext" && strings.EqualFold(p, colName) {
+						idxDef = idx
+						break
+					}
+				}
+			}
+			if idxDef == nil {
+				return nil, moerr.NewInternalError(c.proc.Ctx, "index scan cannot find index def for fulltext function")
+			}
+
+			idxtblName := idxDef.IndexTableName
+			// next open a reader for table idxTblName
+			ctx := c.proc.GetTopContext()
+			txnOp := c.proc.GetTxnOperator()
+
+			// Handle snapshot if needed (similar to handleDbRelContext)
+			if s.DataSource.node.ScanSnapshot != nil && s.DataSource.node.ScanSnapshot.TS != nil {
+				if !s.DataSource.node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+					s.DataSource.node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+					if c.proc.GetCloneTxnOperator() != nil {
+						txnOp = c.proc.GetCloneTxnOperator()
+					} else {
+						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*s.DataSource.node.ScanSnapshot.TS)
+						c.proc.SetCloneTxnOperator(txnOp)
+					}
+
+					if s.DataSource.node.ScanSnapshot.Tenant != nil {
+						ctx = context.WithValue(ctx, defines.TenantIDKey{}, s.DataSource.node.ScanSnapshot.Tenant.TenantID)
+					}
+				}
+			}
+
+			// Get database from the same schema as the main table
+			schemaName := s.DataSource.node.ObjRef.SchemaName
+			if util.TableIsClusterTable(s.DataSource.node.TableDef.GetTableType()) {
+				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			}
+			if s.DataSource.node.ObjRef.PubInfo != nil {
+				ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.node.ObjRef.PubInfo.GetTenantId()))
+			}
+
+			db, err := c.e.Database(ctx, schemaName, txnOp)
+			if err != nil {
+				return nil, err
+			}
+
+			// Open relation for index table
+			idxRel, err := db.Relation(ctx, idxtblName, c.proc)
+			if err != nil {
+				return nil, err
+			}
+
+			// Build readers for index table (no filters needed for index table scan)
+			stats := statistic.StatsInfoFromContext(ctx)
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
+			idxRds, err := idxRel.BuildReaders(
+				newCtx,
+				c.proc,
+				nil, // no filter for index table
+				nil, // no relData for index table
+				s.NodeInfo.Mcpu,
+				s.TxnOffset,
+				false, // no ordering for index table
+				engine.Policy_CheckAll,
+				engine.FilterHint{},
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			stats.AddScopePrepareS3Request(statistic.S3Request{
+				List:      crs.FileService.S3.List.Load(),
+				Head:      crs.FileService.S3.Head.Load(),
+				Put:       crs.FileService.S3.Put.Load(),
+				Get:       crs.FileService.S3.Get.Load(),
+				Delete:    crs.FileService.S3.Delete.Load(),
+				DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+			})
+
+			indexReaders = append(indexReaders, idxRds...)
+		}
+	}
+	return indexReaders, nil
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {

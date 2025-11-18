@@ -31,6 +31,7 @@ var _ vm.Operator = new(TableScan)
 type container struct {
 	maxAllocSize int
 	buf          *batch.Batch
+	idxBuf       *batch.Batch
 	msgReceiver  *message.MessageReceiver
 }
 
@@ -38,6 +39,7 @@ type TableScan struct {
 	ctr            container
 	TopValueMsgTag int32
 	Reader         engine.Reader
+	IndexReaders   []engine.Reader
 
 	// letter case: origin
 	Attrs   []string
@@ -106,6 +108,10 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
+	}
+	if tableScan.ctr.idxBuf != nil {
+		tableScan.ctr.idxBuf.Clean(proc.Mp())
+		tableScan.ctr.idxBuf = nil
 	}
 
 	if tableScan.ProjectList != nil {

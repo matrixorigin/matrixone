@@ -47,13 +47,13 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) RunWithReader(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
-
+func (p *Pipeline) RunWithReader(r engine.Reader, indexReaders []engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
 	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
 		tableScanOperator.TopValueMsgTag = topValueMsgTag
 		tableScanOperator.Attrs = p.attrs
 		tableScanOperator.TableID = p.tableID
+		tableScanOperator.IndexReaders = indexReaders
 	}
 
 	return p.Run(proc)

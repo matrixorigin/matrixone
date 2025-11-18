@@ -61,6 +61,14 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 			tableScan.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(tableScan.Types[i]))
 		}
 	}
+
+	if len(tableScan.IndexScanExprs) > 0 {
+		if tableScan.ctr.idxBuf == nil {
+			tableScan.ctr.idxBuf = batch.NewOffHeapWithSize(len(tableScan.Types))
+			// TODO:
+			// build index Buf with attrs and types.
+		}
+	}
 	return
 }
 
