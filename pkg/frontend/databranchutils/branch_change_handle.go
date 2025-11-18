@@ -77,9 +77,8 @@ var CollectChanges = func(
 		err error
 	)
 
-	handle := new(BranchChangeHandle)
-
 	if end.GE(&from) {
+		handle := new(BranchChangeHandle)
 		if handle.handle, err = rel.CollectChanges(
 			ctx, from, end, false, mp,
 		); err != nil {
@@ -87,9 +86,5 @@ var CollectChanges = func(
 		}
 	}
 
-	return handle, nil
+	return nil, nil
 }
-
-/////////////////
-
-//////////////
