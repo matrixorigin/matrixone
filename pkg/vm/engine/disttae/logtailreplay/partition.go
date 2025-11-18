@@ -171,6 +171,7 @@ func (p *Partition) ConsumeSnapCkps(
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
+// ckp
 	checkpoint string,
 	state *PartitionState,
 ) error,
