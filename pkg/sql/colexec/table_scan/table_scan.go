@@ -118,10 +118,21 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		// Attach read size recorder to context to track actual bytes read from storage layer
-		newCtx = context.WithValue(newCtx, defines.ReadSizeRecorderKey{}, func(bytes int64) {
-			analyzer.AddReadSize(bytes)
-		})
+		// Attach read size recorders to context to track actual bytes read from different sources
+		recorders := defines.ReadSizeRecorders{
+			Total: func(bytes int64) {
+				analyzer.AddReadSize(bytes)
+			},
+			S3: func(bytes int64) {
+				analyzer.AddS3ReadSize(bytes)
+			},
+			Disk: func(bytes int64) {
+				analyzer.AddDiskReadSize(bytes)
+			},
+		}
+		newCtx = context.WithValue(newCtx, defines.ReadSizeRecordersKey{}, recorders)
+		// Also keep the old key for backward compatibility
+		newCtx = context.WithValue(newCtx, defines.ReadSizeRecorderKey{}, recorders.Total)
 		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
 			e = err

@@ -1154,6 +1154,12 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	if a.AnalyzeInfo.ReadSize > 0 {
 		fmt.Fprintf(buf, " ReadSize=%s", formatBytes(a.AnalyzeInfo.ReadSize))
 	}
+	if a.AnalyzeInfo.S3ReadSize > 0 {
+		fmt.Fprintf(buf, " S3ReadSize=%s", formatBytes(a.AnalyzeInfo.S3ReadSize))
+	}
+	if a.AnalyzeInfo.DiskReadSize > 0 {
+		fmt.Fprintf(buf, " DiskReadSize=%s", formatBytes(a.AnalyzeInfo.DiskReadSize))
+	}
 
 	fmt.Fprintf(buf, " MemorySize=%s", formatBytes(a.AnalyzeInfo.MemorySize))
 

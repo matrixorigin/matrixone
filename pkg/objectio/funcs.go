@@ -200,11 +200,22 @@ func ReadOneBlockWithMeta(
 		//TODO when to call ioVec.Release?
 
 		// Record actual bytes read from storage layer (excluding rowid, which is generated, not loaded)
-		if recorder := ctx.Value(defines.ReadSizeRecorderKey{}); recorder != nil {
-			var totalReadSize int64
-			for _, entry := range ioVec.Entries {
-				totalReadSize += entry.Size
+		var totalReadSize int64
+		for _, entry := range ioVec.Entries {
+			totalReadSize += entry.Size
+		}
+
+		// Try to use ReadSizeRecordersKey first (for S3/Disk distinction)
+		if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
+			if rs, ok := recorders.(defines.ReadSizeRecorders); ok {
+				if rs.Total != nil {
+					rs.Total(totalReadSize)
+				}
+				// Note: S3 and Disk recorders are called in filesystem layer (S3FS/LocalFS)
+				// where we can accurately determine the data source
 			}
+		} else if recorder := ctx.Value(defines.ReadSizeRecorderKey{}); recorder != nil {
+			// Fallback to old ReadSizeRecorderKey for backward compatibility
 			if fn, ok := recorder.(func(int64)); ok {
 				fn(totalReadSize)
 			}
