@@ -268,6 +268,9 @@ func (np NullsPosition) String() string {
 // the LIMIT clause.
 type Limit struct {
 	Offset, Count Expr
+	ByRank        bool
+	Option        map[string]string // parsed options like {"fudge_factor": "3.0", "nprobe": "10", "mode": "pre"}
+	Mode          string            // "pre" or "post"
 }
 
 func (node *Limit) Format(ctx *FmtCtx) {
@@ -283,6 +286,32 @@ func (node *Limit) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString("offset ")
 		node.Offset.Format(ctx)
+		needSpace = true
+	}
+	if node != nil && node.ByRank {
+		if needSpace {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("by rank")
+		needSpace = true
+	}
+	if node != nil && node.Option != nil && len(node.Option) > 0 {
+		if needSpace {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("with option ")
+		first := true
+		for key, value := range node.Option {
+			if !first {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteString("'")
+			ctx.WriteString(key)
+			ctx.WriteString("=")
+			ctx.WriteString(value)
+			ctx.WriteString("'")
+			first = false
+		}
 	}
 }
 

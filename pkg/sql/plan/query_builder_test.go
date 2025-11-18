@@ -380,7 +380,7 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
 
-	boundOffsetExpr, boundCountExpr, err := builder.bindLimit(bindCtx, astLimit)
+	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_uint64), boundOffsetExpr.Typ.Id)
 	offsetExpr, ok := boundOffsetExpr.Expr.(*plan.Expr_Lit)

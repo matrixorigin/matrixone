@@ -197,7 +197,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return resid, distances, nil
 	}
 
+	var rowCount int64
 	for _, bat := range res.Batches {
+		rowCount += int64(bat.RowCount())
 		for i := 0; i < bat.RowCount(); i++ {
 			if bat.Vecs[1].IsNull(uint64(i)) {
 				continue
