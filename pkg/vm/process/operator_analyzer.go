@@ -430,6 +430,9 @@ func (ps *OperatorStats) String() string {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
 	}
 	//---------------------------------------------------------------------------------------------
+	if ps.LoadBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("LoadBytes:%dbytes ", ps.LoadBytes))
+	}
 	if ps.CacheRead > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))
 	}
