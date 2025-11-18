@@ -356,6 +356,7 @@ type docVec struct {
 	doc_id any
 	docvec []uint8
 	doclen int64
+	addr   uint64
 }
 
 func topk_thread_func(tid int64, ch chan docVec,
@@ -363,7 +364,8 @@ func topk_thread_func(tid int64, ch chan docVec,
 	proc *process.Process,
 	s *fulltext.SearchAccum,
 	aggcnt []int64,
-	hp *vectorindex.SearchTopKResultSafeMinHeap) {
+	hp *vectorindex.SearchTopKResultSafeMinHeap,
+	mpool *fulltext.FixedBytePool) {
 	for {
 		select {
 		case item, ok := <-ch:
@@ -378,6 +380,12 @@ func topk_thread_func(tid int64, ch chan docVec,
 			if len(score) > 0 {
 				scoref64 := float64(score[0])
 				hp.Push(&vectorindex.SearchResultAnyKey{Id: item.doc_id, Distance: scoref64})
+			}
+
+			err = mpool.FreeItem(item.addr)
+			if err != nil {
+				errch <- err
+				return
 			}
 
 		case <-proc.Ctx.Done():
@@ -404,7 +412,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 		wg.Add(1)
 		go func(tid int64) {
 			defer wg.Done()
-			topk_thread_func(tid, ch, errch, proc, s, aggcnt, u.minheap)
+			topk_thread_func(tid, ch, errch, proc, s, aggcnt, u.minheap, u.mpool)
 		}(i)
 	}
 
@@ -423,7 +431,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 				docLen = int64(len)
 			}
 
-			ch <- docVec{docvec: docvec, doclen: docLen, doc_id: doc_id}
+			ch <- docVec{docvec: docvec, doclen: docLen, doc_id: doc_id, addr: addr}
 
 		}
 
