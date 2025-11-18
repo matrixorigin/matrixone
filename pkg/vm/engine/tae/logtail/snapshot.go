@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"sort"
 	"sync"
 	"time"
@@ -67,6 +68,7 @@ const (
 	SnapshotTidIdx
 	AObjectDelIdx
 	PitrTidIdx
+	CdcTidIdx
 )
 
 const MoTablesPK = "mo_tables_pk"
@@ -101,6 +103,18 @@ const (
 	ColPitrObjId
 	ColPitrLength
 	ColPitrUnit
+)
+
+// cdc watermark schema
+const (
+	ColCdcAccountId uint16 = iota
+	ColCdcTaskId
+	ColCdcDbName
+	ColCdcTableName
+	ColCdcWatermark
+	ColCdcErrMsg
+	ColCdcCreateAt
+	ColCdcDropAt
 )
 
 var (
@@ -336,6 +350,108 @@ func (p *SnapshotInfo) ToTsList() []types.TS {
 	return result
 }
 
+// Special table information structure, used to process special tables such as PITR and CDC
+type specialTableInfo struct {
+	tid        uint64
+	objects    map[objectio.Segmentid]*objectInfo
+	tombstones map[objectio.Segmentid]*objectInfo
+}
+
+func (st *specialTableInfo) init() {
+	st.objects = make(map[objectio.Segmentid]*objectInfo)
+	st.tombstones = make(map[objectio.Segmentid]*objectInfo)
+}
+
+func (st *specialTableInfo) reset() {
+	st.objects = nil
+	st.tombstones = nil
+	st.init()
+}
+
+func (st *specialTableInfo) trim() {
+	for id, info := range st.objects {
+		if !info.deleteAt.IsEmpty() {
+			delete(st.objects, id)
+		}
+	}
+	for id, info := range st.tombstones {
+		if !info.deleteAt.IsEmpty() {
+			delete(st.tombstones, id)
+		}
+	}
+}
+
+func (st *specialTableInfo) getTombstonesStats() []objectio.ObjectStats {
+	tombstonesStats := make([]objectio.ObjectStats, 0)
+	for _, obj := range st.tombstones {
+		tombstonesStats = append(tombstonesStats, obj.stats)
+	}
+	return tombstonesStats
+}
+
+func (st *specialTableInfo) clone() *specialTableInfo {
+	clone := &specialTableInfo{
+		tid:        st.tid,
+		objects:    make(map[objectio.Segmentid]*objectInfo),
+		tombstones: make(map[objectio.Segmentid]*objectInfo),
+	}
+	for id, info := range st.objects {
+		clone.objects[id] = &objectInfo{
+			stats:    info.stats,
+			createAt: info.createAt,
+			deleteAt: info.deleteAt,
+		}
+	}
+	for id, info := range st.tombstones {
+		clone.tombstones[id] = &objectInfo{
+			stats:    info.stats,
+			createAt: info.createAt,
+			deleteAt: info.deleteAt,
+		}
+	}
+	return clone
+}
+
+// General object processing functions
+func (st *specialTableInfo) processObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	idxes []uint16,
+	ds *BackupDeltaLocDataSource,
+	mp *mpool.MPool,
+	processor func(bat *batch.Batch, r int) error,
+) error {
+	for _, object := range st.objects {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		default:
+		}
+		location := object.stats.ObjectLocation()
+		name := object.stats.ObjectName()
+		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
+			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
+			blk := objectio.BlockInfo{
+				BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
+				MetaLoc: objectio.ObjectLocation(loc),
+			}
+
+			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
+			if err != nil {
+				return err
+			}
+			defer bat.Clean(mp)
+
+			for r := 0; r < bat.Vecs[0].Length(); r++ {
+				if err := processor(bat, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 type SnapshotMeta struct {
 	sync.RWMutex
 
@@ -346,11 +462,8 @@ type SnapshotMeta struct {
 
 	aobjDelTsMap map[types.TS]struct{} // used for filering out transferred tombstones
 
-	pitr struct {
-		tid        uint64
-		objects    map[objectio.Segmentid]*objectInfo
-		tombstones map[objectio.Segmentid]*objectInfo
-	}
+	pitr specialTableInfo
+	cdc  specialTableInfo
 
 	// tables records all the table information of mo, the key is account id,
 	// and the map is the mapping of table id and table information.
@@ -382,8 +495,8 @@ func NewSnapshotMeta() *SnapshotMeta {
 		snapshotTableIDs: make(map[uint64]struct{}),
 		tablePKIndex:     make(map[string][]*tableInfo),
 	}
-	meta.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
-	meta.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
+	meta.pitr.init()
+	meta.cdc.init()
 	return meta
 }
 
@@ -424,6 +537,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 	collector := func(
 		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 		_ *map[objectio.Segmentid]*objectInfo,
+		_ *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -452,8 +566,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(ctx, &tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
+	collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -527,12 +641,20 @@ func (sm *SnapshotMeta) updateTableInfo(
 						zap.Uint64("tid", tid),
 						zap.Uint64("old-tid", sm.pitr.tid),
 					)
-					sm.pitr.objects = nil
-					sm.pitr.tombstones = nil
-					sm.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
-					sm.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
+					sm.pitr.reset()
 				}
 				sm.pitr.tid = tid
+			}
+			if dbName == catalog2.MO_CATALOG && name == catalog2.MO_CDC_WATERMARK {
+				if sm.cdc.tid > 0 && sm.cdc.tid != tid {
+					logutil.Warn(
+						"GC-CDC-PANIC-UPDATE-TABLE-WATERMARK",
+						zap.Uint64("tid", tid),
+						zap.Uint64("old-tid", sm.cdc.tid),
+					)
+					sm.cdc.reset()
+				}
+				sm.cdc.tid = tid
 			}
 			if sm.tables[account] == nil {
 				sm.tables[account] = make(map[uint64]*tableInfo)
@@ -664,6 +786,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 		tInfos[0].deleteAt = types.TS{}
 	}
+
 	return nil
 }
 
@@ -671,10 +794,12 @@ func collectObjects(
 	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 	data *CKPReader,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
 		*map[objectio.Segmentid]*objectInfo,
 		uint64,
 		objectio.ObjectStats,
@@ -692,7 +817,7 @@ func collectObjects(
 			rowID types.Rowid,
 		) error {
 			if objectType == objType {
-				collector(objects, objects2, table, objectStats, createTS, deleteTS)
+				collector(objects, objects2, objects3, table, objectStats, createTS, deleteTS)
 			}
 			return nil
 		},
@@ -735,13 +860,14 @@ func (sm *SnapshotMeta) Update(
 		return
 	}
 
-	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
+	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 && sm.cdc.tid == 0 {
 		return
 	}
 
 	collector := func(
 		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
+		objects3 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -782,6 +908,9 @@ func (sm *SnapshotMeta) Update(
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
 		}
+		if tid == sm.cdc.tid {
+			mapFun(*objects3)
+		}
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
@@ -794,6 +923,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
+		&sm.cdc.objects,
 		data,
 		ckputil.ObjectType_Data,
 		collector,
@@ -802,6 +932,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
+		&sm.cdc.tombstones,
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
@@ -823,8 +954,13 @@ func (sm *SnapshotMeta) Update(
 			}
 		}
 	}
-	trimList(sm.objects, sm.pitr.objects)
-	trimList(sm.tombstones, sm.pitr.tombstones)
+	// Cleaning up common objects and tombstones
+	trimList(sm.objects, nil)
+	trimList(sm.tombstones, nil)
+
+	// Clean up special table objects and tombstones
+	sm.pitr.trim()
+	sm.cdc.trim()
 	return
 }
 
@@ -1173,12 +1309,111 @@ func (sm *SnapshotMeta) GetPITR(
 	return pitrInfo, nil
 }
 
+func (sm *SnapshotMeta) GetCDC(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (map[uint64]types.TS, error) {
+	idxes := []uint16{ColCdcAccountId, ColCdcDbName, ColCdcTableName, ColCdcWatermark}
+
+	sm.RLock()
+	cdcClone := sm.cdc.clone()
+	tablePKIndexClone := make(map[string][]*tableInfo)
+	for k, v := range sm.tablePKIndex {
+		tablePKIndexClone[k] = v
+	}
+	sm.RUnlock()
+
+	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, cdcClone.getTombstonesStats())
+	dbWatermarks := make(map[uint64]types.TS)
+
+	processor := func(bat *batch.Batch, r int) error {
+		accountIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+		dbNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](bat.Vecs[1])
+		dbNameArea := bat.Vecs[1].GetArea()
+		tableNameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](bat.Vecs[2])
+		tableNameArea := bat.Vecs[2].GetArea()
+		watermarkList := bat.Vecs[3]
+
+		accountID := accountIDList[r]
+		dbName := string(dbNameVarlena[r].GetByteSlice(dbNameArea))
+		tableName := string(tableNameVarlena[r].GetByteSlice(tableNameArea))
+		watermark := watermarkList.GetBytesAt(r)
+
+		var cdcTS types.TS
+		if len(watermark) > 0 {
+			cdcTS = types.StringToTS(util.UnsafeBytesToString(watermark))
+		} else {
+			cdcTS = types.TS{}
+		}
+
+		// Find tableInfo by matching account_id, db_name, table_name
+		// Build PK from account_id, db_name, table_name to find tableInfo
+		// PK format is the same as mo_tables: (account_id,db_name,table_name)
+		// We need to encode it the same way as mo_tables does
+		packer := types.NewPacker()
+		packer.EncodeUint32(uint32(accountID)) // account_id is uint32 in mo_tables
+		packer.EncodeStringType([]byte(dbName))
+		packer.EncodeStringType([]byte(tableName))
+		pkBytes := packer.Bytes()
+		packer.Close()
+
+		// Decode tuple to get the string representation
+		tuple, _, _, err := types.DecodeTuple(pkBytes)
+		if err != nil {
+			logutil.Error("GC-CDC-DecodeTuple-Error",
+				zap.Error(err),
+				zap.Uint64("account-id", accountID),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName))
+			return err
+		}
+		pk := tuple.ErrString(nil)
+
+		// Find tableInfo from tablePKIndex
+		if tInfos, ok := tablePKIndexClone[pk]; ok && len(tInfos) > 0 {
+			tableInfo := tInfos[0]
+			dbID := tableInfo.dbID
+
+			// For the same dbID, take the smallest TS
+			existingTS := dbWatermarks[dbID]
+			if existingTS.IsEmpty() || cdcTS.LT(&existingTS) {
+				dbWatermarks[dbID] = cdcTS
+			}
+
+			logutil.Info(
+				"GC-GetCDC",
+				zap.Uint64("db-id", dbID),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName),
+				zap.String("watermark", cdcTS.ToString()),
+			)
+		} else {
+			logutil.Warn("GC-CDC-TableInfo-NotFound",
+				zap.String("pk", pk),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName),
+				zap.Uint64("account-id", accountID))
+		}
+
+		return nil
+	}
+
+	err := cdcClone.processObjects(ctx, fs, idxes, ds, mp, processor)
+	if err != nil {
+		return nil, err
+	}
+	return dbWatermarks, nil
+}
+
 func (sm *SnapshotMeta) SetTid(tid uint64) {
 	sm.snapshotTableIDs[tid] = struct{}{}
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
-	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 {
+	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 && len(sm.cdc.objects) == 0 {
 		return 0, nil
 	}
 	bat := containers.NewBatch()
@@ -1213,10 +1448,17 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 			appendBatForMap(bat, tid, objectMap)
 		}
 	}
+	appendSpecialObjects := func(
+		bat *containers.Batch,
+		pitrTid uint64, pitrObjects map[objectio.Segmentid]*objectInfo,
+		cdcTid uint64, cdcObjects map[objectio.Segmentid]*objectInfo) {
+		appendBatForMap(bat, pitrTid, pitrObjects)
+		appendBatForMap(bat, cdcTid, cdcObjects)
+	}
 	appendBat(bat, sm.objects)
-	appendBatForMap(bat, sm.pitr.tid, sm.pitr.objects)
+	appendSpecialObjects(bat, sm.pitr.tid, sm.pitr.objects, sm.cdc.tid, sm.cdc.objects)
 	appendBat(deltaBat, sm.tombstones)
-	appendBatForMap(deltaBat, sm.pitr.tid, sm.pitr.tombstones)
+	appendSpecialObjects(deltaBat, sm.pitr.tid, sm.pitr.tombstones, sm.cdc.tid, sm.cdc.tombstones)
 	defer bat.Close()
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
@@ -1248,10 +1490,12 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	bat := containers.NewBatch()
 	snapTableBat := containers.NewBatch()
 	pitrTableBat := containers.NewBatch()
+	cdcTableBat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 		snapTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 		pitrTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
+		cdcTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	appendBat := func(bat *containers.Batch, table *tableInfo) {
 		vector.AppendFixed[uint32](
@@ -1280,6 +1524,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				appendBat(pitrTableBat, table)
 				continue
 			}
+			if table.tid == sm.cdc.tid {
+				appendBat(cdcTableBat, table)
+				continue
+			}
 
 			if _, ok := sm.snapshotTableIDs[table.tid]; ok {
 				appendBat(snapTableBat, table)
@@ -1289,6 +1537,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	defer bat.Close()
 	defer snapTableBat.Close()
 	defer pitrTableBat.Close()
+	defer cdcTableBat.Close()
 
 	aObjDelTsBat := containers.NewBatch()
 	for i, attr := range aObjectDelSchemaAttr {
@@ -1318,6 +1567,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	}
 
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(pitrTableBat)); err != nil {
+		return 0, err
+	}
+
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(cdcTableBat)); err != nil {
 		return 0, err
 	}
 
@@ -1399,20 +1652,29 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	}
 }
 
-func (sm *SnapshotMeta) RebuildPitr(ins *containers.Batch) {
+// General special table rebuild functions
+func (sm *SnapshotMeta) rebuildSpecialTable(ins *containers.Batch, tableInfo *specialTableInfo, tableName string) {
 	sm.Lock()
 	defer sm.Unlock()
 	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
 		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	if ins.Length() < 1 {
-		logutil.Warnf("RebuildPitr unexpected length %d", ins.Length())
+		logutil.Warnf("Rebuild%s unexpected length %d", tableName, ins.Length())
 		return
 	}
-	logutil.Infof("RebuildPitr tid %d", insTIDs[0])
+	logutil.Infof("Rebuild %s tid %d", tableName, insTIDs[0])
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
-		sm.pitr.tid = tid
+		tableInfo.tid = tid
 	}
+}
+
+func (sm *SnapshotMeta) RebuildPitr(ins *containers.Batch) {
+	sm.rebuildSpecialTable(ins, &sm.pitr, "Pitr")
+}
+
+func (sm *SnapshotMeta) RebuildCdc(ins *containers.Batch) {
+	sm.rebuildSpecialTable(ins, &sm.cdc, "Cdc")
 }
 
 func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
@@ -1437,6 +1699,7 @@ func (sm *SnapshotMeta) Rebuild(
 	ins *containers.Batch,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 ) {
 	sm.Lock()
 	defer sm.Unlock()
@@ -1456,6 +1719,20 @@ func (sm *SnapshotMeta) Rebuild(
 				}
 				logutil.Info(
 					"GC-Rebuild-P1",
+					zap.String("object-name", objectStats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+				)
+			}
+			continue
+		}
+		if tid == sm.cdc.tid {
+			if (*objects3)[objectStats.ObjectName().SegmentId()] == nil {
+				(*objects3)[objectStats.ObjectName().SegmentId()] = &objectInfo{
+					stats:    objectStats,
+					createAt: createTS,
+				}
+				logutil.Info(
+					"GC-Rebuild-CDC-P1",
 					zap.String("object-name", objectStats.ObjectName().String()),
 					zap.String("create-at", createTS.ToString()),
 				)
@@ -1525,7 +1802,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects)
+	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects, &sm.cdc.objects)
 
 	if len(bs) == 1 {
 		return nil
@@ -1552,7 +1829,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		deltaBat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones)
+	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones, &sm.cdc.tombstones)
 	return nil
 }
 
@@ -1614,6 +1891,8 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 			sm.RebuildTid(bat)
 		} else if id == int(PitrTidIdx) {
 			sm.RebuildPitr(bat)
+		} else if id == int(CdcTidIdx) {
+			sm.RebuildCdc(bat)
 		} else {
 			panic("unknown table info type")
 		}
@@ -1936,6 +2215,17 @@ func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
 	sm.RLock()
 	defer sm.RUnlock()
 	return sm.tableIDIndex[tid].pk
+}
+
+// GetTableIDToDBIDMap returns a copy of tableID to dbID mapping
+func (sm *SnapshotMeta) GetTableIDToDBIDMap() map[uint64]uint64 {
+	sm.RLock()
+	defer sm.RUnlock()
+	result := make(map[uint64]uint64, len(sm.tableIDIndex))
+	for tid, info := range sm.tableIDIndex {
+		result[tid] = info.dbID
+	}
+	return result
 }
 
 func (sm *SnapshotMeta) String() string {
