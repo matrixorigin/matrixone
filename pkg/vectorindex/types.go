@@ -91,6 +91,7 @@ type IndexConfig struct {
 type RuntimeConfig struct {
 	Limit             uint
 	Probe             uint
+	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 }
 

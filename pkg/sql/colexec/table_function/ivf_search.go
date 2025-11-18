@@ -245,6 +245,7 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	rt := vectorindex.RuntimeConfig{
 		Limit:             uint(u.limit),
 		Probe:             uint(u.tblcfg.Nprobe),
+		OrigFuncName:      u.tblcfg.OrigFuncName,
 		BackgroundQueries: make([]*plan.Query, 1),
 	}
 	u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, fa, rt)
