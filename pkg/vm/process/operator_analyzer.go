@@ -58,6 +58,7 @@ type Analyzer interface {
 
 	InputBlock()
 	ScanBytes(*batch.Batch)
+	AddLoadBytes(int64) // AddLoadBytes: add actual bytes loaded from storage (excluding rowid tombstone)
 
 	Reset()
 }
@@ -203,6 +204,13 @@ func (opAlyzr *operatorAnalyzer) ScanBytes(bat *batch.Batch) {
 	}
 }
 
+func (opAlyzr *operatorAnalyzer) AddLoadBytes(bytes int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddLoadBytes: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.LoadBytes += bytes
+}
+
 func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Network: operatorAnalyzer.opStats is nil")
@@ -318,6 +326,7 @@ type OperatorStats struct {
 
 	InputBlocks int64 `json:"-"`
 	ScanBytes   int64 `json:"-"`
+	LoadBytes   int64 `json:"LoadBytes,omitempty"`   // LoadBytes: actual bytes loaded from storage (excluding rowid tombstone)
 	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows Used to estimate S3input
 	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows Used to estimate S3input
 

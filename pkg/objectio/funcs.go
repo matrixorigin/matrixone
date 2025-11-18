@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -197,6 +198,17 @@ func ReadOneBlockWithMeta(
 			return
 		}
 		//TODO when to call ioVec.Release?
+
+		// Record actual bytes loaded from storage (excluding rowid, which is generated, not loaded)
+		if recorder := ctx.Value(defines.LoadBytesRecorderKey{}); recorder != nil {
+			var totalLoadBytes int64
+			for _, entry := range ioVec.Entries {
+				totalLoadBytes += entry.Size
+			}
+			if fn, ok := recorder.(func(int64)); ok {
+				fn(totalLoadBytes)
+			}
+		}
 	}
 
 	// need to generate vector
