@@ -148,6 +148,8 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 	opAlyzr.opStats.CallNum++
 }
 
+// Alloc records memory allocation for the operator.
+// It accumulates the allocated memory size in the operator's statistics.
 func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Alloc: operatorAnalyzer.opStats is nil")
@@ -316,19 +318,19 @@ type OperatorStats struct {
 	CallNum          int    `json:"CallCount,omitempty"`
 	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
 	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
-	MemorySize       int64  `json:"MemorySize,omitempty"`
-	InputRows        int64  `json:"InputRows,omitempty"`
-	InputSize        int64  `json:"InputSize,omitempty"`
-	OutputRows       int64  `json:"OutputRows,omitempty"`
-	OutputSize       int64  `json:"OutputSize,omitempty"`
+	MemorySize       int64  `json:"MemorySize,omitempty"` // MemorySize: total memory allocated by the operator (accumulated via Alloc calls)
+	InputRows        int64  `json:"InputRows,omitempty"`  // InputRows: number of input rows processed by the operator
+	InputSize        int64  `json:"InputSize,omitempty"`  // InputSize: total size of input batches received from upstream operators
+	OutputRows       int64  `json:"OutputRows,omitempty"` // OutputRows: number of output rows produced by the operator
+	OutputSize       int64  `json:"OutputSize,omitempty"` // OutputSize: total size of output batches sent to downstream operators
 	NetworkIO        int64  `json:"NetworkIO,omitempty"`
 	DiskIO           int64  `json:"DiskIO,omitempty"`
 
 	InputBlocks int64 `json:"-"`
 	ScanBytes   int64 `json:"-"`
-	LoadBytes   int64 `json:"LoadBytes,omitempty"`   // LoadBytes: actual bytes loaded from storage (excluding rowid tombstone)
-	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows Used to estimate S3input
-	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows Used to estimate S3input
+	LoadBytes   int64 `json:"LoadBytes,omitempty"`   // LoadBytes: actual bytes loaded from storage layer (excluding rowid tombstone)
+	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows: used to estimate S3input
+	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows: used to estimate S3input
 
 	S3List      int64 `json:"S3List,omitempty"`
 	S3Head      int64 `json:"S3Head,omitempty"`
