@@ -614,6 +614,7 @@ read_disk_cache:
 			}
 		}
 	}
+
 	if err := s.read(ctx, vector); err != nil {
 		return err
 	}
