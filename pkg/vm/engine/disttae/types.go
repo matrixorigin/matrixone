@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -196,17 +197,23 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 
 func WithPrefetchOnSubscribed(th []string) EngineOptions {
 	return func(e *Engine) {
+		var (
+			err error
+		)
+
 		for i := range th {
-			r, err := regexp.Compile(th[i])
-			if err != nil {
-				logutil.Error("Compile-PrefetchOnSubscribed",
-					zap.Error(err),
-					zap.String("input", th[i]),
-				)
+			r, err2 := regexp.Compile(th[i])
+			if err2 != nil {
+				err = errors.Join(err, err2)
 				continue
 			}
 			e.config.prefetchOnSubscribed = append(e.config.prefetchOnSubscribed, r)
 		}
+
+		logutil.Info("Set-Prefetch-On-Subscribed-By-TOML",
+			zap.Strings("patterns", th),
+			zap.Error(err),
+		)
 	}
 }
 

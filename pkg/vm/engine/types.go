@@ -37,6 +37,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 type Nodes []Node
@@ -1292,6 +1293,10 @@ func SetPrefetchOnSubscribed(patterns []string) error {
 		}
 		regexps = append(regexps, r)
 	}
+
+	logutil.Info("Set-Prefetch-On-Subscribed-By-MO-CTL",
+		zap.Strings("patterns", patterns),
+	)
 
 	prefetchOnSubscribed.Lock()
 	prefetchOnSubscribed.regexps = regexps
