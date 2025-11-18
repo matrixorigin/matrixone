@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -219,6 +220,7 @@ type tableStuff struct {
 	colNames           []string
 	pkKind             int
 	pkColIdx           int
+	pkColType          types.Type
 	expandedPKColIdxes []int
 	neededColIdxes     []int
 	neededColTypes     []types.Type
@@ -261,8 +263,7 @@ func acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
 			bat = batch.NewWithSize(1)
-			def := tblStuff.tarRel.GetTableDef(context.Background())
-			bat.Vecs[0] = vector.NewVec(plan2.ExprType2Type(&def.Cols[tblStuff.pkColIdx].Typ))
+			bat.Vecs[0] = vector.NewVec(tblStuff.pkColType)
 			return bat
 		}
 
@@ -282,6 +283,11 @@ func acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
 
 		bat = retBatchPool.dList[0]
 		retBatchPool.dList = retBatchPool.dList[1:]
+
+		if tblStuff.pkKind != normalKind {
+			bat.Vecs = append(bat.Vecs, vector.NewVec(tblStuff.pkColType))
+		}
+
 		bat.CleanOnlyData()
 		return bat
 	}
@@ -432,7 +438,9 @@ func diffMergeAgency(
 	}()
 
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
-		mergeStmt, ok = stmt.(*tree.DataBranchMerge)
+		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
+			return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+		}
 	}
 
 	if diffStmt != nil {
@@ -529,6 +537,13 @@ func handleBranchMerge(
 	ses *Session,
 	stmt *tree.DataBranchMerge,
 ) (err error) {
+
+	if stmt.ConflictOpt == nil {
+		stmt.ConflictOpt = &tree.ConflictOpt{
+			Opt: tree.CONFLICT_FAIL,
+		}
+	}
+
 	return diffMergeAgency(ses, execCtx, stmt)
 }
 
@@ -1484,13 +1499,17 @@ func getTableStuff(
 	tblStuff.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
 
 	for i, col := range tarTblDef.Cols {
+		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+		if i == tblStuff.pkColIdx {
+			tblStuff.pkColType = t
+		}
+
 		if col.Name == catalog.Row_ID ||
 			col.Name == catalog.FakePrimaryKeyColName ||
 			col.Name == catalog.CPrimaryKeyColName {
 			continue
 		}
 
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
 		tblStuff.colNames = append(tblStuff.colNames, col.Name)
 		tblStuff.neededColTypes = append(tblStuff.neededColTypes, t)
 		tblStuff.neededColIdxes = append(tblStuff.neededColIdxes, i)
@@ -2085,7 +2104,7 @@ func hashDiff(
 	tblStuff tableStuff,
 	dagInfo branchMetaInfo,
 	retCh chan batchWithKind,
-	option compositeOption,
+	copt compositeOption,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
 ) (
@@ -2129,7 +2148,7 @@ func hashDiff(
 
 	if dagInfo.lcaType == lcaEmpty {
 		if err = hashDiffIfNoLCA(
-			ctx, ses, tblStuff, retCh,
+			ctx, ses, tblStuff, retCh, copt,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2137,7 +2156,7 @@ func hashDiff(
 		}
 	} else {
 		if err = hashDiffIfHasLCA(
-			ctx, ses, bh, dagInfo, tblStuff, retCh,
+			ctx, ses, bh, dagInfo, tblStuff, retCh, copt,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2155,145 +2174,74 @@ func hashDiffIfHasLCA(
 	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
 	retCh chan batchWithKind,
+	copt compositeOption,
 	tarDataHashmap databranchutils.BranchHashmap,
 	tarTombstoneHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
-	if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		var (
-			err2      error
-			tuple     types.Tuple
-			dBat      *batch.Batch
-			tBat      = acquireRetBatch(tblStuff, true)
-			updateBat *batch.Batch
-			checkRet  []databranchutils.GetResult
-		)
+	var (
+		tmpCh = make(chan batchWithKind)
+	)
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
-			if tuple, _, err2 = tarTombstoneHashmap.DecodeRow(key); err2 != nil {
-				return err2
+	var (
+		wg        sync.WaitGroup
+		atomicErr atomic.Value
+
+		baseDeleteBatches []*batch.Batch
+		baseUpdateBatches []*batch.Batch
+	)
+
+	sortColIdx := 0
+	if tblStuff.pkKind != normalKind {
+		sortColIdx = len(tblStuff.neededColIdxes)
+	} else {
+		for i, idx := range tblStuff.neededColIdxes {
+			if idx == tblStuff.pkColIdx {
+				sortColIdx = i
+			}
+		}
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for wrapped := range tmpCh {
+			if err2 := mergeutil.SortColumnsByIndex(
+				wrapped.batch.Vecs, sortColIdx, ses.proc.Mp(),
+			); err2 != nil {
+				atomicErr.Store(err2)
+				return
+			}
+
+			if wrapped.kind == diffDelete {
+				baseDeleteBatches = append(baseDeleteBatches, wrapped.batch)
 			} else {
-				if err2 = vector.AppendAny(tBat.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
-					return err2
-				}
-
-				tBat.SetRowCount(tBat.Vecs[0].Length())
-			}
-			return nil
-		}); err2 != nil {
-			return err2
-		}
-
-		if dBat, err2 = handleDelsOnLCA(
-			ctx, ses, bh, tBat, tblStuff, dagInfo.tarBranchTS.ToTimestamp(),
-		); err2 != nil {
-			return err2
-		}
-
-		// merge inserts and deletes on the tar
-		// this deletes is not on the lca
-		if tBat.RowCount() > 0 {
-			if _, err2 = tarDataHashmap.PopByVectors(
-				[]*vector.Vector{tBat.Vecs[0]}, false,
-			); err2 != nil {
-				return err2
-			}
-			releaseRetBatch(tBat, true)
-		}
-
-		// find update
-		if dBat.RowCount() > 0 {
-			tBat = acquireRetBatch(tblStuff, false)
-			if checkRet, err2 = tarDataHashmap.PopByVectors(
-				[]*vector.Vector{dBat.Vecs[tblStuff.pkColIdx]}, false,
-			); err2 != nil {
-				return err2
-			}
-
-			for i, check := range checkRet {
-				if check.Exists {
-					// delete on lca and insert into tar ==> update
-					if updateBat == nil {
-						updateBat = acquireRetBatch(tblStuff, false)
-					}
-
-					if tuple, _, err2 = tarDataHashmap.DecodeRow(check.Rows[0]); err2 != nil {
-						return err2
-					}
-
-					for j, idx := range tblStuff.neededColIdxes {
-						vec := updateBat.Vecs[j]
-						if err2 = vector.AppendAny(vec, tuple[idx], false, ses.proc.Mp()); err2 != nil {
-							return err2
-						}
-					}
-
-				} else {
-					// delete on lca
-					if err2 = tBat.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
-						return err2
-					}
-				}
-			}
-
-			releaseRetBatch(dBat, true)
-			tBat.SetRowCount(tBat.Vecs[0].Length())
-			updateBat.SetRowCount(tBat.Vecs[0].Length())
-
-			retCh <- batchWithKind{
-				batch: updateBat,
-				kind:  diffUpdate,
-			}
-
-			retCh <- batchWithKind{
-				batch: tBat,
-				kind:  diffDelete,
+				baseUpdateBatches = append(baseUpdateBatches, wrapped.batch)
 			}
 		}
+	}()
 
-		return nil
+	err = findDeleteAndUpdateBat(
+		ctx, ses, bh, tblStuff, tmpCh, dagInfo.baseBranchTS,
+		baseDataHashmap, baseTombstoneHashmap,
+	)
 
-	}, -1); err != nil {
+	close(tmpCh)
+
+	wg.Wait()
+
+	if err != nil {
 		return
 	}
 
-	// insert on the lca
-	return tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		var (
-			err2  error
-			tuple types.Tuple
-			iBat  = acquireRetBatch(tblStuff, false)
-		)
+	if atomicErr.Load() != nil {
+		return atomicErr.Load().(error)
+	}
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
-			for _, row := range rows {
-				if tuple, _, err2 = tarDataHashmap.DecodeRow(row); err2 != nil {
-					return err2
-				}
-
-				for j, idx := range tblStuff.neededColIdxes {
-					vec := iBat.Vecs[j]
-					if err2 = vector.AppendAny(vec, tuple[idx], false, ses.proc.Mp()); err2 != nil {
-						return err2
-					}
-				}
-			}
-			return nil
-		}); err2 != nil {
-			return err2
-		}
-
-		iBat.SetRowCount(iBat.Vecs[0].Length())
-		retCh <- batchWithKind{
-			batch: iBat,
-			kind:  diffInsert,
-		}
-
-		return nil
-
-	}, -1)
+	return diffDataHelper(ses, copt, tblStuff, retCh, tarDataHashmap, baseDataHashmap)
 }
 
 func hashDiffIfNoLCA(
@@ -2328,6 +2276,180 @@ func hashDiffIfNoLCA(
 		return
 	}
 
+	return diffDataHelper(ses, copt, tblStuff, retCh, tarDataHashmap, baseDataHashmap)
+}
+
+func findDeleteAndUpdateBat(
+	ctx context.Context, ses *Session, bh BackgroundExec,
+	tblStuff tableStuff, tmpCh chan batchWithKind, branchTS types.TS,
+	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
+) (err error) {
+
+	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		var (
+			err2      error
+			tuple     types.Tuple
+			dBat      *batch.Batch
+			tBat      = acquireRetBatch(tblStuff, true)
+			updateBat *batch.Batch
+			checkRet  []databranchutils.GetResult
+		)
+
+		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
+			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
+				return err2
+			} else {
+				if err2 = vector.AppendAny(tBat.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+					return err2
+				}
+
+				tBat.SetRowCount(tBat.Vecs[0].Length())
+			}
+			return nil
+		}); err2 != nil {
+			return err2
+		}
+
+		if dBat, err2 = handleDelsOnLCA(
+			ctx, ses, bh, tBat, tblStuff, branchTS.ToTimestamp(),
+		); err2 != nil {
+			return err2
+		}
+
+		// merge inserts and deletes on the tar
+		// this deletes is not on the lca
+		if tBat.RowCount() > 0 {
+			if _, err2 = dataHashmap.PopByVectors(
+				[]*vector.Vector{tBat.Vecs[0]}, false,
+			); err2 != nil {
+				return err2
+			}
+			releaseRetBatch(tBat, true)
+		}
+
+		// find update
+		if dBat.RowCount() > 0 {
+			tBat = acquireRetBatch(tblStuff, false)
+			if checkRet, err2 = dataHashmap.PopByVectors(
+				[]*vector.Vector{dBat.Vecs[tblStuff.pkColIdx]}, false,
+			); err2 != nil {
+				return err2
+			}
+
+			for i, check := range checkRet {
+				if check.Exists {
+					// delete on lca and insert into tar ==> update
+					if updateBat == nil {
+						updateBat = acquireRetBatch(tblStuff, false)
+					}
+
+					if tuple, _, err2 = dataHashmap.DecodeRow(check.Rows[0]); err2 != nil {
+						return err2
+					}
+
+					if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
+						return err2
+					}
+
+				} else {
+					// delete on lca
+					if err2 = tBat.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+						return err2
+					}
+				}
+			}
+
+			releaseRetBatch(dBat, true)
+			tBat.SetRowCount(tBat.Vecs[0].Length())
+			updateBat.SetRowCount(tBat.Vecs[0].Length())
+
+			tmpCh <- batchWithKind{
+				batch: updateBat,
+				kind:  diffUpdate,
+			}
+
+			tmpCh <- batchWithKind{
+				batch: tBat,
+				kind:  diffDelete,
+			}
+		}
+
+		return nil
+
+	}, -1); err != nil {
+		return
+	}
+
+	return nil
+}
+
+func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuff tableStuff) error {
+	for j, idx := range tblStuff.neededColIdxes {
+		vec := bat.Vecs[j]
+		if err := vector.AppendAny(
+			vec, tuple[idx], false, ses.proc.Mp(),
+		); err != nil {
+			return err
+		}
+	}
+
+	if tblStuff.pkKind != normalKind {
+		if err := vector.AppendAny(
+			bat.Vecs[bat.VectorCount()-1], tuple[tblStuff.pkColIdx], false, ses.proc.Mp(),
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func checkConflictAndAppendToBat(
+	ses *Session, copt compositeOption, tblStuff tableStuff,
+	tarBat, baseBat *batch.Batch, tuple types.Tuple,
+) (err2 error) {
+	if copt.conflictOpt != nil {
+		switch copt.conflictOpt.Opt {
+		case tree.CONFLICT_FAIL:
+			buf := acquireBuffer()
+			for i, idx := range tblStuff.expandedPKColIdxes {
+				formatValIntoString(ses, tuple[idx], tblStuff.neededColTypes[i], buf)
+				if i < len(tblStuff.expandedPKColIdxes)-1 {
+					buf.WriteString(",")
+				}
+			}
+
+			msg := buf.String()
+			releaseBuffer(buf)
+			return moerr.NewInternalErrorNoCtxf(
+				"conflict, both insert pk(%v) with different values", msg,
+			)
+		case tree.CONFLICT_SKIP:
+			return
+		case tree.CONFLICT_ACCEPT:
+			// accept the tar's insert
+			return appendTupleToBat(ses, tarBat, tuple, tblStuff)
+		}
+	} else {
+		if err2 = appendTupleToBat(ses, tarBat, tuple, tblStuff); err2 != nil {
+			return err2
+		}
+		if err2 = appendTupleToBat(ses, baseBat, tuple, tblStuff); err2 != nil {
+			return err2
+		}
+	}
+	return
+}
+
+func diffDataHelper(
+	ses *Session,
+	copt compositeOption,
+	tblStuff tableStuff,
+	retCh chan batchWithKind,
+	tarDataHashmap databranchutils.BranchHashmap,
+	baseDataHashmap databranchutils.BranchHashmap,
+) (err error) {
+
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
 			err2      error
@@ -2338,6 +2460,9 @@ func hashDiffIfNoLCA(
 			checkRet  databranchutils.GetResult
 		)
 
+		tarBat = acquireRetBatch(tblStuff, false)
+		baseBat = acquireRetBatch(tblStuff, false)
+
 		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
 			for _, row := range rows {
 				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
@@ -2345,19 +2470,12 @@ func hashDiffIfNoLCA(
 				}
 
 				if !checkRet.Exists {
-					if tarBat == nil {
-						tarBat = acquireRetBatch(tblStuff, false)
-					}
-
 					if tarTuple, _, err2 = tarDataHashmap.DecodeRow(row); err2 != nil {
 						return err2
 					}
 
-					for j, idx := range tblStuff.neededColIdxes {
-						vec := tarBat.Vecs[j]
-						if err2 = vector.AppendAny(vec, tarTuple[idx], false, ses.proc.Mp()); err2 != nil {
-							return err2
-						}
+					if err = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err != nil {
+						return err
 					}
 
 				} else {
@@ -2382,7 +2500,9 @@ func hashDiffIfNoLCA(
 								continue
 							}
 
-							if types.CompareValues(tarTuple[idx], baseTuple[idx], tblStuff.neededColTypes[j].Oid) != 0 {
+							if types.CompareValues(
+								tarTuple[idx], baseTuple[idx], tblStuff.neededColTypes[j].Oid,
+							) != 0 {
 								notSame = true
 								break
 							}
@@ -2390,43 +2510,10 @@ func hashDiffIfNoLCA(
 
 						if notSame {
 							// conflict happened
-							if copt.conflictOpt != nil {
-								switch copt.conflictOpt.Opt {
-								case tree.CONFLICT_FAIL:
-									buf := acquireBuffer()
-									for i, idx := range tblStuff.expandedPKColIdxes {
-										formatValIntoString(ses, tarTuple[idx], tblStuff.neededColTypes[i], buf)
-										if i < len(tblStuff.expandedPKColIdxes)-1 {
-											buf.WriteString(",")
-										}
-									}
-
-									msg := buf.String()
-									releaseBuffer(buf)
-									return moerr.NewInternalErrorNoCtxf(
-										"conflict, both insert pk(%v) with different values", msg,
-									)
-								}
-							}
-
-							if tarBat == nil {
-								tarBat = acquireRetBatch(tblStuff, false)
-							}
-
-							if baseBat == nil {
-								baseBat = acquireRetBatch(tblStuff, false)
-							}
-
-							for j, idx := range tblStuff.neededColIdxes {
-								vec1 := tarBat.Vecs[j]
-								if err2 = vector.AppendAny(vec1, tarTuple[idx], false, ses.proc.Mp()); err2 != nil {
-									return err2
-								}
-
-								vec2 := baseBat.Vecs[j]
-								if err2 = vector.AppendAny(vec2, baseTuple[idx], false, ses.proc.Mp()); err2 != nil {
-									return err2
-								}
+							if err2 = checkConflictAndAppendToBat(
+								ses, copt, tblStuff, tarBat, baseBat, tarTuple,
+							); err2 != nil {
+								return err2
 							}
 						}
 					}
@@ -2454,6 +2541,11 @@ func hashDiffIfNoLCA(
 		return
 	}
 
+	if copt.conflictOpt != nil {
+		// merge doesnt need the base data
+		return nil
+	}
+
 	if err = baseDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
 			err2  error
@@ -2461,21 +2553,16 @@ func hashDiffIfNoLCA(
 			bat   *batch.Batch
 		)
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
-			if bat == nil {
-				bat = acquireRetBatch(tblStuff, false)
-			}
+		bat = acquireRetBatch(tblStuff, false)
 
+		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
 			for _, row := range rows {
 				if tuple, _, err2 = baseDataHashmap.DecodeRow(row); err2 != nil {
 					return err2
 				}
 
-				for i, idx := range tblStuff.neededColIdxes {
-					vec := bat.Vecs[i]
-					if err2 = vector.AppendAny(vec, tuple[idx], false, ses.proc.Mp()); err2 != nil {
-						return err2
-					}
+				if err2 = appendTupleToBat(ses, bat, tuple, tblStuff); err2 != nil {
+					return err2
 				}
 			}
 			return nil
