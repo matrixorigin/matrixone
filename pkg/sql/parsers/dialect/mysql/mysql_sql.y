@@ -199,8 +199,8 @@ import (
     property tree.Property
     exportParm *tree.ExportParam
 
-    epxlainOptions []tree.OptionElem
-    epxlainOption tree.OptionElem
+    explainOptions []tree.OptionElem
+    explainOption tree.OptionElem
     whenClause *tree.When
     whenClauseList []*tree.When
     withClause *tree.With
@@ -788,11 +788,11 @@ import (
 %type <cte> common_table_expr
 %type <cteList> cte_list
 
-%type <epxlainOptions> utility_option_list
-%type <epxlainOption> utility_option_elem
+%type <explainOptions> utility_option_list
+%type <explainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key
-%type <str> explain_foramt_value trim_direction
+%type <str> explain_format_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %type <str> account_name account_role_name
@@ -3199,103 +3199,78 @@ explain_stmt:
     }
 |   explain_sym VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($3, "text")
-        optionElem := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($3, options)
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($3, "text")
-        optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($3, options)
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($4, "text")
-        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym PHYPLAN explainable_stmt
     {
-        explainStmt := tree.NewExplainPhyPlan($3, "text")
-        optionElem := tree.MakeOptionElem("phyplan", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($3, options)
     }
 |   explain_sym PHYPLAN VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainPhyPlan($4, "text")
-        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
-        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+         options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym PHYPLAN ANALYZE explainable_stmt
     {
-        explainStmt := tree.NewExplainPhyPlan($4, "text")
-        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
-        optionElem2 := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-    	if tree.IsContainPhyPlan($3) {
-	    explainStmt := tree.NewExplainPhyPlan($5, "text")
-            explainStmt.Options = $3
-            $$ = explainStmt
-    	} else if tree.IsContainAnalyze($3) {
-            explainStmt := tree.NewExplainAnalyze($5, "text")
-            explainStmt.Options = $3
-            $$ = explainStmt
-        } else {
-            explainStmt := tree.NewExplainStmt($5, "text")
-            explainStmt.Options = $3
-            $$ = explainStmt
-        }
+        $$ = tree.MakeExplainStmt($5, $3)
     }
 |   explain_sym FORCE execute_stmt
-{
-    $$ = tree.NewExplainStmt($3, "text")
-}
+    {
+        $$ = tree.MakeExplainStmt($3, nil)
+    }
 |   explain_sym VERBOSE FORCE execute_stmt
     {
-        explainStmt := tree.NewExplainStmt($4, "text")
-        optionElem := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym ANALYZE FORCE execute_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($4, "text")
-        optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym ANALYZE VERBOSE FORCE execute_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($5, "text")
-        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
     }
 
 explain_option_key:
@@ -3303,8 +3278,9 @@ explain_option_key:
 |   VERBOSE
 |   FORMAT
 |   PHYPLAN
+|   CHECK
 
-explain_foramt_value:
+explain_format_value:
     JSON
 |   TEXT
 
@@ -3328,7 +3304,7 @@ explain_sym:
 utility_option_list:
     utility_option_elem
     {
-        $$ = tree.MakeOptions($1)
+        $$ = []tree.OptionElem{$1}
     }
 |     utility_option_list ',' utility_option_elem
     {
@@ -3348,9 +3324,10 @@ utility_option_name:
     }
 
 utility_option_arg:
-    TRUE                    { $$ = "true" }
-|   FALSE                        { $$ = "false" }
-|   explain_foramt_value                    { $$ = $1 }
+    TRUE                        { $$ = "true" }
+|   FALSE                       { $$ = "false" }
+|   explain_format_value        { $$ = $1 }
+|   STRING                      { $$ = $1 }
 
 analyze_stmt:
     ANALYZE TABLE table_name '(' column_list ')'
