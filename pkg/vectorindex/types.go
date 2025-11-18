@@ -93,6 +93,8 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
+	// Optional BloomFilter bytes for entries table scan (runtime filter)
+	BloomFilter []byte
 }
 
 // nthread == 0, result will return NumCPU - 1

@@ -1070,8 +1070,12 @@ func TestConstructBlockPKFilter(t *testing.T) {
 				}
 
 				blkPKFilter, err := ConstructBlockPKFilter(
+					"tbl",
+					"pk",
 					false,
 					basePKFilter,
+					nil,
+					mp,
 				)
 				require.NoError(t, err)
 

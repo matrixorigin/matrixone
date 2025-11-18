@@ -364,8 +364,12 @@ func NewReader(
 	}
 
 	blockFilter, err := ConstructBlockPKFilter(
+		tableDef.Name,
+		tableDef.Pkey.PkeyColName,
 		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
+		filterHint.BloomFilter,
+		mp,
 	)
 	if err != nil {
 		return nil, err

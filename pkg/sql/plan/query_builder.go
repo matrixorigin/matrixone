@@ -2424,6 +2424,33 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				}
 			}
 		}
+
+		// Parse RankOption if ByRank is true
+		if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
+			rankOption := &plan.RankOption{}
+
+			// Helper function to get value from map case-insensitively
+			getOptionValue := func(key string) (string, bool) {
+				keyLower := strings.ToLower(key)
+				for k, v := range astLimit.Option {
+					if strings.ToLower(k) == keyLower {
+						return v, true
+					}
+				}
+				return "", false
+			}
+
+			if mode, ok := getOptionValue("mode"); ok {
+				modeLower := strings.ToLower(strings.TrimSpace(mode))
+				if modeLower != "pre" && modeLower != "post" {
+					return 0, moerr.NewInvalidInputf(builder.GetContext(), "mode must be 'pre' or 'post', got '%s'", mode)
+				}
+				rankOption.Mode = modeLower
+			}
+			if rankOption.Mode != "" {
+				node.RankOption = rankOption
+			}
+		}
 	}
 
 	// append result PROJECT node
@@ -3019,8 +3046,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// bind limit/offset clause
 	var boundOffsetExpr *Expr
 	var boundCountExpr *Expr
+	var rankOption *plan.RankOption
 	if astLimit != nil {
-		if boundOffsetExpr, boundCountExpr, err = builder.bindLimit(ctx, astLimit); err != nil {
+		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit); err != nil {
 			return
 		}
 
@@ -3124,11 +3152,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// attach limit/offset to last node
-	if boundCountExpr != nil || boundOffsetExpr != nil {
+	if boundCountExpr != nil || boundOffsetExpr != nil || rankOption != nil {
 		node := builder.qry.Nodes[nodeID]
 
 		node.Limit = boundCountExpr
 		node.Offset = boundOffsetExpr
+		if rankOption != nil {
+			node.RankOption = rankOption
+		}
 	}
 
 	// append result PROJECT node
@@ -3593,7 +3624,7 @@ func (builder *QueryBuilder) bindOrderBy(
 func (builder *QueryBuilder) bindLimit(
 	ctx *BindContext,
 	astLimit *tree.Limit,
-) (boundOffsetExpr, boundCountExpr *Expr, err error) {
+) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
 	limitBinder := NewLimitBinder(builder, ctx)
 	if astLimit.Offset != nil {
 		if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
@@ -3611,6 +3642,31 @@ func (builder *QueryBuilder) bindLimit(
 			}
 		}
 	}
+
+	// Parse RankOption if ByRank is true
+	if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
+		rankOption = &plan.RankOption{}
+
+		// Helper function to get value from map case-insensitively
+		getOptionValue := func(key string) (string, bool) {
+			keyLower := strings.ToLower(key)
+			for k, v := range astLimit.Option {
+				if strings.ToLower(k) == keyLower {
+					return v, true
+				}
+			}
+			return "", false
+		}
+
+		if mode, ok := getOptionValue("mode"); ok {
+			modeLower := strings.ToLower(strings.TrimSpace(mode))
+			if modeLower != "pre" && modeLower != "post" {
+				return nil, nil, nil, moerr.NewInvalidInputf(builder.GetContext(), "mode must be 'pre' or 'post', got '%s'", mode)
+			}
+			rankOption.Mode = modeLower
+		}
+	}
+
 	return
 }
 
