@@ -71,6 +71,7 @@ func NewPartition(
 			for i := range prefetchConfig {
 				if prefetchConfig[i].MatchString(name) {
 					prefetch = true
+					break
 				}
 			}
 		}
@@ -115,9 +116,9 @@ func (p *Partition) ConsumeSnapCkps(
 	_ context.Context,
 	ckps []*checkpoint.CheckpointEntry,
 	fn func(
-		ckp *checkpoint.CheckpointEntry,
-		state *PartitionState,
-	) error,
+	ckp *checkpoint.CheckpointEntry,
+	state *PartitionState,
+) error,
 ) (
 	err error,
 ) {
@@ -170,9 +171,9 @@ func (p *Partition) ConsumeSnapCkps(
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
-		checkpoint string,
-		state *PartitionState,
-	) error,
+	checkpoint string,
+	state *PartitionState,
+) error,
 ) (
 	err error,
 ) {
