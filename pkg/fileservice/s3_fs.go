@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -550,11 +551,31 @@ read_disk_cache:
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_disk_cache_Caches_begin)
+		// Record which entries are not done before reading from disk cache
+		undoneBefore := make(map[int]bool)
+		for i, entry := range vector.Entries {
+			undoneBefore[i] = !entry.done
+		}
 		err := readCache(ctx, s.diskCache, vector)
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
+		}
+		// Count bytes actually read from disk cache (entries that became done and from disk cache)
+		var actualDiskReadBytes int64
+		for i, entry := range vector.Entries {
+			if undoneBefore[i] && entry.done && entry.fromCache == s.diskCache {
+				actualDiskReadBytes += entry.Size
+			}
+		}
+		// Record disk read size
+		if actualDiskReadBytes > 0 {
+			if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
+				if rs, ok := recorders.(defines.ReadSizeRecorders); ok && rs.Disk != nil {
+					rs.Disk(actualDiskReadBytes)
+				}
+			}
 		}
 		if vector.allDone() {
 			return nil
@@ -615,8 +636,23 @@ read_disk_cache:
 		}
 	}
 
+	// Count bytes that will be read from S3 (entries that are not done yet)
+	var s3ReadBytes int64
+	for _, entry := range vector.Entries {
+		if !entry.done {
+			s3ReadBytes += entry.Size
+		}
+	}
 	if err := s.read(ctx, vector); err != nil {
 		return err
+	}
+	// Record S3 read size (all bytes read from S3)
+	if s3ReadBytes > 0 {
+		if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
+			if rs, ok := recorders.(defines.ReadSizeRecorders); ok && rs.S3 != nil {
+				rs.S3(s3ReadBytes)
+			}
+		}
 	}
 
 	return nil
