@@ -118,9 +118,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		// Attach load bytes recorder to context to track actual bytes loaded from storage
-		newCtx = context.WithValue(newCtx, defines.LoadBytesRecorderKey{}, func(bytes int64) {
-			analyzer.AddLoadBytes(bytes)
+		// Attach read size recorder to context to track actual bytes read from storage layer
+		newCtx = context.WithValue(newCtx, defines.ReadSizeRecorderKey{}, func(bytes int64) {
+			analyzer.AddReadSize(bytes)
 		})
 		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {

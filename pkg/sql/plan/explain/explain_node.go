@@ -1151,8 +1151,8 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	fmt.Fprintf(buf, " InputSize=%s", formatBytes(a.AnalyzeInfo.InputSize))
 	fmt.Fprintf(buf, " OutputSize=%s", formatBytes(a.AnalyzeInfo.OutputSize))
 
-	if a.AnalyzeInfo.LoadBytes > 0 {
-		fmt.Fprintf(buf, " LoadBytes=%s", formatBytes(a.AnalyzeInfo.LoadBytes))
+	if a.AnalyzeInfo.ReadSize > 0 {
+		fmt.Fprintf(buf, " ReadSize=%s", formatBytes(a.AnalyzeInfo.ReadSize))
 	}
 
 	fmt.Fprintf(buf, " MemorySize=%s", formatBytes(a.AnalyzeInfo.MemorySize))

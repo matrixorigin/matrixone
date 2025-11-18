@@ -58,7 +58,7 @@ type Analyzer interface {
 
 	InputBlock()
 	ScanBytes(*batch.Batch)
-	AddLoadBytes(int64) // AddLoadBytes: add actual bytes loaded from storage (excluding rowid tombstone)
+	AddReadSize(int64) // AddReadSize: add actual bytes read from storage layer (excluding rowid tombstone)
 
 	Reset()
 }
@@ -206,11 +206,11 @@ func (opAlyzr *operatorAnalyzer) ScanBytes(bat *batch.Batch) {
 	}
 }
 
-func (opAlyzr *operatorAnalyzer) AddLoadBytes(bytes int64) {
+func (opAlyzr *operatorAnalyzer) AddReadSize(bytes int64) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.AddLoadBytes: operatorAnalyzer.opStats is nil")
+		panic("operatorAnalyzer.AddReadSize: operatorAnalyzer.opStats is nil")
 	}
-	opAlyzr.opStats.LoadBytes += bytes
+	opAlyzr.opStats.ReadSize += bytes
 }
 
 func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
@@ -328,7 +328,7 @@ type OperatorStats struct {
 
 	InputBlocks int64 `json:"-"`
 	ScanBytes   int64 `json:"-"`
-	LoadBytes   int64 `json:"LoadBytes,omitempty"`   // LoadBytes: actual bytes loaded from storage layer (excluding rowid tombstone)
+	ReadSize    int64 `json:"ReadSize,omitempty"`    // ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
 	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows: used to estimate S3input
 	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows: used to estimate S3input
 
@@ -432,8 +432,8 @@ func (ps *OperatorStats) String() string {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
 	}
 	//---------------------------------------------------------------------------------------------
-	if ps.LoadBytes > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("LoadBytes:%dbytes ", ps.LoadBytes))
+	if ps.ReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize:%dbytes ", ps.ReadSize))
 	}
 	if ps.CacheRead > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))

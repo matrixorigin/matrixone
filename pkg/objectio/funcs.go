@@ -199,14 +199,14 @@ func ReadOneBlockWithMeta(
 		}
 		//TODO when to call ioVec.Release?
 
-		// Record actual bytes loaded from storage (excluding rowid, which is generated, not loaded)
-		if recorder := ctx.Value(defines.LoadBytesRecorderKey{}); recorder != nil {
-			var totalLoadBytes int64
+		// Record actual bytes read from storage layer (excluding rowid, which is generated, not loaded)
+		if recorder := ctx.Value(defines.ReadSizeRecorderKey{}); recorder != nil {
+			var totalReadSize int64
 			for _, entry := range ioVec.Entries {
-				totalLoadBytes += entry.Size
+				totalReadSize += entry.Size
 			}
 			if fn, ok := recorder.(func(int64)); ok {
-				fn(totalLoadBytes)
+				fn(totalReadSize)
 			}
 		}
 	}

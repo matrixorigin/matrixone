@@ -252,9 +252,9 @@ type DisableFkCheck struct{}
 
 type ReaderSummaryKey struct{}
 
-// LoadBytesRecorderKey is used to pass a function to record actual bytes loaded from storage
+// ReadSizeRecorderKey is used to pass a function to record actual bytes read from storage layer
 // The function signature is: func(bytes int64)
-type LoadBytesRecorderKey struct{}
+type ReadSizeRecorderKey struct{}
 
 /*
 The autoIncrCacheManager is initialized with a starting CN.
