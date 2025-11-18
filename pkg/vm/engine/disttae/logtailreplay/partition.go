@@ -115,10 +115,7 @@ func (p *Partition) Unlock() {
 func (p *Partition) ConsumeSnapCkps(
 	_ context.Context,
 	ckps []*checkpoint.CheckpointEntry,
-	fn func(
-	ckp *checkpoint.CheckpointEntry,
-	state *PartitionState,
-) error,
+	fn func(ckp *checkpoint.CheckpointEntry, state *PartitionState) error,
 ) (
 	err error,
 ) {
@@ -170,11 +167,7 @@ func (p *Partition) ConsumeSnapCkps(
 // ConsumeCheckpoints load and consumes all checkpoints in the partition, if consumed, it will return immediately.
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
-	fn func(
-// ckp
-	checkpoint string,
-	state *PartitionState,
-) error,
+	fn func(checkpoint string, state *PartitionState) error,
 ) (
 	err error,
 ) {
