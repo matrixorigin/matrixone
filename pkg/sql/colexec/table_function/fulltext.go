@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -351,65 +352,95 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	return scoremap, nil
 }
 
+type docVec struct {
+	doc_id any
+	docvec []uint8
+	doclen int64
+}
+
+func topk_thread_func(tid int64, ch chan docVec,
+	errch chan error,
+	proc *process.Process,
+	s *fulltext.SearchAccum,
+	aggcnt []int64,
+	hp *vectorindex.SearchTopKResultSafeMinHeap) {
+	for {
+		select {
+		case item, ok := <-ch:
+			if !ok {
+				return
+			}
+			score, err := s.Eval(item.docvec, item.doclen, aggcnt)
+			if err != nil {
+				errch <- err
+				return
+			}
+			if len(score) > 0 {
+				scoref64 := float64(score[0])
+				hp.Push(&vectorindex.SearchResultAnyKey{Id: item.doc_id, Distance: scoref64})
+			}
+
+		case <-proc.Ctx.Done():
+			return
+		}
+	}
+}
+
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
 	aggcnt := u.aggcnt
 	u.minheap = vectorindex.NewSearchTopKResultSafeMinHeap(int(limit))
 
-	errch := make(chan error)
 	var wg sync.WaitGroup
 	nthread := vectorindex.GetConcurrency(0)
 
 	if len(u.agghtab) < int(nthread) {
 		nthread = int64(len(u.agghtab))
 	}
+
+	errch := make(chan error, nthread)
+	ch := make(chan docVec, nthread*2)
+
 	for i := int64(0); i < nthread; i++ {
 		wg.Add(1)
 		go func(tid int64) {
 			defer wg.Done()
-
-			j := int64(0)
-			for doc_id, addr := range u.agghtab {
-
-				if j%nthread != tid {
-					continue
-				}
-				docvec, err := u.mpool.GetItem(addr)
-				if err != nil {
-					errch <- err
-					return
-				}
-
-				docLen := int64(0)
-				if len, ok := u.docLenMap[doc_id]; ok {
-					docLen = int64(len)
-				}
-
-				score, err := s.Eval(docvec, docLen, aggcnt)
-				if err != nil {
-					errch <- err
-					return
-				}
-
-				if len(score) > 0 {
-					scoref64 := float64(score[0])
-					u.minheap.Push(&vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
-				}
-
-				j++
-			}
+			topk_thread_func(tid, ch, errch, proc, s, aggcnt, u.minheap)
 		}(i)
 	}
 
-	wg.Wait()
+	err = func() error {
+		defer close(ch)
 
+		for doc_id, addr := range u.agghtab {
+
+			docvec, err2 := u.mpool.GetItem(addr)
+			if err2 != nil {
+				return err2
+			}
+
+			docLen := int64(0)
+			if len, ok := u.docLenMap[doc_id]; ok {
+				docLen = int64(len)
+			}
+
+			ch <- docVec{docvec: docvec, doclen: docLen, doc_id: doc_id}
+
+		}
+
+		return nil
+	}()
+
+	wg.Wait()
 	// close the pool
 	u.mpool.Close()
 	clear(u.agghtab)
 
 	if len(errch) > 0 {
-		return <-errch
+		for e := range errch {
+			err = errors.Join(err, e)
+		}
 	}
-	return nil
+	return
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))
