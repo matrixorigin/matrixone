@@ -3330,7 +3330,8 @@ func (builder *QueryBuilder) bindWhere(
 	clause *tree.Where,
 	nodeID int32,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
-	whereList, err := splitAndBindCondition(clause.Expr, NoAlias, ctx)
+	convertedExpr := builder.convertAccountToAccountIdIfNeeded(ctx, clause.Expr)
+	whereList, err := splitAndBindCondition(convertedExpr, NoAlias, ctx)
 	if err != nil {
 		return
 	}
@@ -3353,6 +3354,71 @@ func (builder *QueryBuilder) bindWhere(
 
 	newNodeID = nodeID
 	return
+}
+
+// convertAccountToAccountIdIfNeeded converts account to account_id if the query involves statement_info table.
+// This conversion is primarily designed for compatibility with mo-cloud's business-level usage of the account field.
+// When mo-cloud queries statement_info using account names (e.g., WHERE account = 'sys'), this function automatically
+// converts the account filter to account_id filter by looking up the corresponding account_id from mo_catalog.mo_account.
+// This provides a more user-friendly interface while maintaining compatibility with the underlying account_id-based storage.
+func (builder *QueryBuilder) convertAccountToAccountIdIfNeeded(ctx *BindContext, expr tree.Expr) tree.Expr {
+	if !hasStatementInfoTable(ctx, builder) {
+		return expr
+	}
+
+	currentAccountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return expr
+	}
+
+	isSystemAccount := currentAccountID == catalog.System_Account
+	currentAccountName := "sys"
+	if !isSystemAccount {
+		currentAccountName = builder.compCtx.GetAccountName()
+	}
+
+	// Build a map of table aliases to check if they refer to statement_info
+	// The key is the table alias/name used in the query, the value indicates if it refers to statement_info
+	tableAliasMap := make(map[string]bool)
+	for tableName, binding := range ctx.bindingByTable {
+		if binding != nil && binding.db == catalog.MO_SYSTEM {
+			// Check the actual table name from node.TableDef.Name
+			// binding.table might be an alias (e.g., "s"), so we need to check the actual table name
+			if int(binding.nodeId) < len(builder.qry.Nodes) {
+				node := builder.qry.Nodes[binding.nodeId]
+				if node != nil && node.TableDef != nil && node.TableDef.Name == catalog.MO_STATEMENT {
+					// tableName is the alias or table name used in the query (e.g., "s" or "statement_info")
+					tableAliasMap[tableName] = true
+					// Also check the original table name "statement_info"
+					tableAliasMap[catalog.MO_STATEMENT] = true
+				}
+			}
+		}
+	}
+
+	convertedExpr, _ := util.ConvertAccountToAccountIdWithTableCheck(expr, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap)
+	return convertedExpr
+}
+
+// hasStatementInfoTable checks if the query involves statement_info table
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name
+func hasStatementInfoTable(ctx *BindContext, builder *QueryBuilder) bool {
+	for _, binding := range ctx.bindingByTable {
+		if binding != nil && binding.db == catalog.MO_SYSTEM {
+			// Check if binding.table is "statement_info" (no alias case)
+			if binding.table == catalog.MO_STATEMENT {
+				return true
+			}
+			// Check the actual table name from node.TableDef.Name (alias case)
+			if int(binding.nodeId) < len(builder.qry.Nodes) {
+				node := builder.qry.Nodes[binding.nodeId]
+				if node != nil && node.TableDef != nil && node.TableDef.Name == catalog.MO_STATEMENT {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) bindGroupBy(
@@ -4792,7 +4858,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
+					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {

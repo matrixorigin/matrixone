@@ -32,7 +32,7 @@ var enablePartitionMetadata = versions.UpgradeEntry{
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    partitionservice.PartitionTableMetadataSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, partitionservice.PartitionTableMetadataSQL)
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MOPartitionMetadata)
 		return exist, err
 	},
 }
@@ -43,7 +43,7 @@ var enablePartitionTables = versions.UpgradeEntry{
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    partitionservice.PartitionTablesSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, partitionservice.PartitionTablesSQL)
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MOPartitionTables)
 		return exist, err
 	},
 }

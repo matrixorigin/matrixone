@@ -51,6 +51,7 @@ var (
 	txnIDCol     = table.UuidStringColumn("transaction_id", "txn uniq id")
 	sesIDCol     = table.UuidStringColumn("session_id", "session uniq id")
 	accountCol   = table.StringColumn("account", "account name")
+	accountIdCol = table.UInt64Column("account_id", "account id")
 	roleIdCol    = table.Int64Column("role_id", "role id")
 	userCol      = table.StringColumn("user", "user name")
 	hostCol      = table.StringColumn("host", "user client ip")
@@ -86,6 +87,7 @@ var (
 			txnIDCol,
 			sesIDCol,
 			accountCol,
+			accountIdCol,
 			userCol,
 			hostCol,
 			dbCol,
@@ -115,7 +117,7 @@ var (
 			cuCol,
 		},
 		PrimaryKeyColumn: nil,
-		ClusterBy:        []table.Column{accountCol, reqAtCol},
+		ClusterBy:        []table.Column{reqAtCol, accountIdCol},
 		// Engine
 		Engine:        table.NormalTableEngine,
 		Comment:       "record each statement and stats info" + catalog.MO_COMMENT_NO_DEL_HINT,

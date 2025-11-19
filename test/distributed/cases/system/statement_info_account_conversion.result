@@ -1,0 +1,83 @@
+use system;
+EXPLAIN SELECT * FROM statement_info WHERE account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system.statement_info
+        Filter Cond: (statement_info.account_id = 0)
+        Block Filter Cond: (statement_info.account_id = 0)
+EXPLAIN SELECT * FROM statement_info s WHERE s.account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system.statement_info
+        Filter Cond: (s.account_id = 0)
+        Block Filter Cond: (s.account_id = 0)
+EXPLAIN SELECT * FROM statement_info WHERE statement_info.account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system.statement_info
+        Filter Cond: (statement_info.account_id = 0)
+        Block Filter Cond: (statement_info.account_id = 0)
+EXPLAIN SELECT * FROM statement_info WHERE account = 'sys' AND statement_id != '';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system.statement_info
+        Filter Cond: (statement_info.account_id = 0), (statement_info.statement_id <> '')
+        Block Filter Cond: (statement_info.account_id = 0)
+EXPLAIN SELECT * FROM statement_info WHERE account IN ('sys', 'test');
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (statement_info.account_id = cast(ma.account_id AS BIGINT UNSIGNED))
+        ->  Table Scan on system.statement_info
+        ->  Join
+              Join Type: INDEX
+              Join Cond: (ma.account_id = #[1,0])
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on mo_catalog.mo_account [ForceOneCN]
+                    Filter Cond: ma.account_name in ([sys test])
+                    Runtime Filter Probe: ma.account_id
+              ->  Index Table Scan on mo_account.account_name [ForceOneCN]
+                    Filter Cond: #[0,0] in ([sys test])
+                    Block Filter Cond: #[0,0] in ([sys test])
+EXPLAIN SELECT * FROM statement_info WHERE account LIKE 'sys%';
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (statement_info.account_id = cast(ma.account_id AS BIGINT UNSIGNED))
+        ->  Table Scan on system.statement_info
+        ->  Table Scan on mo_catalog.mo_account
+              Filter Cond: prefix_eq(ma.account_name)
+              Block Filter Cond: prefix_eq(ma.account_name)
+EXPLAIN SELECT * FROM statement_info WHERE (account = 'sys' OR account = 'test') AND statement_id != '';
+TP QUERY PLAN
+Project
+  ->  Filter
+        Filter Cond: ((statement_info.account_id = 0) or (statement_info.account_id = cast(ma.account_id AS BIGINT UNSIGNED))), ((statement_info.account_id = 0) or (statement_info.account_id = cast(ma.account_id AS BIGINT UNSIGNED)))
+        ->  Join
+              Join Type: SINGLE
+              ->  Table Scan on system.statement_info
+                    Filter Cond: (statement_info.statement_id <> '')
+              ->  Join
+                    Join Type: INDEX
+                    Join Cond: (ma.account_id = #[1,0])
+                    Runtime Filter Build: #[-1,0]
+                    ->  Table Scan on mo_catalog.mo_account [ForceOneCN]
+                          Filter Cond: (ma.account_name = 'test')
+                          Runtime Filter Probe: ma.account_id
+                    ->  Index Table Scan on mo_account.account_name [ForceOneCN]
+                          Filter Cond: (#[0,0] = 'test')
+                          Block Filter Cond: (#[0,0] = 'test')
+EXPLAIN SELECT * FROM statement_info si WHERE si.account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system.statement_info
+        Filter Cond: (si.account_id = 0)
+        Block Filter Cond: (si.account_id = 0)
+EXPLAIN SELECT * FROM statement_info WHERE account = 'SYS';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system.statement_info
+        Filter Cond: (statement_info.account_id = 0)
+        Block Filter Cond: (statement_info.account_id = 0)

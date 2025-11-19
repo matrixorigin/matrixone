@@ -221,6 +221,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
+	stm.AccountID = tenant.GetTenantID()
 	stm.RoleId = tenant.GetDefaultRoleID()
 	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()

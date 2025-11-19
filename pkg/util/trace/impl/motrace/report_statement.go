@@ -174,6 +174,7 @@ type StatementInfo struct {
 	SessionID            [16]byte `jons:"session_id"`
 	ConnectionId         uint32   `json:"connection_id"`
 	Account              string   `json:"account"`
+	AccountID            uint32   `json:"account_id"`
 	User                 string   `json:"user"`
 	Host                 string   `json:"host"`
 	RoleId               uint32   `json:"role_id"`
@@ -358,6 +359,7 @@ func (s *StatementInfo) free() {
 	s.SessionID = NilSesID
 	s.ConnectionId = 0
 	s.Account = ""
+	s.AccountID = 0
 	s.User = ""
 	s.Host = ""
 	s.RoleId = 0
@@ -401,6 +403,7 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.SessionID = s.SessionID
 	stmt.ConnectionId = s.ConnectionId
 	stmt.Account = s.Account
+	stmt.AccountID = s.AccountID
 	stmt.User = s.User
 	stmt.Host = s.Host
 	stmt.RoleId = s.RoleId
@@ -453,6 +456,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	}
 	row.SetColumnVal(sesIDCol, table.UuidField(s.SessionID[:]))
 	row.SetColumnVal(accountCol, table.StringField(s.Account))
+	row.SetColumnVal(accountIdCol, table.Uint64Field(uint64(s.AccountID)))
 	row.SetColumnVal(roleIdCol, table.Int64Field(int64(s.RoleId)))
 	row.SetColumnVal(userCol, table.StringField(s.User))
 	row.SetColumnVal(hostCol, table.StringField(s.Host))

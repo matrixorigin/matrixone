@@ -168,7 +168,7 @@ Number of columns in sys_net_sent_bytes
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-28
+31
 show column_number from rawlog;
 Number of columns in rawlog
 23
@@ -449,7 +449,7 @@ Number of columns in mo_columns
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-28
+31
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
