@@ -1612,9 +1612,9 @@ func (f *checkpointReaderStub) ReadMeta(context.Context) error {
 
 func (f *checkpointReaderStub) PrefetchData(string) {}
 
-func (f *checkpointReaderStub) ConsumeCheckpointWithTableID(ctx context.Context, fn func(context.Context, objectio.ObjectEntry, bool) error) error {
+func (f *checkpointReaderStub) ConsumeCheckpointWithTableID(ctx context.Context, fn func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error {
 	for _, obj := range f.objects {
-		if err := fn(ctx, obj.entry, obj.isTombstone); err != nil {
+		if err := fn(ctx, nil, obj.entry, obj.isTombstone); err != nil {
 			return err
 		}
 	}
