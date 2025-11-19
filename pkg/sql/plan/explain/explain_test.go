@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -585,6 +586,156 @@ func TestCheckPlan(t *testing.T) {
 			t.Error("Expected error when lines are empty but checkExpr is not, got nil")
 		}
 	})
+}
+
+func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
+	ctx := context.Background()
+	options := &ExplainOptions{
+		Format:   EXPLAIN_FORMAT_TEXT,
+		Verbose:  false,
+		Analyze:  true,
+		NodeType: plan2.Node_TABLE_SCAN,
+	}
+
+	tests := []struct {
+		name            string
+		analyzeInfo     *plan2.AnalyzeInfo
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name: "with ReadSize, S3ReadSize, DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     1000000000, // 1000ms
+				WaitTimeConsumed: 0,
+				InputRows:        1000,
+				OutputRows:       500,
+				InputSize:        16 * 1024 * 1024,  // 16MB
+				OutputSize:       8 * 1024 * 1024,   // 8MB
+				MemorySize:       4 * 1024 * 1024,   // 4MB
+				MemoryMin:        2 * 1024 * 1024,   // 2MB
+				MemoryMax:        6 * 1024 * 1024,   // 6MB
+				ReadSize:         153 * 1024 * 1024, // 153MB
+				S3ReadSize:       150 * 1024 * 1024, // 150MB
+				DiskReadSize:     3 * 1024 * 1024,   // 3MB
+				InputBlocks:      10,
+			},
+			wantContains: []string{
+				"timeConsumed=1000ms",
+				"inputRows=1000",
+				"outputRows=500",
+				"InputSize=",
+				"OutputSize=",
+				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
+				" S3ReadSize=",
+				" DiskReadSize=",
+				"MemorySize=",
+				"inputBlocks=10",
+			},
+			wantNotContains: []string{},
+		},
+		{
+			name: "with ReadSize only, no S3ReadSize and DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     500000000, // 500ms
+				WaitTimeConsumed: 0,
+				InputRows:        500,
+				OutputRows:       250,
+				InputSize:        8 * 1024 * 1024,  // 8MB
+				OutputSize:       4 * 1024 * 1024,  // 4MB
+				MemorySize:       2 * 1024 * 1024,  // 2MB
+				MemoryMin:        1 * 1024 * 1024,  // 1MB
+				MemoryMax:        3 * 1024 * 1024,  // 3MB
+				ReadSize:         10 * 1024 * 1024, // 10MB
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				InputBlocks:      5,
+			},
+			wantContains: []string{
+				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
+			},
+			wantNotContains: []string{
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
+		},
+		{
+			name: "with S3ReadSize and DiskReadSize, no ReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     200000000, // 200ms
+				WaitTimeConsumed: 0,
+				InputRows:        200,
+				OutputRows:       100,
+				InputSize:        4 * 1024 * 1024, // 4MB
+				OutputSize:       2 * 1024 * 1024, // 2MB
+				MemorySize:       1 * 1024 * 1024, // 1MB
+				MemoryMin:        512 * 1024,      // 512KB
+				MemoryMax:        2 * 1024 * 1024, // 2MB
+				ReadSize:         0,
+				S3ReadSize:       50 * 1024 * 1024, // 50MB
+				DiskReadSize:     5 * 1024 * 1024,  // 5MB
+				InputBlocks:      3,
+			},
+			wantContains: []string{
+				"S3ReadSize=",
+				"DiskReadSize=",
+			},
+			wantNotContains: []string{
+				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
+			},
+		},
+		{
+			name: "all ReadSize fields are zero",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     100000000, // 100ms
+				WaitTimeConsumed: 0,
+				InputRows:        100,
+				OutputRows:       50,
+				InputSize:        2 * 1024 * 1024, // 2MB
+				OutputSize:       1 * 1024 * 1024, // 1MB
+				MemorySize:       512 * 1024,      // 512KB
+				MemoryMin:        256 * 1024,      // 256KB
+				MemoryMax:        1 * 1024 * 1024, // 1MB
+				ReadSize:         0,
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				InputBlocks:      1,
+			},
+			wantContains: []string{
+				"timeConsumed=100ms",
+				"inputRows=100",
+				"outputRows=50",
+			},
+			wantNotContains: []string{
+				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			impl := NewAnalyzeInfoDescribeImpl(tt.analyzeInfo)
+			buf := bytes.NewBuffer(nil)
+			err := impl.GetDescription(ctx, options, buf)
+			if err != nil {
+				t.Fatalf("GetDescription() error = %v", err)
+			}
+
+			result := buf.String()
+			for _, want := range tt.wantContains {
+				if !strings.Contains(result, want) {
+					t.Errorf("GetDescription() result should contain %q, got: %s", want, result)
+				}
+			}
+			for _, notWant := range tt.wantNotContains {
+				if strings.Contains(result, notWant) {
+					t.Errorf("GetDescription() result should not contain %q, got: %s", notWant, result)
+				}
+			}
+		})
+	}
 }
 
 //

@@ -848,3 +848,98 @@ func TestShowPipelineTree(t *testing.T) {
 	}
 
 }
+
+func TestApplyOpStatsToNode_ReadSize(t *testing.T) {
+	// Create a query with nodes
+	qry := &plan.Query{
+		Nodes: []*plan.Node{
+			{
+				NodeId: 0,
+			},
+			{
+				NodeId: 1,
+			},
+		},
+	}
+
+	// Create operator stats with ReadSize, S3ReadSize, DiskReadSize
+	opStats1 := &process.OperatorStats{
+		ReadSize:     1024 * 1024, // 1MB
+		S3ReadSize:   512 * 1024,  // 0.5MB
+		DiskReadSize: 256 * 1024,  // 0.25MB
+		ScanBytes:    2048 * 1024, // 2MB
+		NetworkIO:    100 * 1024,  // 100KB
+		InputBlocks:  10,
+	}
+
+	opStats2 := &process.OperatorStats{
+		ReadSize:     2048 * 1024, // 2MB
+		S3ReadSize:   1536 * 1024, // 1.5MB
+		DiskReadSize: 512 * 1024,  // 0.5MB
+		ScanBytes:    4096 * 1024, // 4MB
+		NetworkIO:    200 * 1024,  // 200KB
+		InputBlocks:  20,
+	}
+
+	// Create phy operators
+	phyOp1 := &models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 0,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: opStats1,
+	}
+
+	phyOp2 := &models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 0,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: opStats2,
+	}
+
+	// Initialize AnalyzeInfo for nodes
+	qry.Nodes[0].AnalyzeInfo = &plan.AnalyzeInfo{}
+
+	// Create ParallelScopeInfo
+	parallelInfo := NewParallelScopeInfo()
+
+	// Apply stats from first operator
+	applyOpStatsToNode(phyOp1, qry, qry.Nodes, parallelInfo)
+
+	// Verify first aggregation
+	require.Equal(t, int64(1024*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "ReadSize should be aggregated")
+	require.Equal(t, int64(512*1024), qry.Nodes[0].AnalyzeInfo.S3ReadSize, "S3ReadSize should be aggregated")
+	require.Equal(t, int64(256*1024), qry.Nodes[0].AnalyzeInfo.DiskReadSize, "DiskReadSize should be aggregated")
+	require.Equal(t, int64(2048*1024), qry.Nodes[0].AnalyzeInfo.ScanBytes, "ScanBytes should be aggregated")
+	require.Equal(t, int64(100*1024), qry.Nodes[0].AnalyzeInfo.NetworkIO, "NetworkIO should be aggregated")
+	require.Equal(t, int64(10), qry.Nodes[0].AnalyzeInfo.InputBlocks, "InputBlocks should be aggregated")
+
+	// Apply stats from second operator (accumulation)
+	applyOpStatsToNode(phyOp2, qry, qry.Nodes, parallelInfo)
+
+	// Verify accumulation
+	require.Equal(t, int64(3072*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "ReadSize should accumulate")
+	require.Equal(t, int64(2048*1024), qry.Nodes[0].AnalyzeInfo.S3ReadSize, "S3ReadSize should accumulate")
+	require.Equal(t, int64(768*1024), qry.Nodes[0].AnalyzeInfo.DiskReadSize, "DiskReadSize should accumulate")
+	require.Equal(t, int64(6144*1024), qry.Nodes[0].AnalyzeInfo.ScanBytes, "ScanBytes should accumulate")
+	require.Equal(t, int64(300*1024), qry.Nodes[0].AnalyzeInfo.NetworkIO, "NetworkIO should accumulate")
+	require.Equal(t, int64(30), qry.Nodes[0].AnalyzeInfo.InputBlocks, "InputBlocks should accumulate")
+
+	// Test with a different node
+	phyOp3 := &models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: opStats1,
+	}
+
+	qry.Nodes[1].AnalyzeInfo = &plan.AnalyzeInfo{}
+	applyOpStatsToNode(phyOp3, qry, qry.Nodes, parallelInfo)
+
+	// Verify node 1 has its own stats
+	require.Equal(t, int64(1024*1024), qry.Nodes[1].AnalyzeInfo.ReadSize, "Node 1 ReadSize should be separate")
+	require.Equal(t, int64(512*1024), qry.Nodes[1].AnalyzeInfo.S3ReadSize, "Node 1 S3ReadSize should be separate")
+	require.Equal(t, int64(256*1024), qry.Nodes[1].AnalyzeInfo.DiskReadSize, "Node 1 DiskReadSize should be separate")
+
+	// Verify node 0 stats are unchanged
+	require.Equal(t, int64(3072*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "Node 0 ReadSize should remain unchanged")
+}
