@@ -47,7 +47,7 @@ import (
 type checkpointEntryReader interface {
 	ReadMeta(context.Context) error
 	PrefetchData(string)
-	ConsumeCheckpointWithTableID(context.Context, func(context.Context, objectio.ObjectEntry, bool) error) error
+	ConsumeCheckpointWithTableID(context.Context, func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error
 }
 
 var newCKPReaderWithTableID = func(version uint32, location objectio.Location, tableID uint64, mp *mpool.MPool, fs fileservice.FileService) checkpointEntryReader {
