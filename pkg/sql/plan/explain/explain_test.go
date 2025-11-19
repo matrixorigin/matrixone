@@ -433,3 +433,158 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 	}
 	return nil
 }
+
+func TestCheckPlan(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty checkExpr should return nil", func(t *testing.T) {
+		lines := []string{"line1", "line2", "line3"}
+		err := checkPlan(ctx, lines, []string{})
+		if err != nil {
+			t.Errorf("Expected nil error for empty checkExpr, got: %v", err)
+		}
+	})
+
+	t.Run("single pattern that exists", func(t *testing.T) {
+		lines := []string{"line1", "line2 with pattern", "line3"}
+		err := checkPlan(ctx, lines, []string{"pattern"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern exists, got: %v", err)
+		}
+	})
+
+	t.Run("single pattern that doesn't exist", func(t *testing.T) {
+		lines := []string{"line1", "line2", "line3"}
+		err := checkPlan(ctx, lines, []string{"nonexistent"})
+		if err == nil {
+			t.Error("Expected error when pattern doesn't exist, got nil")
+		}
+		if !strings.Contains(err.Error(), "check expr nonexistent not found") {
+			t.Errorf("Expected error message to contain 'check expr nonexistent not found', got: %v", err)
+		}
+	})
+
+	t.Run("multiple patterns that exist in order", func(t *testing.T) {
+		lines := []string{
+			"line1 with first",
+			"line2",
+			"line3 with second",
+			"line4",
+			"line5 with third",
+		}
+		err := checkPlan(ctx, lines, []string{"first", "second", "third"})
+		if err != nil {
+			t.Errorf("Expected nil error when all patterns exist in order, got: %v", err)
+		}
+	})
+
+	t.Run("multiple patterns where one doesn't exist", func(t *testing.T) {
+		lines := []string{
+			"line1 with first",
+			"line2",
+			"line3 with second",
+			"line4",
+		}
+		err := checkPlan(ctx, lines, []string{"first", "second", "nonexistent"})
+		if err == nil {
+			t.Error("Expected error when pattern doesn't exist, got nil")
+		}
+		if !strings.Contains(err.Error(), "check expr nonexistent not found") {
+			t.Errorf("Expected error message to contain 'check expr nonexistent not found', got: %v", err)
+		}
+	})
+
+	t.Run("multiple patterns where second pattern appears before first", func(t *testing.T) {
+		lines := []string{
+			"line1 with second",
+			"line2",
+			"line3 with first",
+		}
+		err := checkPlan(ctx, lines, []string{"first", "second"})
+		if err == nil {
+			t.Error("Expected error when patterns are out of order, got nil")
+		}
+		// After finding "first", it should look for "second" in remaining lines
+		// Since "second" was before "first", it won't be found
+		if !strings.Contains(err.Error(), "check expr second not found") {
+			t.Errorf("Expected error message to contain 'check expr second not found', got: %v", err)
+		}
+	})
+
+	t.Run("regex pattern matching", func(t *testing.T) {
+		lines := []string{
+			"line1 with number 123",
+			"line2",
+			"line3 with word test",
+		}
+		err := checkPlan(ctx, lines, []string{`\d+`, "test"})
+		if err != nil {
+			t.Errorf("Expected nil error when regex patterns match, got: %v", err)
+		}
+	})
+
+	t.Run("invalid regex pattern", func(t *testing.T) {
+		lines := []string{"line1", "line2"}
+		err := checkPlan(ctx, lines, []string{`[invalid`})
+		if err == nil {
+			t.Error("Expected error for invalid regex pattern, got nil")
+		}
+	})
+
+	t.Run("pattern at beginning of lines", func(t *testing.T) {
+		lines := []string{
+			"first pattern here",
+			"line2",
+			"line3",
+		}
+		err := checkPlan(ctx, lines, []string{"first"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern is at beginning, got: %v", err)
+		}
+	})
+
+	t.Run("pattern at end of lines", func(t *testing.T) {
+		lines := []string{
+			"line1",
+			"line2",
+			"last pattern here",
+		}
+		err := checkPlan(ctx, lines, []string{"last"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern is at end, got: %v", err)
+		}
+	})
+
+	t.Run("case sensitive pattern matching", func(t *testing.T) {
+		lines := []string{
+			"line1 with Pattern",
+			"line2",
+		}
+		err := checkPlan(ctx, lines, []string{"pattern"})
+		if err == nil {
+			t.Error("Expected error for case-sensitive mismatch, got nil")
+		}
+	})
+
+	t.Run("multiple occurrences of same pattern", func(t *testing.T) {
+		lines := []string{
+			"line1 with pattern",
+			"line2 with pattern",
+			"line3 with pattern",
+		}
+		err := checkPlan(ctx, lines, []string{"pattern", "pattern"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern appears multiple times, got: %v", err)
+		}
+	})
+
+	t.Run("empty lines with non-empty checkExpr", func(t *testing.T) {
+		lines := []string{}
+		err := checkPlan(ctx, lines, []string{"pattern"})
+		if err == nil {
+			t.Error("Expected error when lines are empty but checkExpr is not, got nil")
+		}
+	})
+}
+
+//

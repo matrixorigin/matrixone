@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,13 +40,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	cmd_util "github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -1592,6 +1597,115 @@ func TestPartitionChangesHandle(t *testing.T) {
 		assert.NoError(t, handle.Close())
 	}
 }
+
+func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			catalog.SetupDefines("")
+
+			ctx := context.Background()
+			start := types.BuildTS(1, 0)
+			end := types.BuildTS(2, 0)
+
+			dataAppendable := newObjectEntryForCheckpointTest(t, 1, true, false, types.BuildTS(3, 0), types.TS{})
+			dataCN := newObjectEntryForCheckpointTest(t, 2, false, true, types.BuildTS(4, 0), types.TS{})
+			tombstoneAppendable := newObjectEntryForCheckpointTest(t, 3, true, false, types.BuildTS(5, 0), types.BuildTS(6, 0))
+			tombstoneCN := newObjectEntryForCheckpointTest(t, 4, false, true, types.BuildTS(7, 0), types.BuildTS(8, 0))
+
+			fakeReaders := []*checkpointReaderStub{
+				{
+					objects: []checkpointObject{
+						{entry: dataAppendable, isTombstone: false},
+						{entry: dataCN, isTombstone: false},
+						{entry: tombstoneAppendable, isTombstone: true},
+						{entry: tombstoneCN, isTombstone: true},
+					},
+				},
+				{
+					objects: []checkpointObject{
+						{entry: dataAppendable, isTombstone: false},
+						{entry: tombstoneAppendable, isTombstone: true},
+					},
+				},
+			}
+
+			readerIdx := 0
+			restore := logtailreplay.SetCheckpointReaderFactoryForTest(func(uint32, objectio.Location, uint64, *mpool.MPool, fileservice.FileService) logtailreplay.CheckpointEntryReader {
+				r := fakeReaders[readerIdx]
+				readerIdx++
+				return r
+			})
+			defer restore()
+
+			entry1 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+			entry2 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointEntries(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry1, entry2}, nil, nil)
+			require.NoError(t, err)
+
+			require.Len(t, dataAobjs, 1)
+			require.Equal(t, dataAppendable.ObjectShortName().ShortString(), dataAobjs[0].ObjectShortName().ShortString())
+
+			require.Len(t, dataCNObjs, 1)
+			require.Equal(t, dataCN.ObjectShortName().ShortString(), dataCNObjs[0].ObjectShortName().ShortString())
+
+			require.Len(t, tombstoneAobjs, 1)
+			require.Equal(t, tombstoneAppendable.ObjectShortName().ShortString(), tombstoneAobjs[0].ObjectShortName().ShortString())
+
+			require.Len(t, tombstoneCNObjs, 1)
+			require.Equal(t, tombstoneCN.ObjectShortName().ShortString(), tombstoneCNObjs[0].ObjectShortName().ShortString())
+		},
+	)
+}
+
+type checkpointObject struct {
+	entry       objectio.ObjectEntry
+	isTombstone bool
+}
+
+type checkpointReaderStub struct {
+	objects []checkpointObject
+}
+
+func (f *checkpointReaderStub) ReadMeta(context.Context) error {
+	return nil
+}
+
+func (f *checkpointReaderStub) PrefetchData(string) {}
+
+func (f *checkpointReaderStub) ConsumeCheckpointWithTableID(ctx context.Context, fn func(context.Context, objectio.ObjectEntry, bool) error) error {
+	for _, obj := range f.objects {
+		if err := fn(ctx, obj.entry, obj.isTombstone); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newObjectEntryForCheckpointTest(t *testing.T, id byte, appendable bool, cnCreated bool, create types.TS, delete types.TS) objectio.ObjectEntry {
+	t.Helper()
+
+	var uuid types.Uuid
+	uuid[15] = id
+	seg := objectio.Segmentid(uuid)
+	name := objectio.BuildObjectName(&seg, uint16(id))
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	if appendable {
+		objectio.WithAppendable()(stats)
+	}
+	if cnCreated {
+		objectio.WithCNCreated()(stats)
+	}
+
+	return objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  create,
+		DeleteTime:  delete,
+	}
+}
+
 func TestISCPExecutor1(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -4992,4 +5106,306 @@ func TestCheckLeaseFailed(t *testing.T) {
 		},
 	)
 	assert.False(t, cdcExecutor.IsRunning())
+}
+
+func TestPartitionChangesHandleStaleRead(t *testing.T) {
+	/*
+		This test verifies that when nextFrom is not in the checkpoint entry range (minTS, maxTS),
+		it returns a stale read error. This tests the logic in change_handle.go:223-226:
+		if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
+			logutil.Infof("ChangesHandle-Split nextFrom is not in the checkpoint entry range: %s-%s", minTS.ToString(), maxTS.ToString())
+			return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
+		}
+	*/
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_stale_read"
+		databaseName = "db_stale_read"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	// Create database and table
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// Insert first batch and commit
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	// Force checkpoint to create a checkpoint entry
+	now := taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+	now = taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+
+	// Insert second batch
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+	t2 := txn.GetCommitTS()
+
+	// Force another checkpoint
+	now = taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+
+	// Insert third batch
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[2]))
+	require.Nil(t, txn.Commit(ctx))
+	t3 := txn.GetCommitTS()
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	// Force GC to clean up old partition state, making t1 fall outside the current partition state range
+	// This will force the code to use RequestSnapshotRead
+	disttaeEngine.Engine.ForceGC(ctx, t2.Next())
+
+	// Setup stub for RequestSnapshotRead to return a checkpoint entry with a range that doesn't include t1
+	// The key is to return checkpoint entries where minTS > t1, which will trigger the stale read error
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			func(ctx context.Context, meta pbtxn.TxnMeta, req *cmd_util.SnapshotReadReq, resp *cmd_util.SnapshotReadResp) (func(), error) {
+				// Create a fake checkpoint entry with time range [t2, t3]
+				// When we try to read from t1 (which is < t2), it will be less than minTS
+				// This will trigger the stale read error at line 223-226
+				t2Timestamp := t2.ToTimestamp()
+				t3Timestamp := t3.ToTimestamp()
+
+				resp.Succeed = true
+				resp.Entries = []*cmd_util.CheckpointEntryResp{
+					{
+						Start:     &t2Timestamp,
+						End:       &t3Timestamp,
+						Location1: []byte("fake_location1"),
+						Location2: []byte("fake_location2"),
+						EntryType: 0,
+						Version:   1,
+					},
+				}
+				return func() {}, nil
+			},
+		),
+	)
+	defer ssStub.Reset()
+
+	// Try to collect changes from t1 (which is now before the available checkpoint range)
+	// This should trigger the stale read error at line 223-226
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		// Try to collect changes starting from a time that's been GC'd
+		// Since t1.Prev() < t2 (minTS of checkpoint entry), this should trigger the stale read error
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), t3.Next(), true, mp)
+
+		// We expect either:
+		// 1. An error during CollectChanges (stale read error)
+		// 2. Or an error when iterating through Next()
+		if err != nil {
+			// Check if it's a stale read error
+			t.Logf("Got expected error during CollectChanges: %v", err)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead), "Expected stale read error, got: %v", err)
+		} else {
+			// Try to get data, should fail with stale read error
+			gotError := false
+			for {
+				data, tombstone, _, err := handle.Next(ctx, mp)
+				if err != nil {
+					t.Logf("Got expected error during Next: %v", err)
+					assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead), "Expected stale read error, got: %v", err)
+					gotError = true
+					break
+				}
+				if data != nil {
+					data.Clean(mp)
+				}
+				if tombstone != nil {
+					tombstone.Clean(mp)
+				}
+				if data == nil && tombstone == nil {
+					break
+				}
+			}
+			// We expect to get the stale read error
+			assert.True(t, gotError, "Expected to encounter stale read error")
+			if handle != nil {
+				handle.Close()
+			}
+		}
+	}
+}
+
+func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
+	/*
+		This test reproduces a bug in FilterSortedMetaFilesByTimestamp (snapshot.go:51).
+		Because FilterSortedMetaFilesByTimestamp uses LE (<=) instead of LT (<), when the request
+		timestamp equals the end of a newer GCKP, it incorrectly returns the previous GCKP segment
+		instead of the correct one.
+
+		Test scenario:
+		1. Insert data and create first global checkpoint (GCKP1) with range [0, gckp1End]
+		2. Insert more data and create second global checkpoint (GCKP2) with range [0, gckp2End]
+		3. Force GC to clean up old partition state, forcing RequestSnapshotRead to be used
+		4. Try to read from a timestamp equal to gckp2End
+		5. Due to the LE bug in FilterSortedMetaFilesByTimestamp, it will return GCKP1 instead of GCKP2
+		6. This causes getNextChangeHandle to receive the wrong checkpoint entry, leading to stale read error
+	*/
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_gckp_boundary"
+		databaseName = "db_gckp_boundary"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	// Create database and table
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// Insert first batch
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	// Force first global checkpoint (GCKP1)
+	gckp1TS := taeHandler.GetDB().TxnMgr.Now()
+	err = taeHandler.GetDB().ForceGlobalCheckpoint(ctx, gckp1TS, 0)
+	require.NoError(t, err)
+	gckp1 := taeHandler.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, gckp1)
+	gckp1End := gckp1.GetEnd()
+	t.Logf("GCKP1: %s", gckp1.String())
+
+	// Insert second batch
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+
+	// Force second global checkpoint (GCKP2)
+	gckp2TS := taeHandler.GetDB().TxnMgr.Now()
+	err = taeHandler.GetDB().ForceGlobalCheckpoint(ctx, gckp2TS, 0)
+	require.NoError(t, err)
+	gckp2 := taeHandler.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, gckp2)
+	gckp2End := gckp2.GetEnd()
+	t.Logf("GCKP2: %s", gckp2.String())
+
+	// Verify we have two different global checkpoints
+	require.True(t, gckp2End.GT(&gckp1End), "GCKP2 end should be greater than GCKP1 end")
+
+	// Insert third batch
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[2]))
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	// Force GC to clean up old partition state
+	// This forces the code path to use RequestSnapshotRead in getNextChangeHandle
+	disttaeEngine.Engine.ForceGC(ctx, t1.Next())
+
+	// Setup stub to use real HandleSnapshotRead from taeHandler
+	// This will return real checkpoint entries from the TAE engine
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			taeHandler.GetRPCHandle().HandleSnapshotRead,
+		),
+	)
+	defer ssStub.Reset()
+
+	// Try to collect changes from a timestamp that will trigger the bug
+	// Due to the bug in FilterSortedMetaFilesByTimestamp using LE,
+	// when nextFrom == gckp2End, it will return GCKP1 instead of GCKP2
+	// This causes getNextChangeHandle to get the wrong checkpoint entry range
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		// Start reading from just before t1, which will cause nextFrom to be around gckp2End
+		// The bug occurs when the code tries to find the right checkpoint for a timestamp
+		// that equals the end of the second GCKP
+		readFromTS := t1.Prev()
+		readToTS := taeHandler.GetDB().TxnMgr.Now()
+
+		handle, err := rel.CollectChanges(ctx, readFromTS, readToTS, false, mp)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, handle)
+
+		for {
+			data, tombstone, _, err := handle.Next(ctx, mp)
+			assert.NoError(t, err)
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			if data == nil && tombstone == nil {
+				break
+			}
+		}
+	}
 }

@@ -16,9 +16,13 @@ package frontend
 
 import (
 	"context"
+	"fmt"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -89,12 +93,17 @@ func handleUpdateCDCTaskRequest(
 		conds     = make([]taskservice.Condition, 0)
 	)
 
+	var (
+		operation string
+	)
+
 	switch updateReq := req.(type) {
 	case *tree.DropCDC:
 		if updateReq.Option == nil {
 			return moerr.NewInternalError(ctx, "invalid drop cdc option")
 		}
 		targetTaskStatus = task.TaskStatus_CancelRequested
+		operation = "drop"
 		conds = append(
 			conds,
 			taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -112,6 +121,7 @@ func handleUpdateCDCTaskRequest(
 			return moerr.NewInternalError(ctx, "invalid pause cdc option")
 		}
 		targetTaskStatus = task.TaskStatus_PauseRequested
+		operation = "pause"
 		conds = append(
 			conds,
 			taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -126,6 +136,7 @@ func handleUpdateCDCTaskRequest(
 		}
 	case *tree.ResumeCDC:
 		targetTaskStatus = task.TaskStatus_ResumeRequested
+		operation = "resume"
 		taskName = updateReq.TaskName.String()
 		if len(taskName) == 0 {
 			return moerr.NewInternalError(ctx, "invalid resume cdc task name")
@@ -138,6 +149,7 @@ func handleUpdateCDCTaskRequest(
 		)
 	case *tree.RestartCDC:
 		targetTaskStatus = task.TaskStatus_RestartRequested
+		operation = "restart"
 		taskName = updateReq.TaskName.String()
 		if len(taskName) == 0 {
 			return moerr.NewInternalError(ctx, "invalid restart cdc task name")
@@ -155,6 +167,16 @@ func handleUpdateCDCTaskRequest(
 			req.String(),
 		)
 	}
+
+	logutil.Info(
+		"cdc.task.request",
+		zap.String("statement-type", fmt.Sprintf("%T", req)),
+		zap.String("operation", operation),
+		zap.String("target-status", targetTaskStatus.String()),
+		zap.String("task-name", taskName),
+		zap.Uint32("account-id", accountId),
+	)
+
 	return doUpdateCDCTask(
 		ctx,
 		targetTaskStatus,
@@ -173,7 +195,7 @@ func doUpdateCDCTask(
 	service string,
 	conds ...taskservice.Condition,
 ) (err error) {
-	ts := getPu(service).GetTaskService()
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return nil
 	}
@@ -223,23 +245,21 @@ func onPreUpdateCDCTasks(
 
 	//Cancel cdc task
 	if targetTaskStatus == task.TaskStatus_CancelRequested {
-		//deleting mo_cdc_task
-		if cnt, err = dao.DeleteTaskByName(
-			ctx, accountId, taskName,
-		); err != nil {
+		var deleteRes DeleteCDCArtifactsResult
+		if deleteRes, err = dao.DeleteTaskAndWatermark(ctx, accountId, taskName, keys); err != nil {
 			return
 		}
-		affectedCdcRow += int(cnt)
-
-		//delete mo_cdc_watermark
-		if cnt, err = dao.DeleteManyWatermark(
-			ctx, keys,
-		); err != nil {
-			return
-		}
-		affectedCdcRow += int(cnt)
+		affectedCdcRow += int(deleteRes.TaskRows + deleteRes.WatermarkRows)
 		return
 	}
+
+	logutil.Debug(
+		"cdc.handle.update_task",
+		zap.Uint64("account-id", accountId),
+		zap.String("task-name", taskName),
+		zap.Int("key-count", len(keys)),
+		zap.String("target-status", targetTaskStatus.String()),
+	)
 
 	//step2: update or cancel cdc task
 	var targetCDCStatus string
@@ -260,14 +280,5 @@ func onPreUpdateCDCTasks(
 
 	affectedCdcRow += int(cnt)
 
-	// restart cdc task
-	if targetTaskStatus == task.TaskStatus_RestartRequested {
-		if cnt, err = dao.DeleteManyWatermark(
-			ctx, keys,
-		); err != nil {
-			return
-		}
-		affectedCdcRow += int(cnt)
-	}
 	return
 }

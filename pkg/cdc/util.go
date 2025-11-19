@@ -46,6 +46,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+// escapeSQLString escapes special characters in SQL string literals to prevent SQL injection.
+//
+// It follows the SQL standard escaping rules:
+//  1. Single quotes (') are escaped as double single quotes (”)
+//  2. Backslashes (\) are escaped as double backslashes (\\)
+//
+// This function is critical for security: it prevents SQL injection attacks by ensuring
+// that user-provided strings (TaskId, DBName, TableName, ErrMsg) cannot break out of
+// string literals and execute arbitrary SQL commands.
+//
+// Example:
+//
+//	Input:  "task'; DROP TABLE users; --"
+//	Output: "task''; DROP TABLE users; --"
+//	Result: The SQL will treat this as a literal string value, not as SQL commands
+func escapeSQLString(s string) string {
+	// Replace backslash first (before replacing quotes) to avoid double-escaping
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	// Replace single quotes with double single quotes (SQL standard escaping)
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
+
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
 // bat columns layout:
 // 1. data: user defined cols | cpk (if needed) | commit-ts
@@ -543,7 +566,7 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 //}
 
 var OpenDbConn = func(user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
-	logutil.Infof("openDbConn timeout = %s", timeout)
+	logutil.Info("cdc.util.open_db_conn", zap.String("timeout", timeout))
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=%s&timeout=%s&writeTimeout=%s&multiStatements=true",
 		user, password, ip, port, timeout, timeout, timeout)
 	for i := 0; i < 3; i++ {
@@ -554,7 +577,7 @@ var OpenDbConn = func(user, password string, ip string, port int, timeout string
 		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	logutil.Error("cdc task OpenDbConn failed")
+	logutil.Error("cdc.util.open_db_conn_failed", zap.Error(err))
 	return
 }
 
@@ -639,7 +662,7 @@ var GetTableDef = func(
 	cnEngine engine.Engine,
 	tblId uint64,
 ) (*plan.TableDef, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseGetTableDef)
 	defer cancel()
 	_, _, rel, err := cnEngine.GetRelationById(ctx, txnOp, tblId)
 	if err != nil {
@@ -765,30 +788,6 @@ func SplitDbTblKey(dbTblKey string) (dbName, tblName string) {
 	return s[0], s[1]
 }
 
-func addStartMetrics(insertData, deleteData *batch.Batch) {
-	count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
-	allocated := float64(insertData.Allocated() + deleteData.Allocated())
-	v2.CdcTotalProcessingRecordCountGauge.Add(count)
-	v2.CdcHoldChangesBytesGauge.Add(allocated)
-	v2.CdcReadRecordCounter.Add(count)
-}
-
-func addSnapshotEndMetrics(insertData *batch.Batch) {
-	count := float64(batchRowCount(insertData))
-	allocated := float64(insertData.Allocated())
-	v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-	v2.CdcHoldChangesBytesGauge.Sub(allocated)
-	v2.CdcSinkRecordCounter.Add(count)
-}
-
-func addTailEndMetrics(bat *AtomicBatch) {
-	count := float64(bat.RowCount())
-	allocated := float64(bat.Allocated())
-	v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-	v2.CdcHoldChangesBytesGauge.Sub(allocated)
-	v2.CdcSinkRecordCounter.Add(count)
-}
-
 // uriHasPrefix
 func uriHasPrefix(uri string, prefix string) bool {
 	if len(uri) < len(prefix) || strings.ToLower(uri[:len(prefix)]) != prefix {
@@ -862,6 +861,11 @@ func compositedUriInfo(uri string, uriPrefix string) (bool, UriInfo) {
 		PasswordStart: passwordStart,
 		PasswordEnd:   passwordEnd,
 	}
+}
+
+// ParseFrequencyToDuration parses a frequency string (e.g., "1h", "30m") to time.Duration
+func ParseFrequencyToDuration(freq string) time.Duration {
+	return parseFrequencyToDuration(freq)
 }
 
 func parseFrequencyToDuration(freq string) time.Duration {

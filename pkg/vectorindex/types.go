@@ -54,6 +54,7 @@ type IndexTableConfig struct {
 	IndexTable    string `json:"index"`
 	PKey          string `json:"pkey"`
 	KeyPart       string `json:"part"`
+	OrigFuncName  string `json:"orig_func_name"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
 	IndexCapacity int64  `json:"index_capacity"`
@@ -105,6 +106,7 @@ type IndexConfig struct {
 type RuntimeConfig struct {
 	Limit             uint
 	Probe             uint
+	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 }
 

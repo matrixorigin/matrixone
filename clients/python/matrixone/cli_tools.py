@@ -22,12 +22,18 @@ especially secondary indexes and vector indexes.
 """
 
 import cmd
+import datetime
+import getpass
+import json
 import logging
+import string
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
+import uuid
 
 from .client import Client
+from .cdc import CDCSinkType, build_mysql_uri, _parse_watermark_timestamp
 
 # Set default logging level to ERROR to keep output clean
 # Users can override this with --log-level parameter
@@ -81,6 +87,11 @@ if PROMPT_TOOLKIT_AVAILABLE:
                 'connect',
                 'history',
                 'help',
+                'cdc_health',
+                'cdc_tasks',
+                'cdc_create',
+                'cdc_drop',
+                'cdc_task',
                 'exit',
             ]
 
@@ -147,6 +158,98 @@ if PROMPT_TOOLKIT_AVAILABLE:
                             if db.startswith(partial):
                                 yield Completion(db, start_position=-len(partial))
 
+            elif command == 'cdc_health':
+                partial = words[-1] if not text.endswith(' ') else ''
+                options = [
+                    '--details',
+                    '--task=',
+                    '--threshold=',
+                    '--strict',
+                ]
+                for option in options:
+                    if option.startswith(partial):
+                        yield Completion(option, start_position=-len(partial))
+
+            elif command == 'cdc_tasks':
+                partial = words[-1] if not text.endswith(' ') else ''
+                options = [
+                    '--details',
+                ]
+                for option in options:
+                    if option.startswith(partial):
+                        yield Completion(option, start_position=-len(partial))
+
+            elif command == 'cdc_create':
+                partial = words[-1] if not text.endswith(' ') else ''
+                options = [
+                    '--table-level',
+                    '--database-level',
+                ]
+                for option in options:
+                    if option.startswith(partial):
+                        yield Completion(option, start_position=-len(partial))
+
+            elif command == 'cdc_drop':
+                if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                    partial = words[1] if len(words) == 2 else ''
+                    for task in self._get_cdc_tasks():
+                        if task.startswith(partial):
+                            yield Completion(task, start_position=-len(partial))
+                else:
+                    partial = words[-1] if not text.endswith(' ') else ''
+                    options = [
+                        '--force',
+                    ]
+                    for option in options:
+                        if option.startswith(partial):
+                            yield Completion(option, start_position=-len(partial))
+
+            elif command == 'cdc_task':
+                if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                    partial = words[1] if len(words) == 2 else ''
+                    for task in self._get_cdc_tasks():
+                        if task.startswith(partial):
+                            yield Completion(task, start_position=-len(partial))
+                else:
+                    partial = words[-1] if not text.endswith(' ') else ''
+                    options = [
+                        '--details',
+                        '--no-watermarks',
+                        '--watermarks-only',
+                        '--pause',
+                        '--resume',
+                        '--restart',
+                        '--threshold=',
+                        '--table=',
+                        '--strict',
+                    ]
+                    for option in options:
+                        if option.startswith(partial):
+                            yield Completion(option, start_position=-len(partial))
+
+            elif command == 'cdc_task':
+                if len(words) == 1 or (len(words) == 2 and not text.endswith(' ')):
+                    partial = words[1] if len(words) == 2 else ''
+                    for task in self._get_cdc_tasks():
+                        if task.startswith(partial):
+                            yield Completion(task, start_position=-len(partial))
+                else:
+                    partial = words[-1] if not text.endswith(' ') else ''
+                    options = [
+                        '--details',
+                        '--json',
+                        '--no-watermarks',
+                        '--watermarks-only',
+                        '--pause',
+                        '--resume',
+                        '--restart',
+                        '--threshold=',
+                        '--strict',
+                    ]
+                    for option in options:
+                        if option.startswith(partial):
+                            yield Completion(option, start_position=-len(partial))
+
         def _get_tables(self):
             """Get list of tables in current database"""
             if not self.cli.client or not self.cli.current_database:
@@ -164,6 +267,15 @@ if PROMPT_TOOLKIT_AVAILABLE:
             try:
                 result = self.cli.client.execute("SHOW DATABASES")
                 return [row[0] for row in result.fetchall()]
+            except Exception:
+                return []
+
+        def _get_cdc_tasks(self) -> List[str]:
+            """Return CDC task names for completion."""
+            if not self.cli.client:
+                return []
+            try:
+                return [task.task_name for task in self.cli.client.cdc.list()]
             except Exception:
                 return []
 
@@ -249,6 +361,154 @@ def header(msg):
     return f"{Colors.BOLD}{Colors.CYAN}{msg}{Colors.RESET}"
 
 
+_HEX_CHARS = set(string.hexdigits)
+
+
+def _decode_hex_string(value: str) -> str:
+    stripped = value.strip()
+    if not stripped or len(stripped) % 2 != 0:
+        return value
+    if not all(ch in _HEX_CHARS for ch in stripped):
+        return value
+    try:
+        decoded = bytes.fromhex(stripped).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return value
+    return decoded
+
+
+def _format_json_if_possible(value: str) -> str:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    return json.dumps(parsed, indent=2, ensure_ascii=False, default=str)
+
+
+def _format_cdc_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            value = value.decode("utf-8", errors="replace")
+    text = value if isinstance(value, str) else str(value)
+    decoded = _decode_hex_string(text)
+    formatted = _format_json_if_possible(decoded)
+    return formatted
+
+
+def _parse_duration(value: str) -> datetime.timedelta:
+    text = value.strip().lower()
+    if not text:
+        raise ValueError("Duration cannot be empty.")
+
+    units = {"s": "seconds", "m": "minutes", "h": "hours"}
+    unit = None
+    number = text
+
+    if text[-1] in units:
+        unit = text[-1]
+        number = text[:-1]
+
+    try:
+        amount = float(number)
+    except ValueError:
+        raise ValueError(f"Unable to parse duration '{value}'. Use formats like 5m, 30s, 1.5h.") from None
+
+    if amount < 0:
+        raise ValueError("Duration must be non-negative.")
+
+    if unit is None:
+        return datetime.timedelta(minutes=amount)
+
+    kwargs = {units[unit]: amount}
+    return datetime.timedelta(**kwargs)
+
+
+def _format_duration(delta: datetime.timedelta) -> str:
+    total_seconds = delta.total_seconds()
+    if total_seconds == 0:
+        return "0s"
+    if total_seconds % 3600 == 0:
+        hours = total_seconds / 3600
+        return f"{hours:g}h"
+    if total_seconds % 60 == 0:
+        minutes = total_seconds / 60
+        return f"{minutes:g}m"
+    if total_seconds < 60:
+        return f"{total_seconds:g}s"
+    minutes = total_seconds / 60
+    return f"{minutes:.1f}m"
+
+
+def _format_timestamp(value: datetime.datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    value = value.astimezone(datetime.timezone.utc)
+    formatted = value.strftime("%Y-%m-%d %H:%M:%S.%f %Z")
+    formatted = formatted.rstrip("0").rstrip(".")
+    return formatted
+
+
+def _parse_options_string(raw: str) -> Optional[Dict[str, Any]]:
+    options: Dict[str, Any] = {}
+    for segment in raw.split(","):
+        segment = segment.strip()
+        if not segment:
+            continue
+        if "=" not in segment:
+            raise ValueError(f"Invalid option format: '{segment}'. Expected key=value.")
+        key, value = segment.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise ValueError("Option key cannot be empty.")
+        lower = value.lower()
+        if lower in {"true", "false"}:
+            options[key] = lower == "true"
+        else:
+            options[key] = value
+    return options
+
+
+def _parse_table_mapping(line: str) -> Dict[str, str]:
+    if ":" in line:
+        source_part, sink_part = line.split(":", 1)
+    else:
+        source_part, sink_part = line, line
+    source_part = source_part.strip()
+    sink_part = sink_part.strip()
+    if "." not in source_part:
+        raise ValueError("Source mapping must include database.table (e.g. src_db.orders)")
+    if "." not in sink_part:
+        raise ValueError("Sink mapping must include database.table (e.g. dest_db.orders)")
+    src_db, src_table = source_part.split(".", 1)
+    dest_db, dest_table = sink_part.split(".", 1)
+    if not src_db or not src_table or not dest_db or not dest_table:
+        raise ValueError("Incomplete mapping. Provide both database and table names.")
+    return {
+        "source_db": src_db,
+        "source_table": src_table,
+        "sink_db": dest_db,
+        "sink_table": dest_table,
+    }
+
+
+def _print_cdc_field(label: str, value: Any, indent: str = "  ") -> None:
+    formatted = _format_cdc_value(value)
+    if formatted is None:
+        return
+    if "\n" in formatted:
+        indented = "\n".join(f"{indent}  {line}" for line in formatted.splitlines())
+        print(f"{indent}{info(label)}\n{indented}")
+    else:
+        print(f"{indent}{info(label)} {formatted}")
+
+
 class MatrixOneCLI(cmd.Cmd):
     """Interactive CLI for MatrixOne diagnostics"""
 
@@ -309,6 +569,29 @@ class MatrixOneCLI(cmd.Cmd):
                     f'[{Colors.YELLOW}{self.current_database}{Colors.RESET}{Colors.BOLD}]'
                     f'{Colors.GREEN}>{Colors.RESET} '
                 )
+
+    def _prompt(self, message: str, default: Optional[str] = None, *, is_password: bool = False) -> str:
+        prompt_message = message
+        if default and not is_password:
+            prompt_message += f" [{default}]"
+        prompt_message += ": "
+        while True:
+            try:
+                if PROMPT_TOOLKIT_AVAILABLE and getattr(self, "session", None):
+                    response = self.session.prompt(prompt_message, is_password=is_password)
+                else:
+                    if is_password:
+                        response = getpass.getpass(prompt_message)
+                    else:
+                        response = input(prompt_message)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return ""
+            if not response and default is not None:
+                response = default
+            if response is None:
+                response = ""
+            return response
 
     def cmdloop(self, intro=None):
         """Override cmdloop to use prompt_toolkit for better input experience"""
@@ -771,6 +1054,707 @@ class MatrixOneCLI(cmd.Cmd):
 
         except Exception as e:
             print(f"❌ Error: {e}")
+
+    def do_cdc_health(self, arg):
+        """
+        Check CDC task health, including error states and watermark lag.
+
+        Usage: cdc_health [threshold] [--task=<task_name>] [--threshold=<duration>] [--strict] [--details]
+        Example:
+            cdc_health
+            cdc_health 5
+            cdc_health --task=cdc_sales_sync --threshold=15
+            cdc_health --strict
+            cdc_health --details
+
+        When a numeric threshold or ``--threshold`` is provided, it overrides the
+        default 10 minute tolerance used to detect late watermarks. ``--strict``
+        applies a zero minute tolerance (useful for quick smoke checks).
+        """
+
+        tokens = [token for token in arg.strip().split() if token]
+        threshold_delta = datetime.timedelta(minutes=10)
+        task_filter: Optional[str] = None
+        strict_mode = False
+        show_details = False
+
+        for token in tokens:
+            if token == "--strict":
+                strict_mode = True
+            elif token == "--details":
+                show_details = True
+            elif token.startswith("--task="):
+                task_filter = token.split("=", 1)[1] or None
+            elif token.startswith("--threshold="):
+                value = token.split("=", 1)[1]
+                try:
+                    threshold_delta = _parse_duration(value)
+                except ValueError as exc:
+                    print(error(str(exc)))
+                    return
+            else:
+                # Backwards-compatible positional numeric threshold interpreted as minutes
+                try:
+                    threshold_delta = _parse_duration(f"{float(token)}m")
+                except ValueError:
+                    print(
+                        "❌ Unknown option. Use 'cdc_health [threshold] [--task=<task>] [--threshold=<duration>] [--strict]'"
+                    )
+                    return
+
+        if strict_mode:
+            threshold_delta = datetime.timedelta(0)
+
+        threshold_display = _format_duration(threshold_delta)
+
+        if not self.client:
+            print("❌ Not connected. Use 'connect' first.")
+            return
+
+        threshold = threshold_delta
+
+        try:
+            all_tasks = self.client.cdc.list(task_filter)
+            failing_tasks = self.client.cdc.list_failing_tasks()
+            stuck_tasks = self.client.cdc.list_stuck_tasks()
+            late_watermarks = self.client.cdc.list_late_table_watermarks(
+                task_name=task_filter,
+                default_threshold=threshold,
+            )
+        except Exception as exc:
+            print(f"{Colors.RED}❌ CDC health check failed: {exc}{Colors.RESET}")
+            return
+
+        if task_filter:
+            failing_tasks = [task for task in failing_tasks if task.task_name == task_filter]
+            stuck_tasks = [task for task in stuck_tasks if task.task_name == task_filter]
+
+        total_tasks = len(all_tasks)
+        print(f"\n{header('📈 CDC Health Overview')}")
+        print(info(f"Threshold for watermark lag: {threshold_display}"))
+        print(info(f"Evaluated CDC tasks: {total_tasks}"))
+        if task_filter:
+            print(info(f"Task filter: {task_filter}"))
+
+        print()
+        if failing_tasks:
+            print(error(f"Tasks reporting errors ({len(failing_tasks)}):"))
+            for task in failing_tasks:
+                state = task.state or 'unknown'
+                err_msg = task.err_msg or '-'
+                print(f"  • {task.task_name} (state: {state}, error: {err_msg})")
+        else:
+            print(success("No CDC tasks currently report errors."))
+
+        print()
+        if stuck_tasks:
+            print(warning(f"Running tasks with per-table errors ({len(stuck_tasks)}):"))
+            for task in stuck_tasks:
+                state = task.state or 'unknown'
+                print(f"  • {task.task_name} (state: {state})")
+        else:
+            print(success("No running tasks with per-table errors detected."))
+
+        print()
+        if late_watermarks:
+            print(warning(f"Tables lagging beyond threshold ({len(late_watermarks)}):"))
+            for watermark in late_watermarks:
+                parts = [watermark.task_name or '-']
+                if watermark.database:
+                    parts.append(watermark.database)
+                if watermark.table:
+                    parts.append(watermark.table)
+                location = ".".join(part for part in parts if part)
+                stamp = watermark.watermark or 'N/A'
+                print(f"  • {location} (watermark: {stamp})")
+        else:
+            print(success("All table watermarks are within the expected threshold."))
+
+        problematic = {task.task_name for task in failing_tasks}
+        problematic.update(task.task_name for task in stuck_tasks)
+        healthy_count = max(0, total_tasks - len(problematic))
+        print()
+        print(info(f"Healthy tasks (no reported issues): {healthy_count}"))
+
+        if show_details and all_tasks:
+            print(f"\n{header('🛠 CDC Task Definitions')}")
+            for task in all_tasks:
+                print(bold(f"• {task.task_name}"))
+                print(f"  {info('State:')} {task.state or 'unknown'}")
+                if task.err_msg:
+                    print(f"  {error('Error:')} {task.err_msg}")
+                _print_cdc_field("Mapping:", task.table_mapping, indent="  ")
+                _print_cdc_field("Source URI:", task.source_uri, indent="  ")
+                _print_cdc_field("Sink URI:", task.sink_uri, indent="  ")
+                _print_cdc_field("Options:", task.additional_config, indent="  ")
+                _print_cdc_field("NoFull:", task.no_full, indent="  ")
+                _print_cdc_field("Checkpoint:", task.checkpoint, indent="  ")
+                print()
+
+    def do_cdc_task(self, arg):
+        """
+        Inspect a specific CDC task, optionally pausing/resuming and reviewing per-table watermarks.
+
+        Usage:
+            cdc_task <task_name> [--details] [--no-watermarks] [--watermarks-only] [--table=<name>] \
+                     [--threshold=<duration>] [--strict] [--pause|--resume|--restart]
+
+        Examples:
+            cdc_task cdc_orders_sync
+            cdc_task cdc_orders_sync --details --table=orders
+            cdc_task cdc_orders_sync --pause
+            cdc_task cdc_orders_sync --threshold=5 --strict
+        """
+
+        tokens = [token for token in arg.strip().split() if token]
+        if not tokens:
+            print(
+                "❌ Usage: cdc_task <task_name> [--details] [--no-watermarks] [--table=<name>] [--threshold=<duration>] [--strict] [--pause|--resume|--restart]"
+            )
+            return
+
+        if not self.client:
+            print("❌ Not connected. Use 'connect' first.")
+            return
+
+        task_name = tokens[0]
+        options = tokens[1:]
+
+        show_details = False
+        include_watermarks = True
+        threshold_delta = datetime.timedelta(minutes=10)
+        strict_mode = False
+        table_filter: Optional[str] = None
+        action: Optional[str] = None
+        watermarks_only = False
+
+        i = 0
+        while i < len(options):
+            token = options[i]
+            if token == "--details":
+                show_details = True
+            elif token == "--no-watermarks":
+                include_watermarks = False
+            elif token == "--watermarks-only":
+                watermarks_only = True
+            elif token in ("--pause", "--resume", "--restart"):
+                chosen = token[2:]
+                if action and action != chosen:
+                    print("❌ Specify only one of --pause, --resume, or --restart.")
+                    return
+                action = chosen
+            elif token == "--strict":
+                strict_mode = True
+            elif token.startswith("--threshold="):
+                value = token.split("=", 1)[1]
+                try:
+                    threshold_delta = _parse_duration(value)
+                except ValueError as exc:
+                    print(error(str(exc)))
+                    return
+            elif token == "--threshold":
+                i += 1
+                if i >= len(options):
+                    print("❌ --threshold requires a value.")
+                    return
+                value = options[i]
+                try:
+                    threshold_delta = _parse_duration(value)
+                except ValueError as exc:
+                    print(error(str(exc)))
+                    return
+            elif token.startswith("--table="):
+                table_filter = token.split("=", 1)[1] or None
+            elif token == "--table":
+                i += 1
+                if i >= len(options):
+                    print("❌ --table requires a value.")
+                    return
+                table_filter = options[i]
+            else:
+                print("❌ Unknown option. Use 'help cdc_task' for usage details.")
+                return
+            i += 1
+
+        if strict_mode:
+            threshold_delta = datetime.timedelta(0)
+
+        if watermarks_only and not include_watermarks:
+            print("❌ --watermarks-only cannot be combined with --no-watermarks.")
+            return
+
+        try:
+            task = self.client.cdc.get(task_name)
+        except ValueError as exc:
+            print(error(str(exc)))
+            return
+        except Exception as exc:
+            print(error(f"Failed to load CDC task '{task_name}': {exc}"))
+            return
+
+        if action:
+            action_labels = {
+                "pause": "paused",
+                "resume": "resumed",
+                "restart": "restarted",
+            }
+            try:
+                getattr(self.client.cdc, action)(task_name)
+                action_label = action_labels.get(action, f"{action}d")
+                print(success(f"CDC task '{task_name}' {action_label} successfully."))
+                task = self.client.cdc.get(task_name)
+            except Exception as exc:
+                print(error(f"Failed to {action} task '{task_name}': {exc}"))
+                return
+
+        threshold = threshold_delta
+        threshold_display = _format_duration(threshold_delta)
+
+        if not watermarks_only:
+            print(f"\n{header('🧭 CDC Task Inspect')}")
+            print(info(f"Task: {task.task_name}"))
+            print(info(f"State: {task.state or 'unknown'}"))
+            sink_type = task.sink_type or 'unknown'
+            print(info(f"Sink type: {sink_type}"))
+            if task.err_msg:
+                print(error(f"Task error: {task.err_msg}"))
+            _print_cdc_field("Checkpoint:", task.checkpoint)
+            _print_cdc_field("NoFull:", task.no_full)
+            _print_cdc_field("Options:", task.additional_config)
+            _print_cdc_field("Table mapping:", task.table_mapping)
+            _print_cdc_field("Source URI:", task.source_uri)
+            _print_cdc_field("Sink URI:", task.sink_uri)
+
+        threshold_seconds = threshold.total_seconds()
+        late_count = 0
+
+        if include_watermarks:
+            try:
+                watermarks = self.client.cdc.list_watermarks(task_name)
+            except Exception as exc:
+                print(error(f"Failed to load watermarks: {exc}"))
+                watermarks = []
+
+            if table_filter:
+                pattern = table_filter.lower()
+
+                def _match_watermark(mark) -> bool:
+                    candidates = []
+                    if mark.table:
+                        candidates.append(mark.table.lower())
+                    if mark.database:
+                        candidates.append(mark.database.lower())
+                    if mark.database and mark.table:
+                        candidates.append(f"{mark.database}.{mark.table}".lower())
+                    return pattern in candidates
+
+                watermarks = [mark for mark in watermarks if _match_watermark(mark)]
+
+            print(f"\n{header('🕒 Watermarks')} (threshold {threshold_display})")
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            print(info("Adjust via '--threshold=<duration>' (supports s/m/h) or '--strict' for zero tolerance."))
+            print(info(f"Current UTC: {_format_timestamp(now_utc)}"))
+            if not watermarks:
+                print(info("No watermarks found for this task."))
+            else:
+                for mark in watermarks:
+                    location_parts = [part for part in (mark.database, mark.table) if part]
+                    location = '.'.join(location_parts) if location_parts else '(unknown)'
+                    watermark_value = mark.watermark or 'N/A'
+                    watermark_time = None
+                    if mark.watermark:
+                        ts = _parse_watermark_timestamp(mark.watermark)
+                        if ts is None:
+                            numeric = mark.watermark.split('-', 1)[0]
+                            if numeric.isdigit():
+                                try:
+                                    watermark_time = datetime.datetime.fromtimestamp(
+                                        int(numeric) / 1_000_000_000,
+                                        datetime.timezone.utc,
+                                    )
+                                except (ValueError, OverflowError):
+                                    watermark_time = None
+                        else:
+                            watermark_time = ts
+                    watermark_time_str = f" ({_format_timestamp(watermark_time)})" if watermark_time else ""
+                    delay_str = ""
+                    if watermark_time:
+                        delay_seconds = (now_utc - watermark_time).total_seconds()
+                        delay_str = f" Δ={delay_seconds:.3f}s"
+                        is_late = delay_seconds >= threshold_seconds
+                    else:
+                        delay_seconds = None
+                        is_late = False
+                    if is_late:
+                        late_count += 1
+                    status = warning('⚠️  late') if is_late else success('✓ on schedule')
+                    err_msg = f" | error: {mark.err_msg}" if mark.err_msg else ''
+                    print(f"  • {location} → {watermark_value}{watermark_time_str} ({status}){delay_str}{err_msg}")
+        else:
+            print(f"\n{info('Watermark listing skipped (--no-watermarks).')} Late tables detected: {late_count}")
+
+        print(info(f"Tables exceeding threshold: {late_count}"))
+        if table_filter:
+            print(info(f"Watermark filter: {table_filter}"))
+
+        if show_details:
+            try:
+                result = self.client.cdc.show_task(task_name)
+                if hasattr(result, 'rows'):
+                    rows = result.rows
+                    columns = getattr(result, 'columns', [])
+                else:
+                    rows = result.fetchall() if result else []
+                    columns = [col[0] for col in getattr(result, 'description', [])]
+
+                if rows and columns:
+                    detail_payload = [{columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))} for row in rows]
+                else:
+                    detail_payload = rows
+
+                print(f"\n{header('📋 SHOW CDC TASK output')}")
+                print(json.dumps(detail_payload, indent=2, default=str))
+            except Exception as exc:
+                print(error(f"Failed to fetch SHOW CDC TASK output: {exc}"))
+
+    def do_cdc_tasks(self, arg):
+        """
+        List CDC tasks and basic metadata.
+
+        Usage:
+            cdc_tasks [--details]
+
+        Example:
+            cdc_tasks
+            cdc_tasks --details
+        """
+
+        show_details = False
+        tokens = [token for token in arg.strip().split() if token]
+        for token in tokens:
+            if token == "--details":
+                show_details = True
+            else:
+                print("❌ Unknown option. Usage: cdc_tasks [--details]")
+                return
+
+        if not self.client:
+            print("❌ Not connected. Use 'connect' first.")
+            return
+
+        try:
+            tasks = self.client.cdc.list()
+        except Exception as exc:
+            print(error(f"Failed to list CDC tasks: {exc}"))
+            return
+
+        if not tasks:
+            print(info("No CDC tasks found."))
+            return
+
+        print(f"\n{header('🧾 CDC Tasks Summary')}")
+        print(info(f"Total tasks: {len(tasks)}"))
+
+        for task in tasks:
+            print(bold(f"• {task.task_name}"))
+            print(f"  {info('State:')} {task.state or 'unknown'}")
+            print(f"  {info('Sink:')} {task.sink_type or 'unknown'}")
+            if task.err_msg:
+                print(f"  {error('Error:')} {task.err_msg}")
+            mapping_preview = _format_cdc_value(task.table_mapping or "")
+            if mapping_preview and "\n" not in mapping_preview:
+                print(f"  {info('Mapping:')} {mapping_preview}")
+            if show_details:
+                _print_cdc_field("Source URI:", task.source_uri, indent="  ")
+                _print_cdc_field("Sink URI:", task.sink_uri, indent="  ")
+                _print_cdc_field("Options:", task.additional_config, indent="  ")
+                _print_cdc_field("NoFull:", task.no_full, indent="  ")
+                _print_cdc_field("Checkpoint:", task.checkpoint, indent="  ")
+            print()
+
+    def do_cdc_create(self, arg):
+        """
+        Guided helper to create a CDC task.
+
+        Usage:
+            cdc_create [--database-level|--table-level]
+
+        If no level flag is supplied, you will be prompted to choose between
+        database-level and table-level replication.
+        """
+
+        level_override: Optional[str] = None
+        tokens = [token for token in arg.strip().split() if token]
+        for token in tokens:
+            if token == "--database-level":
+                if level_override == "table":
+                    print("❌ Specify only one of --database-level or --table-level.")
+                    return
+                level_override = "database"
+            elif token == "--table-level":
+                if level_override == "database":
+                    print("❌ Specify only one of --database-level or --table-level.")
+                    return
+                level_override = "table"
+            else:
+                print("❌ Unknown option. Usage: cdc_create [--database-level|--table-level]")
+                return
+
+        if not self.client:
+            print("❌ Not connected. Use 'connect' first.")
+            return
+
+        params = getattr(self.client, "_connection_params", {}) or {}
+        host = params.get("host", "127.0.0.1")
+        port = params.get("port", 6001)
+        user = params.get("user", "root")
+        password = params.get("password", "")
+        account = params.get("account") or params.get("tenant")
+
+        try:
+            port_int = int(port)
+        except (TypeError, ValueError):
+            port_int = 6001
+
+        try:
+            source_uri_default = build_mysql_uri(host, port_int, user, password, account=account)
+        except Exception:
+            source_uri_default = ""
+
+        task_name_default = f"cdc_task_{uuid.uuid4().hex[:6]}"
+        if params.get("database"):
+            task_name_default = f"{params['database']}_cdc_{uuid.uuid4().hex[:4]}"
+
+        task_name = self._prompt("Task name", default=task_name_default).strip()
+        if not task_name:
+            print("❌ Task name is required.")
+            return
+
+        sink_type_default = CDCSinkType.MATRIXONE.value
+        sink_type_input = self._prompt("Sink type (mysql/matrixone)", default=sink_type_default).strip().lower()
+        try:
+            sink_type = CDCSinkType(sink_type_input)
+        except ValueError:
+            print(f"❌ Invalid sink type '{sink_type_input}'. Choose from {[m.value for m in CDCSinkType]}.")
+            return
+
+        source_uri = self._prompt("Source URI", default=source_uri_default).strip()
+        if not source_uri:
+            print("❌ Source URI is required.")
+            return
+
+        sink_uri = self._prompt("Sink URI", default=source_uri).strip()
+        if not sink_uri:
+            print("❌ Sink URI is required.")
+            return
+
+        level = level_override
+        if not level:
+            level = self._prompt("Replication level (database/table)", default="database").strip().lower()
+        if level not in {"database", "table"}:
+            print("❌ Replication level must be 'database' or 'table'.")
+            return
+
+        options: Optional[Dict[str, Any]] = None
+        print(info("Common CDC options include Frequency=1h, NoFull=true, MaxSqlLength=2097152, SendSqlTimeout=30m."))
+        print(
+            info(
+                "Enter key=value pairs separated by commas (e.g. Frequency=1h,NoFull=true) or press Enter to skip. Type 'help' for more guidance."
+            )
+        )
+        while True:
+            raw_options = self._prompt("Additional CDC options", default="")
+            raw_options = raw_options.strip()
+            if not raw_options:
+                break
+            if raw_options.lower() in {"help", "?", "examples"}:
+                print(info("Examples:"))
+                print("  Frequency=1h")
+                print("  NoFull=true")
+                print("  Frequency=30m,NoFull=true,SendSqlTimeout=45m")
+                continue
+            try:
+                options = _parse_options_string(raw_options)
+                break
+            except ValueError as exc:
+                print(error(str(exc)))
+                continue
+
+        creation_context: Dict[str, Any]
+        try:
+            if level == "database":
+                source_db_default = params.get("database") or ""
+                source_database = self._prompt("Source database", default=source_db_default).strip()
+                if not source_database:
+                    print("❌ Source database is required.")
+                    return
+                sink_db_default = f"{source_database}_cdc"
+                sink_database = self._prompt("Sink database", default=sink_db_default).strip()
+                if not sink_database:
+                    sink_database = source_database
+                creation_context = {
+                    "mode": "database",
+                    "source_database": source_database,
+                    "sink_database": sink_database,
+                }
+            else:
+                print(info("Enter table mappings in the form source_db.table[:sink_db.table]."))
+                print(info("Press Enter on an empty prompt when you are done."))
+                mappings: List[Dict[str, str]] = []
+                while True:
+                    entry = self._prompt("Mapping (blank to finish)").strip()
+                    if not entry:
+                        break
+                    try:
+                        mapping = _parse_table_mapping(entry)
+                    except ValueError as exc:
+                        print(error(str(exc)))
+                        continue
+                    mappings.append(mapping)
+
+                if not mappings:
+                    print("❌ At least one table mapping is required for table-level replication.")
+                    return
+
+                table_tuples = [(m["source_db"], m["source_table"], m["sink_db"], m["sink_table"]) for m in mappings]
+                creation_context = {
+                    "mode": "table",
+                    "table_mappings": mappings,
+                    "table_tuples": table_tuples,
+                }
+        except Exception as exc:
+            print(error(f"Failed to gather CDC task details: {exc}"))
+            return
+
+        sink_type_display = sink_type.value if isinstance(sink_type, CDCSinkType) else str(sink_type)
+        preview_payload: Dict[str, Any] = {
+            "task_name": task_name,
+            "level": level,
+            "source_uri": source_uri,
+            "sink_type": sink_type_display,
+            "sink_uri": sink_uri,
+        }
+        if options is not None:
+            preview_payload["options"] = options
+        if creation_context["mode"] == "database":
+            preview_payload["source_database"] = creation_context["source_database"]
+            preview_payload["sink_database"] = creation_context["sink_database"]
+        else:
+            preview_payload["table_mappings"] = creation_context["table_mappings"]
+
+        print(f"\n{header('📝 CDC Task Configuration Preview')}")
+        print(json.dumps(preview_payload, indent=2, ensure_ascii=False, default=str))
+        confirm = self._prompt("Proceed with CDC task creation? (yes/no)", default="no").strip().lower()
+        if confirm not in {"y", "yes"}:
+            print(info("CDC task creation cancelled."))
+            return
+
+        try:
+            if creation_context["mode"] == "database":
+                task = self.client.cdc.create_database_task(
+                    task_name=task_name,
+                    source_uri=source_uri,
+                    sink_type=sink_type,
+                    sink_uri=sink_uri,
+                    source_database=creation_context["source_database"],
+                    sink_database=creation_context["sink_database"],
+                    options=options,
+                )
+            else:
+                task = self.client.cdc.create_table_task(
+                    task_name=task_name,
+                    source_uri=source_uri,
+                    sink_type=sink_type,
+                    sink_uri=sink_uri,
+                    table_mappings=creation_context["table_tuples"],
+                    options=options,
+                )
+        except Exception as exc:
+            print(error(f"Failed to create CDC task: {exc}"))
+            return
+
+        print(success(f"\nCDC task '{task.task_name}' created successfully."))
+        print(info(f"Use 'cdc_task {task.task_name}' to inspect or manage the task."))
+
+    def do_cdc_drop(self, arg):
+        """
+        Drop a CDC task with double confirmation.
+
+        Usage:
+            cdc_drop <task_name> [--force]
+
+        The command will prompt for confirmation twice unless ``--force`` is supplied.
+        """
+
+        tokens = [token for token in arg.strip().split() if token]
+        if not tokens:
+            print("❌ Usage: cdc_drop <task_name> [--force]")
+            return
+
+        task_name = tokens[0]
+        force = False
+        for token in tokens[1:]:
+            if token == "--force":
+                force = True
+            else:
+                print("❌ Unknown option. Usage: cdc_drop <task_name> [--force]")
+                return
+
+        if not self.client:
+            print("❌ Not connected. Use 'connect' first.")
+            return
+
+        try:
+            task = self.client.cdc.get(task_name)
+        except ValueError as exc:
+            print(error(str(exc)))
+            return
+        except Exception as exc:
+            print(error(f"Failed to load CDC task '{task_name}': {exc}"))
+            return
+
+        print(f"\n{header('⚠️  CDC Task Drop Preview')}")
+        summary_payload: Dict[str, Any] = {
+            "task_name": task.task_name,
+            "state": task.state,
+            "sink_type": task.sink_type,
+            "table_mapping": task.table_mapping,
+            "source_uri": task.source_uri,
+            "sink_uri": task.sink_uri,
+            "options": task.additional_config,
+            "no_full": task.no_full,
+            "checkpoint": task.checkpoint,
+        }
+        print(json.dumps(summary_payload, indent=2, ensure_ascii=False, default=str))
+
+        if not force:
+            first_confirm = (
+                self._prompt(
+                    f"Confirm drop of CDC task '{task_name}'? (yes/no)",
+                    default="no",
+                )
+                .strip()
+                .lower()
+            )
+            if first_confirm not in {"y", "yes"}:
+                print(info("CDC task drop cancelled."))
+                return
+
+            second_confirm = self._prompt(
+                f"Type the task name '{task_name}' to confirm drop",
+                default="",
+            ).strip()
+            if second_confirm != task_name:
+                print(info("Confirmation mismatch. CDC task drop cancelled."))
+                return
+
+        try:
+            self.client.cdc.drop(task_name)
+        except Exception as exc:
+            print(error(f"Failed to drop CDC task '{task_name}': {exc}"))
+            return
+
+        print(success(f"CDC task '{task_name}' dropped successfully."))
 
     def do_verify_counts(self, arg):
         """
@@ -2042,6 +3026,27 @@ class MatrixOneCLI(cmd.Cmd):
         pass
 
 
+def _create_connected_client(host, port, user, password, database, log_level):
+    """Create and return a connected MatrixOne client with logging configured."""
+    import logging
+
+    level = getattr(logging, log_level.upper(), logging.ERROR)
+    mo_logger = logging.getLogger('matrixone')
+    mo_logger.setLevel(level)
+    for handler in mo_logger.handlers:
+        handler.setLevel(level)
+
+    sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
+    client = Client(sql_log_mode=sql_log_mode)
+
+    mo_logger.setLevel(level)
+    for handler in mo_logger.handlers:
+        handler.setLevel(level)
+
+    client.connect(host=host, port=port, user=user, password=password, database=database)
+    return client
+
+
 def start_interactive_tool(host='localhost', port=6001, user='root', password='111', database=None, log_level='ERROR'):
     """
     Start the interactive diagnostic tool.
@@ -2054,30 +3059,15 @@ def start_interactive_tool(host='localhost', port=6001, user='root', password='1
         database: Database name (optional)
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: ERROR
     """
-    import logging
-
-    # Set logging level BEFORE creating Client
-    level = getattr(logging, log_level.upper(), logging.ERROR)
-
-    # Set for matrixone logger and all its handlers
-    mo_logger = logging.getLogger('matrixone')
-    mo_logger.setLevel(level)
-
-    # Set level for all existing handlers
-    for handler in mo_logger.handlers:
-        handler.setLevel(level)
-
-    # Create client with minimal SQL logging
-    sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
-    client = Client(sql_log_mode=sql_log_mode)
-
-    # Set level again after client creation (in case client adds handlers)
-    mo_logger.setLevel(level)
-    for handler in mo_logger.handlers:
-        handler.setLevel(level)
-
     try:
-        client.connect(host=host, port=port, user=user, password=password, database=database)
+        client = _create_connected_client(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database,
+            log_level=log_level,
+        )
         print(f"✓ Connected to {host}:{port}" + (f" (database: {database})" if database else ""))
     except Exception as e:
         print(f"⚠️  Failed to connect: {e}")
@@ -2125,38 +3115,47 @@ Examples:
     )
     parser.add_argument('--command', '-c', help='Execute a single command and exit (non-interactive mode)')
 
+    subparsers = parser.add_subparsers(dest='subcommand')
+
+    cdc_parser = subparsers.add_parser('cdc', help='Manage CDC tasks')
+    cdc_subparsers = cdc_parser.add_subparsers(dest='cdc_command')
+
+    cdc_show_parser = cdc_subparsers.add_parser('show', help='Show CDC tasks or a specific task')
+    cdc_show_parser.add_argument('task_name', nargs='?', help='Name of the CDC task to inspect')
+    cdc_show_parser.add_argument('--details', action='store_true', help='Show detailed information')
+    cdc_show_parser.add_argument('--no-watermarks', action='store_true', help='Skip watermark listing (task view)')
+    cdc_show_parser.add_argument('--watermarks-only', action='store_true', help='Show only watermarks (task view)')
+    cdc_show_parser.add_argument('--threshold', help='Watermark latency threshold (task view, e.g. 5m, 30s)')
+    cdc_show_parser.add_argument('--table', help='Filter watermarks by table name (task view)')
+    cdc_show_parser.add_argument('--strict', action='store_true', help='Zero tolerance for watermark delays (task view)')
+
+    cdc_create_parser = cdc_subparsers.add_parser('create', help='Launch guided CDC task creation')
+    cdc_create_parser.add_argument('--database-level', action='store_true', help='Force database-level replication')
+    cdc_create_parser.add_argument('--table-level', action='store_true', help='Force table-level replication')
+
+    cdc_drop_parser = cdc_subparsers.add_parser('drop', help='Drop a CDC task')
+    cdc_drop_parser.add_argument('task_name', help='Name of the CDC task to drop')
+    cdc_drop_parser.add_argument('--force', action='store_true', help='Skip confirmation prompts')
+
     args = parser.parse_args()
 
     # Non-interactive mode: execute single command
     if args.command:
-        import logging
-
-        # Set logging level
-        level = getattr(logging, args.log_level.upper(), logging.ERROR)
-        mo_logger = logging.getLogger('matrixone')
-        mo_logger.setLevel(level)
-        for handler in mo_logger.handlers:
-            handler.setLevel(level)
-
-        # Create client
-        sql_log_mode = 'off' if level >= logging.ERROR else 'auto'
-        client = Client(sql_log_mode=sql_log_mode)
-
-        # Set level again after client creation
-        mo_logger.setLevel(level)
-        for handler in mo_logger.handlers:
-            handler.setLevel(level)
-
-        # Connect
         try:
-            client.connect(host=args.host, port=args.port, user=args.user, password=args.password, database=args.database)
+            client = _create_connected_client(
+                host=args.host,
+                port=args.port,
+                user=args.user,
+                password=args.password,
+                database=args.database,
+                log_level=args.log_level,
+            )
         except Exception as e:
             print(f"❌ Failed to connect: {e}")
             import sys
 
             sys.exit(1)
 
-        # Create CLI instance and execute command
         cli = MatrixOneCLI(client)
         try:
             cli.onecmd(args.command)
@@ -2171,16 +3170,92 @@ Examples:
                     client.disconnect()
                 except Exception:
                     pass
-    else:
-        # Interactive mode
-        start_interactive_tool(
-            host=args.host,
-            port=args.port,
-            user=args.user,
-            password=args.password,
-            database=args.database,
-            log_level=args.log_level,
-        )
+        return
+
+    if args.subcommand == 'cdc':
+        if not args.cdc_command:
+            print("❌ Usage: mo-diag cdc <show|create|drop> [...]")
+            return
+
+        try:
+            client = _create_connected_client(
+                host=args.host,
+                port=args.port,
+                user=args.user,
+                password=args.password,
+                database=args.database,
+                log_level=args.log_level,
+            )
+        except Exception as e:
+            print(f"❌ Failed to connect: {e}")
+            import sys
+
+            sys.exit(1)
+
+        cli = MatrixOneCLI(client)
+        try:
+            if args.cdc_command == 'show':
+                if not args.task_name:
+                    if args.no_watermarks or args.watermarks_only or args.threshold or args.table or args.strict:
+                        print(
+                            "❌ Options --no-watermarks/--watermarks-only/--threshold/--table/--strict require a task name."
+                        )
+                        return
+                    command = "cdc_tasks"
+                    if args.details:
+                        command += " --details"
+                    cli.onecmd(command)
+                else:
+                    segments = [f"cdc_task {args.task_name}"]
+                    if args.details:
+                        segments.append("--details")
+                    if args.no_watermarks:
+                        segments.append("--no-watermarks")
+                    if args.watermarks_only:
+                        segments.append("--watermarks-only")
+                    if args.threshold:
+                        segments.append(f"--threshold={args.threshold}")
+                    if args.table:
+                        segments.append(f"--table={args.table}")
+                    if args.strict:
+                        segments.append("--strict")
+                    command = " ".join(segments)
+                    cli.onecmd(command)
+            elif args.cdc_command == 'create':
+                flags: List[str] = []
+                if args.database_level and args.table_level:
+                    print("❌ Specify only one of --database-level or --table-level.")
+                    return
+                if args.database_level:
+                    flags.append("--database-level")
+                if args.table_level:
+                    flags.append("--table-level")
+                cli.do_cdc_create(" ".join(flags))
+            elif args.cdc_command == 'drop':
+                segments = [args.task_name]
+                if args.force:
+                    segments.append("--force")
+                cli.do_cdc_drop(" ".join(segments))
+            else:
+                print(f"❌ Unknown CDC command '{args.cdc_command}'.")
+                return
+        finally:
+            if 'client' in locals() and client:
+                try:
+                    client.disconnect()
+                except Exception:
+                    pass
+        return
+
+    # Interactive mode
+    start_interactive_tool(
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        password=args.password,
+        database=args.database,
+        log_level=args.log_level,
+    )
 
 
 if __name__ == '__main__':
