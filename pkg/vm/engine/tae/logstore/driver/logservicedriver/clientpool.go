@@ -138,10 +138,14 @@ func NewClient(
 			break
 		}
 		logutil.Errorf("WAL-Replay failed to create log service client: %v", err)
-		if time.Since(startTime) > retryDuration {
-			break
+		// Only check time limit if this is not the last attempt
+		// This ensures we at least try retryTimes times
+		if i < retryTimes-1 {
+			if time.Since(startTime) > retryDuration {
+				break
+			}
+			time.Sleep(retryInterval)
 		}
-		time.Sleep(retryInterval)
 	}
 	if err != nil {
 		return nil, err
