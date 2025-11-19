@@ -626,13 +626,15 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 				"outputRows=500",
 				"InputSize=",
 				"OutputSize=",
-				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
-				" S3ReadSize=",
-				" DiskReadSize=",
+				" ReadSize=", // Format: ReadSize=total|s3|disk
+				"|",          // Check for pipe separator
 				"MemorySize=",
 				"inputBlocks=10",
 			},
-			wantNotContains: []string{},
+			wantNotContains: []string{
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
 		},
 		{
 			name: "with ReadSize only, no S3ReadSize and DiskReadSize",
@@ -652,7 +654,8 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 				InputBlocks:      5,
 			},
 			wantContains: []string{
-				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
+				" ReadSize=", // Format: ReadSize=total|s3|disk (always present)
+				"|",          // Check for pipe separator
 			},
 			wantNotContains: []string{
 				" S3ReadSize=",
@@ -677,11 +680,12 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 				InputBlocks:      3,
 			},
 			wantContains: []string{
-				"S3ReadSize=",
-				"DiskReadSize=",
+				" ReadSize=", // Format: ReadSize=total|s3|disk (always present, even if total is 0)
+				"|",          // Check for pipe separator
 			},
 			wantNotContains: []string{
-				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
+				" S3ReadSize=",
+				" DiskReadSize=",
 			},
 		},
 		{
@@ -705,9 +709,10 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 				"timeConsumed=100ms",
 				"inputRows=100",
 				"outputRows=50",
+				" ReadSize=", // Format: ReadSize=total|s3|disk (always present, even if all are 0)
+				"|",          // Check for pipe separator
 			},
 			wantNotContains: []string{
-				" ReadSize=", // Note: space before ReadSize to avoid matching S3ReadSize or DiskReadSize
 				" S3ReadSize=",
 				" DiskReadSize=",
 			},
