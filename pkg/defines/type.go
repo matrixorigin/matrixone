@@ -252,10 +252,6 @@ type DisableFkCheck struct{}
 
 type ReaderSummaryKey struct{}
 
-// ReadSizeRecorderKey is used to pass a function to record actual bytes read from storage layer
-// The function signature is: func(bytes int64)
-type ReadSizeRecorderKey struct{}
-
 // ReadSizeRecorders contains recorders for different data sources
 type ReadSizeRecorders struct {
 	Total func(int64) // Total: record total bytes read

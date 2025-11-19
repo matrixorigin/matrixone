@@ -131,8 +131,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			},
 		}
 		newCtx = context.WithValue(newCtx, defines.ReadSizeRecordersKey{}, recorders)
-		// Also keep the old key for backward compatibility
-		newCtx = context.WithValue(newCtx, defines.ReadSizeRecorderKey{}, recorders.Total)
 		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
 			e = err
