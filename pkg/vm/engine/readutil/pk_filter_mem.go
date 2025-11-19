@@ -70,6 +70,11 @@ func NewMemPKFilter(
 		return
 	}
 
+	// Currently only support single atomic filter in memory path.
+	if len(basePKFilter.Disjuncts) > 0 {
+		return
+	}
+
 	var lbVal, ubVal any
 	var packed [][]byte
 	var packer *types.Packer
