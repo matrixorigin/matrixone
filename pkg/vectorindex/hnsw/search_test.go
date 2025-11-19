@@ -24,7 +24,6 @@ import (
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 

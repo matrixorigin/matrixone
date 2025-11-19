@@ -238,8 +238,12 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
+	rt := vectorindex.RuntimeConfig{
+		Limit:        uint(u.limit),
+		OrigFuncName: u.tblcfg.OrigFuncName,
+	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
+	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
 	if err != nil {
 		return err
 	}

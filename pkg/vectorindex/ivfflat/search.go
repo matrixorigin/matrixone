@@ -207,7 +207,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			resid = append(resid, pk)
 
 			dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
-			dist = metric.DistanceTransformIvfflat(dist, idxcfg.OpType, metric.MetricType(idxcfg.Ivfflat.Metric))
+			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}
 	}
@@ -269,6 +269,5 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // check config and update some parameters such as ef_search
 func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-
 	return nil
 }
