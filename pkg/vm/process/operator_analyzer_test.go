@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -597,6 +598,158 @@ func Test_operatorAnalyzer_AddDiskReadSize(t *testing.T) {
 				if tt.name == "normal case - add disk read size" {
 					opAlyzr.AddDiskReadSize(256 * 1024)
 					assert.Equalf(t, int64(768*1024), opAlyzr.opStats.DiskReadSize, "AddDiskReadSize() should accumulate")
+				}
+			}
+		})
+	}
+}
+
+func Test_operatorAnalyzer_AddReadSizeInfo(t *testing.T) {
+	type fields struct {
+		nodeIdx              int
+		isFirst              bool
+		isLast               bool
+		start                time.Time
+		wait                 time.Duration
+		childrenCallDuration time.Duration
+		opStats              *OperatorStats
+	}
+	type args struct {
+		counter *perfcounter.CounterSet
+	}
+	tests := []struct {
+		name      string
+		fields    fields
+		args      args
+		wantPanic bool
+		want      struct {
+			ReadSize     int64
+			S3ReadSize   int64
+			DiskReadSize int64
+		}
+	}{
+		{
+			name: "panic when opStats is nil",
+			fields: fields{
+				opStats: nil,
+			},
+			args: args{
+				counter: &perfcounter.CounterSet{},
+			},
+			wantPanic: true,
+		},
+		{
+			name: "normal case - add read size info from CounterSet",
+			fields: fields{
+				opStats: NewOperatorStats("testOp"),
+			},
+			args: args{
+				counter: func() *perfcounter.CounterSet {
+					cs := &perfcounter.CounterSet{}
+					cs.FileService.ReadSize.Add(1024 * 1024)    // 1MB
+					cs.FileService.S3ReadSize.Add(512 * 1024)   // 0.5MB
+					cs.FileService.DiskReadSize.Add(256 * 1024) // 0.25MB
+					return cs
+				}(),
+			},
+			wantPanic: false,
+			want: struct {
+				ReadSize     int64
+				S3ReadSize   int64
+				DiskReadSize int64
+			}{
+				ReadSize:     1024 * 1024,
+				S3ReadSize:   512 * 1024,
+				DiskReadSize: 256 * 1024,
+			},
+		},
+		{
+			name: "accumulate read size info from CounterSet",
+			fields: fields{
+				opStats: NewOperatorStats("testOp"),
+			},
+			args: args{
+				counter: func() *perfcounter.CounterSet {
+					cs := &perfcounter.CounterSet{}
+					cs.FileService.ReadSize.Add(2048 * 1024)    // 2MB
+					cs.FileService.S3ReadSize.Add(1536 * 1024)  // 1.5MB
+					cs.FileService.DiskReadSize.Add(512 * 1024) // 0.5MB
+					return cs
+				}(),
+			},
+			wantPanic: false,
+			want: struct {
+				ReadSize     int64
+				S3ReadSize   int64
+				DiskReadSize int64
+			}{
+				ReadSize:     2048 * 1024,
+				S3ReadSize:   1536 * 1024,
+				DiskReadSize: 512 * 1024,
+			},
+		},
+		{
+			name: "accumulate multiple times",
+			fields: fields{
+				opStats: NewOperatorStats("testOp"),
+			},
+			args: args{
+				counter: func() *perfcounter.CounterSet {
+					cs := &perfcounter.CounterSet{}
+					cs.FileService.ReadSize.Add(1024 * 1024)    // 1MB
+					cs.FileService.S3ReadSize.Add(512 * 1024)   // 0.5MB
+					cs.FileService.DiskReadSize.Add(256 * 1024) // 0.25MB
+					return cs
+				}(),
+			},
+			wantPanic: false,
+			want: struct {
+				ReadSize     int64
+				S3ReadSize   int64
+				DiskReadSize int64
+			}{
+				ReadSize:     1024 * 1024,
+				S3ReadSize:   512 * 1024,
+				DiskReadSize: 256 * 1024,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantPanic {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Logf("operatorAnalyzer.AddReadSizeInfo() panic: %v", r)
+					} else {
+						t.Errorf("should catch operatorAnalyzer.AddReadSizeInfo() panic")
+					}
+				}()
+			}
+
+			opAlyzr := &operatorAnalyzer{
+				nodeIdx:              tt.fields.nodeIdx,
+				isFirst:              tt.fields.isFirst,
+				isLast:               tt.fields.isLast,
+				start:                tt.fields.start,
+				wait:                 tt.fields.wait,
+				childrenCallDuration: tt.fields.childrenCallDuration,
+				opStats:              tt.fields.opStats,
+			}
+			opAlyzr.AddReadSizeInfo(tt.args.counter)
+			if !tt.wantPanic && opAlyzr.opStats != nil {
+				assert.Equalf(t, tt.want.ReadSize, opAlyzr.opStats.ReadSize, "AddReadSizeInfo() ReadSize")
+				assert.Equalf(t, tt.want.S3ReadSize, opAlyzr.opStats.S3ReadSize, "AddReadSizeInfo() S3ReadSize")
+				assert.Equalf(t, tt.want.DiskReadSize, opAlyzr.opStats.DiskReadSize, "AddReadSizeInfo() DiskReadSize")
+				// Test accumulation
+				if tt.name == "normal case - add read size info from CounterSet" {
+					cs2 := &perfcounter.CounterSet{}
+					cs2.FileService.ReadSize.Add(2048 * 1024)    // 2MB
+					cs2.FileService.S3ReadSize.Add(1024 * 1024)  // 1MB
+					cs2.FileService.DiskReadSize.Add(512 * 1024) // 0.5MB
+					opAlyzr.AddReadSizeInfo(cs2)
+					assert.Equalf(t, int64(3072*1024), opAlyzr.opStats.ReadSize, "AddReadSizeInfo() should accumulate ReadSize")
+					assert.Equalf(t, int64(1536*1024), opAlyzr.opStats.S3ReadSize, "AddReadSizeInfo() should accumulate S3ReadSize")
+					assert.Equalf(t, int64(768*1024), opAlyzr.opStats.DiskReadSize, "AddReadSizeInfo() should accumulate DiskReadSize")
 				}
 			}
 		})
