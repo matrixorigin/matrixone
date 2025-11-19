@@ -1660,7 +1660,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		types.T_char, types.T_binary, types.T_json,
 	}
 
-	var needFreeVecs []*vector.Vector
+	needFreeVecs := make([]*vector.Vector, 0, len(tys))
 	defer func() {
 		for i := range needFreeVecs {
 			needFreeVecs[i].Free(mp)

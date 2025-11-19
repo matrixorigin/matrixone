@@ -304,16 +304,3 @@ func toDisjuncts(f BasePKFilter) []BasePKFilter {
 	}
 	return []BasePKFilter{f}
 }
-
-func cloneBaseFilter(src BasePKFilter, mp *mpool.MPool) (BasePKFilter, error) {
-	dst := src
-	dst.Disjuncts = nil
-	if src.Vec != nil {
-		vec, err := src.Vec.Dup(mp)
-		if err != nil {
-			return BasePKFilter{}, err
-		}
-		dst.Vec = vec
-	}
-	return dst, nil
-}
