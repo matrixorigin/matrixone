@@ -98,56 +98,45 @@ func ConstructBasePKFilter(
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
-			// Distribute AND over OR: (a or b) and c => (a and c) or (b and c)
-			var disjuncts []BasePKFilter
-			first := true
+			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
 				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
-				if !ff.Valid {
-					continue
+				if ff.Valid {
+					filters = append(filters, ff)
 				}
-				rightList := toDisjuncts(ff)
-				if first {
-					disjuncts = append(disjuncts, rightList...)
-					first = false
-					continue
+			}
+
+			if len(filters) == 0 {
+				return BasePKFilter{}, nil
+			}
+
+			for idx := 0; idx < len(filters)-1; {
+				f1 := &filters[idx]
+				f2 := &filters[idx+1]
+				ff, err := mergeFilters(f1, f2, function.AND, mp)
+				if err != nil {
+					return BasePKFilter{}, err
 				}
 
-				var next []BasePKFilter
-				for i := range disjuncts {
-					for j := range rightList {
-						leftCopy, err := cloneBaseFilter(disjuncts[i], mp)
-						if err != nil {
-							return BasePKFilter{}, err
-						}
-						rightCopy, err := cloneBaseFilter(rightList[j], mp)
-						if err != nil {
-							return BasePKFilter{}, err
-						}
-						ff, err := mergeFilters(&leftCopy, &rightCopy, function.AND, mp)
-						if err != nil {
-							return BasePKFilter{}, err
-						}
-						if ff.Valid {
-							next = append(next, ff)
-						}
-					}
-				}
-				disjuncts = next
-				if len(disjuncts) == 0 {
+				if !ff.Valid {
 					return BasePKFilter{}, nil
 				}
+
+				idx++
+				filters[idx] = ff
 			}
 
-			if len(disjuncts) == 1 {
-				return disjuncts[0], nil
+			for idx := 0; idx < len(filters)-1; idx++ {
+				if filters[idx].Vec != nil {
+					filters[idx].Vec.Free(mp)
+				}
 			}
-			filter.Valid = true
-			filter.Disjuncts = disjuncts
-			return filter, nil
+
+			ret := filters[len(filters)-1]
+			return ret, nil
 
 		case "or":
 			var filters []BasePKFilter
