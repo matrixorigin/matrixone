@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -432,4 +433,196 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 		t.Log("\n" + buffer.ToString())
 	}
 	return nil
+}
+
+func TestFormatBytes(t *testing.T) {
+	tests := []struct {
+		name     string
+		bytes    int64
+		expected string
+	}{
+		{"zero bytes", 0, "0bytes"},
+		{"small bytes", 1024, "1024bytes"},
+		{"exactly 1MB", MB, "1mb"},
+		{"less than 1MB", MB - 1, "1048575bytes"},
+		{"1.5MB", MB + MB/2, "1mb"},
+		{"10MB", 10 * MB, "10mb"},
+		{"less than 10GB", 10*GB - 1, "10239mb"},
+		{"exactly 10GB", 10 * GB, "10gb"},
+		{"more than 10GB", 10*GB + 1, "10gb"},
+		{"20GB", 20 * GB, "20gb"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatBytes(tt.bytes)
+			if result != tt.expected {
+				t.Errorf("formatBytes(%d) = %s, want %s", tt.bytes, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAnalyzeInfoDescribeImpl_GetDescription(t *testing.T) {
+	ctx := context.Background()
+	options := &ExplainOptions{
+		Format:   EXPLAIN_FORMAT_TEXT,
+		Verbose:  false,
+		Analyze:  true,
+		NodeType: plan2.Node_TABLE_SCAN,
+	}
+
+	tests := []struct {
+		name            string
+		analyzeInfo     *plan2.AnalyzeInfo
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name: "with ReadSize, S3ReadSize, DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     1000000000, // 1000ms
+				WaitTimeConsumed: 0,
+				InputRows:        1000,
+				OutputRows:       500,
+				InputSize:        16 * MB,
+				OutputSize:       8 * MB,
+				MemorySize:       4 * MB,
+				ReadSize:         153 * MB,
+				S3ReadSize:       150 * MB,
+				DiskReadSize:     3 * MB,
+				InputBlocks:      10,
+			},
+			wantContains: []string{
+				"timeConsumed=1000ms",
+				"inputRows=1000",
+				"outputRows=500",
+				"InputSize=16mb",
+				"OutputSize=8mb",
+				"ReadSize=153mb",
+				"S3ReadSize=150mb",
+				"DiskReadSize=3mb",
+				"MemorySize=4mb",
+				"inputBlocks=10",
+			},
+			wantNotContains: []string{},
+		},
+		{
+			name: "with ReadSize only, no S3ReadSize and DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     500000000, // 500ms
+				WaitTimeConsumed: 0,
+				InputRows:        500,
+				OutputRows:       250,
+				InputSize:        8 * MB,
+				OutputSize:       4 * MB,
+				MemorySize:       2 * MB,
+				ReadSize:         10 * MB,
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+			},
+			wantContains: []string{
+				"ReadSize=10mb",
+			},
+			wantNotContains: []string{
+				"S3ReadSize",
+				"DiskReadSize",
+			},
+		},
+		{
+			name: "with S3ReadSize only",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     2000000000, // 2000ms
+				WaitTimeConsumed: 0,
+				InputRows:        2000,
+				OutputRows:       1000,
+				InputSize:        32 * MB,
+				OutputSize:       16 * MB,
+				MemorySize:       8 * MB,
+				ReadSize:         50 * MB,
+				S3ReadSize:       50 * MB,
+				DiskReadSize:     0,
+			},
+			wantContains: []string{
+				"ReadSize=50mb",
+				"S3ReadSize=50mb",
+			},
+			wantNotContains: []string{
+				"DiskReadSize",
+			},
+		},
+		{
+			name: "with DiskReadSize only",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     1500000000, // 1500ms
+				WaitTimeConsumed: 0,
+				InputRows:        1500,
+				OutputRows:       750,
+				InputSize:        24 * MB,
+				OutputSize:       12 * MB,
+				MemorySize:       6 * MB,
+				ReadSize:         30 * MB,
+				S3ReadSize:       0,
+				DiskReadSize:     30 * MB,
+			},
+			wantContains: []string{
+				"ReadSize=30mb",
+				"DiskReadSize=30mb",
+			},
+			wantNotContains: []string{
+				"S3ReadSize",
+			},
+		},
+		{
+			name: "small bytes format",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     100000000, // 100ms
+				WaitTimeConsumed: 0,
+				InputRows:        100,
+				OutputRows:       50,
+				InputSize:        1024,
+				OutputSize:       512,
+				MemorySize:       256,
+				ReadSize:         2048,
+				S3ReadSize:       2048,
+				DiskReadSize:     0,
+			},
+			wantContains: []string{
+				"InputSize=1024bytes",
+				"OutputSize=512bytes",
+				"ReadSize=2048bytes",
+				"S3ReadSize=2048bytes",
+				"MemorySize=256bytes",
+			},
+			wantNotContains: []string{
+				"DiskReadSize",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			impl := NewAnalyzeInfoDescribeImpl(tt.analyzeInfo)
+			buf := bytes.NewBuffer(make([]byte, 0, 400))
+			err := impl.GetDescription(ctx, options, buf)
+			if err != nil {
+				t.Fatalf("GetDescription() error = %v", err)
+			}
+			result := buf.String()
+
+			// Check contains
+			for _, want := range tt.wantContains {
+				if !strings.Contains(result, want) {
+					t.Errorf("GetDescription() result should contain %q, got: %s", want, result)
+				}
+			}
+
+			// Check not contains
+			for _, notWant := range tt.wantNotContains {
+				if strings.Contains(result, notWant) {
+					t.Errorf("GetDescription() result should not contain %q, got: %s", notWant, result)
+				}
+			}
+		})
+	}
 }
