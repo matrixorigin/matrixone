@@ -1,0 +1,105 @@
+drop database if exists block_or_cpk;
+create database block_or_cpk;
+use block_or_cpk;
+select enable_fault_injection();
+enable_fault_injection()
+true
+create table cpk_int(a int, b int, c int, primary key(a, b));
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_cpk.cpk_int');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_cpk.cpk_int)
+true
+insert into cpk_int select g.result, g.result * 2, g.result * 3 from generate_series(1, 8192) g;
+select a, b from cpk_int where a = 10 or a in (20, 30, 40) order by a, b;
+a    b
+10    20
+20    40
+30    60
+40    80
+select a, b from cpk_int where a between 100 and 102 or a >= 8190 order by a, b;
+a    b
+100    200
+101    202
+102    204
+8190    16380
+8191    16382
+8192    16384
+select a, b from cpk_int where a < 4 or a > 8189 order by a, b;
+a    b
+1    2
+2    4
+3    6
+8190    16380
+8191    16382
+8192    16384
+select a, b from cpk_int where a <= 5 or a >= 8191 order by a, b;
+a    b
+1    2
+2    4
+3    6
+4    8
+5    10
+8191    16382
+8192    16384
+select a, b from cpk_int where (a = 11 and a = 12) or a = 13 order by a, b;
+a    b
+13    26
+select a, b from cpk_int where a < 4 or a between 256 and 258 or a in (500, 600) or a >= 8191 order by a, b;
+a    b
+1    2
+2    4
+3    6
+256    512
+257    514
+258    516
+500    1000
+600    1200
+8191    16382
+8192    16384
+drop table cpk_int;
+create table cpk_varchar(a varchar(64), b varchar(64), c int, primary key(a, b));
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_cpk.cpk_varchar');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_cpk.cpk_varchar)
+true
+insert into cpk_varchar select cast(g.result as varchar), cast(g.result * 2 as varchar), g.result * 3 from generate_series(1, 8192) g;
+select a, b from cpk_varchar where a = '10' or a in ('20', '30', '40') order by cast(a as int), cast(b as int);
+a    b
+10    20
+20    40
+30    60
+40    80
+select a, b from cpk_varchar where a between '8000' and '8003' or a between '900' and '903' order by cast(a as int), cast(b as int);
+a    b
+900    1800
+901    1802
+902    1804
+903    1806
+8000    16000
+8001    16002
+8002    16004
+8003    16006
+select a, b from cpk_varchar where a in ('5', '15', '25') or a = '512' order by cast(a as int), cast(b as int);
+a    b
+5    10
+15    30
+25    50
+512    1024
+select a, b from cpk_varchar where (a = '200' and a = '201') or a = '300' order by cast(a as int), cast(b as int);
+a    b
+300    600
+select a, b from cpk_varchar where a between '2500' and '2502' or a between '6000' and '6001' or a in ('700', '800') or a between '950' and '952' order by cast(a as int), cast(b as int);
+a    b
+700    1400
+800    1600
+950    1900
+951    1902
+952    1904
+2500    5000
+2501    5002
+2502    5004
+6000    12000
+6001    12002
+drop table cpk_varchar;
+drop database block_or_cpk;
+select disable_fault_injection();
+disable_fault_injection()
+true
