@@ -35,7 +35,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -411,11 +410,9 @@ read_disk_cache:
 		}
 		// Record disk read size
 		if actualDiskReadBytes > 0 {
-			if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
-				if rs, ok := recorders.(defines.ReadSizeRecorders); ok && rs.Disk != nil {
-					rs.Disk(actualDiskReadBytes)
-				}
-			}
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
+			})
 		}
 		if vector.allDone() {
 			return nil
@@ -476,11 +473,9 @@ read_disk_cache:
 	}
 	// Record disk read size (all bytes read from local disk)
 	if localDiskReadBytes > 0 {
-		if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
-			if rs, ok := recorders.(defines.ReadSizeRecorders); ok && rs.Disk != nil {
-				rs.Disk(localDiskReadBytes)
-			}
-		}
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.DiskReadSize.Add(localDiskReadBytes)
+		})
 	}
 
 	return nil

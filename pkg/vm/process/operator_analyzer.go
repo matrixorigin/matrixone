@@ -52,6 +52,7 @@ type Analyzer interface {
 	AddS3RequestCount(counter *perfcounter.CounterSet)
 	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
+	AddReadSizeInfo(counter *perfcounter.CounterSet)
 
 	GetOpCounterSet() *perfcounter.CounterSet
 	GetOpStats() *OperatorStats
@@ -320,6 +321,16 @@ func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
 
 	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Read.Load()
 	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Write.Load()
+}
+
+func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddReadSizeInfo: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
+	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
 }
 
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {

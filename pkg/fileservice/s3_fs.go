@@ -29,7 +29,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -571,11 +570,9 @@ read_disk_cache:
 		}
 		// Record disk read size
 		if actualDiskReadBytes > 0 {
-			if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
-				if rs, ok := recorders.(defines.ReadSizeRecorders); ok && rs.Disk != nil {
-					rs.Disk(actualDiskReadBytes)
-				}
-			}
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
+			})
 		}
 		if vector.allDone() {
 			return nil
@@ -648,11 +645,9 @@ read_disk_cache:
 	}
 	// Record S3 read size (all bytes read from S3)
 	if s3ReadBytes > 0 {
-		if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
-			if rs, ok := recorders.(defines.ReadSizeRecorders); ok && rs.S3 != nil {
-				rs.S3(s3ReadBytes)
-			}
-		}
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.S3ReadSize.Add(s3ReadBytes)
+		})
 	}
 
 	return nil

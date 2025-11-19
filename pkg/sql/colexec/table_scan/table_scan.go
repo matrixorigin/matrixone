@@ -16,12 +16,10 @@ package table_scan
 
 import (
 	"bytes"
-	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -118,19 +116,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		// Attach read size recorders to context to track actual bytes read from different sources
-		recorders := defines.ReadSizeRecorders{
-			Total: func(bytes int64) {
-				analyzer.AddReadSize(bytes)
-			},
-			S3: func(bytes int64) {
-				analyzer.AddS3ReadSize(bytes)
-			},
-			Disk: func(bytes int64) {
-				analyzer.AddDiskReadSize(bytes)
-			},
-		}
-		newCtx = context.WithValue(newCtx, defines.ReadSizeRecordersKey{}, recorders)
 		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
 			e = err
@@ -139,6 +124,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.AddS3RequestCount(crs)
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
+		analyzer.AddReadSizeInfo(crs)
 
 		if isEnd {
 			e = err

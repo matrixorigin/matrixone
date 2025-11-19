@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -204,15 +204,13 @@ func ReadOneBlockWithMeta(
 			totalReadSize += entry.Size
 		}
 
-		// Record actual bytes read from storage layer using ReadSizeRecordersKey
-		// Note: S3 and Disk recorders are called in filesystem layer (S3FS/LocalFS)
+		// Record actual bytes read from storage layer using CounterSet
+		// Note: S3 and Disk read sizes are recorded in filesystem layer (S3FS/LocalFS)
 		// where we can accurately determine the data source
-		if recorders := ctx.Value(defines.ReadSizeRecordersKey{}); recorders != nil {
-			if rs, ok := recorders.(defines.ReadSizeRecorders); ok {
-				if rs.Total != nil {
-					rs.Total(totalReadSize)
-				}
-			}
+		if totalReadSize > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.ReadSize.Add(totalReadSize)
+			})
 		}
 	}
 

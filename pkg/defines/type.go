@@ -252,16 +252,6 @@ type DisableFkCheck struct{}
 
 type ReaderSummaryKey struct{}
 
-// ReadSizeRecorders contains recorders for different data sources
-type ReadSizeRecorders struct {
-	Total func(int64) // Total: record total bytes read
-	S3    func(int64) // S3: record bytes read from S3
-	Disk  func(int64) // Disk: record bytes read from disk cache
-}
-
-// ReadSizeRecordersKey is used to pass ReadSizeRecorders to track bytes read from different sources
-type ReadSizeRecordersKey struct{}
-
 /*
 The autoIncrCacheManager is initialized with a starting CN.
 The autoIncrCacheManager instance of each CN is stored in type service in package cnservice.
