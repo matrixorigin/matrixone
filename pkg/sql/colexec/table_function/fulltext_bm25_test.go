@@ -54,11 +54,11 @@ func TestFullTextCallBM25(t *testing.T) {
 	var result vm.CallResult
 
 	// first call receive data
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 192; i++ {
 		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
 		require.Nil(t, err)
 		require.Equal(t, result.Status, vm.ExecNext)
-		require.Equal(t, result.Batch.RowCount(), 8192)
+		require.Equal(t, result.Batch.RowCount(), 128)
 	}
 
 	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
@@ -109,11 +109,11 @@ func TestFullTextCallOneAttrBM25(t *testing.T) {
 	var result vm.CallResult
 
 	// first call receive data
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 192; i++ {
 		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
 		require.Nil(t, err)
 		require.Equal(t, result.Status, vm.ExecNext)
-		require.Equal(t, result.Batch.RowCount(), 8192)
+		require.Equal(t, result.Batch.RowCount(), 128)
 	}
 
 	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)

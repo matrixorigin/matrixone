@@ -164,11 +164,11 @@ func TestFullTextCall(t *testing.T) {
 	var result vm.CallResult
 
 	// first call receive data
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 192; i++ {
 		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
 		require.Nil(t, err)
 		require.Equal(t, result.Status, vm.ExecNext)
-		require.Equal(t, result.Batch.RowCount(), 8192)
+		require.Equal(t, result.Batch.RowCount(), 128)
 	}
 
 	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
@@ -219,11 +219,11 @@ func TestFullTextCallOneAttr(t *testing.T) {
 	var result vm.CallResult
 
 	// first call receive data
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 192; i++ {
 		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
 		require.Nil(t, err)
 		require.Equal(t, result.Status, vm.ExecNext)
-		require.Equal(t, result.Batch.RowCount(), 8192)
+		require.Equal(t, result.Batch.RowCount(), 128)
 	}
 
 	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
@@ -377,7 +377,7 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc_id
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc len
 
 	nitem := 8192*3 + 1
 	for i := 0; i < nitem; i++ {

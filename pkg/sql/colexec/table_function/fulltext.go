@@ -95,6 +95,7 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 	}
 }
 
+/*
 // return (doc_id, score) as result
 // when scoremap is empty, return result end.
 func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]float32) (vm.CallResult, error) {
@@ -138,10 +139,11 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 
 }
+*/
 
 // return (doc_id, score) as result
 // when scoremap is empty, return result end.
-func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResult, error) {
+func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64) (vm.CallResult, error) {
 
 	blocksz := 8192
 
@@ -149,6 +151,10 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, nil
 	}
 	n := u.minheap.Len()
+
+	if n > int(limit) {
+		n = int(limit)
+	}
 	if n > blocksz {
 		n = blocksz
 	}
@@ -172,6 +178,7 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResu
 			vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
 		}
 	}
+
 	u.batch.SetRowCount(n)
 	u.n_result += uint64(n)
 	if u.batch.RowCount() == 0 {
@@ -186,38 +193,24 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 	var err error
 	u.batch.CleanOnlyData()
-
-	// number of result more than pushdown limit and exit
-	if u.limit > 0 && u.n_result >= u.limit {
-		return vm.CancelResult, nil
-	}
+	limit := uint64(0)
 
 	if u.limit == 0 {
-		// array is empty, try to get batch from SQL executor
-		scoremap, err := evaluate(u, proc, u.sacc)
+		limit = uint64(128)
+	}
+
+	// build minheap
+	if u.minheap == nil || u.minheap.Len() == 0 {
+		err = sort_topk(u, proc, u.sacc, 3*limit)
 		if err != nil {
 			return vm.CancelResult, err
 		}
-
-		if scoremap != nil {
-			return u.returnResult(proc, scoremap)
-		}
-		return vm.CancelResult, nil
-
-	} else {
-		// build minheap
-		if u.minheap == nil {
-			err = sort_topk(u, proc, u.sacc, u.limit)
-			if err != nil {
-				return vm.CancelResult, err
-			}
-		}
-
-		if u.minheap != nil {
-			return u.returnResultFromHeap(proc)
-		}
-		return vm.CancelResult, nil
 	}
+
+	if u.minheap != nil {
+		return u.returnResultFromHeap(proc, limit)
+	}
+	return vm.CancelResult, nil
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
@@ -310,6 +303,7 @@ func runWordStats(
 
 // evaluate the score for all document vectors in Agg hashtable.
 // whenever there is 8192 results, return it immediately.
+/*
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
 
 	scoremap = make(map[any]float32, 8192)
@@ -351,6 +345,7 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 
 	return scoremap, nil
 }
+*/
 
 type docVec struct {
 	doc_id any
@@ -382,12 +377,6 @@ func topk_thread_func(tid int64, ch chan docVec,
 				hp.Push(&vectorindex.SearchResultAnyKey{Id: item.doc_id, Distance: scoref64})
 			}
 
-			err = mpool.FreeItem(item.addr)
-			if err != nil {
-				errch <- err
-				return
-			}
-
 		case <-proc.Ctx.Done():
 			return
 		}
@@ -396,7 +385,12 @@ func topk_thread_func(tid int64, ch chan docVec,
 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
 	aggcnt := u.aggcnt
-	u.minheap = vectorindex.NewSearchTopKResultSafeMinHeap(int(limit))
+
+	if u.minheap == nil {
+		u.minheap = vectorindex.NewSearchTopKResultSafeMinHeap(int(limit))
+	} else if u.minheap.Len() > 0 {
+		return moerr.NewInternalError(proc.Ctx, "sort_topk: heap is not empty. heap cannot be initialized")
+	}
 
 	var wg sync.WaitGroup
 	nthread := vectorindex.GetConcurrency(0)
@@ -405,7 +399,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 		nthread = int64(len(u.agghtab))
 	}
 
-	errch := make(chan error, nthread)
+	errch := make(chan error, nthread*2)
 	ch := make(chan docVec, nthread*2)
 
 	for i := int64(0); i < nthread; i++ {
@@ -439,9 +433,14 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	}()
 
 	wg.Wait()
-	// close the pool
-	u.mpool.Close()
-	clear(u.agghtab)
+	for _, it := range u.minheap.GetHeap() {
+		sr := it.(*vectorindex.SearchResultAnyKey)
+		err = u.mpool.FreeItem(u.agghtab[sr.Id])
+		if err != nil {
+			break
+		}
+		delete(u.agghtab, sr.Id)
+	}
 
 	if len(errch) > 0 {
 		for e := range errch {

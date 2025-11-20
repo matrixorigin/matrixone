@@ -167,6 +167,10 @@ func NewSearchTopKResultSafeMinHeap(size int) *SearchTopKResultSafeMinHeap {
 	return h
 }
 
+func (h *SearchTopKResultSafeMinHeap) GetHeap() SearchResultHeap {
+	return h.resheap
+}
+
 func (h *SearchTopKResultSafeMinHeap) Len() int {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
