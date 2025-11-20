@@ -374,7 +374,7 @@ var predefinedFunids = map[int]int{
 	MO_MEMORY:   329,
 	MO_CPU_DUMP: 330,
 
-	BITMAP_BIT_POSITION:  331              ,
+	BITMAP_BIT_POSITION:  331,
 	BITMAP_BUCKET_NUMBER: 332,
 	BITMAP_COUNT:         333,
 	BITMAP_CONSTRUCT_AGG: 334,
