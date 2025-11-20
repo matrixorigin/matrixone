@@ -248,7 +248,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 		u.batch = tf.createResultBatch()
-		u.errCh = make(chan error)
+		u.errCh = make(chan error, 2)
 		u.streamCh = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
@@ -678,7 +678,10 @@ func fulltextIndexMatch(
 
 	waiter.Add(1)
 	go func() {
-		defer waiter.Done()
+		defer func() {
+			close(u.streamCh)
+			waiter.Done()
+		}()
 
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		res, err2 := runWordStats(ctx, u, proc, u.sacc)

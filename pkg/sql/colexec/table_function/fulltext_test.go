@@ -128,7 +128,6 @@ func fake_runSql_streaming(
 	err_chan chan error,
 ) (executor.Result, error) {
 	proc := sqlproc.Proc
-	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeTextBatchFT(proc)}}
 	ch <- res
 	return executor.Result{}, nil

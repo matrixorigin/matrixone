@@ -125,7 +125,7 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    1001,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, 1001)
+			ps := logtailreplay.NewPartitionState("", true, 1001, false)
 			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
@@ -145,7 +145,7 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, tid)
+			ps := logtailreplay.NewPartitionState("", true, tid, false)
 			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
@@ -165,7 +165,7 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, tid)
+			ps := logtailreplay.NewPartitionState("", true, tid, false)
 			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.True(t, updated)
 		}, WithApproxObjectNumUpdater(func() int64 {

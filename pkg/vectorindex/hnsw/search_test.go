@@ -54,7 +54,6 @@ func mock_runSql_streaming(
 ) (executor.Result, error) {
 
 	proc := sqlproc.Proc
-	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
 	return executor.Result{}, nil
@@ -82,7 +81,6 @@ func mock_runSql_streaming_2files(
 	}
 
 	proc := sqlproc.Proc
-	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch2Files(proc, idx)}}
 	ch <- res
 	return executor.Result{}, nil
