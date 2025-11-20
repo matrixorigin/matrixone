@@ -987,6 +987,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 	sid string,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
+	extraClusterTS ...types.TS,
 ) (*SnapshotInfo, error) {
 	var err error
 
@@ -1118,6 +1119,19 @@ func (sm *SnapshotMeta) GetSnapshot(
 			}
 		}
 	}
+	
+	// Add extra cluster-level snapshot timestamps (e.g., for backup protection)
+	// Add them before sorting so we only need to sort once
+	for _, extraTS := range extraClusterTS {
+		if !extraTS.IsEmpty() {
+			snapshotInfo.cluster = append(snapshotInfo.cluster, extraTS)
+			logutil.Info(
+				"GetSnapshot-Add-Extra-Cluster-Snapshot",
+				zap.String("ts", extraTS.ToString()),
+			)
+		}
+	}
+	
 	// Sort cluster snapshots
 	sort.Slice(snapshotInfo.cluster, func(i, j int) bool {
 		return snapshotInfo.cluster[i].LT(&snapshotInfo.cluster[j])

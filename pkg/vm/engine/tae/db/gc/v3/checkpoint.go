@@ -2074,50 +2074,23 @@ func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 }
 
 func (c *checkpointCleaner) GetSnapshotsLocked() (*logtail.SnapshotInfo, error) {
-	snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
-	if err != nil {
-		return nil, err
-	}
-	
-	// If backup protection is active, add the protected timestamp as a fake cluster-level snapshot
-	// This ensures that objects existing at the backup time point are not deleted by GC
-	// ObjectIsSnapshotRefers will check if createTS <= snapshot < dropTS, protecting objects
+	// Check if backup protection is active and add protected TS as extra cluster snapshot
 	c.backupProtection.RLock()
+	var extraTS types.TS
 	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-		// Clone the snapshot info and add protected TS to cluster level
-		protectedSnapshots := &logtail.SnapshotInfo{
-			Cluster:  make([]types.TS, 0, len(snapshots.Cluster)+1),
-			Account:  make(map[uint32][]types.TS),
-			Database: make(map[uint64][]types.TS),
-			Tables:   make(map[uint64][]types.TS),
-		}
-		
-		// Copy existing cluster snapshots
-		protectedSnapshots.Cluster = append(protectedSnapshots.Cluster, snapshots.Cluster...)
-		// Add protected TS as a fake cluster snapshot (not persisted to disk)
-		protectedSnapshots.Cluster = append(protectedSnapshots.Cluster, c.backupProtection.protectedTS)
-		
-		// Copy other levels from existing snapshots
-		for accID, tsList := range snapshots.Account {
-			protectedSnapshots.Account[accID] = tsList
-		}
-		for dbID, tsList := range snapshots.Database {
-			protectedSnapshots.Database[dbID] = tsList
-		}
-		for tableID, tsList := range snapshots.Tables {
-			protectedSnapshots.Tables[tableID] = tsList
-		}
-		
-		c.backupProtection.RUnlock()
+		extraTS = c.backupProtection.protectedTS
 		logutil.Info(
 			"GC-Backup-Protection-Add-Fake-Snapshot",
-			zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+			zap.String("protected-ts", extraTS.ToString()),
 		)
-		return protectedSnapshots, nil
 	}
 	c.backupProtection.RUnlock()
 	
-	return snapshots, nil
+	// Pass the protected TS to GetSnapshot, which will add it to cluster snapshots
+	if !extraTS.IsEmpty() {
+		return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
+	}
+	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 }
 func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()
