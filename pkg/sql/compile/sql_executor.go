@@ -376,6 +376,8 @@ func (exec *txnExecutor) Exec(
 					Query: optimized,
 				},
 			}
+		} else {
+			return executor.Result{}, err
 		}
 	default:
 		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
