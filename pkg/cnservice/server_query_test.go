@@ -518,10 +518,10 @@ func Test_service_handleUnsubscribeTable(t *testing.T) {
 	err := dummyErr
 	ctl := gomock.NewController(t)
 	mockEng := mock_frontend.NewMockEngine(ctl)
-	mockEng.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockEng.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	mockEngErr := mock_frontend.NewMockEngine(ctl)
-	mockEngErr.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(err).AnyTimes()
+	mockEngErr.EXPECT().UnsubscribeTable(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(err).AnyTimes()
 
 	respWithErr := &query.Response{}
 	respWithErr.WrapError(err)
@@ -757,6 +757,24 @@ func Test_service_handleCtlReader(t *testing.T) {
 				"handleCtlReader(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+}
+
+func Test_service_handleCtlPrefetchOnSubscribed(t *testing.T) {
+	ctx := context.Background()
+
+	req := &query.Request{CtlPrefetchOnSubscribedRequest: &query.CtlPrefetchOnSubscribedRequest{
+		Patterns: []string{"^foo$"},
+	}}
+	resp := &query.Response{}
+	t.Cleanup(func() {
+		require.NoError(t, engine.SetPrefetchOnSubscribed(nil))
+	})
+	s := &service{}
+	err := s.handleCtlPrefetchOnSubscribed(ctx, req, resp, nil)
+	require.NoError(t, err)
+	require.Equal(t, &query.Response{CtlPrefetchOnSubscribedResponse: &query.CtlPrefetchOnSubscribedResponse{
+		Resp: "prefetch_on_subscribed updated, patterns: 1",
+	}}, resp)
 }
 
 func Test_service_handleRunTask(t *testing.T) {

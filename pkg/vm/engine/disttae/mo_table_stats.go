@@ -2992,6 +2992,7 @@ func subscribeTable(
 
 	if pState, err = e.PushClient().toSubscribeTable(
 		ctx,
+		uint64(txnTbl.accountId),
 		txnTbl.tableId,
 		txnTbl.tableName,
 		txnTbl.db.databaseId,
