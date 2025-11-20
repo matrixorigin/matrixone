@@ -34,6 +34,17 @@ const MB = 1024 * 1024
 const GB = MB * 1024
 const MILLION = 1000000
 
+// formatBytes formats bytes to human-readable string (e.g., "16mb", "1.5gb", "1024bytes")
+func formatBytes(bytes int64) string {
+	if bytes < MB {
+		return fmt.Sprintf("%dbytes", bytes)
+	} else if bytes < 10*GB {
+		return fmt.Sprintf("%dmb", bytes/MB)
+	} else {
+		return fmt.Sprintf("%dgb", bytes/GB)
+	}
+}
+
 type NodeDescribeImpl struct {
 	Node *plan.Node
 }
@@ -1137,29 +1148,20 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	}
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	if a.AnalyzeInfo.InputSize < MB {
-		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	} else if a.AnalyzeInfo.InputSize < 10*GB {
-		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
+	fmt.Fprintf(buf, " InputSize=%s", formatBytes(a.AnalyzeInfo.InputSize))
+	fmt.Fprintf(buf, " OutputSize=%s", formatBytes(a.AnalyzeInfo.OutputSize))
+
+	if a.AnalyzeInfo.ReadSize > 0 {
+		fmt.Fprintf(buf, " ReadSize=%s", formatBytes(a.AnalyzeInfo.ReadSize))
+	}
+	if a.AnalyzeInfo.S3ReadSize > 0 {
+		fmt.Fprintf(buf, " S3ReadSize=%s", formatBytes(a.AnalyzeInfo.S3ReadSize))
+	}
+	if a.AnalyzeInfo.DiskReadSize > 0 {
+		fmt.Fprintf(buf, " DiskReadSize=%s", formatBytes(a.AnalyzeInfo.DiskReadSize))
 	}
 
-	if a.AnalyzeInfo.OutputSize < MB {
-		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	} else if a.AnalyzeInfo.OutputSize < 10*GB {
-		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
-	}
-
-	if a.AnalyzeInfo.MemorySize < MB {
-		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
-	} else if a.AnalyzeInfo.MemorySize < 10*GB {
-		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
-	} else {
-		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
-	}
+	fmt.Fprintf(buf, " MemorySize=%s", formatBytes(a.AnalyzeInfo.MemorySize))
 
 	return nil
 }
