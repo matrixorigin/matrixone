@@ -70,6 +70,7 @@ type Partition struct {
 
 // FixedBytePool
 type FixedBytePool struct {
+	mu            sync.Mutex
 	proc          *process.Process
 	partitions    []*Partition // list of partitions
 	capacity      uint64       // total capacity of all partitions
@@ -298,6 +299,9 @@ func NewFixedBytePool(proc *process.Process, dsize uint64, partition_cap uint64,
 // If memory in use exceed the memory limit, spill
 // If no avaiable partition, create a new partition
 func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
 	// find last partition to new item
 	np := len(pool.partitions)
 	if np > 0 {
@@ -331,6 +335,9 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 
 // Getitem return item with partitions.  If requested partition was spilled, unspill()
 func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
 	id := GetPartitionId(addr)
 	offset := GetPartitionOffset(addr)
 
@@ -353,6 +360,9 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 
 // FreeItem call partition.FreeItem
 func (pool *FixedBytePool) FreeItem(addr uint64) error {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
 	id := GetPartitionId(addr)
 	offset := GetPartitionOffset(addr)
 	if id >= uint64(len(pool.partitions)) {
@@ -369,12 +379,16 @@ func (pool *FixedBytePool) FreeItem(addr uint64) error {
 }
 
 func (pool *FixedBytePool) String() string {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 	return fmt.Sprintf("FixedBytePool: capacity %d, part_cap %d, npart %d, dsize %d\n",
 		pool.capacity, pool.partition_cap, len(pool.partitions), pool.dsize)
 }
 
 // Close the pool and cleanup memory and temp files
 func (pool *FixedBytePool) Close() {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 	for i, p := range pool.partitions {
 		if p != nil {
 			p.Close()
