@@ -505,6 +505,7 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	//We should handle this case in next PR if needed.
 	ps, err := gs.engine.pClient.toSubscribeTable(
 		wrapKey.Ctx,
+		uint64(wrapKey.Key.AccId),
 		wrapKey.Key.TableID,
 		wrapKey.Key.TableName,
 		wrapKey.Key.DatabaseID,
