@@ -220,7 +220,7 @@ insert into t15 select (result % 5000) + 1, ((result % 100000) + 1), 100 from ge
 -- Test query with COUNT(DISTINCT) + SUM + GROUP BY multiple columns + JOIN
 -- This is the minimal case that triggers the distinct aggregation parallel execution error
 -- The query should execute successfully without error after the fix
-SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.i = t15.p GROUP BY t14.g, t14.i ORDER BY t14.g limit 10;
+SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.i = t15.p GROUP BY t14.g, t14.i ORDER BY t14.g, t14.i limit 10;
 
 drop table t14;
 drop table t15;
