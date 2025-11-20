@@ -73,7 +73,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
+		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -124,8 +124,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
 				if errEncode != nil {
 					err = errEncode
 					break
@@ -181,8 +180,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
 				if errEncode != nil {
 					return errEncode
 				}
@@ -294,7 +292,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
+	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
 	if errEncode != nil {
 		return false, errEncode
 	}

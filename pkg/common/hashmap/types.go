@@ -57,6 +57,8 @@ type HashMap interface {
 	WriteTo(w io.Writer) (int64, error)
 	// UnmarshalFrom deserializes a byte slice from a reader.
 	UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int64, error)
+	// Get all (group, hashCode) pairs
+	AllGroupHash() []uint64
 }
 
 // Iterator allows users to do insert or find operations on hash tables in bulk.

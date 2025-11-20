@@ -790,3 +790,74 @@ func (l *LocalETLFSMutator) Close() error {
 
 	return nil
 }
+
+// open for read and write, raw os.File API.
+func (l *LocalETLFS) EnsureDir(ctx context.Context, filePath string) error {
+	return l.ensureDir(l.toNativeFilePath(filePath))
+}
+
+func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+}
+
+// create or truncate.
+func (l *LocalETLFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Create(nativePath)
+}
+
+// remove file
+func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
+	err := ctx.Err()
+	if err != nil {
+		return err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Remove(nativePath)
+}
+
+// open/create then immediately remove.   the opend file is good for read/write.
+func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	f, err := os.Create(nativePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// do not check error for this one
+	os.Remove(nativePath)
+	return f, nil
+}
