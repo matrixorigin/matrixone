@@ -4293,6 +4293,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		partialResults, _, _ := checkAggOptimize(n)
 		if partialResults != nil {
 			forceSingle = true
+		} else if n.Stats != nil && n.Stats.ForceOneCN {
+			// ForceOneCN is already set by CalcNodeDOP for distinct aggregation
+			// Use it directly instead of checking again
+			forceSingle = true
+		} else {
+			// Fallback: Check if any aggregation function uses distinct flag
+			// This is defensive programming in case CalcNodeDOP didn't set ForceOneCN
+			for _, agg := range n.AggList {
+				if f, ok := agg.Expr.(*plan.Expr_F); ok {
+					if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
+						forceSingle = true
+						break
+					}
+				}
+			}
 		}
 	}
 	//if len(n.OrderBy) > 0 {
