@@ -267,17 +267,17 @@ create table t14 (i bigint, g bigint);
 create table t15 (o bigint, p bigint, v int);
 insert into t14 (select result, (result % 100) + 1 from generate_series(1, 100000, 1) g);
 insert into t15 select (result % 5000) + 1, ((result % 100000) + 1), 100 from generate_series(1, 1000000, 1) g;
-SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.i = t15.p GROUP BY t14.g, t14.i ORDER BY t14.g limit 10;
+SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.i = t15.p GROUP BY t14.g, t14.i ORDER BY t14.g, t14.i limit 10;
 g    i    COUNT(distinct t15.o)    SUM(t15.v)
-1    700    1    1000
-1    900    1    1000
-1    300    1    1000
-1    600    1    1000
-1    500    1    1000
-1    800    1    1000
-1    200    1    1000
 1    100    1    1000
+1    200    1    1000
+1    300    1    1000
 1    400    1    1000
+1    500    1    1000
+1    600    1    1000
+1    700    1    1000
+1    800    1    1000
+1    900    1    1000
 1    1000    1    1000
 drop table t14;
 drop table t15;
