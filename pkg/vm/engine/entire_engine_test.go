@@ -326,11 +326,11 @@ func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 	return 0, nil
 }
 
-func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, accId, dbID, tbID uint64, dbName, tblName string) error {
 	return nil
 }
 
-func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+func (e *testEngine) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64) error {
 	return nil
 }
 

@@ -30,7 +30,7 @@ import (
 // so CanServe will work based on the internal state's timestamp range
 func newMockPartition(tableID uint64) *logtailreplay.Partition {
 	// Use the real NewPartition to create a properly initialized partition
-	p := logtailreplay.NewPartition("test_service", tableID)
+	p := logtailreplay.NewPartition("test_service", nil, 0, 0, tableID, nil)
 	return p
 }
 
