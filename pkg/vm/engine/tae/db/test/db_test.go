@@ -8255,7 +8255,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	tae.CreateRelAndAppend2(bat, false)
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
 	// testutils.WaitExpect(5000, func() bool {
 	// 	return tae.AllCheckpointsFinished()
