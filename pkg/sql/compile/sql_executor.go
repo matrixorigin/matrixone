@@ -437,9 +437,6 @@ func (exec *txnExecutor) Exec(
 	result := executor.NewResult(exec.s.mp)
 
 	stream_chan, err_chan, streaming := exec.opts.Streaming()
-	if streaming {
-		defer close(stream_chan)
-	}
 
 	if exec.opts.ForceRebuildPlan() {
 		pn, err = c.buildPlanFunc(proc.Ctx)
