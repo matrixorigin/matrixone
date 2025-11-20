@@ -94,8 +94,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			newOrArgs := make([]*plan.Expr, 0, len(orArgs))
 			var inArgs []*plan.Expr
+			var mergeCandidates []*plan.Expr
 			var firstEquiExpr *plan.Expr
 			pkFnName := "in"
+			hasPrefixEq := false
+			hasEquality := false
 
 			currColPos := int32(-1)
 			for _, subExpr := range orArgs {
@@ -142,20 +145,32 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				switch mergedFn.Func.ObjName {
 				case "=":
 					inArgs = append(inArgs, mergedFn.Args[1])
+					mergeCandidates = append(mergeCandidates, subExpr)
+					hasEquality = true
 
 				case "prefix_eq":
 					inArgs = append(inArgs, mergedFn.Args[1])
+					mergeCandidates = append(mergeCandidates, subExpr)
 					pkFnName = "prefix_in"
+					hasPrefixEq = true
 
 				case "in":
 					inArgs = append(inArgs, mergedFn.Args[1].GetList().List...)
+					mergeCandidates = append(mergeCandidates, subExpr)
+					hasEquality = true
 
 				default:
 					newOrArgs = append(newOrArgs, subExpr)
 				}
 			}
 
-			if len(inArgs) == 1 {
+			canMerge := !(hasPrefixEq && hasEquality)
+
+			if len(inArgs) == 0 {
+				// no merge candidates
+			} else if !canMerge {
+				newOrArgs = append(newOrArgs, mergeCandidates...)
+			} else if len(inArgs) == 1 {
 				newOrArgs = append(newOrArgs, firstEquiExpr)
 			} else if len(inArgs) > 1 {
 				leftExpr := firstEquiExpr.GetF().Args[0]
