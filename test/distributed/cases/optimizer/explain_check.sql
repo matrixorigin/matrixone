@@ -25,25 +25,34 @@ select mo_ctl('dn', 'flush', 'd1.t3');
 select mo_ctl('dn', 'flush', 'd1.t4');
 
 -- @separator:table
+-- basic explain without analyze
 explain select * from t4 where c1 + 2 = 5;
 
 -- @separator:table
-explain (check '["= 3"]') select * from t4 where c1 + 2 = 5;
+-- check filter condition in explain output
+explain (check '["Table Scan", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 
 -- the following should fail
 -- @separator:table
 explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
 
 -- @separator:table
-explain analyze select * from t4 where c1 + 2 = 5;
+-- check ReadSize format (ReadSize=xx|xx|xx), filter condition, and other key fields
+-- verify: ReadSize format with pipe separator, Analyze info fields, Table Scan node, and filter condition
+-- Note: ReadSize values may vary (cache state, data distribution), so we only verify format, not specific values
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 -- @separator:table
-explain (analyze true, check '["= 3"]') select * from t4 where c1 + 2 = 5;
+-- check ReadSize format (ReadSize=xx|xx|xx), filter condition, and other key fields
+-- verify: ReadSize format with pipe separator, Analyze info fields, Table Scan node, and filter condition
+-- Note: ReadSize values may vary (cache state, data distribution), so we only verify format, not specific values
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 
 -- the following should fail
 -- @separator:table
 explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;
 -- 
 -- @separator:table
+-- check complex query plan with Sort, Limit, Filter, and multiple conditions
 explain (check '["% 2", "Sort", "Limit: 10", "% 3"]') select * from (select * from t1 where c1%3=0 order by c1 desc limit 10) tmpt where c1 % 2 = 0;
 
 drop database if exists d1;

@@ -20,7 +20,7 @@ import (
 )
 
 func BenchmarkPartitonConsumeCheckpoint(b *testing.B) {
-	partition := NewPartition("", 42)
+	partition := NewPartition("", nil, 0, 0, 42, nil)
 
 	state, done := partition.MutateState()
 	state.checkpoints = append(state.checkpoints, "a", "b", "c")
@@ -40,7 +40,7 @@ func BenchmarkPartitonConsumeCheckpoint(b *testing.B) {
 }
 
 func BenchmarkConcurrentPartitionConsumeCheckpoint(b *testing.B) {
-	partition := NewPartition("", 42)
+	partition := NewPartition("", nil, 0, 0, 42, nil)
 
 	state, done := partition.MutateState()
 	state.checkpoints = append(state.checkpoints, "a", "b", "c")

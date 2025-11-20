@@ -311,3 +311,156 @@ func runSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, err
 	ctx := opt.CurrentContext()
 	return plan.BuildPlan(ctx, stmts[0], false)
 }
+
+func TestMarshalNodeImpl_GetStatistics_ReadSize(t *testing.T) {
+	ctx := context.Background()
+	options := &ExplainOptions{
+		Format:   EXPLAIN_FORMAT_JSON,
+		Verbose:  false,
+		Analyze:  true,
+		NodeType: plan2.Node_TABLE_SCAN,
+	}
+
+	tests := []struct {
+		name        string
+		analyzeInfo *plan2.AnalyzeInfo
+		wantFields  []string
+		checkValues map[string]int64
+	}{
+		{
+			name: "with ReadSize, S3ReadSize, DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     1000000000, // 1000ms
+				WaitTimeConsumed: 0,
+				InputRows:        1000,
+				OutputRows:       500,
+				InputSize:        16 * 1024 * 1024,  // 16MB
+				OutputSize:       8 * 1024 * 1024,   // 8MB
+				MemorySize:       4 * 1024 * 1024,   // 4MB
+				ReadSize:         153 * 1024 * 1024, // 153MB
+				S3ReadSize:       150 * 1024 * 1024, // 150MB
+				DiskReadSize:     3 * 1024 * 1024,   // 3MB
+				InputBlocks:      10,
+			},
+			wantFields: []string{"Read Size", "S3 Read Size", "Disk Read Size"},
+			checkValues: map[string]int64{
+				"Read Size":      153 * 1024 * 1024,
+				"S3 Read Size":   150 * 1024 * 1024,
+				"Disk Read Size": 3 * 1024 * 1024,
+			},
+		},
+		{
+			name: "with ReadSize only",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     500000000, // 500ms
+				WaitTimeConsumed: 0,
+				InputRows:        500,
+				OutputRows:       250,
+				InputSize:        8 * 1024 * 1024,  // 8MB
+				OutputSize:       4 * 1024 * 1024,  // 4MB
+				MemorySize:       2 * 1024 * 1024,  // 2MB
+				ReadSize:         10 * 1024 * 1024, // 10MB
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				InputBlocks:      5,
+			},
+			wantFields: []string{"Read Size"},
+			checkValues: map[string]int64{
+				"Read Size": 10 * 1024 * 1024,
+			},
+		},
+		{
+			name: "all ReadSize fields are zero",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     100000000, // 100ms
+				WaitTimeConsumed: 0,
+				InputRows:        100,
+				OutputRows:       50,
+				InputSize:        2 * 1024 * 1024, // 2MB
+				OutputSize:       1 * 1024 * 1024, // 1MB
+				MemorySize:       512 * 1024,      // 512KB
+				ReadSize:         0,
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				InputBlocks:      1,
+			},
+			wantFields:  []string{},
+			checkValues: map[string]int64{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &plan2.Node{
+				NodeType:    plan2.Node_TABLE_SCAN,
+				NodeId:      0,
+				AnalyzeInfo: tt.analyzeInfo,
+			}
+
+			m := MarshalNodeImpl{node: node}
+			statistics := m.GetStatistics(ctx, options)
+
+			// Convert to JSON to verify structure
+			jsonData, err := json.Marshal(statistics)
+			if err != nil {
+				t.Fatalf("Failed to marshal statistics: %v", err)
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(jsonData, &result); err != nil {
+				t.Fatalf("Failed to unmarshal statistics: %v", err)
+			}
+
+			// Check IO statistics
+			ioStats, ok := result["IO"].([]interface{})
+			if !ok {
+				t.Fatalf("Expected 'IO' field in statistics, got: %v", result)
+			}
+
+			// Build a map of IO statistics for easy lookup
+			ioMap := make(map[string]int64)
+			for _, stat := range ioStats {
+				statMap := stat.(map[string]interface{})
+				name := statMap["name"].(string)
+				value := int64(statMap["value"].(float64))
+				ioMap[name] = value
+			}
+
+			// Verify expected fields are present
+			for _, field := range tt.wantFields {
+				if _, ok := ioMap[field]; !ok {
+					t.Errorf("Expected field %q in IO statistics, but not found. Available fields: %v", field, getKeys(ioMap))
+				}
+			}
+
+			// Verify values
+			for field, expectedValue := range tt.checkValues {
+				if actualValue, ok := ioMap[field]; ok {
+					if actualValue != expectedValue {
+						t.Errorf("Field %q: expected value %d, got %d", field, expectedValue, actualValue)
+					}
+				} else {
+					t.Errorf("Expected field %q in IO statistics, but not found", field)
+				}
+			}
+
+			// Verify zero values are not present (if not in wantFields)
+			if len(tt.wantFields) == 0 {
+				zeroFields := []string{"Read Size", "S3 Read Size", "Disk Read Size"}
+				for _, field := range zeroFields {
+					if value, ok := ioMap[field]; ok && value != 0 {
+						t.Errorf("Field %q should not be present or should be 0 when not expected, got: %d", field, value)
+					}
+				}
+			}
+		})
+	}
+}
+
+func getKeys(m map[string]int64) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}

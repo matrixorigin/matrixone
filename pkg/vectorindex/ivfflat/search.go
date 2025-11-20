@@ -116,14 +116,14 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 				heap.Fix(&hp, 0)
 			}
 		} else {
-			hp.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist64})
+			heap.Push(&hp, &vectorindex.SearchResult{Id: c.Id, Distance: dist64})
 		}
 	}
 
 	n := hp.Len()
 	res := make([]int64, 0, n)
 	for range n {
-		srif := hp.Pop()
+		srif := heap.Pop(&hp)
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
 			return nil, moerr.NewInternalError(sqlproc.GetContext(), "findCentroids: heap return key is not int64")

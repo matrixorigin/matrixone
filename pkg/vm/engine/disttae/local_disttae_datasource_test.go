@@ -95,7 +95,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		db: &txnDB,
 	}
 
-	pState := logtailreplay.NewPartitionState("", true, 0)
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
 
 	proc := testutil.NewProc(t)
 

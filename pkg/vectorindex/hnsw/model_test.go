@@ -36,16 +36,15 @@ import (
 // give metadata [index_id, checksum, timestamp]
 func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
 
-	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
+       return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
 }
 
 // give blob
 func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
 
-	defer close(ch)
-	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
-	ch <- res
-	return executor.Result{}, nil
+       res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
+       ch <- res
+       return executor.Result{}, nil
 }
 */
 
@@ -61,7 +60,6 @@ func mock_runSql_streaming_error(
 	defer func() {
 		err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
 		time.Sleep(10 * time.Millisecond)
-		close(ch)
 	}()
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
 }

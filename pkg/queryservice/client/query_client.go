@@ -59,6 +59,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_CtlMoTableStats:          defines.MORPCVersion4,
 	pb.CmdMethod_WorkspaceThreshold:       defines.MORPCVersion4,
 	pb.CmdMethod_MinTimestamp:             defines.MORPCVersion4,
+	pb.CmdMethod_CtlPrefetchOnSubscribed:  defines.MORPCVersion4,
 }
 
 type queryClient struct {

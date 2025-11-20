@@ -824,7 +824,7 @@ func getObjectsFromCheckpointEntries(
 	for _, reader := range readers {
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
-			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if obj.GetAppendable() {
 					if obj.CreateTime.GE(&start) {
 						if isTombstone {
@@ -1523,7 +1523,7 @@ func SetCheckpointReaderFactoryForTest(factory func(uint32, objectio.Location, u
 type checkpointEntryReader interface {
 	ReadMeta(context.Context) error
 	PrefetchData(string)
-	ConsumeCheckpointWithTableID(context.Context, func(context.Context, objectio.ObjectEntry, bool) error) error
+	ConsumeCheckpointWithTableID(context.Context, func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error
 }
 
 var newCKPReaderWithTableID = func(version uint32, location objectio.Location, tableID uint64, mp *mpool.MPool, fs fileservice.FileService) checkpointEntryReader {

@@ -2040,6 +2040,8 @@ func (tbl *txnTable) getPartitionState(
 	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
 		//return an empty partition state.
 		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
+			ctx,
+			uint64(tbl.accountId),
 			tbl.db.databaseId,
 			tbl.tableId).Snapshot()
 		return
@@ -2048,6 +2050,7 @@ func (tbl *txnTable) getPartitionState(
 	// Subscribe a latest partition state
 	if ps, err = eng.PushClient().toSubscribeTable(
 		ctx,
+		uint64(tbl.accountId),
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,
@@ -2333,6 +2336,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	}
 	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
 		ctx,
+		uint64(tbl.accountId),
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,

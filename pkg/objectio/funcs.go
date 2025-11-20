@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 func ReleaseIOVector(vector *fileservice.IOVector) {
@@ -195,6 +196,21 @@ func ReadOneBlockWithMeta(
 		err = fs.Read(ctx, &ioVec)
 		if err != nil {
 			return
+		}
+
+		// Record actual bytes read from storage layer (excluding rowid, which is generated, not loaded)
+		var totalReadSize int64
+		for _, entry := range ioVec.Entries {
+			totalReadSize += entry.Size
+		}
+
+		// Record actual bytes read from storage layer using CounterSet
+		// Note: S3 and Disk read sizes are recorded in filesystem layer (S3FS/LocalFS)
+		// where we can accurately determine the data source
+		if totalReadSize > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.ReadSize.Add(totalReadSize)
+			})
 		}
 		//TODO when to call ioVec.Release?
 	}

@@ -1,0 +1,12 @@
+select mo_ctl("cn", "prefetch-on-subscribed", "'^mo_catalog\.mo_tables$'");
+mo_ctl(cn, prefetch-on-subscribed, '^mo_catalog.mo_tables$')
+{\n  "method": "PREFETCH-ON-SUBSCRIBED",\n  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:prefetch_on_subscribed updated, patterns: 1; "\n}\n
+select mo_ctl("cn", "prefetch-on-subscribed", "'^mysql\..*$','^test1\..*$'");
+mo_ctl(cn, prefetch-on-subscribed, '^mysql..*$','^test1..*$')
+{\n  "method": "PREFETCH-ON-SUBSCRIBED",\n  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:prefetch_on_subscribed updated, patterns: 2; "\n}\n
+select mo_ctl("cn", "prefetch-on-subscribed", "'.*'");
+mo_ctl(cn, prefetch-on-subscribed, '.*')
+{\n  "method": "PREFETCH-ON-SUBSCRIBED",\n  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:prefetch_on_subscribed updated, patterns: 1; "\n}\n
+select mo_ctl("cn", "prefetch-on-subscribed", "'clean all'");
+mo_ctl(cn, prefetch-on-subscribed, 'clean all')
+{\n  "method": "PREFETCH-ON-SUBSCRIBED",\n  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:prefetch_on_subscribed updated, patterns: 1; "\n}\n

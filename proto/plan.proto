@@ -667,6 +667,13 @@ message AnalyzeInfo {
     // useful for detecting skews. 
     int64 outrows_min = 38;
     int64 outrows_max = 39;
+
+	// read_size: actual bytes read from storage layer (excluding rowid tombstone)
+	int64 read_size = 40;
+	// s3_read_size: actual bytes read from S3 (excluding rowid tombstone)
+	int64 s3_read_size = 41;
+	// disk_read_size: actual bytes read from disk cache (excluding rowid tombstone)
+	int64 disk_read_size = 42;
 }
 
 message OriginTableMessageForFuzzy {

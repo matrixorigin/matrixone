@@ -718,6 +718,9 @@ const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
+const ReadSize = "Read Size"
+const S3ReadSize = "S3 Read Size"
+const DiskReadSize = "Disk Read Size"
 const Network = "Network"
 const S3List = "S3 List Count"
 const S3Head = "S3 Head Count"
@@ -834,6 +837,21 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  ScanBytes,
 				Value: analyzeInfo.ScanBytes,
+				Unit:  Statistic_Unit_byte, //"byte",
+			},
+			{
+				Name:  ReadSize,
+				Value: analyzeInfo.ReadSize,
+				Unit:  Statistic_Unit_byte, //"byte",
+			},
+			{
+				Name:  S3ReadSize,
+				Value: analyzeInfo.S3ReadSize,
+				Unit:  Statistic_Unit_byte, //"byte",
+			},
+			{
+				Name:  DiskReadSize,
+				Value: analyzeInfo.DiskReadSize,
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
 			{

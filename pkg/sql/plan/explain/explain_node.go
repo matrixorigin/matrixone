@@ -1144,6 +1144,13 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 
 	fmt.Fprintf(buf, " InputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.InputSize))
 	fmt.Fprintf(buf, " OutputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.OutputSize))
+
+	// ReadSize format: ReadSize=total|s3|disk
+	fmt.Fprintf(buf, " ReadSize=%s|%s|%s",
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.ReadSize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.S3ReadSize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.DiskReadSize))
+
 	fmt.Fprintf(buf, " MemorySize=%s (min=%s, max=%s)",
 		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemorySize),
 		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMin),

@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync"
@@ -193,6 +195,28 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
+func WithPrefetchOnSubscribed(th []string) EngineOptions {
+	return func(e *Engine) {
+		var (
+			err error
+		)
+
+		for i := range th {
+			r, err2 := regexp.Compile(th[i])
+			if err2 != nil {
+				err = errors.Join(err, err2)
+				continue
+			}
+			e.config.prefetchOnSubscribed = append(e.config.prefetchOnSubscribed, r)
+		}
+
+		logutil.Info("Set-Prefetch-On-Subscribed-By-TOML",
+			zap.Strings("patterns", th),
+			zap.Error(err),
+		)
+	}
+}
+
 func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	return func(e *Engine) {
 		e.config.ieFactory = f
@@ -233,6 +257,7 @@ type Engine struct {
 
 		memThrottler rscthrottler.RSCThrottler
 
+		prefetchOnSubscribed           []*regexp.Regexp
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor
@@ -273,6 +298,13 @@ type Engine struct {
 	skipConsume bool
 
 	cloneTxnCache *CloneTxnCache
+}
+
+func (e *Engine) getPrefetchOnSubscribed() []*regexp.Regexp {
+	if overridden, regs := engine.GetPrefetchOnSubscribed(); overridden {
+		return regs
+	}
+	return e.config.prefetchOnSubscribed
 }
 
 func (e *Engine) SetService(svr string) {

@@ -270,6 +270,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				require.Nil(t, err)
 
 				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx,
+					0,
 					engineTbl.GetTableID(ctx),
 					engineTbl.GetTableName(),
 					engineTbl.GetDBID(ctx),
@@ -568,7 +569,7 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 
 		checkSubscribed()
 
-		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
+		err = disttaeEngine.Engine.UnsubscribeTable(ctx, 0, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		checkUnSubscribed()
@@ -771,7 +772,7 @@ func TestConsumeCheckpointEntry(t *testing.T) {
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
-	partitionState := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot().Copy()
+	partitionState := disttaeEngine.Engine.GetOrCreateLatestPart(nil, 0, id.DbID, id.TableID).Snapshot().Copy()
 
 	taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
 	taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())

@@ -22,6 +22,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/detailyang/go-fallocate"
@@ -454,7 +455,8 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 
 	var (
 		stream_chan = make(chan executor.Result, 2)
-		error_chan  = make(chan error)
+		error_chan  = make(chan error, 2)
+		wg          sync.WaitGroup
 	)
 
 	if idx.Index != nil {
@@ -484,7 +486,12 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
 
+		wg.Add(1)
 		go func() {
+			defer func() {
+				close(stream_chan)
+				wg.Done()
+			}()
 			_, err2 := runSql_streaming(ctx, sqlproc, sql, stream_chan, error_chan)
 			if err2 != nil {
 				error_chan <- err2
@@ -510,6 +517,8 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 				res.Close()
 			}
 		}
+
+		wg.Wait()
 
 		if err == nil {
 			// fetch potential remaining errors from error_chan
@@ -630,8 +639,9 @@ func (idx *HnswModel[T]) LoadIndex(
 	var (
 		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
-		error_chan  = make(chan error)
+		error_chan  = make(chan error, 2)
 		fname       string
+		wg          sync.WaitGroup
 	)
 
 	if idx.Index != nil {
@@ -688,7 +698,13 @@ func (idx *HnswModel[T]) LoadIndex(
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
 
+		wg.Add(1)
 		go func() {
+
+			defer func() {
+				close(stream_chan)
+				wg.Done()
+			}()
 			_, err2 := runSql_streaming(ctx, sqlproc, sql, stream_chan, error_chan)
 			if err2 != nil {
 				error_chan <- err2
@@ -714,6 +730,8 @@ func (idx *HnswModel[T]) LoadIndex(
 				res.Close()
 			}
 		}
+
+		wg.Wait()
 
 		if err == nil {
 			// fetch potential remaining errors from error_chan

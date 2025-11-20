@@ -33,7 +33,7 @@ Project
   ->  Table Scan on d1.t4
         Filter Cond: (t4.c1 = 3)
         Block Filter Cond: (t4.c1 = 3)
-explain (check '["= 3"]') select * from t4 where c1 + 2 = 5;
+explain (check '["Table Scan", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 TP QUERY PLAN
 Project
   ->  Table Scan on d1.t4
@@ -41,20 +41,20 @@ Project
         Block Filter Cond: (t4.c1 = 3)
 explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
 invalid input: check expr = 5 not found
-explain analyze select * from t4 where c1 + 2 = 5;
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 tp query plan
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)
   ->  Table Scan on d1.t4
-        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes MemorySize=33 bytes (min=16 bytes, max=16 bytes)
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=96.05 KiB|0 bytes|64.04 KiB MemorySize=33 bytes (min=16 bytes, max=16 bytes)
         Filter Cond: (t4.c1 = 3)
         Block Filter Cond: (t4.c1 = 3)
-explain (analyze true, check '["= 3"]') select * from t4 where c1 + 2 = 5;
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 tp query plan
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)
   ->  Table Scan on d1.t4
-        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes MemorySize=33 bytes (min=16 bytes, max=16 bytes)
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=96.05 KiB|0 bytes|0 bytes MemorySize=33 bytes (min=16 bytes, max=16 bytes)
         Filter Cond: (t4.c1 = 3)
         Block Filter Cond: (t4.c1 = 3)
 explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;
