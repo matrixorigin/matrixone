@@ -285,7 +285,36 @@ func execBackup(
 		common.AnyField("backup time", backupTime),
 		common.AnyField("checkpoint num", len(names)),
 		common.AnyField("parallel num", parallelNum))
+	
+	// Get SQL executor for mo_ctl calls
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}
+	
+	// Backup protection timestamp - will be set to the first checkpoint's start time
+	var protectedTS types.TS
+	var updateTicker *time.Ticker
+	var updateTickerStop chan struct{}
+	
 	defer func() {
+		// Stop the update ticker
+		if updateTicker != nil {
+			updateTicker.Stop()
+			close(updateTickerStop)
+		}
+		// Remove backup protection
+		if !protectedTS.IsEmpty() {
+			sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','remove_checker.backup.')")
+			_, err := exec.Exec(ctx, sql, opts)
+			if err != nil {
+				logutil.Errorf("backup: failed to remove backup protection: %v", err)
+			} else {
+				logutil.Info("backup: backup protection removed")
+			}
+		}
 		logutil.Info("backup", common.OperationField("end backup"),
 			common.AnyField("load checkpoint cost", loadDuration),
 			common.AnyField("copy file cost", copyDuration),
@@ -376,6 +405,53 @@ func execBackup(
 		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
 			return err
+		}
+	}
+	
+	// Set protectedTS to the backup time point
+	// This is the timestamp that should be protected from GC
+	// Use start if available (from trimInfo), otherwise use baseTS
+	if !start.IsEmpty() {
+		protectedTS = start
+	} else if !baseTS.IsEmpty() {
+		protectedTS = baseTS
+	}
+	
+	if !protectedTS.IsEmpty() {
+		// Set backup protection via mo_ctl
+		tsValue := fmt.Sprintf("%d-%d", protectedTS.Physical(), protectedTS.Logical())
+		sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
+		_, err := exec.Exec(ctx, sql, opts)
+		if err != nil {
+			logutil.Errorf("backup: failed to set backup protection: %v", err)
+			// Continue backup even if protection setup fails, but log the error
+		} else {
+			logutil.Info("backup: backup protection set", 
+				common.AnyField("protected-ts", protectedTS.ToString()))
+			
+			// Start a ticker to update backup protection every 5 minutes
+			updateTicker = time.NewTicker(5 * time.Minute)
+			updateTickerStop = make(chan struct{})
+			go func() {
+				for {
+					select {
+					case <-updateTicker.C:
+						// Update backup protection
+						tsValue := fmt.Sprintf("%d-%d", protectedTS.Physical(), protectedTS.Logical())
+						sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
+						_, err := exec.Exec(ctx, sql, opts)
+						if err != nil {
+							logutil.Errorf("backup: failed to update backup protection: %v", err)
+						} else {
+							logutil.Info("backup: backup protection updated")
+						}
+					case <-updateTickerStop:
+						return
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
 		}
 	}
 
