@@ -433,20 +433,25 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	}()
 
 	wg.Wait()
+
+	if err != nil || len(errch) > 0 {
+		for i := 0; i < len(errch); i++ {
+			e := <-errch
+			err = errors.Join(err, e)
+		}
+		return
+
+	}
+
 	for _, it := range u.minheap.GetHeap() {
 		sr := it.(*vectorindex.SearchResultAnyKey)
 		err = u.mpool.FreeItem(u.agghtab[sr.Id])
 		if err != nil {
-			break
+			return err
 		}
 		delete(u.agghtab, sr.Id)
 	}
 
-	if len(errch) > 0 {
-		for e := range errch {
-			err = errors.Join(err, e)
-		}
-	}
 	return
 }
 
