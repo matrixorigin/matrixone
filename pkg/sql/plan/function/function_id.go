@@ -755,5 +755,5 @@ var functionIdRegister = map[string]int32{
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
-	"dayofweek": DAYOFWEEK,
+	"dayofweek":    DAYOFWEEK,
 }
