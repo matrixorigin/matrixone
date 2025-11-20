@@ -120,7 +120,8 @@ func (idx *HnswSearchIndex) LoadIndex(
 	var (
 		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
-		error_chan  = make(chan error)
+		error_chan  = make(chan error, 2)
+		wg          sync.WaitGroup
 	)
 
 	// create tempfile for writing
@@ -149,7 +150,13 @@ func (idx *HnswSearchIndex) LoadIndex(
 	ctx, cancel := context.WithCancelCause(proc.GetTopContext())
 	defer cancel(nil)
 
+	wg.Add(1)
 	go func() {
+		defer func() {
+			close(stream_chan)
+			wg.Done()
+		}()
+
 		if _, err2 := runSql_streaming(
 			ctx, proc, sql, stream_chan, error_chan,
 		); err2 != nil {
@@ -177,6 +184,8 @@ func (idx *HnswSearchIndex) LoadIndex(
 			res.Close()
 		}
 	}
+
+	wg.Wait()
 
 	if err == nil {
 		// fetch potential remaining errors from error_chan

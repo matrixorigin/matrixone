@@ -52,7 +52,6 @@ func mock_runSql_streaming(
 	err_chan chan error,
 ) (executor.Result, error) {
 
-	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
 	return executor.Result{}, nil

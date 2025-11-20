@@ -117,14 +117,14 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				heap.Fix(&hp, 0)
 			}
 		} else {
-			hp.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist64})
+			heap.Push(&hp, &vectorindex.SearchResult{Id: c.Id, Distance: dist64})
 		}
 	}
 
 	n := hp.Len()
 	res := make([]int64, 0, n)
 	for range n {
-		srif := hp.Pop()
+		srif := heap.Pop(&hp)
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
 			return nil, moerr.NewInternalError(proc.Ctx, "findCentroids: heap return key is not int64")
@@ -199,6 +199,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	for _, bat := range res.Batches {
 		for i := 0; i < bat.RowCount(); i++ {
+			if bat.Vecs[1].IsNull(uint64(i)) {
+				continue
+			}
+
 			pk := vector.GetAny(bat.Vecs[0], i, true)
 			resid = append(resid, pk)
 
