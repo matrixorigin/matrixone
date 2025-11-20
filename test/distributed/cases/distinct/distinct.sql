@@ -202,3 +202,25 @@ INSERT INTO t13 VALUES ( 'Computer', 2,2000, 1200),
 SELECT product, country_id, COUNT(*), COUNT(distinct year) FROM t13 GROUP BY product, country_id order by product;
 
 drop table t13;
+
+
+-- test distinct aggregation with JOIN and GROUP BY multiple columns
+-- This test case verifies that distinct aggregation runs correctly in single CPU mode
+-- without triggering "distinct agg should be run in only one node and without any parallel" error
+drop table if exists t14;
+drop table if exists t15;
+
+create table t14 (i bigint, g bigint);
+create table t15 (o bigint, p bigint, v int);
+
+-- Insert data using generate_series to create sufficient data volume for testing parallel execution
+insert into t14 (select result, (result % 100) + 1 from generate_series(1, 100000, 1) g);
+insert into t15 select (result % 5000) + 1, ((result % 100000) + 1), 100 from generate_series(1, 1000000, 1) g;
+
+-- Test query with COUNT(DISTINCT) + SUM + GROUP BY multiple columns + JOIN
+-- This is the minimal case that triggers the distinct aggregation parallel execution error
+-- The query should execute successfully without error after the fix
+SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.i = t15.p GROUP BY t14.g, t14.i limit 10;
+
+drop table t14;
+drop table t15;
