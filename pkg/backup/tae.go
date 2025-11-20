@@ -190,6 +190,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 						Res: nil,
 					}
 				}
+				time.Sleep(2 * time.Second)
 				checksum, err := CopyFileWithRetry(context.Background(), srcFs, dstFs, backupObject.Location.Name().String(), "")
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -285,7 +286,7 @@ func execBackup(
 		common.AnyField("backup time", backupTime),
 		common.AnyField("checkpoint num", len(names)),
 		common.AnyField("parallel num", parallelNum))
-	
+
 	// Get SQL executor for mo_ctl calls
 	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
@@ -293,12 +294,12 @@ func execBackup(
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}
-	
+
 	// Backup protection timestamp - will be set to the first checkpoint's start time
 	var protectedTS types.TS
 	var updateTicker *time.Ticker
 	var updateTickerStop chan struct{}
-	
+
 	defer func() {
 		// Stop the update ticker
 		if updateTicker != nil {
@@ -407,7 +408,7 @@ func execBackup(
 			return err
 		}
 	}
-	
+
 	// Set protectedTS to the backup time point
 	// This is the timestamp that should be protected from GC
 	// Use start if available (from trimInfo), otherwise use baseTS
@@ -419,16 +420,16 @@ func execBackup(
 	
 	if !protectedTS.IsEmpty() {
 		// Set backup protection via mo_ctl
-		tsValue := fmt.Sprintf("%d-%d", protectedTS.Physical(), protectedTS.Logical())
+		tsValue := protectedTS.ToString()
 		sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
 		_, err := exec.Exec(ctx, sql, opts)
 		if err != nil {
 			logutil.Errorf("backup: failed to set backup protection: %v", err)
 			// Continue backup even if protection setup fails, but log the error
 		} else {
-			logutil.Info("backup: backup protection set", 
+			logutil.Info("backup: backup protection set",
 				common.AnyField("protected-ts", protectedTS.ToString()))
-			
+
 			// Start a ticker to update backup protection every 5 minutes
 			updateTicker = time.NewTicker(5 * time.Minute)
 			updateTickerStop = make(chan struct{})
@@ -437,7 +438,7 @@ func execBackup(
 					select {
 					case <-updateTicker.C:
 						// Update backup protection
-						tsValue := fmt.Sprintf("%d-%d", protectedTS.Physical(), protectedTS.Logical())
+						tsValue := protectedTS.ToString()
 						sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
 						_, err := exec.Exec(ctx, sql, opts)
 						if err != nil {

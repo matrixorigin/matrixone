@@ -573,7 +573,8 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		// Check backup protection before deleting
 		c.backupProtection.RLock()
 		if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-			if thisTS.GE(&c.backupProtection.protectedTS) {
+			// Protect files whose end timestamp is <= protected timestamp
+			if thisTS.LE(&c.backupProtection.protectedTS) {
 				c.backupProtection.RUnlock()
 				logutil.Info(
 					"GC-Backup-Protection-Block-Delete-Snapshot",
@@ -612,7 +613,8 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 			c.backupProtection.RLock()
 			shouldDelete := true
 			if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-				if maxTS.GE(&c.backupProtection.protectedTS) {
+				// Protect files whose end timestamp is <= protected timestamp
+				if maxTS.LE(&c.backupProtection.protectedTS) {
 					shouldDelete = false
 					logutil.Info(
 						"GC-Backup-Protection-Block-Delete-Snapshot",
@@ -894,6 +896,29 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	); err != nil {
 		return
 	}
+	
+	// Filter out checkpoints that are protected by backup
+	c.backupProtection.RLock()
+	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+		filtered := make([]*checkpoint.CheckpointEntry, 0, len(toMergeCheckpoint))
+		for _, ckp := range toMergeCheckpoint {
+			endTS := ckp.GetEnd()
+			// Protect checkpoints whose end timestamp is <= protected timestamp
+			if endTS.LE(&c.backupProtection.protectedTS) {
+				logutil.Info(
+					"GC-Backup-Protection-Block-Merge-Checkpoint",
+					zap.String("checkpoint-end-ts", endTS.ToString()),
+					zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+					zap.String("checkpoint", ckp.String()),
+				)
+				continue
+			}
+			filtered = append(filtered, ckp)
+		}
+		toMergeCheckpoint = filtered
+	}
+	c.backupProtection.RUnlock()
+	
 	if len(toMergeCheckpoint) == 0 {
 		return
 	}
@@ -933,6 +958,32 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+	
+	// Filter out protected files from deleteFiles
+	c.backupProtection.RLock()
+	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+		filteredDeleteFiles := make([]string, 0, len(deleteFiles))
+		for _, deleteFile := range deleteFiles {
+			// Try to decode the file name to get its timestamp
+			_, decodedFile := ioutil.TryDecodeTSRangeFile(deleteFile)
+			if decodedFile.IsMetadataFile() || decodedFile.IsCompactExt() {
+				// Check if this checkpoint file should be protected
+				endTS := decodedFile.GetEnd()
+				if endTS.LE(&c.backupProtection.protectedTS) {
+					logutil.Info(
+						"GC-Backup-Protection-Block-Delete-File",
+						zap.String("file", deleteFile),
+						zap.String("file-end-ts", endTS.ToString()),
+						zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+					)
+					continue
+				}
+			}
+			filteredDeleteFiles = append(filteredDeleteFiles, deleteFile)
+		}
+		deleteFiles = filteredDeleteFiles
+	}
+	c.backupProtection.RUnlock()
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
@@ -981,7 +1032,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			c.backupProtection.RLock()
 			shouldDelete := true
 			if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-				if end.GE(&c.backupProtection.protectedTS) {
+				// Protect checkpoints whose end timestamp is <= protected timestamp
+				if end.LE(&c.backupProtection.protectedTS) {
 					shouldDelete = false
 					logutil.Info(
 						"GC-Backup-Protection-Block-Delete-Checkpoint",
@@ -1861,10 +1913,11 @@ func (c *checkpointCleaner) checkBackupProtection(item any) bool {
 		return true
 	}
 
-	// For checkpoint entries, check if the end timestamp is greater than or equal to protected timestamp
-	// We protect checkpoints whose end timestamp is >= protected timestamp
+	// For checkpoint entries, check if the end timestamp is less than or equal to protected timestamp
+	// We protect checkpoints whose end timestamp is <= protected timestamp
+	// This means we protect all checkpoints up to and including the backup time point
 	endTS := ckp.GetEnd()
-	if endTS.GE(&c.backupProtection.protectedTS) {
+	if endTS.LE(&c.backupProtection.protectedTS) {
 		logutil.Info(
 			"GC-Backup-Protection-Block-Checkpoint",
 			zap.String("checkpoint-end-ts", endTS.ToString()),
