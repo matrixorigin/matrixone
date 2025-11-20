@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
 	"iter"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"go.uber.org/zap"
 
@@ -388,10 +389,30 @@ read_disk_cache:
 	if l.diskCache != nil {
 
 		t0 := time.Now()
+		LogEvent(ctx, str_read_disk_cache_Caches_begin)
+		// Record which entries are not done before reading from disk cache
+		undoneBefore := make(map[int]bool)
+		for i, entry := range vector.Entries {
+			undoneBefore[i] = !entry.done
+		}
 		err := readCache(ctx, l.diskCache, vector)
+		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
+		}
+		// Count bytes actually read from disk cache (entries that became done and from disk cache)
+		var actualDiskReadBytes int64
+		for i, entry := range vector.Entries {
+			if undoneBefore[i] && entry.done && entry.fromCache == l.diskCache {
+				actualDiskReadBytes += entry.Size
+			}
+		}
+		// Record disk read size
+		if actualDiskReadBytes > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
+			})
 		}
 		if vector.allDone() {
 			return nil
@@ -439,9 +460,22 @@ read_disk_cache:
 		}
 	}
 
+	// Count bytes that will be read from local disk (entries that are not done yet)
+	var localDiskReadBytes int64
+	for _, entry := range vector.Entries {
+		if !entry.done {
+			localDiskReadBytes += entry.Size
+		}
+	}
 	err = l.read(ctx, vector, bytesCounter)
 	if err != nil {
 		return err
+	}
+	// Record disk read size (all bytes read from local disk)
+	if localDiskReadBytes > 0 {
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.DiskReadSize.Add(localDiskReadBytes)
+		})
 	}
 
 	return nil
