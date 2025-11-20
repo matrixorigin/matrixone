@@ -190,32 +190,9 @@ DAYOFWEEK(c1)
 2
 6
 DROP TABLE t3;
-CREATE TABLE ci_store_sales_order (
-    id INT,
-    store_id INT,
-    order_date DATETIME,
-    status CHAR(1),
-    is_paid INT,
-    total_amount DECIMAL(10,2)
-);
-INSERT INTO ci_store_sales_order VALUES
-(1, 1, '2023-11-08 10:30:00', 'C', 1, 100.50),
-(2, 1, '2023-11-08 14:20:00', 'C', 1, 200.75),
-(3, 1, '2023-11-09 09:15:00', 'C', 1, 150.00),
-(4, 2, '2023-11-08 11:00:00', 'C', 1, 300.25),
-(5, 2, '2023-11-09 16:45:00', 'C', 1, 250.50),
-(6, 1, '2023-11-10 08:00:00', 'C', 1, 180.00);
-SELECT 
-    store_id,
-    HOUR(order_date) as hour_of_day,
-    DAYOFWEEK(order_date) as day_of_week,
-    COUNT(id) as order_count,
-    SUM(total_amount) as total_sales,
-    AVG(total_amount) as avg_order_value
-FROM ci_store_sales_order
-WHERE status = 'C' AND is_paid = 1
-GROUP BY store_id, HOUR(order_date), DAYOFWEEK(order_date)
-ORDER BY store_id, day_of_week, hour_of_day;
+CREATE TABLE ci_store_sales_order (id INT, store_id INT, order_date DATETIME, status CHAR(1), is_paid INT, total_amount DECIMAL(10,2));
+INSERT INTO ci_store_sales_order VALUES (1, 1, '2023-11-08 10:30:00', 'C', 1, 100.50), (2, 1, '2023-11-08 14:20:00', 'C', 1, 200.75), (3, 1, '2023-11-09 09:15:00', 'C', 1, 150.00), (4, 2, '2023-11-08 11:00:00', 'C', 1, 300.25), (5, 2, '2023-11-09 16:45:00', 'C', 1, 250.50), (6, 1, '2023-11-10 08:00:00', 'C', 1, 180.00);
+SELECT store_id, HOUR(order_date) as hour_of_day, DAYOFWEEK(order_date) as day_of_week, COUNT(id) as order_count, SUM(total_amount) as total_sales, AVG(total_amount) as avg_order_value FROM ci_store_sales_order WHERE status = 'C' AND is_paid = 1 GROUP BY store_id, HOUR(order_date), DAYOFWEEK(order_date) ORDER BY store_id, day_of_week, hour_of_day;
 store_id	hour_of_day	day_of_week	order_count	total_sales	avg_order_value
 1	8	6	1	180.00	180.00
 1	9	5	1	150.00	150.00
@@ -224,4 +201,3 @@ store_id	hour_of_day	day_of_week	order_count	total_sales	avg_order_value
 2	11	4	1	300.25	300.25
 2	16	5	1	250.50	250.50
 DROP TABLE ci_store_sales_order;
-
