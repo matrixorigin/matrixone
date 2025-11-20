@@ -58,6 +58,7 @@ type fulltextState struct {
 	param     fulltext.FullTextParserParam
 	docLenMap map[any]int32
 	minheap   *vectorindex.SearchTopKResultSafeMinHeap
+	resbuf    []*vectorindex.SearchResultAnyKey
 
 	// holding output batch
 	batch *batch.Batch
@@ -141,17 +142,11 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 }
 */
 
-// return (doc_id, score) as result
-// when scoremap is empty, return result end.
-func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64) (vm.CallResult, error) {
+func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint64) (vm.CallResult, error) {
 
 	blocksz := 8192
-
-	if u.minheap == nil {
-		return vm.CancelResult, nil
-	}
-	n := u.minheap.Len()
-
+	nres := len(u.resbuf)
+	n := nres
 	if n > int(limit) {
 		n = int(limit)
 	}
@@ -159,14 +154,9 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64
 		n = blocksz
 	}
 
-	for range n {
-		srif := u.minheap.Pop()
-		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
-		if !ok {
-			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
-		}
-
-		// doc_id returned
+	for i := range n {
+		// get result in reversed order
+		sr := u.resbuf[nres-i-1]
 		doc_id := sr.Id
 		if str, ok := sr.Id.(string); ok {
 			bytes := []byte(str)
@@ -179,6 +169,9 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64
 		}
 	}
 
+	// remove the retrieved results from buffer
+	u.resbuf = u.resbuf[:nres-n]
+
 	u.batch.SetRowCount(n)
 	u.n_result += uint64(n)
 	if u.batch.RowCount() == 0 {
@@ -189,6 +182,32 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64
 
 }
 
+// return (doc_id, score) as result
+// when scoremap is empty, return result end.
+func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64) (vm.CallResult, error) {
+
+	if len(u.resbuf) > 0 {
+		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "result buffer is not empty.")
+	}
+
+	if u.minheap == nil {
+		return vm.CancelResult, nil
+	}
+
+	// minheap is in reversed order so pop everything out
+	for range u.minheap.Len() {
+		srif := u.minheap.Pop()
+		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
+		if !ok {
+			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
+		}
+
+		u.resbuf = append(u.resbuf, sr)
+	}
+
+	return u.returnResultFromBuffer(proc, limit)
+}
+
 func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 
 	var err error
@@ -197,6 +216,10 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 	if u.limit == 0 {
 		limit = uint64(128)
+	}
+
+	if len(u.resbuf) > 0 {
+		return u.returnResultFromBuffer(proc, limit)
 	}
 
 	// build minheap
@@ -388,6 +411,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 
 	if u.minheap == nil {
 		u.minheap = vectorindex.NewSearchTopKResultSafeMinHeap(int(limit))
+		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, int(limit))
 	} else if u.minheap.Len() > 0 {
 		return moerr.NewInternalError(proc.Ctx, "sort_topk: heap is not empty. heap cannot be initialized")
 	}
