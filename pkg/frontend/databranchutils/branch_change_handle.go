@@ -84,6 +84,8 @@ var CollectChanges = func(
 		); err != nil {
 			return nil, err
 		}
+
+		return handle, nil
 	}
 
 	return nil, nil

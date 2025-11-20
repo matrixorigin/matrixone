@@ -156,7 +156,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 		if cpu <= 0 {
 			cpu = 1
 		}
-		bh.shardCount = cpu * 4
+		bh.shardCount = 1
 	}
 	if bh.shardCount < minShardCount {
 		bh.shardCount = minShardCount
@@ -570,10 +570,10 @@ func (sc *shardCursor) PopByEncodedKey(encodedKey []byte, removeAll bool) (GetRe
 }
 func (bh *branchHashmap) DecodeRow(data []byte) (types.Tuple, []types.Type, error) {
 	t, err := types.Unpack(data)
-	bh.metaMu.RLock()
-	valueTypes := bh.valueTypes
-	bh.metaMu.RUnlock()
-	return t, valueTypes, err
+	//bh.metaMu.RLock()
+	//valueTypes := bh.valueTypes
+	//bh.metaMu.RUnlock()
+	return t, nil, err
 }
 func (bh *branchHashmap) Close() error {
 	bh.metaMu.Lock()
