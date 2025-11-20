@@ -96,7 +96,6 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 	}
 }
 
-/*
 // return (doc_id, score) as result
 // when scoremap is empty, return result end.
 func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]float32) (vm.CallResult, error) {
@@ -140,7 +139,6 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 
 }
-*/
 
 func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint64) (vm.CallResult, error) {
 
@@ -212,28 +210,43 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 
 	var err error
 	u.batch.CleanOnlyData()
-	limit := uint64(0)
+	limit := u.limit
+	flag := false
 
-	if u.limit == 0 {
+	// TODO: check flag
+	if flag && limit == 0 {
 		limit = uint64(128)
 	}
 
-	if len(u.resbuf) > 0 {
-		return u.returnResultFromBuffer(proc, limit)
-	}
-
-	// build minheap
-	if u.minheap == nil || u.minheap.Len() == 0 {
-		err = sort_topk(u, proc, u.sacc, 3*limit)
+	if limit == 0 {
+		scoremap, err := evaluate(u, proc, u.sacc)
 		if err != nil {
 			return vm.CancelResult, err
 		}
-	}
 
-	if u.minheap != nil {
-		return u.returnResultFromHeap(proc, limit)
+		if scoremap != nil {
+			return u.returnResult(proc, scoremap)
+		}
+		return vm.CancelResult, nil
+
+	} else {
+		if len(u.resbuf) > 0 {
+			return u.returnResultFromBuffer(proc, limit)
+		}
+
+		// build minheap
+		if u.minheap == nil || u.minheap.Len() == 0 {
+			err = sort_topk(u, proc, u.sacc, 3*limit)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+		}
+
+		if u.minheap != nil {
+			return u.returnResultFromHeap(proc, limit)
+		}
+		return vm.CancelResult, nil
 	}
-	return vm.CancelResult, nil
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
@@ -326,7 +339,6 @@ func runWordStats(
 
 // evaluate the score for all document vectors in Agg hashtable.
 // whenever there is 8192 results, return it immediately.
-/*
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
 
 	scoremap = make(map[any]float32, 8192)
@@ -368,7 +380,6 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 
 	return scoremap, nil
 }
-*/
 
 type docVec struct {
 	doc_id any
@@ -401,6 +412,7 @@ func topk_thread_func(tid int64, ch chan docVec,
 			}
 
 		case <-proc.Ctx.Done():
+			errch <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 			return
 		}
 	}
@@ -447,6 +459,14 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 			docLen := int64(0)
 			if len, ok := u.docLenMap[doc_id]; ok {
 				docLen = int64(len)
+			}
+
+			select {
+			case <-proc.Ctx.Done():
+				return moerr.NewInternalError(proc.Ctx, "context cancelled")
+			case e := <-errch:
+				return e
+			default:
 			}
 
 			ch <- docVec{docvec: docvec, doclen: docLen, doc_id: doc_id, addr: addr}
