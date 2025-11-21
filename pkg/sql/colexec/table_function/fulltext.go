@@ -58,6 +58,8 @@ type fulltextState struct {
 	param     fulltext.FullTextParserParam
 	docLenMap map[any]int32
 	minheap   vectorindex.SearchResultHeap
+	resbuf    []*vectorindex.SearchResultAnyKey
+	ranking   bool
 
 	// holding output batch
 	batch *batch.Batch
@@ -139,28 +141,21 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 
 }
 
-// return (doc_id, score) as result
-// when scoremap is empty, return result end.
-func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResult, error) {
+func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint64) (vm.CallResult, error) {
 
 	blocksz := 8192
-
-	if u.minheap == nil {
-		return vm.CancelResult, nil
+	nres := len(u.resbuf)
+	n := nres
+	if n > int(limit) {
+		n = int(limit)
 	}
-	n := u.minheap.Len()
 	if n > blocksz {
 		n = blocksz
 	}
 
-	for range n {
-		srif := heap.Pop(&u.minheap).(vectorindex.SearchResultIf)
-		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
-		if !ok {
-			return vm.CancelResult, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("heap return key is not SearchResultAnyKey. %v", srif))
-		}
-
-		// doc_id returned
+	for i := range n {
+		// get result in reversed order
+		sr := u.resbuf[nres-i-1]
 		doc_id := sr.Id
 		if str, ok := sr.Id.(string); ok {
 			bytes := []byte(str)
@@ -172,6 +167,10 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResu
 			vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
 		}
 	}
+
+	// remove the retrieved results from buffer
+	u.resbuf = u.resbuf[:nres-n]
+
 	u.batch.SetRowCount(n)
 	u.n_result += uint64(n)
 	if u.batch.RowCount() == 0 {
@@ -182,17 +181,45 @@ func (u *fulltextState) returnResultFromHeap(proc *process.Process) (vm.CallResu
 
 }
 
+// return (doc_id, score) as result
+// when scoremap is empty, return result end.
+func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64) (vm.CallResult, error) {
+
+	if len(u.resbuf) > 0 {
+		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "result buffer is not empty.")
+	}
+
+	if u.minheap == nil {
+		return vm.CancelResult, nil
+	}
+
+	// minheap is in reversed order so pop everything out
+	for range u.minheap.Len() {
+		sr := heap.Pop(&u.minheap).(*vectorindex.SearchResultAnyKey)
+		u.resbuf = append(u.resbuf, sr)
+	}
+
+	return u.returnResultFromBuffer(proc, limit)
+}
+
 func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	u.batch.CleanOnlyData()
+	limit := u.limit
+	topk := limit
 
-	// number of result more than pushdown limit and exit
-	if u.limit > 0 && u.n_result >= u.limit {
-		return vm.CancelResult, nil
+	if u.ranking {
+		topk = 3 * limit
+	} else {
+
+		// number of result more than pushdown limit and exit
+		if limit > 0 && u.n_result >= limit {
+			return vm.CancelResult, nil
+		}
 	}
 
-	if u.limit == 0 {
+	if limit == 0 {
 		// array is empty, try to get batch from SQL executor
 		scoremap, err := evaluate(u, proc, u.sacc)
 		if err != nil {
@@ -205,16 +232,20 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 		return vm.CancelResult, nil
 
 	} else {
+		if len(u.resbuf) > 0 {
+			return u.returnResultFromBuffer(proc, limit)
+		}
+
 		// build minheap
-		if u.minheap == nil {
-			err = sort_topk(u, proc, u.sacc, u.limit)
+		if len(u.minheap) == 0 {
+			err = sort_topk(u, proc, u.sacc, topk)
 			if err != nil {
 				return vm.CancelResult, err
 			}
 		}
 
 		if u.minheap != nil {
-			return u.returnResultFromHeap(proc)
+			return u.returnResultFromHeap(proc, limit)
 		}
 		return vm.CancelResult, nil
 	}
@@ -285,6 +316,9 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 			}
 		}
 	}
+
+	// TODO: LIMIT BY RANK should set ranking to true
+	st.ranking = false
 	return st, err
 }
 
@@ -354,7 +388,10 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
 	aggcnt := u.aggcnt
-	u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
+	if u.minheap == nil {
+		u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
+		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, limit)
+	}
 	heap.Init(&u.minheap)
 
 	for doc_id, addr := range u.agghtab {
@@ -387,9 +424,14 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 		}
 	}
 
-	// close the pool
-	u.mpool.Close()
-	clear(u.agghtab)
+	for _, it := range u.minheap {
+		sr := it.(*vectorindex.SearchResultAnyKey)
+		err = u.mpool.FreeItem(u.agghtab[sr.Id])
+		if err != nil {
+			return err
+		}
+		delete(u.agghtab, sr.Id)
+	}
 
 	return nil
 }
