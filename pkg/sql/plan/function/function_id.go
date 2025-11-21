@@ -447,9 +447,12 @@ const (
 	// function `degrees`
 	DEGREES = 358
 
+	// function `radians`
+	RADIANS = 359
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 359
+	FUNCTION_END_NUMBER = 360
 )
 
 // functionIdRegister is what function we have registered already.
@@ -608,6 +611,7 @@ var functionIdRegister = map[string]int32{
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
+	"radians":                        RADIANS,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,

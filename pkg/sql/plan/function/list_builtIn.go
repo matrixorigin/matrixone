@@ -3094,6 +3094,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `radians`
+	{
+		functionId: RADIANS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInRadians
+				},
+			},
+		},
+	},
+
 	// function `bin`
 	{
 		functionId: BIN,

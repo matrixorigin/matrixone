@@ -900,6 +900,31 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
+			info: "test radians",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+						180,
+						90,
+						45,
+						360,
+						-180,
+						30,
+						60,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, math.Pi, math.Pi / 2, math.Pi / 4, 2 * math.Pi, -math.Pi, math.Pi / 6, math.Pi / 3}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRadians)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
 			info: "test log",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),

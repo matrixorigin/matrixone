@@ -2630,6 +2630,13 @@ func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWra
 	}, selectList)
 }
 
+func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, func(v float64) float64 {
+		// Convert degrees to radians: radians = degrees * (π / 180)
+		return v * (math.Pi / 180.0)
+	}, selectList)
+}
+
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
