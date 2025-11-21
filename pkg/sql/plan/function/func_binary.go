@@ -4040,20 +4040,126 @@ func MakeDateString(
 	return nil
 }
 
+// makeTimeFromInt64: Helper function to create Time from int64 values
+func makeTimeFromInt64(hour, minute, second int64, rs *vector.FunctionResult[types.Time], i uint64) error {
+	// MySQL allows hour to be in range [0, 838] (TIME type range)
+	// minute and second should be in range [0, 59]
+	// If values are out of range, MySQL returns NULL
+	if hour < 0 || hour > 838 {
+		return rs.Append(types.Time(0), true)
+	}
+
+	if minute < 0 || minute > 59 || second < 0 || second > 59 {
+		return rs.Append(types.Time(0), true)
+	}
+
+	// Create Time value using TimeFromClock
+	// hour can be up to 838, so we use uint64 for hour
+	timeValue := types.TimeFromClock(false, uint64(hour), uint8(minute), uint8(second), 0)
+
+	// Validate the resulting time
+	h := timeValue.Hour()
+	if h < 0 {
+		h = -h
+	}
+	if !types.ValidTime(uint64(h), 0, 0) {
+		return rs.Append(types.Time(0), true)
+	}
+
+	return rs.Append(timeValue, false)
+}
+
 // MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
 func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Accept various numeric types for hour, minute, second
-	// We'll use float64 to handle all numeric types, then convert to int64
-	hourParams := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-	minuteParams := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-	secondParams := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
+	// Check the types of input vectors and create appropriate parameter wrappers
+	hourType := ivecs[0].GetType().Oid
+	minuteType := ivecs[1].GetType().Oid
+	secondType := ivecs[2].GetType().Oid
 
+	// Create parameter wrappers based on types (these can be reused for all rows)
+	var getHourValue func(uint64) (int64, bool)
+	var getMinuteValue func(uint64) (int64, bool)
+	var getSecondValue func(uint64) (int64, bool)
+
+	// Setup hour parameter extractor
+	switch hourType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", hourType)
+	}
+
+	// Setup minute parameter extractor
+	switch minuteType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", minuteType)
+	}
+
+	// Setup second parameter extractor
+	switch secondType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", secondType)
+	}
+
+	// Process all rows
 	for i := uint64(0); i < uint64(length); i++ {
-		hour, null1 := hourParams.GetValue(i)
-		minute, null2 := minuteParams.GetValue(i)
-		second, null3 := secondParams.GetValue(i)
+		hourInt, null1 := getHourValue(i)
+		minuteInt, null2 := getMinuteValue(i)
+		secondInt, null3 := getSecondValue(i)
 
 		if null1 || null2 || null3 {
 			if err := rs.Append(types.Time(0), true); err != nil {
@@ -4062,45 +4168,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			continue
 		}
 
-		// Convert to int64 (truncate decimal part)
-		hourInt := int64(hour)
-		minuteInt := int64(minute)
-		secondInt := int64(second)
-
-		// MySQL allows hour to be in range [0, 838] (TIME type range)
-		// minute and second should be in range [0, 59]
-		// If values are out of range, MySQL returns NULL
-		if hourInt < 0 || hourInt > 838 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if minuteInt < 0 || minuteInt > 59 || secondInt < 0 || secondInt > 59 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Create Time value using TimeFromClock
-		// hour can be up to 838, so we use uint64 for hour
-		timeValue := types.TimeFromClock(false, uint64(hourInt), uint8(minuteInt), uint8(secondInt), 0)
-
-		// Validate the resulting time
-		h := timeValue.Hour()
-		if h < 0 {
-			h = -h
-		}
-		if !types.ValidTime(uint64(h), 0, 0) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := rs.Append(timeValue, false); err != nil {
+		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, rs, i); err != nil {
 			return err
 		}
 	}
