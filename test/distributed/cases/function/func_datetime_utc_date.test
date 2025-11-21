@@ -1,0 +1,39 @@
+# Basic test case from requirements
+-- @ignore 0
+SELECT UTC_DATE() AS result1;
+
+# Additional test cases
+# Basic usage
+-- @ignore 0
+SELECT UTC_DATE() AS current_utc_date;
+-- @ignore 0
+SELECT UTC_DATE AS current_utc_date_no_parens;
+
+# Table usage
+CREATE TABLE t1(id INT);
+INSERT INTO t1 VALUES (1), (2), (3);
+-- @ignore 1
+SELECT id, UTC_DATE() AS utc_date FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-01-01'), ('2024-12-31');
+SELECT * FROM t1 WHERE d < UTC_DATE();
+DROP TABLE t1;
+
+# NULL handling (UTC_DATE() should never return NULL)
+SELECT UTC_DATE() IS NOT NULL AS not_null_check;
+
+# Date arithmetic
+-- @ignore 0
+SELECT UTC_DATE() + INTERVAL 1 DAY AS tomorrow;
+-- @ignore 0
+SELECT UTC_DATE() - INTERVAL 1 DAY AS yesterday;
+-- @ignore 0
+SELECT DATEDIFF(UTC_DATE(), '2024-01-01') AS days_since_jan1;
+
+# Format verification (should return DATE type in YYYY-MM-DD format)
+-- @ignore 0
+SELECT UTC_DATE() AS date_format;
+

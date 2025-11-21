@@ -526,6 +526,24 @@ func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	})
 }
 
+func UtcDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	var err error
+
+	// Use UTC timezone instead of session timezone
+	loc := time.UTC
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime())
+	dateTimes := make([]types.Datetime, 1)
+	dateTimes, err = types.TimestampToDatetime(loc, []types.Timestamp{ts}, dateTimes)
+	if err != nil {
+		return err
+	}
+	r := dateTimes[0].ToDate()
+
+	return opNoneParamToFixed[types.Date](result, proc, length, func() types.Date {
+		return r
+	})
+}
+
 func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
 		return v

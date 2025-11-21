@@ -4841,6 +4841,28 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `utc_date`, `utc_date()`
+	{
+		functionId: UTC_DATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            nil,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_date.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return UtcDate
+				},
+			},
+		},
+	},
+
 	// function `current_timestamp`, `now`
 	{
 		functionId: CURRENT_TIMESTAMP,

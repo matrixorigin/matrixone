@@ -510,9 +510,12 @@ const (
 	// function `time_to_sec`
 	TIME_TO_SEC = 379
 
+	// function `utc_date`
+	UTC_DATE = 380
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 380
+	FUNCTION_END_NUMBER = 381
 )
 
 // functionIdRegister is what function we have registered already.
@@ -816,6 +819,7 @@ var functionIdRegister = map[string]int32{
 	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
+	"utc_date":                       UTC_DATE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,
