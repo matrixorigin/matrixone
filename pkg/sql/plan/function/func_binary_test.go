@@ -2466,6 +2466,78 @@ func TestLeft(t *testing.T) {
 	}
 }
 
+// Right
+func initRightTestCase() []tcTemp {
+	cases := []struct {
+		s    string
+		len  int64
+		want string
+	}{
+		// Basic cases from user requirements
+		{"Hello World", 5, "World"}, // RIGHT('Hello World', 5) = 'World'
+		{"Hello", 10, "Hello"},      // RIGHT('Hello', 10) = 'Hello'
+		{"Hello", 0, ""},            // RIGHT('Hello', 0) = ''
+		// Additional test cases
+		{"abcde", 3, "cde"},
+		{"abcde", -1, ""},
+		{"abcde", 100, "abcde"},
+		{"foobarbar", 5, "arbar"},
+		// Unicode test cases
+		{"是都方式快递费", 3, "快递费"},
+		{"ｱｲｳｴｵ", 3, "ｳｴｵ"},
+		{"あいうえお", 3, "うえお"},
+		{"龔龖龗龞龡", 3, "龗龞龡"},
+		// Edge cases
+		{"", 5, ""},
+		{"test", 4, "test"},
+		{"test", 1, "t"},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		testInputs = append(testInputs, tcTemp{
+			info: fmt.Sprintf("test right('%s', %d) = '%s'", c.s, c.len, c.want),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{c.s}, []bool{}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{c.len}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{c.want}, []bool{}),
+		})
+	}
+
+	// Add NULL test cases
+	testInputs = append(testInputs, tcTemp{
+		info: "test right with NULL first argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+	})
+
+	testInputs = append(testInputs, tcTemp{
+		info: "test right with NULL second argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"Hello World"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+	})
+
+	return testInputs
+}
+
+func TestRight(t *testing.T) {
+	testCases := initRightTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Right)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // POWER
 func initPowerTestCase() []tcTemp {
 	cases := []struct {

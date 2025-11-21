@@ -3030,6 +3030,43 @@ func evalLeft(str string, length int64) string {
 	return string(runeStr[:leftLength])
 }
 
+func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := evalRight(functionUtil.QuickBytesToStr(v1), v2)
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func evalRight(str string, length int64) string {
+	runeStr := []rune(str)
+	rightLength := int(length)
+	strLength := len(runeStr)
+
+	if rightLength <= 0 {
+		return ""
+	}
+	if rightLength >= strLength {
+		return str
+	}
+	// Return the last rightLength characters
+	return string(runeStr[strLength-rightLength:])
+}
+
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
