@@ -4175,6 +4175,194 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	return nil
 }
 
+// PeriodAdd: PERIOD_ADD(P, N) - Adds N months to period P (in the format YYMM or YYYYMM). Returns a value in the format YYYYMM.
+func PeriodAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+
+	// P can be int64, uint64, or float64 (period in YYMM or YYYYMM format)
+	// N can be int64, uint64, or float64 (number of months to add)
+	periodType := ivecs[0].GetType().Oid
+	monthsType := ivecs[1].GetType().Oid
+
+	// Create parameter extractors based on types
+	var getPeriodValue func(uint64) (int64, bool)
+	var getMonthsValue func(uint64) (int64, bool)
+
+	// Setup period parameter extractor
+	switch periodType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		periodParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getPeriodValue = func(i uint64) (int64, bool) {
+			val, null := periodParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		periodParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getPeriodValue = func(i uint64) (int64, bool) {
+			val, null := periodParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		periodParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getPeriodValue = func(i uint64) (int64, bool) {
+			val, null := periodParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("PERIOD_ADD period parameter", periodType)
+	}
+
+	// Setup months parameter extractor
+	switch monthsType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		monthsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+		getMonthsValue = func(i uint64) (int64, bool) {
+			val, null := monthsParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		monthsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+		getMonthsValue = func(i uint64) (int64, bool) {
+			val, null := monthsParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		monthsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+		getMonthsValue = func(i uint64) (int64, bool) {
+			val, null := monthsParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("PERIOD_ADD months parameter", monthsType)
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		period, null1 := getPeriodValue(i)
+		months, null2 := getMonthsValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse period P (YYMM or YYYYMM format)
+		// MySQL behavior:
+		// - 3 digits (100-999): pad to 4 digits (0XXX) and treat as YYMM
+		// - 4 digits (1000-9999): treat as YYMM
+		// - 6 digits (100000-999999): treat as YYYYMM
+		var year int32
+		var month uint8
+
+		// Handle negative periods (MySQL returns NULL for negative periods)
+		if period < 0 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		periodStr := fmt.Sprintf("%d", period)
+		periodLen := len(periodStr)
+
+		// Pad 3-digit periods to 4 digits (e.g., 802 -> 0802)
+		if periodLen == 3 {
+			periodStr = "0" + periodStr
+			periodLen = 4
+		}
+
+		if periodLen == 4 {
+			// YYMM format (e.g., 0802)
+			yy, err := strconv.ParseInt(periodStr[:2], 10, 32)
+			if err != nil {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			mm, err := strconv.ParseInt(periodStr[2:], 10, 32)
+			if err != nil || mm < 1 || mm > 12 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert YY to YYYY: 00-69 -> 2000-2069, 70-99 -> 1970-1999
+			if yy >= 0 && yy <= 69 {
+				year = int32(2000 + yy)
+			} else if yy >= 70 && yy <= 99 {
+				year = int32(1900 + yy)
+			} else {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			month = uint8(mm)
+		} else if periodLen == 6 {
+			// YYYYMM format (e.g., 200802)
+			yyyy, err := strconv.ParseInt(periodStr[:4], 10, 32)
+			if err != nil {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			mm, err := strconv.ParseInt(periodStr[4:], 10, 32)
+			if err != nil || mm < 1 || mm > 12 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			year = int32(yyyy)
+			month = uint8(mm)
+		} else {
+			// Invalid period format (not 3, 4, or 6 digits)
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Validate year and month
+		if year < 0 || year > 9999 || month < 1 || month > 12 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Add months to the date
+		// Create a date from year and month (use day 1)
+		date := types.DateFromCalendar(year, month, 1)
+		dt := date.ToDatetime()
+
+		// Add months using AddInterval
+		resultDt, success := dt.AddInterval(months, types.Month, types.DateTimeType)
+		if !success {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Extract year and month from result
+		resultDate := resultDt.ToDate()
+		resultYear := resultDate.Year()
+		resultMonth := resultDate.Month()
+
+		// Format as YYYYMM
+		resultPeriod := int64(resultYear)*100 + int64(resultMonth)
+
+		if err := rs.Append(resultPeriod, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
