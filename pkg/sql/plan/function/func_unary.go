@@ -1180,6 +1180,14 @@ func DatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+// TimeToMinute returns the minute from time (0-59)
+func TimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		_, minute, _, _, _ := v.ClockFormat()
+		return uint8(minute)
+	}, selectList)
+}
+
 func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Sec())

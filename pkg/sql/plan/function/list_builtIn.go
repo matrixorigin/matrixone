@@ -4936,6 +4936,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToMinute
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeToMinute
+				},
+			},
 		},
 	},
 
