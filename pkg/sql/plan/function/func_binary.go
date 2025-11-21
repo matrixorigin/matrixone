@@ -2902,6 +2902,102 @@ func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
+// GetFormat returns a format string based on the type and locale.
+// GET_FORMAT({DATE|TIME|DATETIME}, {'EUR'|'USA'|'JIS'|'ISO'|'INTERNAL'})
+func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	vs1 := vector.GenerateFunctionStrParameter(ivecs[0]) // type: DATE, TIME, or DATETIME
+	vs2 := vector.GenerateFunctionStrParameter(ivecs[1]) // locale: EUR, USA, JIS, ISO, INTERNAL
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := vs1.GetStrValue(i)
+		v2, null2 := vs2.GetStrValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		typeStr := strings.ToUpper(functionUtil.QuickBytesToStr(v1))
+		localeStr := strings.ToUpper(functionUtil.QuickBytesToStr(v2))
+
+		var formatStr string
+		switch typeStr {
+		case "DATE":
+			switch localeStr {
+			case "USA":
+				formatStr = "%m.%d.%Y"
+			case "EUR":
+				formatStr = "%d.%m.%Y"
+			case "JIS":
+				formatStr = "%Y-%m-%d"
+			case "ISO":
+				formatStr = "%Y-%m-%d"
+			case "INTERNAL":
+				formatStr = "%Y%m%d"
+			default:
+				// Invalid locale, return NULL
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		case "TIME":
+			switch localeStr {
+			case "USA":
+				formatStr = "%h:%i:%s %p"
+			case "EUR":
+				formatStr = "%H.%i.%s"
+			case "JIS":
+				formatStr = "%H:%i:%s"
+			case "ISO":
+				formatStr = "%H:%i:%s"
+			case "INTERNAL":
+				formatStr = "%H%i%s"
+			default:
+				// Invalid locale, return NULL
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		case "DATETIME":
+			switch localeStr {
+			case "USA":
+				formatStr = "%Y-%m-%d %H.%i.%s"
+			case "EUR":
+				formatStr = "%Y-%m-%d %H.%i.%s"
+			case "JIS":
+				formatStr = "%Y-%m-%d %H:%i:%s"
+			case "ISO":
+				formatStr = "%Y-%m-%d %H:%i:%s"
+			case "INTERNAL":
+				formatStr = "%Y%m%d%H%i%s"
+			default:
+				// Invalid locale, return NULL
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		default:
+			// Invalid type, return NULL
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 

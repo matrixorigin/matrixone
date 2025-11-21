@@ -483,9 +483,12 @@ const (
 	// function `from_days`
 	FROM_DAYS = 370
 
+	// function `get_format`
+	GET_FORMAT = 371
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 371
+	FUNCTION_END_NUMBER = 372
 )
 
 // functionIdRegister is what function we have registered already.
@@ -616,6 +619,7 @@ var functionIdRegister = map[string]int32{
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_days":         FROM_DAYS,
 	"from_unixtime":     FROM_UNIXTIME,
+	"get_format":        GET_FORMAT,
 	"left":              LEFT,
 	"right":             RIGHT,
 	// unary functions
