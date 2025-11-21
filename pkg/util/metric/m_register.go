@@ -17,9 +17,10 @@ package metric
 import prom "github.com/prometheus/client_golang/prometheus"
 
 const constTenantKey = "account"
+const constTenantIdKey = "account_id"
 
 // this constant lable is used for sys_* and process_* table
-var sysTenantID = prom.Labels{constTenantKey: "sys"}
+var sysTenantID = prom.Labels{constTenantKey: "sys", constTenantIdKey: "0"}
 
 // InitCollectors contains all the collectors that belong to SubSystemSql, SubSystemServer, SubSystemProcess and
 // SubSystemStatement.

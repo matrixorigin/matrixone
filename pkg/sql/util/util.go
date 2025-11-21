@@ -146,9 +146,8 @@ func BuildSysStatementInfoFilter(curAccountId uint64) tree.Expr {
 	return makeAccountIdEqualAst(curAccountId)
 }
 
-func BuildSysMetricFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
-	return equalAccount
+func BuildSysMetricFilter(curAccountId uint64) tree.Expr {
+	return makeAccountIdEqualAst(curAccountId)
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:
@@ -336,10 +335,10 @@ func ConvertAccountToAccountId(astExpr tree.Expr, isSystemAccount bool, currentA
 // For non-system accounts, it only converts account = currentAccountName to account_id = currentAccountID, as other account filters
 // are already implicitly restricted by the existing account_id filter.
 //
-// tableAliasMap is a map of table names/aliases that refer to statement_info table. If nil, only checks for unqualified column names
-// or table name "statement_info". This map is used to verify if table-qualified column names (e.g., s.account) refer to statement_info.
+// tableAliasMap is a map of table names/aliases that refer to statement_info or metric table. If nil, only checks for unqualified column names
+// or table name "statement_info"/"metric". This map is used to verify if table-qualified column names (e.g., s.account, m.account) refer to statement_info or metric.
 //
-// This allows mo-cloud to query statement_info table using account names (e.g., WHERE account = 'sys' or WHERE s.account = 'sys')
+// This allows mo-cloud to query statement_info or metric table using account names (e.g., WHERE account = 'sys' or WHERE s.account = 'sys')
 // instead of account_ids, providing a more intuitive interface while maintaining compatibility with the underlying account_id-based storage and access control.
 //
 // Returns the converted AST expression and a boolean indicating if any conversion was made.
@@ -421,34 +420,38 @@ func isAccountColumn(expr tree.Expr) bool {
 	return isAccountColumnFromStatementInfo(expr, nil)
 }
 
-// isAccountColumnFromStatementInfo checks if the expression is an account column reference from statement_info table.
+// isAccountColumnFromStatementInfo checks if the expression is an account column reference from statement_info or metric table.
 // This is used to identify account column comparisons that need to be converted to account_id comparisons
 // for compatibility with mo-cloud's business-level usage of the account field.
 //
 // For table-qualified column names (e.g., s.account or statement_info.account), it checks if the table name/alias
-// refers to statement_info table using tableAliasMap. If tableAliasMap is nil, it only checks if table name is "statement_info".
-// For unqualified column names, it returns true (will be checked by hasStatementInfoTable in caller).
+// refers to statement_info or metric table using tableAliasMap. If tableAliasMap is nil, it only checks if table name is "statement_info" or "metric".
+// For unqualified column names, it returns true (will be checked by hasStatementInfoOrMetricTable in caller).
 func isAccountColumnFromStatementInfo(expr tree.Expr, tableAliasMap map[string]bool) bool {
 	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok {
 		colName := unresolvedName.ColName()
 		if !strings.EqualFold(colName, "account") {
 			return false
 		}
-		// If column name has table qualification, check if table refers to statement_info
+		// If column name has table qualification, check if table refers to statement_info or metric
 		if unresolvedName.NumParts >= 2 {
 			tblName := unresolvedName.TblName()
 			// Check if table name is "statement_info" (case-insensitive)
 			if strings.EqualFold(tblName, catalog.MO_STATEMENT) {
 				return true
 			}
-			// If tableAliasMap is provided, check if the table alias refers to statement_info
+			// Check if table name is "metric" (case-insensitive)
+			if strings.EqualFold(tblName, catalog.MO_METRIC) {
+				return true
+			}
+			// If tableAliasMap is provided, check if the table alias refers to statement_info or metric
 			if tableAliasMap != nil {
 				return tableAliasMap[tblName]
 			}
-			// If no tableAliasMap and table name is not "statement_info", don't convert
+			// If no tableAliasMap and table name is not "statement_info" or "metric", don't convert
 			return false
 		}
-		// For unqualified column names, return true (will be checked by hasStatementInfoTable in caller)
+		// For unqualified column names, return true (will be checked by hasStatementInfoOrMetricTable in caller)
 		return true
 	}
 	return false

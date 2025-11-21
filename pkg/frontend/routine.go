@@ -291,7 +291,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	tenantCtx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
 	rt.increaseCount(func() {
-		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
+		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant(), ses.GetTenantInfo().GetTenantID()).Inc()
 	})
 
 	execCtx.reqCtx = tenantCtx
@@ -340,7 +340,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if quit {
 		rt.decreaseCount(func() {
-			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Dec()
+			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant(), ses.GetTenantInfo().GetTenantID()).Dec()
 		})
 
 		//ensure cleaning the transaction

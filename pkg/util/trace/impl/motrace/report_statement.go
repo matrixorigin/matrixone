@@ -683,8 +683,8 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		s.MarkResponseAt()
 		// --- Start of metric part
 		// duration is filled in s.MarkResponseAt()
-		incStatementCounter(s.Account, s.QueryType)
-		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
+		incStatementCounter(s.Account, s.AccountID, s.QueryType)
+		addStatementDurationCounter(s.Account, s.AccountID, s.QueryType, s.Duration)
 		// --- END of metric part
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
@@ -698,7 +698,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
 			v2.GetTraceNegativeCUCounter("cu").Inc()
 		} else {
-			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+			metric.StatementCUCounter(s.Account, s.AccountID, s.SqlSourceType).Add(s.statsArray.GetCU())
 		}
 		s.Status = StatementStatusSuccess
 		if err != nil {
@@ -734,11 +734,11 @@ func (s *StatementInfo) CopyStatementInfo() string {
 	return builder.String()
 }
 
-func addStatementDurationCounter(tenant, queryType string, duration time.Duration) {
-	metric.StatementDuration(tenant, queryType).Add(float64(duration))
+func addStatementDurationCounter(tenant string, tenantId uint32, queryType string, duration time.Duration) {
+	metric.StatementDuration(tenant, tenantId, queryType).Add(float64(duration))
 }
-func incStatementCounter(tenant, queryType string) {
-	metric.StatementCounter(tenant, queryType).Inc()
+func incStatementCounter(tenant string, tenantId uint32, queryType string) {
+	metric.StatementCounter(tenant, tenantId, queryType).Inc()
 }
 
 type StatementInfoStatus int

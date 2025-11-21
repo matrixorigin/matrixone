@@ -81,3 +81,58 @@ Project
   ->  Table Scan on system.statement_info
         Filter Cond: (statement_info.account_id = 0)
         Block Filter Cond: (statement_info.account_id = 0)
+use system_metrics;
+EXPLAIN SELECT * FROM metric WHERE account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)
+        Block Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric m WHERE m.account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(m.__mo_cbkey_007account011metric_name011collecttime)
+        Block Filter Cond: prefix_eq(m.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric WHERE metric.account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)
+        Block Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric WHERE account = 'sys' AND metric_name != '';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime), (metric.metric_name <> '')
+        Block Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric WHERE account IN ('sys', 'test');
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_in(metric.__mo_cbkey_007account011metric_name011collecttime)
+        Block Filter Cond: prefix_in(metric.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric WHERE account LIKE 'sys%';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(metric.account)
+        Block Filter Cond: prefix_eq(metric.account)
+EXPLAIN SELECT * FROM metric WHERE (account = 'sys' OR account = 'test') AND metric_name != '';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_in(metric.__mo_cbkey_007account011metric_name011collecttime), (metric.metric_name <> '')
+        Block Filter Cond: prefix_in(metric.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric mi WHERE mi.account = 'sys';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(mi.__mo_cbkey_007account011metric_name011collecttime)
+        Block Filter Cond: prefix_eq(mi.__mo_cbkey_007account011metric_name011collecttime)
+EXPLAIN SELECT * FROM metric WHERE account = 'SYS';
+TP QUERY PLAN
+Project
+  ->  Table Scan on system_metrics.metric
+        Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)
+        Block Filter Cond: prefix_eq(metric.__mo_cbkey_007account011metric_name011collecttime)

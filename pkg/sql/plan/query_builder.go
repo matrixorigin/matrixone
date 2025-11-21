@@ -3356,13 +3356,69 @@ func (builder *QueryBuilder) bindWhere(
 	return
 }
 
-// convertAccountToAccountIdIfNeeded converts account to account_id if the query involves statement_info table.
+// isAccountConvertibleTable checks if a binding refers to statement_info or metric table.
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name.
+func isAccountConvertibleTable(binding *Binding, builder *QueryBuilder, dbName, tableName string) bool {
+	if binding == nil {
+		return false
+	}
+	if binding.db != dbName {
+		return false
+	}
+	// Check if binding.table matches (no alias case)
+	if binding.table == tableName {
+		return true
+	}
+	// Check the actual table name from node.TableDef.Name (alias case)
+	if int(binding.nodeId) < len(builder.qry.Nodes) {
+		node := builder.qry.Nodes[binding.nodeId]
+		if node != nil && node.TableDef != nil && node.TableDef.Name == tableName {
+			return true
+		}
+	}
+	return false
+}
+
+// buildAccountConvertibleTableAliasMap builds a map of table aliases/names that refer to statement_info or metric table.
+// The key is the table alias/name used in the query, the value indicates if it refers to statement_info or metric.
+func (builder *QueryBuilder) buildAccountConvertibleTableAliasMap(ctx *BindContext) map[string]bool {
+	tableAliasMap := make(map[string]bool)
+	for tableName, binding := range ctx.bindingByTable {
+		// Check for statement_info table in system database
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM, catalog.MO_STATEMENT) {
+			tableAliasMap[tableName] = true
+			tableAliasMap[catalog.MO_STATEMENT] = true
+		}
+		// Check for metric table in system_metrics database
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC) {
+			tableAliasMap[tableName] = true
+			tableAliasMap[catalog.MO_METRIC] = true
+		}
+	}
+	return tableAliasMap
+}
+
+// hasStatementInfoOrMetricTable checks if the query involves statement_info or metric table
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name
+func hasStatementInfoOrMetricTable(ctx *BindContext, builder *QueryBuilder) bool {
+	for _, binding := range ctx.bindingByTable {
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM, catalog.MO_STATEMENT) {
+			return true
+		}
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC) {
+			return true
+		}
+	}
+	return false
+}
+
+// convertAccountToAccountIdIfNeeded converts account to account_id if the query involves statement_info or metric table.
 // This conversion is primarily designed for compatibility with mo-cloud's business-level usage of the account field.
-// When mo-cloud queries statement_info using account names (e.g., WHERE account = 'sys'), this function automatically
+// When mo-cloud queries statement_info or metric using account names (e.g., WHERE account = 'sys'), this function automatically
 // converts the account filter to account_id filter by looking up the corresponding account_id from mo_catalog.mo_account.
 // This provides a more user-friendly interface while maintaining compatibility with the underlying account_id-based storage.
 func (builder *QueryBuilder) convertAccountToAccountIdIfNeeded(ctx *BindContext, expr tree.Expr) tree.Expr {
-	if !hasStatementInfoTable(ctx, builder) {
+	if !hasStatementInfoOrMetricTable(ctx, builder) {
 		return expr
 	}
 
@@ -3377,48 +3433,9 @@ func (builder *QueryBuilder) convertAccountToAccountIdIfNeeded(ctx *BindContext,
 		currentAccountName = builder.compCtx.GetAccountName()
 	}
 
-	// Build a map of table aliases to check if they refer to statement_info
-	// The key is the table alias/name used in the query, the value indicates if it refers to statement_info
-	tableAliasMap := make(map[string]bool)
-	for tableName, binding := range ctx.bindingByTable {
-		if binding != nil && binding.db == catalog.MO_SYSTEM {
-			// Check the actual table name from node.TableDef.Name
-			// binding.table might be an alias (e.g., "s"), so we need to check the actual table name
-			if int(binding.nodeId) < len(builder.qry.Nodes) {
-				node := builder.qry.Nodes[binding.nodeId]
-				if node != nil && node.TableDef != nil && node.TableDef.Name == catalog.MO_STATEMENT {
-					// tableName is the alias or table name used in the query (e.g., "s" or "statement_info")
-					tableAliasMap[tableName] = true
-					// Also check the original table name "statement_info"
-					tableAliasMap[catalog.MO_STATEMENT] = true
-				}
-			}
-		}
-	}
-
+	tableAliasMap := builder.buildAccountConvertibleTableAliasMap(ctx)
 	convertedExpr, _ := util.ConvertAccountToAccountIdWithTableCheck(expr, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap)
 	return convertedExpr
-}
-
-// hasStatementInfoTable checks if the query involves statement_info table
-// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name
-func hasStatementInfoTable(ctx *BindContext, builder *QueryBuilder) bool {
-	for _, binding := range ctx.bindingByTable {
-		if binding != nil && binding.db == catalog.MO_SYSTEM {
-			// Check if binding.table is "statement_info" (no alias case)
-			if binding.table == catalog.MO_STATEMENT {
-				return true
-			}
-			// Check the actual table name from node.TableDef.Name (alias case)
-			if int(binding.nodeId) < len(builder.qry.Nodes) {
-				node := builder.qry.Nodes[binding.nodeId]
-				if node != nil && node.TableDef != nil && node.TableDef.Name == catalog.MO_STATEMENT {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func (builder *QueryBuilder) bindGroupBy(
@@ -4834,7 +4851,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if err != nil {
 				return 0, err
 			}
-			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
@@ -4850,7 +4866,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(acctName)
+					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {

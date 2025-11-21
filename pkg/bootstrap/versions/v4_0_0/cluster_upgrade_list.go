@@ -27,6 +27,8 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
 	upg_create_system_stmt_info_4000,
+	upg_rename_system_metrics_metric_4000,
+	upg_create_system_metrics_metric_4000,
 }
 
 var upg_mo_iscp_task = versions.UpgradeEntry{
@@ -75,5 +77,32 @@ var upg_create_system_stmt_info_4000 = versions.UpgradeEntry{
 	UpgSql:    CreateStmtInfo_4000,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_SYSTEM, catalog.MO_STATEMENT)
+	},
+}
+
+const MO_METRIC_4000 = "metric_4000"
+const RenameMetric_4000 = "ALTER TABLE `system_metrics`.`metric` RENAME `system_metrics`.`metric_4000`;"
+
+const CreateMetric_4000 = "CREATE TABLE `system_metrics`.`metric` (\n  `metric_name` varchar(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` datetime(6) NOT NULL COMMENT 'metric data collect time',\n  `value` double DEFAULT '0.0' COMMENT 'metric value',\n  `node` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` varchar(1024) DEFAULT 'sys' COMMENT 'account name',\n  `account_id` bigint unsigned DEFAULT '0' COMMENT 'account id',\n  `type` varchar(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data[mo_no_del_hint]' CLUSTER BY (`collecttime`, `account_id`, `metric_name`)"
+
+// upg_rename_system_metrics_metric_4000 do rename table
+var upg_rename_system_metrics_metric_4000 = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM_METRICS,
+	TableName: catalog.MO_METRIC,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    RenameMetric_4000,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_SYSTEM_METRICS, MO_METRIC_4000)
+	},
+}
+
+// upg_create_system_metrics_metric_4000 do create new table
+var upg_create_system_metrics_metric_4000 = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM_METRICS,
+	TableName: catalog.MO_METRIC,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    CreateMetric_4000,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC)
 	},
 }
