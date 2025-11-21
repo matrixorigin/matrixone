@@ -603,6 +603,7 @@ var functionIdRegister = map[string]int32{
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
 	"localtime":         LOCALTIME,
+	"localtimestamp":    LOCALTIME,
 	"current_time":      CURRENT_TIME,
 	"curtime":           CURRENT_TIME,
 	"sysdate":           SYSDATE,

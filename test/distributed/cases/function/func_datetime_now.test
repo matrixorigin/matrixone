@@ -155,3 +155,5 @@ select second(now());
 select localtime() = now() as should_be_true;
 select localtime = now() as should_be_true;
 
+select localtimestamp() = now() as should_be_true;
+select localtimestamp = now() as should_be_true;

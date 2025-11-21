@@ -59,13 +59,13 @@ timestampdiff(second, t1, t2)    a
 2    0
 select time(now());
 time(now())
-13:38:50
+13:43:48
 select date(now());
 date(now())
 2025-11-21
 select timestamp(now());
 timestamp(now())
-2025-11-21 13:38:51
+2025-11-21 13:43:48
 select year(now());
 year(now())
 2025
@@ -80,13 +80,19 @@ hour(now())
 13
 select minute(now());
 minute(now())
-38
+43
 select second(now());
 second(now())
-50
+48
 select localtime() = now() as should_be_true;
 should_be_true
 true
 select localtime = now() as should_be_true;
+should_be_true
+true
+select localtimestamp() = now() as should_be_true;
+should_be_true
+true
+select localtimestamp = now() as should_be_true;
 should_be_true
 true
