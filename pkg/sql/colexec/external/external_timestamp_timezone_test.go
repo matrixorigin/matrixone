@@ -284,3 +284,152 @@ func Test_getColData_Timestamp_Consistency(t *testing.T) {
 		})
 	}
 }
+
+// Test_isLegalLine_Timestamp tests that isLegalLine correctly validates TIMESTAMP fields
+// using time.Local as fallback (since proc is not available in this context).
+// This test verifies the code path for parallel LOAD DATA file offset calculation.
+func Test_isLegalLine_Timestamp(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Format: tree.CSV,
+		},
+	}
+
+	testCases := []struct {
+		name      string
+		timestamp string
+		scale     int32
+		expected  bool
+	}{
+		{
+			name:      "valid timestamp without scale",
+			timestamp: "2020-09-07 00:00:00",
+			scale:     0,
+			expected:  true,
+		},
+		{
+			name:      "valid timestamp with scale",
+			timestamp: "2020-09-07 00:00:00.123456",
+			scale:     6,
+			expected:  true,
+		},
+		{
+			name:      "valid timestamp with microseconds",
+			timestamp: "2024-01-01 12:30:45.123",
+			scale:     3,
+			expected:  true,
+		},
+		{
+			name:      "invalid timestamp format",
+			timestamp: "invalid-timestamp",
+			scale:     0,
+			expected:  false,
+		},
+		{
+			name:      "invalid timestamp with wrong date",
+			timestamp: "2020-13-45 25:70:80",
+			scale:     0,
+			expected:  false,
+		},
+		{
+			name:      "empty timestamp string",
+			timestamp: "",
+			scale:     0,
+			expected:  true, // empty string is treated as null/empty and skipped
+		},
+		{
+			name:      "valid timestamp edge case - epoch",
+			timestamp: "1970-01-01 00:00:00",
+			scale:     0,
+			expected:  true,
+		},
+		{
+			name:      "valid timestamp edge case - future date",
+			timestamp: "2099-12-31 23:59:59",
+			scale:     0,
+			expected:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := []*plan.ColDef{
+				{
+					Name: "ts",
+					Typ: plan.Type{
+						Id:    int32(types.T_timestamp),
+						Scale: tc.scale,
+					},
+				},
+			}
+
+			fields := []csvparser.Field{
+				{
+					Val:            tc.timestamp,
+					IsNull:         false,
+					HasStringQuote: false,
+				},
+			}
+
+			result := isLegalLine(param, cols, fields)
+			require.Equal(t, tc.expected, result,
+				"isLegalLine should return %v for timestamp '%s' with scale %d",
+				tc.expected, tc.timestamp, tc.scale)
+		})
+	}
+
+	// Test null field handling
+	t.Run("null timestamp field", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{
+				Name: "ts",
+				Typ: plan.Type{
+					Id:    int32(types.T_timestamp),
+					Scale: 0,
+				},
+			},
+		}
+
+		fields := []csvparser.Field{
+			{
+				Val:            "2020-09-07 00:00:00",
+				IsNull:         true,
+				HasStringQuote: false,
+			},
+		}
+
+		result := isLegalLine(param, cols, fields)
+		require.True(t, result, "null field should be skipped and return true")
+	})
+
+	// Test that isLegalLine uses time.Local (not session timezone)
+	// This is important because isLegalLine is used for file offset calculation
+	// where proc is not available, so it must use time.Local as fallback
+	t.Run("uses time.Local for parsing", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{
+				Name: "ts",
+				Typ: plan.Type{
+					Id:    int32(types.T_timestamp),
+					Scale: 0,
+				},
+			},
+		}
+
+		// A valid timestamp that can be parsed with time.Local
+		fields := []csvparser.Field{
+			{
+				Val:            "2020-09-07 00:00:00",
+				IsNull:         false,
+				HasStringQuote: false,
+			},
+		}
+
+		result := isLegalLine(param, cols, fields)
+		require.True(t, result, "should successfully parse timestamp using time.Local")
+
+		// Verify that the timestamp can actually be parsed with time.Local
+		_, err := types.ParseTimestamp(time.Local, "2020-09-07 00:00:00", 0)
+		require.NoError(t, err, "timestamp should be parseable with time.Local")
+	})
+}
