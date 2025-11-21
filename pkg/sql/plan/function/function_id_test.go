@@ -130,6 +130,7 @@ var predefinedFunids = map[int]int{
 	JSON_ARRAY:        365,
 	JSON_OBJECT:       366,
 	CONV:              367,
+	DAYNAME:           368,
 	DATE_FROM_PARTS:   90,
 	DATE_PART:         91,
 	DATEADD:           92,
@@ -421,7 +422,7 @@ var predefinedFunids = map[int]int{
 
 	MO_TUPLE_EXPR: 350,
 
-	FUNCTION_END_NUMBER: 368,
+	FUNCTION_END_NUMBER: 369,
 }
 
 func Test_funids(t *testing.T) {

@@ -1713,6 +1713,38 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 	}, selectList)
 }
 
+// DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
+func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// Use String() method to get the weekday name
+		return v.DayOfWeek().String()
+	}, selectList)
+}
+
+// DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
+func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// Use String() method to get the weekday name
+		return v.DayOfWeek().String()
+	}, selectList)
+}
+
+// TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
+func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// Use String() method to get the weekday name
+		return dt.DayOfWeek().String()
+	}, selectList)
+}
+
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
 		return 0
