@@ -520,6 +520,7 @@ var functionIdRegister = map[string]int32{
 	"endswith":    ENDSWITH,
 	"findinset":   FINDINSET,
 	"find_in_set": FINDINSET,
+	"pow":         POW,
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,

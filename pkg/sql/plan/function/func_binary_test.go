@@ -2473,13 +2473,17 @@ func initPowerTestCase() []tcTemp {
 		right float64
 		want  float64
 	}{
+		// Basic cases from user requirements
+		{2, 3, 8},    // POW(2, 3) = 8
+		{2, 0, 1},    // POW(2, 0) = 1
+		{4, 0.5, 2},  // POW(4, 0.5) = 2 (square root)
+		// Additional test cases
 		{1, 2, 1},
 		{2, 2, 4},
 		{3, 2, 9},
 		{3, 3, 27},
 		{4, 2, 16},
 		{4, 3, 64},
-		{4, 0.5, 2},
 		{5, 2, 25},
 		{6, 2, 36},
 		{7, 2, 49},
@@ -2490,13 +2494,28 @@ func initPowerTestCase() []tcTemp {
 		{3.5, 2, 12.25},
 		{4.5, 2, 20.25},
 		{5.5, 2, 30.25},
+		// Negative exponent
+		{2, -1, 0.5},
+		{4, -2, 0.0625},
+		{10, -2, 0.01},
+		// Zero base
+		{0, 5, 0},
+		{0, 0, 1}, // 0^0 = 1 in most systems
+		// One as base or exponent
+		{1, 100, 1},
+		{100, 1, 100},
+		// Negative base with integer exponent
+		{-2, 2, 4},
+		{-2, 3, -8},
+		{-1, 1, -1},
+		{-1, 2, 1},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
-			info: "test pow ",
+			info: fmt.Sprintf("test pow(%v, %v) = %v", c.left, c.right, c.want),
 			inputs: []FunctionTestInput{
 				// Create a input entry <float64, float64>
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.left}, []bool{}),
@@ -2505,6 +2524,34 @@ func initPowerTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{c.want}, []bool{}),
 		})
 	}
+
+	// Add NULL test cases
+	testInputs = append(testInputs, tcTemp{
+		info: "test pow with NULL first argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
+
+	testInputs = append(testInputs, tcTemp{
+		info: "test pow with NULL second argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
+
+	testInputs = append(testInputs, tcTemp{
+		info: "test pow with both NULL arguments",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
 
 	return testInputs
 }
