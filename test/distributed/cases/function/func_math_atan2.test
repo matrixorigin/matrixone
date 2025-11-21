@@ -1,0 +1,36 @@
+# Basic test case from requirements
+SELECT ATAN2(1, 1) AS result1;
+
+# Additional test cases
+SELECT ATAN2(1, 0) AS y_positive_x_zero;
+SELECT ATAN2(0, 1) AS y_zero_x_positive;
+SELECT ATAN2(-1, 1) AS y_negative_x_positive;
+SELECT ATAN2(1, -1) AS y_positive_x_negative;
+SELECT ATAN2(-1, -1) AS both_negative;
+SELECT ATAN2(0, 0) AS both_zero;
+
+# Edge cases
+SELECT ATAN2(0.0, 1.0) AS zero_float;
+SELECT ATAN2(1.0, 0.0) AS pi_over_2;
+SELECT ATAN2(-1.0, 0.0) AS minus_pi_over_2;
+
+# NULL handling
+SELECT ATAN2(NULL, 1) AS null_y;
+SELECT ATAN2(1, NULL) AS null_x;
+SELECT ATAN2(NULL, NULL) AS both_null;
+
+# Table usage
+CREATE TABLE t1(y FLOAT, x FLOAT);
+INSERT INTO t1 VALUES (1, 1), (1, 0), (0, 1), (-1, 1), (1, -1);
+SELECT y, x, ATAN2(y, x) AS atan2_value FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(y FLOAT, x FLOAT);
+INSERT INTO t1 VALUES (1, 1), (1, 0), (0, 1), (-1, 1), (1, -1);
+SELECT * FROM t1 WHERE ATAN2(y, x) > 0;
+DROP TABLE t1;
+
+# Comparison with ATAN (ATAN2(y, x) should equal ATAN(y/x) when x > 0)
+SELECT ATAN2(1, 1) AS atan2_result, ATAN(1/1) AS atan_result;
+

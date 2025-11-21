@@ -854,21 +854,21 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
-			info: "test atan with 2 args",
+			info: "test atan2",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
-						-1, 1, 1, 1, 1.0, 1.0,
+						1, 1, 0, -1, 1, -1,
 					},
 					nil),
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
-						1, 0, -1, 1, -1.0, 1.0,
+						1, 0, 1, -1, -1, 1,
 					},
 					nil),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, nil),
+				[]float64{0.7853981633974483, 1.5707963267948966, 0, -2.356194490192345, 2.356194490192345, -0.7853981633974483}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInATan2)
 		succeed, info := tcc.Run()

@@ -623,6 +623,7 @@ var functionIdRegister = map[string]int32{
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
 	"atan":                           ATAN,
+	"atan2":                          ATAN2,
 	"cos":                            COS,
 	"cot":                            COT,
 	"crc32":                          CRC32,

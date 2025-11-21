@@ -2603,21 +2603,19 @@ func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0]) // Y
+	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1]) // X
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
+		v1, null1 := p1.GetValue(i) // Y
+		v2, null2 := p2.GetValue(i) // X
 		if null1 || null2 {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
-			if v1 == 0 {
-				return moerr.NewInvalidArg(proc.Ctx, "Atan first input", 0)
-			}
-			if err := rs.Append(math.Atan(v2/v1), false); err != nil {
+			// ATAN2(Y, X) - use math.Atan2 which properly handles all edge cases
+			if err := rs.Append(math.Atan2(v1, v2), false); err != nil {
 				return err
 			}
 		}
