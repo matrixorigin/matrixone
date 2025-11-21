@@ -113,6 +113,7 @@ var predefinedFunids = map[int]int{
 	CUME_DIST:         87,
 	CURRENT_DATE:      88,
 	CURRENT_TIMESTAMP: 89,
+	CURRENT_TIME:      351,
 	DATE_FROM_PARTS:   90,
 	DATE_PART:         91,
 	DATEADD:           92,
