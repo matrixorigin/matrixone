@@ -18,6 +18,7 @@ This document captures the design decisions for the sharded `branchHashmap`. All
 - `PutByVectors` encodes up to 8,192 rows per call, allocates once per chunk, and dispatches entries to shards based on hash.
 - `GetByVectors` / `PopByVectors` encode keys sequentially inside the calling goroutine and rely on shard-level parallelism plus caller-driven concurrency rather than spawning worker pools.
 - `PopByEncodedKey` remains O(1) when provided a pre-encoded key. Calls targeting the same shard serialize; different shards operate concurrently.
+- `PopByEncodedFullValues` reconstructs keys from full row payloads before delegating to key-based pop, allowing callers that only have value encoding to remove entries.
 - `ForEachShardParallel` replaces the old `ForEach`. `PopByEncodedKey` must be invoked via `ShardCursor` while holding the shard lock to avoid blocking other shards. `parallelism <= 0` uses `min(runtime.NumCPU(), shardCount)`; positive values are clamped to `[1, shardCount]`.
 - `ItemCount` returns the current row count using shard-local counters that are updated during insertions and removals. No iteration is required to compute the total.
 - Returned rows still decode via `DecodeRow` without changing tuple order.
