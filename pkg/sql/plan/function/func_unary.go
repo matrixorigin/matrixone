@@ -567,6 +567,17 @@ func DatetimeToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}, selectList)
 }
 
+func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		return dt.Day()
+	}, selectList)
+}
+
 func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) uint16 {
 		return v.DayOfYear()

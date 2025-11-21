@@ -477,9 +477,12 @@ const (
 	// function `dayname`
 	DAYNAME = 368
 
+	// function `dayofmonth`
+	DAYOFMONTH = 369
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 369
+	FUNCTION_END_NUMBER = 370
 )
 
 // functionIdRegister is what function we have registered already.
@@ -634,6 +637,7 @@ var functionIdRegister = map[string]int32{
 	"to_days":                        TO_DAYS,
 	"dayofweek":                      DAYOFWEEK,
 	"dayname":                        DAYNAME,
+	"dayofmonth":                     DAYOFMONTH,
 	"dayofyear":                      DAYOFYEAR,
 	"exp":                            EXP,
 	"empty":                          EMPTY,
