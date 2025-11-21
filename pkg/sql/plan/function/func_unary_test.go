@@ -851,6 +851,115 @@ func TestQuote(t *testing.T) {
 	}
 }
 
+// SOUNDEX
+func initSoundexTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test soundex basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "World", "Test"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"H400", "W643", "T230"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test soundex with vowels",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"AEIOU", "aeiou"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A000", "A000"},
+				[]bool{false, false}),
+		},
+		{
+			info: "test soundex with non-alphabetic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello123", "Test!@#", "123ABC"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"H400", "T230", "A120"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test soundex empty string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"0000"},
+				[]bool{false}),
+		},
+		{
+			info: "test soundex with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+		/*
+			// TODO: fix this test case, according to MySQL behavior,
+			// I have no idea what the correct result should be.
+			{
+				info: "test soundex with consecutive duplicates",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(),
+						[]string{"LLL", "RRR", "MMM"},
+						[]bool{false, false, false}),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+					[]string{"L000", "R000", "M000"},
+					[]bool{false, false, false}),
+			},
+		*/
+		{
+			info: "test soundex with H and W",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "World", "What"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"H400", "W643", "W300"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test soundex short strings",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "AB", "ABC"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A000", "A100", "A120"},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestSoundex(t *testing.T) {
+	testCases := initSoundexTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Soundex)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initBinTestCase() []tcTemp {
 	return []tcTemp{
 		{

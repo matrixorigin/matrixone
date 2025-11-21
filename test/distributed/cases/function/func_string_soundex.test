@@ -1,0 +1,33 @@
+# Basic test case from requirements
+SELECT SOUNDEX('Hello') AS result1;
+
+# Additional test cases
+SELECT SOUNDEX('World') AS basic_string;
+SELECT SOUNDEX('Test') AS test_string;
+SELECT SOUNDEX('AEIOU') AS vowels_only;
+SELECT SOUNDEX('Hello123') AS with_numbers;
+SELECT SOUNDEX('Test!@#') AS with_special_chars;
+SELECT SOUNDEX('') AS empty_string;
+SELECT SOUNDEX('A') AS single_char;
+SELECT SOUNDEX('AB') AS two_chars;
+SELECT SOUNDEX('ABC') AS three_chars;
+
+# NULL handling
+SELECT SOUNDEX(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello'), ('World'), ('Test'), ('AEIOU');
+SELECT str, SOUNDEX(str) AS soundex_code FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello'), ('World'), ('Test');
+SELECT * FROM t1 WHERE SOUNDEX(str) = SOUNDEX('Hello');
+DROP TABLE t1;
+
+# Comparison - words that sound similar should have same soundex
+SELECT SOUNDEX('Smith') AS smith, SOUNDEX('Smythe') AS smythe;
+SELECT SOUNDEX('Robert') AS robert, SOUNDEX('Rupert') AS rupert;
+

@@ -441,9 +441,12 @@ const (
 	// function `quote`
 	QUOTE = 356
 
+	// function `soundex`
+	SOUNDEX = 357
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 357
+	FUNCTION_END_NUMBER = 358
 )
 
 // functionIdRegister is what function we have registered already.
@@ -561,6 +564,7 @@ var functionIdRegister = map[string]int32{
 	"quote":             QUOTE,
 	"round":             ROUND,
 	"rpad":              RPAD,
+	"soundex":           SOUNDEX,
 	"strcmp":            STRCMP,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,

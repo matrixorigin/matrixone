@@ -367,25 +367,25 @@ func OrdString(val []byte) int64 {
 	if len(val) == 0 {
 		return 0
 	}
-	
+
 	// Get the first character (rune) to determine its byte size
 	_, runeSize := utf8.DecodeRune(val)
 	if runeSize == 0 {
 		return 0
 	}
-	
+
 	// If it's a single-byte character (ASCII), return the byte value
 	if runeSize == 1 {
 		return int64(val[0])
 	}
-	
+
 	// For multibyte characters, calculate using the formula:
 	// (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
 	var result int64
 	for i := 0; i < runeSize && i < len(val); i++ {
 		result += int64(val[i]) * int64(1<<(8*i)) // 256^i = 2^(8*i)
 	}
-	
+
 	return result
 }
 
@@ -618,7 +618,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 func QuoteString(str string) string {
 	var result strings.Builder
 	result.WriteByte('\'')
-	
+
 	for _, r := range str {
 		switch r {
 		case '\'':
@@ -647,7 +647,7 @@ func QuoteString(str string) string {
 			result.WriteRune(r)
 		}
 	}
-	
+
 	result.WriteByte('\'')
 	return result.String()
 }
@@ -657,6 +657,106 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		str := functionUtil.QuickBytesToStr(v)
 		quoted := QuoteString(str)
 		return functionUtil.QuickStrToBytes(quoted)
+	}, selectList)
+}
+
+// SoundexString implements the SOUNDEX algorithm
+// Returns a phonetic code representing how a string sounds
+func SoundexString(str string) string {
+	if len(str) == 0 {
+		return "0000"
+	}
+
+	// Convert to uppercase and process only alphabetic characters
+	upper := strings.ToUpper(str)
+
+	// Find the first alphabetic character
+	firstChar := byte(0)
+	firstIdx := -1
+	for i := 0; i < len(upper); i++ {
+		if upper[i] >= 'A' && upper[i] <= 'Z' {
+			firstChar = upper[i]
+			firstIdx = i
+			break
+		}
+	}
+
+	// If no alphabetic character found, return "0000"
+	if firstChar == 0 {
+		return "0000"
+	}
+
+	// Build the soundex code
+	var code strings.Builder
+	code.WriteByte(firstChar)
+
+	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
+	// Index: A=0, B=1, C=2, ..., Z=25
+	soundexMap := [26]byte{
+		0,   // A
+		'1', // B
+		'2', // C
+		'3', // D
+		0,   // E
+		'1', // F
+		'2', // G
+		0,   // H
+		0,   // I
+		'2', // J
+		'2', // K
+		'4', // L
+		'5', // M
+		'5', // N
+		0,   // O
+		'1', // P
+		'2', // Q
+		'6', // R
+		'2', // S
+		'3', // T
+		0,   // U
+		'1', // V
+		0,   // W
+		'2', // X
+		0,   // Y
+		'2', // Z
+	}
+
+	lastCode := byte(0)
+	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
+		c := upper[i]
+		if c < 'A' || c > 'Z' {
+			continue
+		}
+
+		codeChar := soundexMap[c-'A']
+		// Skip vowels, H, W (codeChar == 0)
+		if codeChar == 0 {
+			continue
+		}
+
+		// Skip consecutive duplicate codes
+		if codeChar == lastCode {
+			continue
+		}
+
+		code.WriteByte(codeChar)
+		lastCode = codeChar
+	}
+
+	// Pad with zeros to make it 4 characters
+	result := code.String()
+	for len(result) < 4 {
+		result += "0"
+	}
+
+	return result
+}
+
+func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+		str := functionUtil.QuickBytesToStr(v)
+		soundex := SoundexString(str)
+		return functionUtil.QuickStrToBytes(soundex)
 	}, selectList)
 }
 
