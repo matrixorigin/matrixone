@@ -1756,6 +1756,47 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	}, selectList)
 }
 
+// DateToMonthName returns the month name for date (e.g., "January", "February", ...)
+func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+		// Month() returns 1-12
+		month := v.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
+// DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
+func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+		// Month() returns 1-12
+		month := v.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
+// TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
+func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		// Month() returns 1-12
+		month := dt.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
 		return 0
