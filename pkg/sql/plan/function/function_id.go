@@ -429,9 +429,12 @@ const (
 	// function `truncate`
 	TRUNCATE = 352
 
+	// function `char`
+	CHAR = 353
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 353
+	FUNCTION_END_NUMBER = 354
 )
 
 // functionIdRegister is what function we have registered already.
@@ -534,6 +537,7 @@ var functionIdRegister = map[string]int32{
 	// variadic functions
 	"ceil":              CEIL,
 	"ceiling":           CEIL,
+	"char":              CHAR,
 	"concat_ws":         CONCAT_WS,
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,

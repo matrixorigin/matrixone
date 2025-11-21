@@ -115,6 +115,7 @@ var predefinedFunids = map[int]int{
 	CURRENT_TIMESTAMP: 89,
 	CURRENT_TIME:      351,
 	TRUNCATE:          352,
+	CHAR:              353,
 	DATE_FROM_PARTS:   90,
 	DATE_PART:         91,
 	DATEADD:           92,
@@ -406,7 +407,7 @@ var predefinedFunids = map[int]int{
 
 	MO_TUPLE_EXPR: 350,
 
-	FUNCTION_END_NUMBER: 353,
+	FUNCTION_END_NUMBER: 354,
 }
 
 func Test_funids(t *testing.T) {

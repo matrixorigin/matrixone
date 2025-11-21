@@ -583,6 +583,79 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
+	// CHAR accepts one or more integer arguments
+	if len(inputs) < 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	ret := make([]types.Type, len(inputs))
+	for i, source := range inputs {
+		// Check if it's an integer type
+		if !source.Oid.IsInteger() {
+			// Try to cast to int64
+			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				ret[i] = types.T_int64.ToType()
+			}
+		} else {
+			ret[i] = source
+		}
+	}
+	if shouldCast {
+		return newCheckResultWithCast(0, ret)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// Generate integer parameter wrappers for all parameters
+	ps := make([]vector.FunctionParameterWrapper[int64], len(parameters))
+	for i := range parameters {
+		ps[i] = vector.GenerateFunctionFixedTypeParameter[int64](parameters[i])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		var resultStr string
+		hasNull := false
+
+		// Process all integer arguments
+		for _, p := range ps {
+			v, null := p.GetValue(i)
+			if null {
+				hasNull = true
+				break
+			}
+			// Convert integer to character (rune)
+			// MySQL CHAR function uses ASCII/Unicode code points
+			if v < 0 || v > 0x10FFFF {
+				// Invalid Unicode code point, skip or use replacement character
+				// MySQL behavior: NULL or empty string for invalid codes
+				continue
+			}
+			resultStr += string(rune(v))
+		}
+
+		if hasNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 const (
 	formatMask = "%Y/%m/%d"
 	regexpMask = `\d{1,4}/\d{1,2}/\d{1,2}`

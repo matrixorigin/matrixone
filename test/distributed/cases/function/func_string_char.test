@@ -1,0 +1,35 @@
+# Basic test case from requirements
+SELECT CHAR(65, 66, 67) AS result1;
+
+# Additional test cases
+SELECT CHAR(65) AS single_char;
+SELECT CHAR(72, 101, 108, 108, 111) AS hello;
+SELECT CHAR(48, 49, 50) AS digits;
+SELECT CHAR(72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100) AS hello_world;
+
+# Edge cases
+SELECT CHAR(0) AS null_char;
+SELECT CHAR(32) AS space;
+SELECT CHAR(65, 66, 67, 68, 69) AS abcde;
+
+# NULL handling
+SELECT CHAR(65, 66, NULL) AS with_null;
+SELECT CHAR(NULL, 66, 67) AS null_first;
+SELECT CHAR(65, NULL, 67) AS null_middle;
+
+# Different integer types (should be cast to int64)
+SELECT CHAR(CAST(65 AS INT), CAST(66 AS INT)) AS int_type;
+SELECT CHAR(CAST(65 AS BIGINT), CAST(66 AS BIGINT)) AS bigint_type;
+
+# Table usage
+CREATE TABLE t1(a INT, b INT, c INT);
+INSERT INTO t1 VALUES (65, 66, 67), (72, 101, 108), (48, 49, 50);
+SELECT a, b, c, CHAR(a, b, c) AS char_result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(a INT, b INT, c INT);
+INSERT INTO t1 VALUES (65, 66, 67), (72, 101, 108), (48, 49, 50);
+SELECT * FROM t1 WHERE CHAR(a, b, c) = 'ABC';
+DROP TABLE t1;
+

@@ -221,6 +221,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `char`
+	{
+		functionId: CHAR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    builtInCharCheck,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInChar
+				},
+			},
+		},
+	},
+
 	// function `concat_ws`
 	{
 		functionId: CONCAT_WS,
