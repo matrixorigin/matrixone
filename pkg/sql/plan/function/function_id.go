@@ -486,9 +486,12 @@ const (
 	// function `get_format`
 	GET_FORMAT = 371
 
+	// function `localtime`
+	LOCALTIME = 372
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 372
+	FUNCTION_END_NUMBER = 373
 )
 
 // functionIdRegister is what function we have registered already.
@@ -599,6 +602,7 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"localtime":         LOCALTIME,
 	"current_time":      CURRENT_TIME,
 	"curtime":           CURRENT_TIME,
 	"sysdate":           SYSDATE,
