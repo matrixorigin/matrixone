@@ -992,3 +992,281 @@ func encodeJsonArray(op *opBuiltInJsonArray, v *vector.Vector, length uint64) er
 	}
 	return nil
 }
+
+type opBuiltInJsonObject struct {
+	enc []JqEncoder
+}
+
+func newOpBuiltInJsonObject() *opBuiltInJsonObject {
+	var op opBuiltInJsonObject
+	return &op
+}
+
+func (op *opBuiltInJsonObject) grow(length int) {
+	if len(op.enc) == 0 {
+		op.enc = make([]JqEncoder, length)
+		for i := 0; i < length; i++ {
+			op.enc[i].intialize(false, 0)
+		}
+	} else if length > len(op.enc) {
+		for i := len(op.enc); i < length; i++ {
+			op.enc = append(op.enc, JqEncoder{})
+			op.enc[i].intialize(false, 0)
+		}
+	}
+}
+
+func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// JSON_OBJECT requires an even number of arguments (key-value pairs)
+	if len(params)%2 != 0 {
+		return moerr.NewInvalidInputf(proc.Ctx, "json_object requires an even number of arguments (key-value pairs), got %d", len(params))
+	}
+
+	op.grow(length)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ulen := uint64(length)
+
+	// Write opening brace for all rows
+	for j := 0; j < length; j++ {
+		op.enc[j].w.WriteByte('{')
+	}
+
+	// Process parameters in pairs (key, value)
+	for i := 0; i < len(params); i += 2 {
+		keyVec := params[i]
+		valVec := params[i+1]
+
+		// Write separator first (comma before each pair except the first)
+		if i > 0 {
+			for j := 0; j < length; j++ {
+				op.enc[j].w.WriteByte(',')
+			}
+		}
+
+		// Encode key (must be a string)
+		keyType := keyVec.GetType()
+		if !keyType.Oid.IsMySQLString() {
+			return moerr.NewInvalidInputf(proc.Ctx, "json_object key must be a string, got %v", keyType.String())
+		}
+
+		keyParam := vector.GenerateFunctionStrParameter(keyVec)
+		// Check all keys first for NULL values and write them
+		for j := uint64(0); j < ulen; j++ {
+			key, null := keyParam.GetStrValue(j)
+			if null {
+				// NULL keys are not allowed in JSON objects
+				return moerr.NewInvalidInputf(proc.Ctx, "json_object key cannot be NULL")
+			}
+			// Write key as JSON string
+			op.enc[j].encodeString(string(key))
+			op.enc[j].w.WriteByte(':')
+		}
+
+		// Encode value based on its type
+		valType := valVec.GetType()
+		switch valType.Oid {
+		case types.T_any: // scalar null
+			op.encodeScalarNull(ulen)
+		case types.T_bool:
+			op.encodeBool(valVec, ulen)
+		case types.T_int8:
+			encodeIntObject[int8](op, valVec, ulen)
+		case types.T_int16:
+			encodeIntObject[int16](op, valVec, ulen)
+		case types.T_int32:
+			encodeIntObject[int32](op, valVec, ulen)
+		case types.T_int64:
+			encodeIntObject[int64](op, valVec, ulen)
+		case types.T_uint8:
+			encodeIntObject[uint8](op, valVec, ulen)
+		case types.T_uint16:
+			encodeIntObject[uint16](op, valVec, ulen)
+		case types.T_uint32:
+			encodeIntObject[uint32](op, valVec, ulen)
+		case types.T_uint64:
+			encodeIntObject[uint64](op, valVec, ulen)
+		case types.T_float32:
+			encodeFloatObject[float32](op, valVec, ulen)
+		case types.T_float64:
+			encodeFloatObject[float64](op, valVec, ulen)
+		case types.T_decimal64:
+			encodeDecimalObject[types.Decimal64](op, valVec, ulen)
+		case types.T_decimal128:
+			encodeDecimalObject[types.Decimal128](op, valVec, ulen)
+		case types.T_date:
+			encodeFixedStringerObject[types.Date](op, valVec, ulen)
+		case types.T_time:
+			encodeFixedStringerObject[types.Time](op, valVec, ulen)
+		case types.T_datetime:
+			encodeFixedStringerObject[types.Datetime](op, valVec, ulen)
+		case types.T_timestamp:
+			encodeFixedStringerObject[types.Timestamp](op, valVec, ulen)
+		case types.T_char, types.T_varchar, types.T_text:
+			encodeStringObject(op, valVec, ulen)
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			return moerr.NewInvalidInputf(proc.Ctx, "binary data not supported json_object: %v", valType.String())
+		case types.T_array_float32:
+			encodeFloatArrayObjectType[float32](op, valVec, ulen)
+		case types.T_array_float64:
+			encodeFloatArrayObjectType[float64](op, valVec, ulen)
+		case types.T_uuid:
+			encodeFixedStringerObject[types.Uuid](op, valVec, ulen)
+		case types.T_json:
+			if err := encodeJsonObject(op, valVec, ulen); err != nil {
+				return err
+			}
+		default:
+			return moerr.NewInvalidInputf(proc.Ctx, "unsupported type for json_object: %v", valType.String())
+		}
+	}
+
+	// Write closing brace and convert to ByteJson, then marshal
+	for j := 0; j < length; j++ {
+		op.enc[j].w.WriteByte('}')
+		if selectList != nil && selectList.Contains(uint64(j)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			// Parse the JSON string to ByteJson and marshal it
+			jsonStr := op.enc[j].bytes()
+			bj, err := types.ParseSliceToByteJson(jsonStr)
+			if err != nil {
+				return err
+			}
+			marshaled, err := bj.Marshal()
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(marshaled, false); err != nil {
+				return err
+			}
+		}
+		op.enc[j].done()
+	}
+	return nil
+}
+
+func (op *opBuiltInJsonObject) encodeScalarNull(length uint64) {
+	for i := uint64(0); i < length; i++ {
+		op.enc[i].w.WriteString("null")
+	}
+}
+
+func (op *opBuiltInJsonObject) encodeBool(v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[bool](v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			if v {
+				op.enc[i].w.WriteString("true")
+			} else {
+				op.enc[i].w.WriteString("false")
+			}
+		}
+	}
+}
+
+func encodeIntObject[T constraints.Integer](op *opBuiltInJsonObject, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[T](v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			op.enc[i].w.Write(strconv.AppendInt(op.enc[i].buf[:0], int64(v), 10))
+		}
+	}
+}
+
+func encodeFloatObject[T constraints.Float](op *opBuiltInJsonObject, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[T](v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			op.enc[i].encodeFloat64(float64(v))
+		}
+	}
+}
+
+func encodeFloatArrayObjectType[T constraints.Float](op *opBuiltInJsonObject, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionStrParameter(v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetStrValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			vv := types.BytesToArray[T](v)
+			op.enc[i].w.WriteByte('[')
+			for j, val := range vv {
+				if j > 0 {
+					op.enc[i].w.WriteByte(',')
+				}
+				ff := float64(val)
+				op.enc[i].encodeFloat64(ff)
+			}
+			op.enc[i].w.WriteByte(']')
+		}
+	}
+}
+
+func encodeDecimalObject[T types.DecimalWithFormat](op *opBuiltInJsonObject, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[T](v)
+	fromTyp := v.GetType()
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			bs := []byte(v.Format(fromTyp.Scale))
+			op.enc[i].w.Write(bs)
+		}
+	}
+}
+
+func encodeFixedStringerObject[T types.FixedWithStringer](op *opBuiltInJsonObject, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[T](v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			op.enc[i].encodeString(v.String())
+		}
+	}
+}
+
+func encodeStringObject(op *opBuiltInJsonObject, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionStrParameter(v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetStrValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			op.enc[i].encodeString(string(v))
+		}
+	}
+}
+
+func encodeJsonObject(op *opBuiltInJsonObject, v *vector.Vector, length uint64) error {
+	p := vector.GenerateFunctionStrParameter(v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetStrValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			bj := types.DecodeJson(v)
+			val, err := bj.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			op.enc[i].w.Write(val)
+		}
+	}
+	return nil
+}

@@ -853,6 +853,29 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_object`
+	{
+		functionId: JSON_OBJECT,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		// typechecking: always success (accepts any even number of arguments)
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonObject().jsonObject
+				},
+			},
+		},
+	},
+
 	// function `jq`
 	{
 		functionId: JQ,
