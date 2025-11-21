@@ -1625,6 +1625,38 @@ func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+// DateToDayOfWeek returns the weekday index for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+func DateToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
+		return int64(v.DayOfWeek()) + 1
+	}, selectList)
+}
+
+// DatetimeToDayOfWeek returns the weekday index for datetime (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+func DatetimeToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
+		return int64(v.DayOfWeek()) + 1
+	}, selectList)
+}
+
+// TimestampToDayOfWeek returns the weekday index for timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
+		return int64(dt.DayOfWeek()) + 1
+	}, selectList)
+}
+
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
 		return 0

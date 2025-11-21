@@ -3765,6 +3765,94 @@ func TestDateTimeToWeekday(t *testing.T) {
 	}
 }
 
+// DAYOFWEEK
+
+func initDateToDayOfWeekTestCase() []tcTemp {
+	// 2024-12-20 is a Friday (should be 6 in DAYOFWEEK: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat)
+	// Let's test with known dates
+	d1, _ := types.ParseDateCast("2024-12-20") // Friday
+	d2, _ := types.ParseDateCast("2024-12-22") // Sunday
+	d3, _ := types.ParseDateCast("2024-12-23") // Monday
+	d4, _ := types.ParseDateCast("2024-12-21") // Saturday
+	return []tcTemp{
+		{
+			info: "test date to dayofweek",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1, d2, d3, d4},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{6, 1, 2, 7}, // Friday=6, Sunday=1, Monday=2, Saturday=7
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to dayofweek - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestDateToDayOfWeek(t *testing.T) {
+	testCases := initDateToDayOfWeekTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToDayOfWeek)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDateTimeToDayOfWeekTestCase() []tcTemp {
+	d1, _ := types.ParseDatetime("2024-12-20 10:30:45", 6) // Friday
+	d2, _ := types.ParseDatetime("2024-12-22 10:30:45", 6) // Sunday
+	d3, _ := types.ParseDatetime("2024-12-23 10:30:45", 6) // Monday
+	d4, _ := types.ParseDatetime("2024-12-21 10:30:45", 6) // Saturday
+	return []tcTemp{
+		{
+			info: "test datetime to dayofweek",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1, d2, d3, d4},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{6, 1, 2, 7}, // Friday=6, Sunday=1, Monday=2, Saturday=7
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to dayofweek - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestDateTimeToDayOfWeek(t *testing.T) {
+	testCases := initDateTimeToDayOfWeekTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToDayOfWeek)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initPiTestCase() []tcTemp {
 	return []tcTemp{
 		{

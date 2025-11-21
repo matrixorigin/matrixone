@@ -1,0 +1,37 @@
+# Basic test case from requirements
+SELECT DAYOFWEEK('2024-12-20') AS result1;
+
+# Additional test cases
+SELECT DAYOFWEEK('2024-12-22') AS sunday;
+SELECT DAYOFWEEK('2024-12-23') AS monday;
+SELECT DAYOFWEEK('2024-12-24') AS tuesday;
+SELECT DAYOFWEEK('2024-12-25') AS wednesday;
+SELECT DAYOFWEEK('2024-12-26') AS thursday;
+SELECT DAYOFWEEK('2024-12-20') AS friday;
+SELECT DAYOFWEEK('2024-12-21') AS saturday;
+
+# DATETIME type
+SELECT DAYOFWEEK('2024-12-20 10:30:45') AS datetime_friday;
+SELECT DAYOFWEEK('2024-12-22 10:30:45') AS datetime_sunday;
+
+# TIMESTAMP type
+SELECT DAYOFWEEK(TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_friday;
+
+# NULL handling
+SELECT DAYOFWEEK(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20'), ('2024-12-22'), ('2024-12-23'), ('2024-12-21');
+SELECT d, DAYOFWEEK(d) AS dayofweek FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20'), ('2024-12-22'), ('2024-12-23'), ('2024-12-21');
+SELECT * FROM t1 WHERE DAYOFWEEK(d) = 1;
+DROP TABLE t1;
+
+# Comparison with WEEKDAY (different numbering)
+SELECT DAYOFWEEK('2024-12-20') AS dayofweek, WEEKDAY('2024-12-20') AS weekday;
+
