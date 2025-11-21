@@ -441,7 +441,15 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
+		// Get backup protection TS if active
+		c.backupProtection.RLock()
+		var extraTS types.TS
+		if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+			extraTS = c.backupProtection.protectedTS
+		}
+		c.backupProtection.RUnlock()
+		
+		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 		if err != nil {
 			logutil.Error(
 				"GC-REPLAY-GET-SNAPSHOT_ERROR",
@@ -1208,7 +1216,16 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "GetPITRs failed"
 		return
 	}
-	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp)
+	
+	// Get backup protection TS if active
+	c.backupProtection.RLock()
+	var extraTS types.TS
+	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+		extraTS = c.backupProtection.protectedTS
+	}
+	c.backupProtection.RUnlock()
+	
+	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp, extraTS)
 	if err != nil {
 		extraErrMsg = "GetSnapshot failed"
 		return
@@ -2070,7 +2087,16 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
-	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
+	
+	// Get backup protection TS if active
+	c.backupProtection.RLock()
+	var extraTS types.TS
+	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+		extraTS = c.backupProtection.protectedTS
+	}
+	c.backupProtection.RUnlock()
+	
+	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 }
 
 func (c *checkpointCleaner) GetSnapshotsLocked() (*logtail.SnapshotInfo, error) {
