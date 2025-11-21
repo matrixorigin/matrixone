@@ -57,6 +57,16 @@ type BranchHashmap interface {
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
 	// min(runtime.NumCPU(), shardCount), clamped to [1, shardCount].
 	ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error
+	// Project rebuilds a new hashmap using the provided keyCols from the current
+	// rows. parallelism controls shard-level fan-out; see ForEachShardParallel
+	// for the clamping rules. The returned hashmap owns its own storage and is
+	// independent from the source.
+	Project(keyCols []int, parallelism int) (BranchHashmap, error)
+	// Migrate rebuilds a new hashmap using the provided keyCols while freeing
+	// rows from the current map during the process. This reduces peak memory
+	// when Project would duplicate data. parallelism follows ForEachShardParallel
+	// semantics.
+	Migrate(keyCols []int, parallelism int) (BranchHashmap, error)
 	// ItemCount reports the number of rows currently stored in the hashmap.
 	ItemCount() int64
 	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
@@ -152,7 +162,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 		return nil, moerr.NewInternalErrorNoCtx("branchHashmap requires a non-nil allocator")
 	}
 	if bh.shardCount <= 0 {
-		cpu := runtime.NumCPU()
+		cpu := runtime.NumCPU() * 4
 		if cpu <= 0 {
 			cpu = 1
 		}
@@ -281,18 +291,20 @@ func (bh *branchHashmap) flushPreparedEntries(shardBuckets [][]*hashEntry, chunk
 		buf, deallocator, err = bh.allocateBuffer(uint64(totalBytes))
 		if err != nil {
 			if len(chunk) <= 1 {
-				return err
+				// Fallback to Go heap for single entry when allocator is exhausted.
+				buf = make([]byte, totalBytes)
+			} else {
+				// Current batch does not fit into the allocator even after spilling.
+				// Split the chunk so smaller batches can still make progress.
+				mid := len(chunk) / 2
+				if mid == 0 {
+					mid = 1
+				}
+				if err := bh.flushPreparedEntries(shardBuckets, chunk[:mid]); err != nil {
+					return err
+				}
+				return bh.flushPreparedEntries(shardBuckets, chunk[mid:])
 			}
-			// Current batch does not fit into the allocator even after spilling.
-			// Split the chunk so smaller batches can still make progress.
-			mid := len(chunk) / 2
-			if mid == 0 {
-				mid = 1
-			}
-			if err := bh.flushPreparedEntries(shardBuckets, chunk[:mid]); err != nil {
-				return err
-			}
-			return bh.flushPreparedEntries(shardBuckets, chunk[mid:])
 		}
 	}
 
@@ -516,6 +528,144 @@ func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error,
 
 	wg.Wait()
 	return first
+}
+
+func (bh *branchHashmap) Project(keyCols []int, parallelism int) (BranchHashmap, error) {
+	return bh.projectInternal(keyCols, parallelism, false)
+}
+
+func (bh *branchHashmap) Migrate(keyCols []int, parallelism int) (BranchHashmap, error) {
+	return bh.projectInternal(keyCols, parallelism, true)
+}
+
+func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume bool) (BranchHashmap, error) {
+	if len(keyCols) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("branchHashmap requires at least one key column for Project")
+	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	valueTypes := cloneTypesFromSlice(bh.valueTypes)
+	shardCount := bh.shardCount
+	allocator := bh.allocator
+	spillRoot := bh.spillRoot
+	bh.metaMu.RUnlock()
+
+	if len(valueTypes) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("branchHashmap Project requires existing value types")
+	}
+	newKeyTypes := make([]types.Type, len(keyCols))
+	seen := make(map[int]struct{}, len(keyCols))
+	for i, idx := range keyCols {
+		if idx < 0 || idx >= len(valueTypes) {
+			return nil, moerr.NewInvalidInputNoCtxf("key column index %d out of range", idx)
+		}
+		if _, ok := seen[idx]; ok {
+			return nil, moerr.NewInvalidInputNoCtx("duplicate key column index in Project")
+		}
+		seen[idx] = struct{}{}
+		newKeyTypes[i] = valueTypes[idx]
+	}
+
+	targetIface, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(spillRoot),
+		WithBranchHashmapShardCount(shardCount),
+	)
+	if err != nil {
+		return nil, err
+	}
+	target, ok := targetIface.(*branchHashmap)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected BranchHashmap implementation")
+	}
+	target.metaMu.Lock()
+	target.valueTypes = cloneTypesFromSlice(valueTypes)
+	target.keyTypes = cloneTypesFromSlice(newKeyTypes)
+	target.metaMu.Unlock()
+
+	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
+		shardBuckets := make([][]*hashEntry, target.shardCount)
+		keyPacker := target.getPacker()
+		chunk := target.getPreparedEntryBatch(0)
+		flushChunk := func() error {
+			if len(chunk) == 0 {
+				return nil
+			}
+			if err := target.flushPreparedEntries(shardBuckets, chunk); err != nil {
+				return err
+			}
+			target.putPreparedEntryBatch(chunk)
+			chunk = target.getPreparedEntryBatch(0)
+			return nil
+		}
+		defer func() {
+			target.putPacker(keyPacker)
+			target.putPreparedEntryBatch(chunk)
+		}()
+
+		err := cursor.ForEach(func(key []byte, rows [][]byte) error {
+			var sourceRows [][]byte
+			if consume {
+				res, err := cursor.PopByEncodedKey(key, true)
+				if err != nil {
+					return err
+				}
+				sourceRows = res.Rows
+			} else {
+				sourceRows = rows
+			}
+			if len(sourceRows) == 0 {
+				return nil
+			}
+			for _, row := range sourceRows {
+				tuple, err := types.Unpack(row)
+				if err != nil {
+					return err
+				}
+				if len(tuple) != len(valueTypes) {
+					return moerr.NewInvalidInputNoCtxf("unexpected row width %d, want %d", len(tuple), len(valueTypes))
+				}
+
+				keyPacker.Reset()
+				for _, colIdx := range keyCols {
+					if err := encodeDecodedValue(keyPacker, valueTypes[colIdx], tuple[colIdx]); err != nil {
+						return err
+					}
+				}
+				keyCopy := make([]byte, len(keyPacker.Bytes()))
+				copy(keyCopy, keyPacker.Bytes())
+				valueBytes := row
+				if consume {
+					valueCopy := make([]byte, len(row))
+					copy(valueCopy, row)
+					valueBytes = valueCopy
+				}
+				chunk = append(chunk, preparedEntry{
+					key:   keyCopy,
+					value: valueBytes,
+				})
+				if len(chunk) >= putBatchSize {
+					if err := flushChunk(); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return flushChunk()
+	}, parallelism)
+	if err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	return target, nil
 }
 
 func (bh *branchHashmap) ItemCount() int64 {
@@ -1032,6 +1182,15 @@ func cloneTypes(vecs []*vector.Vector) []types.Type {
 	return ret
 }
 
+func cloneTypesFromSlice(typesIn []types.Type) []types.Type {
+	if len(typesIn) == 0 {
+		return nil
+	}
+	out := make([]types.Type, len(typesIn))
+	copy(out, typesIn)
+	return out
+}
+
 func encodeRow(p *types.Packer, vecs []*vector.Vector, cols []int, row int) error {
 	for _, col := range cols {
 		vec := vecs[col]
@@ -1042,6 +1201,153 @@ func encodeRow(p *types.Packer, vecs []*vector.Vector, cols []int, row int) erro
 		if err := encodeValue(p, vec, row); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
+	if v == nil {
+		p.EncodeNull()
+		return nil
+	}
+	switch typ.Oid {
+	case types.T_bool:
+		val, ok := v.(bool)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected bool value")
+		}
+		p.EncodeBool(val)
+	case types.T_int8:
+		val, ok := v.(int8)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected int8 value")
+		}
+		p.EncodeInt8(val)
+	case types.T_int16:
+		val, ok := v.(int16)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected int16 value")
+		}
+		p.EncodeInt16(val)
+	case types.T_int32:
+		val, ok := v.(int32)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected int32 value")
+		}
+		p.EncodeInt32(val)
+	case types.T_int64:
+		val, ok := v.(int64)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected int64 value")
+		}
+		p.EncodeInt64(val)
+	case types.T_uint8:
+		val, ok := v.(uint8)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected uint8 value")
+		}
+		p.EncodeUint8(val)
+	case types.T_uint16:
+		val, ok := v.(uint16)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected uint16 value")
+		}
+		p.EncodeUint16(val)
+	case types.T_uint32:
+		val, ok := v.(uint32)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected uint32 value")
+		}
+		p.EncodeUint32(val)
+	case types.T_uint64:
+		val, ok := v.(uint64)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected uint64 value")
+		}
+		p.EncodeUint64(val)
+	case types.T_float32:
+		val, ok := v.(float32)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected float32 value")
+		}
+		p.EncodeFloat32(val)
+	case types.T_float64:
+		val, ok := v.(float64)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected float64 value")
+		}
+		p.EncodeFloat64(val)
+	case types.T_date:
+		val, ok := v.(types.Date)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected date value")
+		}
+		p.EncodeDate(val)
+	case types.T_time:
+		val, ok := v.(types.Time)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected time value")
+		}
+		p.EncodeTime(val)
+	case types.T_datetime:
+		val, ok := v.(types.Datetime)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected datetime value")
+		}
+		p.EncodeDatetime(val)
+	case types.T_timestamp:
+		val, ok := v.(types.Timestamp)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected timestamp value")
+		}
+		p.EncodeTimestamp(val)
+	case types.T_decimal64:
+		val, ok := v.(types.Decimal64)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected decimal64 value")
+		}
+		p.EncodeDecimal64(val)
+	case types.T_decimal128:
+		val, ok := v.(types.Decimal128)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected decimal128 value")
+		}
+		p.EncodeDecimal128(val)
+	case types.T_uuid:
+		val, ok := v.(types.Uuid)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected uuid value")
+		}
+		p.EncodeUuid(val)
+	case types.T_bit:
+		val, ok := v.(uint64)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected bit value")
+		}
+		p.EncodeBit(val)
+	case types.T_enum:
+		switch val := v.(type) {
+		case types.Enum:
+			p.EncodeUint16(uint16(val))
+		case uint16:
+			p.EncodeUint16(val)
+		default:
+			return moerr.NewInvalidInputNoCtx("expected enum value")
+		}
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_datalink,
+		types.T_array_float32, types.T_array_float64, types.T_TS:
+		bytesVal, ok := v.([]byte)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected byte slice value")
+		}
+		p.EncodeStringType(bytesVal)
+	default:
+		bytesVal, ok := v.([]byte)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected byte slice value")
+		}
+		p.EncodeStringType(bytesVal)
 	}
 	return nil
 }
