@@ -876,6 +876,157 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `conv`
+	{
+		functionId: CONV,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 3 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			// First parameter can be any type (string or numeric)
+			// Second and third parameters must be int64 (bases)
+			if inputs[1].Oid != types.T_int64 || inputs[2].Oid != types.T_int64 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int8, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_int16, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_uint8, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_uint16, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_uint32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_uint64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_float32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_float64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+		},
+	},
+
 	// function `jq`
 	{
 		functionId: JQ,

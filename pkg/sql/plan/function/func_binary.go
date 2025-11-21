@@ -1507,6 +1507,217 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// Conv: CONV(N, from_base, to_base) - Converts numbers between different number bases
+// N can be a string or numeric type
+// from_base and to_base must be integers between 2 and 36
+// Returns a string representation of N in to_base
+func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// Get base parameters (must be constants)
+	if !ivecs[1].IsConst() || !ivecs[2].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "conv bases", "not constant")
+	}
+
+	fromBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	toBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	fromBase, null1 := fromBaseVec.GetValue(0)
+	toBase, null2 := toBaseVec.GetValue(0)
+
+	if null1 || null2 {
+		// If bases are NULL, return NULL for all rows
+		for i := uint64(0); i < uint64(length); i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Validate base ranges (2-36)
+	if fromBase < 2 || fromBase > 36 || toBase < 2 || toBase > 36 {
+		return moerr.NewInvalidInputf(proc.Ctx, "conv base must be between 2 and 36, got from_base=%d, to_base=%d", fromBase, toBase)
+	}
+
+	// Handle different input types for N
+	// MySQL behavior:
+	// - For numeric types: always treat as base 10, regardless of from_base
+	// - For string types: parse according to from_base
+	inputType := ivecs[0].GetType()
+	switch inputType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		// Numeric types are always treated as base 10
+		return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		// Numeric types are always treated as base 10
+		return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+	case types.T_float32, types.T_float64:
+		// Numeric types are always treated as base 10
+		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
+	default:
+		// For other types, try to convert to string first
+		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	}
+}
+
+func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionStrParameter(nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		nStr, null := nParam.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse the number from from_base
+		// strconv.ParseInt can handle bases 2-36
+		val, err := strconv.ParseInt(strings.TrimSpace(string(nStr)), int(fromBase), 64)
+		if err != nil {
+			// If parsing as signed int fails, try unsigned
+			uval, uerr := strconv.ParseUint(strings.TrimSpace(string(nStr)), int(fromBase), 64)
+			if uerr != nil {
+				// Return NULL if parsing fails (MySQL behavior)
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert unsigned to string in to_base
+			result := strconv.FormatUint(uval, int(toBase))
+			if err := rs.AppendBytes([]byte(result), false); err != nil {
+				return err
+			}
+		} else {
+			// Convert signed int to string in to_base
+			// For negative numbers, MySQL returns the unsigned representation
+			if val < 0 {
+				uval := uint64(val)
+				result := strconv.FormatUint(uval, int(toBase))
+				if err := rs.AppendBytes([]byte(result), false); err != nil {
+					return err
+				}
+			} else {
+				result := strconv.FormatInt(val, int(toBase))
+				if err := rs.AppendBytes([]byte(result), false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int64](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert int64 to string in to_base
+		// For negative numbers, MySQL returns the unsigned representation
+		var result string
+		if n < 0 {
+			uval := uint64(n)
+			result = strconv.FormatUint(uval, int(toBase))
+		} else {
+			result = strconv.FormatInt(n, int(toBase))
+		}
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint64](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert uint64 to string in to_base
+		result := strconv.FormatUint(n, int(toBase))
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[float64](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert float64 to int64 first (truncate), then to string in to_base
+		val := int64(n)
+		var result string
+		if val < 0 {
+			uval := uint64(val)
+			result = strconv.FormatUint(uval, int(toBase))
+		} else {
+			result = strconv.FormatInt(val, int(toBase))
+		}
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")

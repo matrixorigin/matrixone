@@ -471,9 +471,12 @@ const (
 	// function `json_object`
 	JSON_OBJECT = 366
 
+	// function `conv`
+	CONV = 367
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 367
+	FUNCTION_END_NUMBER = 368
 )
 
 // functionIdRegister is what function we have registered already.
@@ -672,6 +675,7 @@ var functionIdRegister = map[string]int32{
 	"charset":                        CHARSET,
 	"convert":                        CONVERT,
 	"convert_tz":                     CONVERT_TZ,
+	"conv":                           CONV,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
