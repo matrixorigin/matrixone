@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -122,30 +121,16 @@ type tableStuff struct {
 
 	lcaRel engine.Relation
 
-	colNames           []string
-	pkKind             int
-	pkColIdx           int
-	pkColType          types.Type
-	expandedPKColIdxes []int
-	neededColIdxes     []int
-	neededColTypes     []types.Type
-
-	worker *ants.Pool
-}
-
-func (t tableStuff) pkIdxInBat() int {
-	sortColIdx := 0
-	if t.pkKind != normalKind {
-		sortColIdx = len(t.neededColIdxes)
-	} else {
-		for i, idx := range t.neededColIdxes {
-			if idx == t.pkColIdx {
-				sortColIdx = i
-			}
-		}
+	def struct {
+		colNames     []string     // all columns
+		colTypes     []types.Type // all columns
+		visibleIdxes []int
+		pkColIdx     int
+		pkColIdxes   []int // expanded pk columns
+		pkKind       int
 	}
 
-	return sortColIdx
+	worker *ants.Pool
 }
 
 type batchWithKind struct {
@@ -184,8 +169,9 @@ func acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
 
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
+			pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 			bat = batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(tblStuff.pkColType)
+			bat.Vecs[0] = vector.NewVec(pkType)
 			return bat
 		}
 
@@ -196,15 +182,10 @@ func acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
 
 	} else {
 		if len(retBatchPool.dList) == 0 {
-			bat = batch.NewWithSize(len(tblStuff.colNames))
-			for i := range tblStuff.colNames {
-				bat.Vecs[i] = vector.NewVec(tblStuff.neededColTypes[i])
+			bat = batch.NewWithSize(len(tblStuff.def.colNames))
+			for i := range tblStuff.def.colNames {
+				bat.Vecs[i] = vector.NewVec(tblStuff.def.colTypes[i])
 			}
-
-			if tblStuff.pkKind != normalKind {
-				bat.Vecs = append(bat.Vecs, vector.NewVec(tblStuff.pkColType))
-			}
-
 			return bat
 		}
 
@@ -564,12 +545,12 @@ func satisfyDiffOutputOpt(
 		for wrapped := range retCh {
 			for rowIdx := range wrapped.batch.RowCount() {
 				var (
-					row = make([]any, len(tblStuff.neededColIdxes)+2)
+					row = make([]any, len(tblStuff.def.visibleIdxes)+2)
 				)
 				row[0] = wrapped.name
 				row[1] = wrapped.kind
 
-				for colIdx, _ := range tblStuff.neededColIdxes {
+				for _, colIdx := range tblStuff.def.visibleIdxes {
 					vec := wrapped.batch.Vecs[colIdx]
 					if err = extractRowFromVector(
 						ctx, ses, vec, colIdx+2, row, rowIdx, true,
@@ -871,24 +852,26 @@ func constructValsFromBatch(
 	}
 
 	var (
-		row = make([]any, len(tblStuff.neededColIdxes))
+		row = make([]any, len(tblStuff.def.visibleIdxes))
 	)
 
 	for rowIdx := range wrapped.batch.RowCount() {
-		for colIdx, vec := range wrapped.batch.Vecs {
+		for _, colIdx := range tblStuff.def.visibleIdxes {
+			vec := wrapped.batch.Vecs[colIdx]
 			if err = extractRowFromVector(
 				ctx, ses, vec, colIdx, row, rowIdx, true,
 			); err != nil {
 				return
 			}
 		}
-	}
-	if wrapped.kind == diffDelete {
-		writeDeleteFrom(row)
-	} else if wrapped.kind == diffInsert {
-		writeReplaceInto(row)
-	} else {
-		writeReplaceInto(row)
+
+		if wrapped.kind == diffDelete {
+			writeDeleteFrom(row)
+		} else if wrapped.kind == diffInsert {
+			writeReplaceInto(row)
+		} else {
+			writeReplaceInto(row)
+		}
 	}
 
 	return
@@ -1066,45 +1049,46 @@ func getTableStuff(
 	}
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		tblStuff.pkKind = fakeKind
+		tblStuff.def.pkKind = fakeKind
 		for i, col := range baseTblDef.Cols {
 			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				tblStuff.expandedPKColIdxes = append(tblStuff.expandedPKColIdxes, i)
+				tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, i)
 			}
 		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
 		// case 2: composite pk, combined all pks columns as the PK
-		tblStuff.pkKind = compositeKind
+		tblStuff.def.pkKind = compositeKind
 		pkNames := baseTblDef.Pkey.Names
 		for _, name := range pkNames {
 			idx := int(baseTblDef.Name2ColIndex[name])
-			tblStuff.expandedPKColIdxes = append(tblStuff.expandedPKColIdxes, idx)
+			tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, idx)
 		}
 	} else {
 		// normal pk
-		tblStuff.pkKind = normalKind
+		tblStuff.def.pkKind = normalKind
 		pkName := baseTblDef.Pkey.PkeyColName
 		idx := int(baseTblDef.Name2ColIndex[pkName])
-		tblStuff.expandedPKColIdxes = append(tblStuff.expandedPKColIdxes, idx)
+		tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, idx)
 	}
 
-	tblStuff.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
+	tblStuff.def.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
 
 	for i, col := range tarTblDef.Cols {
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-		if i == tblStuff.pkColIdx {
-			tblStuff.pkColType = t
+		if col.Name == catalog.Row_ID {
+			continue
 		}
 
-		if col.Name == catalog.Row_ID ||
-			col.Name == catalog.FakePrimaryKeyColName ||
+		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+
+		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
+		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
+
+		if col.Name == catalog.FakePrimaryKeyColName ||
 			col.Name == catalog.CPrimaryKeyColName {
 			continue
 		}
 
-		tblStuff.colNames = append(tblStuff.colNames, col.Name)
-		tblStuff.neededColTypes = append(tblStuff.neededColTypes, t)
-		tblStuff.neededColIdxes = append(tblStuff.neededColIdxes, i)
+		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 	}
 
 	return
@@ -1365,14 +1349,13 @@ func hashDiffIfHasLCA(
 		wg        sync.WaitGroup
 		atomicErr atomic.Value
 
-		pkIdxInBat        = tblStuff.pkIdxInBat()
 		baseDeleteBatches []batchWithKind
 		baseUpdateBatches []batchWithKind
 	)
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		if err2 := mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, pkIdxInBat, ses.proc.Mp(),
+			wrapped.batch.Vecs, tblStuff.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1393,7 +1376,7 @@ func hashDiffIfHasLCA(
 		}
 
 		if err2 = mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, pkIdxInBat, ses.proc.Mp(),
+			wrapped.batch.Vecs, tblStuff.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1402,8 +1385,8 @@ func hashDiffIfHasLCA(
 			var (
 				tarRow  = make([]any, 1)
 				baseRow = make([]any, 1)
-				tarVec  = tarWrapped.batch.Vecs[pkIdxInBat]
-				baseVec = baseWrapped.batch.Vecs[pkIdxInBat]
+				tarVec  = tarWrapped.batch.Vecs[tblStuff.pkColIdx]
+				baseVec = baseWrapped.batch.Vecs[tblStuff.pkColIdx]
 			)
 
 			i, j := 0, 0
@@ -1668,9 +1651,11 @@ func compareRowInWrappedBatches(
 		return 0, nil
 	}
 
-	for i, colIdx := range tblStuff.neededColIdxes {
-		if slices.Index(tblStuff.expandedPKColIdxes, colIdx) != -1 {
-			continue
+	for i, colIdx := range tblStuff.def.visibleIdxes {
+		if skipPKCols {
+			if slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
+				continue
+			}
 		}
 
 		var (
@@ -1695,7 +1680,7 @@ func compareRowInWrappedBatches(
 		}
 
 		if cmp := types.CompareValues(
-			row1[0], row2[0], tblStuff.neededColTypes[i].Oid,
+			row1[0], row2[0], tblStuff.def.colTypes[i].Oid,
 		); cmp != 0 {
 			return cmp, nil
 		}
@@ -1709,8 +1694,6 @@ func findDeleteAndUpdateBat(
 	tblStuff tableStuff, tblName string, tmpCh chan batchWithKind, branchTS types.TS,
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
-
-	pkIdxInBat := tblStuff.pkIdxInBat()
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
@@ -1769,12 +1752,10 @@ func findDeleteAndUpdateBat(
 		if dBat.RowCount() > 0 {
 			tBat = acquireRetBatch(tblStuff, false)
 			if checkRet, err2 = dataHashmap.PopByVectors(
-				[]*vector.Vector{dBat.Vecs[pkIdxInBat]}, false,
+				[]*vector.Vector{dBat.Vecs[tblStuff.pkColIdx]}, false,
 			); err2 != nil {
 				return err2
 			}
-
-			fmt.Println("AAA", tblName, len(checkRet), common.MoBatchToString(dBat, dBat.RowCount()))
 
 			for i, check := range checkRet {
 				if check.Exists {
@@ -1804,7 +1785,6 @@ func findDeleteAndUpdateBat(
 
 			if updateBat != nil {
 				updateBat.SetRowCount(updateBat.Vecs[0].Length())
-				fmt.Println("BBB", updateBat.RowCount(), tblName)
 				tmpCh <- batchWithKind{
 					name:  tblName,
 					batch: updateBat,
@@ -1898,6 +1878,29 @@ func diffDataHelper(
 	baseDataHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
+	// if no pk, we cannot use the fake pk to probe.
+	// must probe with full columns
+
+	if tblStuff.pkKind == fakeKind {
+		var (
+			keyIdxes   = tblStuff.expandedPKColIdxes
+			newHashmap databranchutils.BranchHashmap
+		)
+
+		ll := len(keyIdxes)
+
+		keyIdxes = append(keyIdxes, ll)   // fake pk
+		keyIdxes = append(keyIdxes, ll+1) // commit ts
+
+		if newHashmap, err = baseDataHashmap.Migrate(keyIdxes, -1); err != nil {
+			return err
+		}
+		if err = baseDataHashmap.Close(); err != nil {
+			return err
+		}
+		baseDataHashmap = newHashmap
+	}
+
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
 			err2      error
@@ -1911,7 +1914,7 @@ func diffDataHelper(
 		tarBat = acquireRetBatch(tblStuff, false)
 		baseBat = acquireRetBatch(tblStuff, false)
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
+		if err2 = cursor.ForEach(func(_ []byte, rows [][]byte) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1919,7 +1922,7 @@ func diffDataHelper(
 			}
 
 			for _, row := range rows {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
+				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(row, false); err2 != nil {
 					return err2
 				}
 
@@ -2220,7 +2223,6 @@ func handleDelsOnLCA(
 
 	sql = sqlBuf.String()
 	if sqlRet, err = runSql(ctx, ses, bh, sql); err != nil {
-		fmt.Println(sql)
 		return
 	}
 

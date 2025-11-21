@@ -2972,10 +2972,6 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_int16:
 		return appendOneFixed(vec, val.(int16), false, mp)
 	case types.T_int32:
-		if _, ok := val.(int32); !ok {
-			x := 0
-			x++
-		}
 		return appendOneFixed(vec, val.(int32), false, mp)
 	case types.T_int64:
 		return appendOneFixed(vec, val.(int64), false, mp)
