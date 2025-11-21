@@ -465,9 +465,12 @@ const (
 	// function `timestampadd`
 	TIMESTAMPADD = 364
 
+	// function `json_array`
+	JSON_ARRAY = 365
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 365
+	FUNCTION_END_NUMBER = 366
 )
 
 // functionIdRegister is what function we have registered already.
@@ -685,6 +688,7 @@ var functionIdRegister = map[string]int32{
 	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
+	"json_array":                     JSON_ARRAY,
 	"json_extract":                   JSON_EXTRACT,
 	"json_extract_string":            JSON_EXTRACT_STRING,
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,

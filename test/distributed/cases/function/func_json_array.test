@@ -1,0 +1,41 @@
+# Basic test case from requirements
+SELECT JSON_ARRAY(1, 2, 3) AS result1;
+
+# Additional test cases
+# Basic arrays
+SELECT JSON_ARRAY(1, 2, 3) AS basic_array;
+SELECT JSON_ARRAY('a', 'b', 'c') AS string_array;
+SELECT JSON_ARRAY(1.5, 2.5, 3.5) AS float_array;
+SELECT JSON_ARRAY(true, false) AS bool_array;
+SELECT JSON_ARRAY(NULL) AS null_array;
+SELECT JSON_ARRAY() AS empty_array;
+
+# Mixed types
+SELECT JSON_ARRAY(1, 'a', 2.5, true, NULL) AS mixed_array;
+
+# Date and time types
+SELECT JSON_ARRAY('2024-12-20', '2024-12-21') AS date_array;
+SELECT JSON_ARRAY('10:30:45', '11:30:45') AS time_array;
+
+# Nested JSON
+SELECT JSON_ARRAY(JSON_ARRAY(1, 2), JSON_ARRAY(3, 4)) AS nested_array;
+
+# NULL handling
+SELECT JSON_ARRAY(NULL, 1, NULL, 2) AS nulls_in_array;
+SELECT JSON_ARRAY(1, NULL, 2) AS null_middle;
+
+# Table usage
+CREATE TABLE t1(a INT, b VARCHAR(10), c FLOAT);
+INSERT INTO t1 VALUES (1, 'a', 1.5), (2, 'b', 2.5), (3, 'c', 3.5);
+SELECT JSON_ARRAY(a, b, c) AS json_array FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(id INT, name VARCHAR(10));
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+SELECT * FROM t1 WHERE JSON_ARRAY(id, name) IS NOT NULL;
+DROP TABLE t1;
+
+# Multiple JSON_ARRAY calls
+SELECT JSON_ARRAY(1, 2) AS arr1, JSON_ARRAY(3, 4) AS arr2, JSON_ARRAY(5, 6) AS arr3;
+
