@@ -6941,6 +6941,86 @@ var supportedControlBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `period_diff`
+	{
+		functionId: PERIOD_DIFF,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_int64, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_float64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PeriodDiff
+				},
+			},
+		},
+	},
 }
 
 var supportedOthersBuiltIns = []FuncNew{

@@ -498,9 +498,12 @@ const (
 	// function `period_add`
 	PERIOD_ADD = 375
 
+	// function `period_diff`
+	PERIOD_DIFF = 376
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 376
+	FUNCTION_END_NUMBER = 377
 )
 
 // functionIdRegister is what function we have registered already.
@@ -775,6 +778,7 @@ var functionIdRegister = map[string]int32{
 	"makedate":                       MAKEDATE,
 	"maketime":                       MAKETIME,
 	"period_add":                     PERIOD_ADD,
+	"period_diff":                    PERIOD_DIFF,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
