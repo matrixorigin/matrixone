@@ -4040,6 +4040,73 @@ func MakeDateString(
 	return nil
 }
 
+// MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
+func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Accept various numeric types for hour, minute, second
+	// We'll use float64 to handle all numeric types, then convert to int64
+	hourParams := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	minuteParams := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	secondParams := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		hour, null1 := hourParams.GetValue(i)
+		minute, null2 := minuteParams.GetValue(i)
+		second, null3 := secondParams.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert to int64 (truncate decimal part)
+		hourInt := int64(hour)
+		minuteInt := int64(minute)
+		secondInt := int64(second)
+
+		// MySQL allows hour to be in range [0, 838] (TIME type range)
+		// minute and second should be in range [0, 59]
+		// If values are out of range, MySQL returns NULL
+		if hourInt < 0 || hourInt > 838 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if minuteInt < 0 || minuteInt > 59 || secondInt < 0 || secondInt > 59 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Create Time value using TimeFromClock
+		// hour can be up to 838, so we use uint64 for hour
+		timeValue := types.TimeFromClock(false, uint64(hourInt), uint8(minuteInt), uint8(secondInt), 0)
+
+		// Validate the resulting time
+		h := timeValue.Hour()
+		if h < 0 {
+			h = -h
+		}
+		if !types.ValidTime(uint64(h), 0, 0) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(timeValue, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])

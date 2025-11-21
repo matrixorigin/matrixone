@@ -6760,6 +6760,66 @@ var supportedControlBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `MAKETIME`
+	{
+		functionId: MAKETIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint64, types.T_uint64, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_float64, types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int32, types.T_int32, types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint32, types.T_uint32, types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+		},
+	},
 }
 
 var supportedOthersBuiltIns = []FuncNew{
