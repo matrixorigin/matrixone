@@ -318,7 +318,7 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	}
 
 	// TODO: LIMIT BY RANK should set ranking to true
-	st.ranking = true
+	st.ranking = false
 	return st, err
 }
 

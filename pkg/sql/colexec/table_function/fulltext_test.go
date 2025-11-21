@@ -211,6 +211,9 @@ func TestFullTextCallWithLimitByRank(t *testing.T) {
 	ft_runSql = fake_runSql
 	ft_runSql_streaming = fake_runSql_streaming
 
+	// enable LIMIT BY RANK
+	ut.arg.ctr.state.(*fulltextState).ranking = true
+
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 	require.Nil(t, err)
