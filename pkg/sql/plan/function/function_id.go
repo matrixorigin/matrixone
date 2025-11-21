@@ -426,9 +426,12 @@ const (
 	// function `current_time`, `curtime`
 	CURRENT_TIME = 351
 
+	// function `truncate`
+	TRUNCATE = 352
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 352
+	FUNCTION_END_NUMBER = 353
 )
 
 // functionIdRegister is what function we have registered already.
@@ -700,6 +703,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_size":                  MO_TABLE_SIZE,
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
+	"truncate":                       TRUNCATE,
 	"trim":                           TRIM,
 	"sha2":                           SHA2,
 	"mo_log_date":                    MO_LOG_DATE,

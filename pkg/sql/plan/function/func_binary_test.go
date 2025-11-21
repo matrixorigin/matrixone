@@ -2474,9 +2474,9 @@ func initPowerTestCase() []tcTemp {
 		want  float64
 	}{
 		// Basic cases from user requirements
-		{2, 3, 8},    // POW(2, 3) = 8
-		{2, 0, 1},    // POW(2, 0) = 1
-		{4, 0.5, 2},  // POW(4, 0.5) = 2 (square root)
+		{2, 3, 8},   // POW(2, 3) = 8
+		{2, 0, 1},   // POW(2, 0) = 1
+		{4, 0.5, 2}, // POW(4, 0.5) = 2 (square root)
 		// Additional test cases
 		{1, 2, 1},
 		{2, 2, 4},
@@ -2563,6 +2563,76 @@ func TestPower(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Power)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TRUNCATE
+func initTruncateTestCase() []tcTemp {
+	cases := []struct {
+		left  float64
+		right int64
+		want  float64
+	}{
+		// Basic cases from user requirements
+		{4.567, 2, 4.56},   // TRUNCATE(4.567, 2) = 4.56
+		{4.567, 0, 4.0},    // TRUNCATE(4.567, 0) = 4
+		{-4.567, 2, -4.56}, // TRUNCATE(-4.567, 2) = -4.56
+		// Additional test cases
+		{4.567, 1, 4.5},
+		{4.567, 3, 4.567},
+		{-4.567, 0, -4.0},
+		{-4.567, 1, -4.5},
+		{0.5, 0, 0.0},
+		{-0.5, 0, 0.0},
+		{1.999, 2, 1.99},
+		{-1.999, 2, -1.99},
+		{10.123456, 3, 10.123},
+		{-10.123456, 3, -10.123},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		testInputs = append(testInputs, tcTemp{
+			info: fmt.Sprintf("test truncate(%v, %v) = %v", c.left, c.right, c.want),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.left}, []bool{}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{c.right}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{c.want}, []bool{}),
+		})
+	}
+
+	// Add NULL test cases
+	testInputs = append(testInputs, tcTemp{
+		info: "test truncate with NULL first argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
+
+	// truncate with NULL second argument should expect error, we want a const.
+	testInputs = append(testInputs, tcTemp{
+		info: "test truncate with NULL second argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{4.567}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, []bool{true}),
+	})
+
+	return testInputs
+}
+
+func TestTruncate(t *testing.T) {
+	testCases := initTruncateTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

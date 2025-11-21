@@ -596,6 +596,147 @@ func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64, selectList)
 }
 
+// TRUNCATE function implementations
+// TRUNCATE truncates a number to D decimal places without rounding
+func truncateUint64(x uint64, digits int64) uint64 {
+	switch {
+	case digits >= 0:
+		return x
+	case digits > -MaxUint64digits:
+		scale := ScaleTable[-digits]
+		x = x / scale * scale // truncate without rounding
+	case digits <= -MaxUint64digits:
+		x = 0
+	}
+	return x
+}
+
+func TruncateUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUint64, selectList)
+}
+
+func truncateInt64(x int64, digits int64) int64 {
+	switch {
+	case digits >= 0:
+		return x
+	case digits > -MaxInt64digits:
+		scale := int64(ScaleTable[-digits])
+		// Truncate towards zero (just divide and multiply, no rounding)
+		x = x / scale * scale
+	case digits <= -MaxInt64digits:
+		x = 0
+	}
+	return x
+}
+
+func TruncateInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateInt64, selectList)
+}
+
+func truncateFloat64(x float64, digits int64) float64 {
+	if digits == 0 {
+		x = math.Trunc(x)
+	} else if digits >= 308 { // the range of float64
+		// No truncation needed
+	} else if digits <= -308 {
+		x = 0
+	} else {
+		var abs_digits uint64
+		if digits < 0 {
+			abs_digits = uint64(-digits)
+		} else {
+			abs_digits = uint64(digits)
+		}
+		var tmp = math.Pow(10.0, float64(abs_digits))
+
+		if digits > 0 {
+			// Truncate to D decimal places: multiply, truncate, divide
+			var value_mul_tmp = x * tmp
+			x = math.Trunc(value_mul_tmp) / tmp
+		} else {
+			// Truncate to -D digits before decimal point
+			var value_div_tmp = x / tmp
+			x = math.Trunc(value_div_tmp) * tmp
+		}
+	}
+	return x
+}
+
+func TruncateFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
+}
+
+func truncateDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
+	if digits > 19 {
+		digits = 19
+	}
+	if digits < -18 {
+		digits = -18
+	}
+	// Truncate to D decimal places (towards zero)
+	// Similar to Floor but works correctly for both positive and negative
+	if int32(digits) >= scale {
+		return x
+	}
+	k := scale - int32(digits)
+	if k > 18 {
+		k = 18
+	}
+	// Remove the fractional part beyond D digits
+	y, _, _ := x.Mod(types.Decimal64(1), k, 0)
+	x, _ = x.Sub64(y)
+	if isConst {
+		if int32(digits) < 0 {
+			k = scale
+		}
+		x, _ = x.Scale(-k)
+	}
+	return x
+}
+
+func TruncateDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
+		return truncateDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
+}
+
+func truncateDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
+	if digits > 39 {
+		digits = 39
+	}
+	if digits < -38 {
+		digits = -38
+	}
+	// Truncate to D decimal places (towards zero)
+	if int32(digits) >= scale {
+		return x
+	}
+	k := scale - int32(digits)
+	if k > 38 {
+		k = 38
+	}
+	// Remove the fractional part beyond D digits
+	y, _, _ := x.Mod(types.Decimal128{B0_63: 1, B64_127: 0}, k, 0)
+	x, _ = x.Sub128(y)
+	if isConst {
+		if int32(digits) < 0 {
+			k = scale
+		}
+		x, _ = x.Scale(-k)
+	}
+	return x
+}
+
+func TruncateDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
+		return truncateDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
+}
+
 func roundDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
