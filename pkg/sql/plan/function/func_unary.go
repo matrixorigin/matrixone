@@ -1219,6 +1219,15 @@ func TimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}, selectList)
 }
 
+// TimeToSec returns the time argument, converted to seconds (total seconds)
+func TimeToSec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
+		// Time is stored in microseconds, so divide by MicroSecsPerSec to get seconds
+		// This gives total seconds (hours*3600 + minutes*60 + seconds)
+		return int64(v) / types.MicroSecsPerSec
+	}, selectList)
+}
+
 // TimestampToMicrosecond returns the microseconds from timestamp (0-999999)
 func TimestampToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {

@@ -5772,6 +5772,27 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `time_to_sec`
+	{
+		functionId: TIME_TO_SEC,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeToSec
+				},
+			},
+		},
+	},
+
 	// function `quarter`
 	{
 		functionId: QUARTER,

@@ -507,9 +507,12 @@ const (
 	// function `subtime`
 	SUBTIME = 378
 
+	// function `time_to_sec`
+	TIME_TO_SEC = 379
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 379
+	FUNCTION_END_NUMBER = 380
 )
 
 // functionIdRegister is what function we have registered already.
@@ -787,6 +790,7 @@ var functionIdRegister = map[string]int32{
 	"period_diff":                    PERIOD_DIFF,
 	"sec_to_time":                    SEC_TO_TIME,
 	"subtime":                        SUBTIME,
+	"time_to_sec":                    TIME_TO_SEC,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
