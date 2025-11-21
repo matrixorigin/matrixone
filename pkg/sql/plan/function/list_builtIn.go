@@ -1258,6 +1258,37 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `insert`
+	{
+		functionId: INSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Insert
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_int64, types.T_int64, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Insert
+				},
+			},
+		},
+	},
+
 	// function `reg_match`
 	{
 		functionId: REG_MATCH,

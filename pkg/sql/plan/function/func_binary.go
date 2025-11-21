@@ -3241,6 +3241,73 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
+func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
+	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
+	p4 := vector.GenerateFunctionStrParameter(ivecs[3])              // newstr
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		v4, null4 := p4.GetStrValue(i)
+
+		if null1 || null2 || null3 || null4 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			str := functionUtil.QuickBytesToStr(v1)
+			pos := v2
+			replaceLen := v3
+			newstr := functionUtil.QuickBytesToStr(v4)
+
+			// Convert to runes for proper character handling
+			runes := []rune(str)
+			strLen := int64(len(runes))
+
+			// MySQL INSERT behavior:
+			// - If pos <= 0 or pos > string length, return original string
+			// - If replaceLen <= 0, insert newstr at position pos without removing anything
+			// - Otherwise, replace replaceLen characters starting at pos with newstr
+			// - Position is 1-based
+
+			var result string
+			if pos <= 0 || pos > strLen {
+				// Invalid position, return original string
+				result = str
+			} else if replaceLen <= 0 {
+				// Insert without removing
+				posIdx := int(pos - 1) // Convert to 0-based index
+				if posIdx >= len(runes) {
+					result = str + newstr
+				} else {
+					result = string(runes[:posIdx]) + newstr + string(runes[posIdx:])
+				}
+			} else {
+				// Replace replaceLen characters starting at pos
+				posIdx := int(pos - 1) // Convert to 0-based index
+				endIdx := posIdx + int(replaceLen)
+				if endIdx > len(runes) {
+					endIdx = len(runes)
+				}
+				if posIdx >= len(runes) {
+					result = str + newstr
+				} else {
+					result = string(runes[:posIdx]) + newstr + string(runes[endIdx:])
+				}
+			}
+
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(result), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
