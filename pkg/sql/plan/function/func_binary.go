@@ -1806,6 +1806,120 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	return nil
 }
 
+// TimeFormat: format the time value according to the format string.
+// TIME_FORMAT only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
+func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "time format format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	formats := vector.GenerateFunctionStrParameter(ivecs[1])
+	fmt, null2 := formats.GetStrValue(0)
+
+	var buf bytes.Buffer
+	for i := uint64(0); i < uint64(length); i++ {
+		t, null1 := times.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			buf.Reset()
+			if err = timeFormat(proc.Ctx, t, string(fmt), &buf); err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// timeFormat: Get the format string corresponding to the time according to format specifiers
+// Only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
+func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buffer) error {
+	hour, minute, sec, msec, _ := t.ClockFormat()
+	inPatternMatch := false
+	for _, b := range format {
+		if inPatternMatch {
+			if err := makeTimeFormat(ctx, hour, minute, sec, msec, b, buf); err != nil {
+				return err
+			}
+			inPatternMatch = false
+			continue
+		}
+
+		// It's not in pattern match now.
+		if b == '%' {
+			inPatternMatch = true
+		} else {
+			buf.WriteRune(b)
+		}
+	}
+	return nil
+}
+
+// makeTimeFormat: Get the format string corresponding to the time according to a single format character
+// Only supports time-related format specifiers
+func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec uint64, b rune, buf *bytes.Buffer) error {
+	switch b {
+	case 'f':
+		fmt.Fprintf(buf, "%06d", msec)
+	case 'H':
+		FormatInt2BufByWidth(int(hour), 2, buf)
+	case 'k':
+		buf.WriteString(strconv.FormatUint(hour, 10))
+	case 'h', 'I':
+		tt := hour % 24
+		if tt%12 == 0 {
+			buf.WriteString("12")
+		} else {
+			FormatInt2BufByWidth(int(tt%12), 2, buf)
+		}
+	case 'i':
+		FormatInt2BufByWidth(int(minute), 2, buf)
+	case 'l':
+		tt := hour % 24
+		if tt%12 == 0 {
+			buf.WriteString("12")
+		} else {
+			buf.WriteString(strconv.FormatUint(tt%12, 10))
+		}
+	case 'p':
+		h := hour % 24
+		if h/12%2 == 0 {
+			buf.WriteString("AM")
+		} else {
+			buf.WriteString("PM")
+		}
+	case 'r':
+		h := hour % 24
+		switch {
+		case h == 0:
+			fmt.Fprintf(buf, "%02d:%02d:%02d AM", 12, minute, sec)
+		case h == 12:
+			fmt.Fprintf(buf, "%02d:%02d:%02d PM", 12, minute, sec)
+		case h < 12:
+			fmt.Fprintf(buf, "%02d:%02d:%02d AM", h, minute, sec)
+		default:
+			fmt.Fprintf(buf, "%02d:%02d:%02d PM", h-12, minute, sec)
+		}
+	case 'S', 's':
+		FormatInt2BufByWidth(int(sec), 2, buf)
+	case 'T':
+		fmt.Fprintf(buf, "%02d:%02d:%02d", hour%24, minute, sec)
+	default:
+		// For unsupported format specifiers, just write the character as-is
+		// This matches MySQL behavior where non-time format specifiers are ignored
+		buf.WriteRune(b)
+	}
+	return nil
+}
+
 // FormatIntByWidth: Formatintwidthn is used to format ints with width parameter n. Insufficient numbers are filled with 0.
 func FormatIntByWidth(num, n int) string {
 	numStr := strconv.Itoa(num)

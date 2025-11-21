@@ -459,9 +459,12 @@ const (
 	// function `quarter`
 	QUARTER = 362
 
+	// function `time_format`
+	TIME_FORMAT = 363
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 363
+	FUNCTION_END_NUMBER = 364
 )
 
 // functionIdRegister is what function we have registered already.
@@ -599,6 +602,7 @@ var functionIdRegister = map[string]int32{
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
+	"time_format":                    TIME_FORMAT,
 	"hour":                           HOUR,
 	"microsecond":                    MICROSECOND,
 	"minute":                         MINUTE,
