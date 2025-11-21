@@ -450,6 +450,46 @@ func TestBranchHashmapProjectChangeKey(t *testing.T) {
 	require.Equal(t, []byte("c"), row[1])
 }
 
+func TestBranchHashmapPopByEncodedFullValues(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	key1 := buildInt64Vector(t, mp, []int64{1, 1, 2})
+	val := buildStringVector(t, mp, []string{"a", "b", "c"})
+	key2 := buildInt64Vector(t, mp, []int64{5, 5, 6})
+	defer key1.Free(mp)
+	defer val.Free(mp)
+	defer key2.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer bh.Close()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{key1, val, key2}, []int{0, 2}))
+
+	probe := buildInt64Vector(t, mp, []int64{1, 2})
+	probe2 := buildInt64Vector(t, mp, []int64{5, 6})
+	defer probe.Free(mp)
+	defer probe2.Free(mp)
+
+	results, err := bh.GetByVectors([]*vector.Vector{probe, probe2})
+	require.NoError(t, err)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 2)
+	require.True(t, results[1].Exists)
+	require.Len(t, results[1].Rows, 1)
+
+	removed, err := bh.PopByEncodedFullValue(results[0].Rows[0], true)
+	require.NoError(t, err)
+	require.True(t, removed.Exists)
+	require.Len(t, removed.Rows, 2)
+
+	after, err := bh.GetByVectors([]*vector.Vector{probe, probe2})
+	require.NoError(t, err)
+	require.False(t, after[0].Exists)
+	require.True(t, after[1].Exists)
+}
+
 func TestBranchHashmapProjectIndependence(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -486,7 +526,7 @@ func TestBranchHashmapProjectIndependence(t *testing.T) {
 	require.Len(t, after[0].Rows, 1)
 }
 
-func TestBranchHashmapProjectAndRelease(t *testing.T) {
+func TestBranchHashmapMigrate(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -1589,7 +1629,7 @@ func BenchmarkBranchHashmapProject(b *testing.B) {
 	})
 }
 
-func BenchmarkBranchHashmapProjectAndRelease(b *testing.B) {
+func BenchmarkBranchHashmapMigrate(b *testing.B) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 

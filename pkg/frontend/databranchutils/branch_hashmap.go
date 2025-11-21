@@ -52,6 +52,10 @@ type BranchHashmap interface {
 	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
 	// from ForEachShardParallel. It mirrors PopByVectors semantics.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedFullValues removes rows by reconstructing the key from a full
+	// encoded row payload. The full row must match the value encoding used by
+	// PutByVectors. It mirrors PopByEncodedKey semantics.
+	PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error)
 	// ForEachShardParallel provides exclusive access to each shard. The callback
 	// receives a cursor offering read-only iteration plus mutation helpers that
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
@@ -114,6 +118,7 @@ type branchHashmap struct {
 
 	valueTypes []types.Type
 	keyTypes   []types.Type
+	keyCols    []int
 
 	spillRoot string
 
@@ -189,6 +194,7 @@ func (bh *branchHashmap) ensurePutTypes(vecs []*vector.Vector, keyCols []int) er
 	if len(bh.valueTypes) == 0 {
 		bh.valueTypes = cloneTypes(vecs)
 		bh.keyTypes = make([]types.Type, len(keyCols))
+		bh.keyCols = cloneInts(keyCols)
 		seen := make(map[int]struct{}, len(keyCols))
 		for i, idx := range keyCols {
 			if idx < 0 || idx >= len(vecs) {
@@ -456,6 +462,49 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 	result.Exists = len(rows) > 0
 	return result, nil
 }
+
+func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error) {
+	var result GetResult
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	valueTypes := cloneTypesFromSlice(bh.valueTypes)
+	keyTypes := cloneTypesFromSlice(bh.keyTypes)
+	keyCols := cloneInts(bh.keyCols)
+	bh.metaMu.RUnlock()
+
+	if len(valueTypes) == 0 || len(keyTypes) == 0 || len(keyCols) == 0 {
+		return result, moerr.NewInvalidInputNoCtx("branchHashmap PopByEncodedFullValue requires initialized key and value types")
+	}
+	if len(keyCols) != len(keyTypes) {
+		return result, moerr.NewInvalidInputNoCtx("branchHashmap key columns/types mismatch")
+	}
+
+	tuple, err := types.Unpack(encodedValue)
+	if err != nil {
+		return result, err
+	}
+	if len(tuple) != len(valueTypes) {
+		return result, moerr.NewInvalidInputNoCtxf("unexpected row width %d, want %d", len(tuple), len(valueTypes))
+	}
+
+	packer := bh.getPacker()
+	defer bh.putPacker(packer)
+
+	for i, colIdx := range keyCols {
+		if *(&valueTypes[colIdx]) != keyTypes[i] {
+			return result, moerr.NewInvalidInputNoCtx("key column type mismatch")
+		}
+		if err := encodeDecodedValue(packer, valueTypes[colIdx], tuple[colIdx]); err != nil {
+			return result, err
+		}
+	}
+	encodedKey := packer.Bytes()
+	return bh.PopByEncodedKey(encodedKey, removeAll)
+}
 func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error {
 	if fn == nil {
 		return nil
@@ -585,6 +634,7 @@ func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume
 	target.metaMu.Lock()
 	target.valueTypes = cloneTypesFromSlice(valueTypes)
 	target.keyTypes = cloneTypesFromSlice(newKeyTypes)
+	target.keyCols = cloneInts(keyCols)
 	target.metaMu.Unlock()
 
 	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
@@ -1125,6 +1175,9 @@ func (bh *branchHashmap) validatePutTypesLocked(vecs []*vector.Vector, keyCols [
 		if *vecs[idx].GetType() != bh.keyTypes[i] {
 			return moerr.NewInvalidInputNoCtxf("key column type mismatch at index %d", i)
 		}
+		if bh.keyCols[i] != idx {
+			return moerr.NewInvalidInputNoCtx("key column indexes changed between PutByVectors calls")
+		}
 	}
 	return nil
 }
@@ -1188,6 +1241,15 @@ func cloneTypesFromSlice(typesIn []types.Type) []types.Type {
 	}
 	out := make([]types.Type, len(typesIn))
 	copy(out, typesIn)
+	return out
+}
+
+func cloneInts(in []int) []int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]int, len(in))
+	copy(out, in)
 	return out
 }
 
