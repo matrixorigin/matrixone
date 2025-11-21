@@ -52,6 +52,7 @@ type Analyzer interface {
 	AddS3RequestCount(counter *perfcounter.CounterSet)
 	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
+	AddReadSizeInfo(counter *perfcounter.CounterSet)
 
 	GetOpCounterSet() *perfcounter.CounterSet
 	GetOpStats() *OperatorStats
@@ -303,6 +304,16 @@ func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
 	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Write.Load()
 }
 
+func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddReadSizeInfo: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
+	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
+}
+
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.GetOpStats(): operatorAnalyzer.opStats is nil")
@@ -324,10 +335,13 @@ type OperatorStats struct {
 	NetworkIO        int64  `json:"NetworkIO,omitempty"`
 	DiskIO           int64  `json:"DiskIO,omitempty"`
 
-	InputBlocks int64 `json:"-"`
-	ScanBytes   int64 `json:"-"`
-	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows Used to estimate S3input
-	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows Used to estimate S3input
+	InputBlocks  int64 `json:"-"`
+	ScanBytes    int64 `json:"-"`
+	ReadSize     int64 `json:"ReadSize,omitempty"`     // ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
+	S3ReadSize   int64 `json:"S3ReadSize,omitempty"`   // S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
+	DiskReadSize int64 `json:"DiskReadSize,omitempty"` // DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
+	WrittenRows  int64 `json:"WrittenRows,omitempty"`  // WrittenRows Used to estimate S3input
+	DeletedRows  int64 `json:"DeletedRows,omitempty"`  // DeletedRows Used to estimate S3input
 
 	S3List      int64 `json:"S3List,omitempty"`
 	S3Head      int64 `json:"S3Head,omitempty"`
@@ -431,6 +445,15 @@ func (ps *OperatorStats) String() string {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
 	}
 	//---------------------------------------------------------------------------------------------
+	if ps.ReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize:%dbytes ", ps.ReadSize))
+	}
+	if ps.S3ReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3ReadSize:%dbytes ", ps.S3ReadSize))
+	}
+	if ps.DiskReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("DiskReadSize:%dbytes ", ps.DiskReadSize))
+	}
 	if ps.CacheRead > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))
 	}

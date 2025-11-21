@@ -65,6 +65,13 @@ type FileServiceCounterSet struct {
 		Read  stats.Counter // logical read, unit：bytes
 		Write stats.Counter // logical write, unit：bytes
 	}
+
+	// ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
+	ReadSize stats.Counter
+	// S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
+	S3ReadSize stats.Counter
+	// DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
+	DiskReadSize stats.Counter
 }
 
 type DistTAECounterSet struct {
