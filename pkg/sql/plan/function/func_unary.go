@@ -1368,6 +1368,30 @@ func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+func DateToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+		// DAYOFWEEK returns 1-7, where 1=Sunday, 2=Monday, ..., 7=Saturday
+		// DayOfWeek() returns 0-6, where 0=Sunday, 1=Monday, ..., 6=Saturday
+		return int64(v.DayOfWeek()) + 1
+	}, selectList)
+}
+
+func DatetimeToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		// DAYOFWEEK returns 1-7, where 1=Sunday, 2=Monday, ..., 7=Saturday
+		// DayOfWeek() returns 0-6, where 0=Sunday, 1=Monday, ..., 6=Saturday
+		return int64(v.ToDate().DayOfWeek()) + 1
+	}, selectList)
+}
+
+func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		// DAYOFWEEK returns 1-7, where 1=Sunday, 2=Monday, ..., 7=Saturday
+		// DayOfWeek() returns 0-6, where 0=Sunday, 1=Monday, ..., 6=Saturday
+		return int64(v.ToDatetime(proc.GetSessionInfo().TimeZone).ToDate().DayOfWeek()) + 1
+	}, selectList)
+}
+
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
 		return 0
