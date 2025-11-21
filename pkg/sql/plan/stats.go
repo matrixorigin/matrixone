@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -1708,10 +1709,15 @@ func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 	if len(node.Children) > 0 {
 		setNodeDOP(p, node.Children[0], dop)
 	}
-	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.Shuffle {
+	if node.NodeType == plan.Node_JOIN &&
+		node.Stats != nil &&
+		node.Stats.HashmapStats != nil &&
+		node.Stats.HashmapStats.Shuffle {
 		setNodeDOP(p, node.Children[1], dop)
 	}
-	node.Stats.Dop = dop
+	if node.Stats != nil {
+		node.Stats.Dop = dop
+	}
 }
 
 func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
@@ -1720,6 +1726,32 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	for i := range node.Children {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
+
+	// Check if node has distinct aggregation, which should run in single CPU
+	hasDistinctAgg := false
+	if node.NodeType == plan.Node_AGG && len(node.AggList) > 0 {
+		for _, agg := range node.AggList {
+			if f, ok := agg.Expr.(*plan.Expr_F); ok {
+				if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
+					hasDistinctAgg = true
+					break
+				}
+			}
+		}
+	}
+
+	if hasDistinctAgg {
+		// distinct aggregation should run in only one node and without any parallel
+		if node.Stats == nil {
+			// If Stats is nil, create it first
+			// This should be rare for AGG nodes, but we handle it for safety
+			node.Stats = DefaultStats()
+		}
+		setNodeDOP(p, rootID, 1)
+		node.Stats.ForceOneCN = true
+		return
+	}
+
 	if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
 			setNodeDOP(p, rootID, ncpu)
