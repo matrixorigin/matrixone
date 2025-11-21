@@ -237,7 +237,7 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 		}
 
 		// build minheap
-		if u.minheap == nil {
+		if u.minheap == nil || len(u.minheap) == 0 {
 			err = sort_topk(u, proc, u.sacc, topk)
 			if err != nil {
 				return vm.CancelResult, err
@@ -319,7 +319,6 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 
 	// TODO: LIMIT BY RANK should set ranking to true
 	st.ranking = true
-
 	return st, err
 }
 
