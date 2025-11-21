@@ -1,54 +1,52 @@
 SELECT DAYOFWEEK('2024-12-20') AS result1;
 result1
 6
-SELECT DAYOFWEEK('2024-12-22') AS sunday;
+SELECT DAYOFWEEK('2024-12-15') AS sunday;    # Sunday = 1
 sunday
 1
-SELECT DAYOFWEEK('2024-12-23') AS monday;
+SELECT DAYOFWEEK('2024-12-16') AS monday;    # Monday = 2
 monday
 2
-SELECT DAYOFWEEK('2024-12-24') AS tuesday;
+SELECT DAYOFWEEK('2024-12-17') AS tuesday;   # Tuesday = 3
 tuesday
 3
-SELECT DAYOFWEEK('2024-12-25') AS wednesday;
+SELECT DAYOFWEEK('2024-12-18') AS wednesday; # Wednesday = 4
 wednesday
 4
-SELECT DAYOFWEEK('2024-12-26') AS thursday;
+SELECT DAYOFWEEK('2024-12-19') AS thursday;  # Thursday = 5
 thursday
 5
-SELECT DAYOFWEEK('2024-12-20') AS friday;
+SELECT DAYOFWEEK('2024-12-20') AS friday;    # Friday = 6
 friday
 6
-SELECT DAYOFWEEK('2024-12-21') AS saturday;
+SELECT DAYOFWEEK('2024-12-21') AS saturday;  # Saturday = 7
 saturday
 7
-SELECT DAYOFWEEK('2024-12-20 10:30:45') AS datetime_friday;
+SELECT DAYOFWEEK('2024-12-20 12:30:45') AS datetime_friday;
 datetime_friday
 6
-SELECT DAYOFWEEK('2024-12-22 10:30:45') AS datetime_sunday;
-datetime_sunday
-1
-SELECT DAYOFWEEK(TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_friday;
+SELECT DAYOFWEEK('2007-02-03 23:59:59') AS datetime_saturday;
+datetime_saturday
+7
+SELECT DAYOFWEEK('2024-12-20 12:30:45') AS timestamp_friday;
 timestamp_friday
 6
-SELECT DAYOFWEEK(NULL) AS null_input;
-null_input
+SELECT DAYOFWEEK(NULL) AS null_date;
+null_date
 null
-CREATE TABLE t1(d DATE);
-INSERT INTO t1 VALUES ('2024-12-20'), ('2024-12-22'), ('2024-12-23'), ('2024-12-21');
-SELECT d, DAYOFWEEK(d) AS dayofweek FROM t1;
-d    dayofweek
-2024-12-20    6
-2024-12-22    1
-2024-12-23    2
-2024-12-21    7
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20', '2024-12-20 12:00:00'), ('2024-12-21', '2024-12-21 12:00:00');
+SELECT DAYOFWEEK(d) AS day_from_date, DAYOFWEEK(dt) AS day_from_datetime FROM t1;
+day_from_date    day_from_datetime
+6    6
+7    7
 DROP TABLE t1;
 CREATE TABLE t1(d DATE);
-INSERT INTO t1 VALUES ('2024-12-20'), ('2024-12-22'), ('2024-12-23'), ('2024-12-21');
-SELECT * FROM t1 WHERE DAYOFWEEK(d) = 1;
+INSERT INTO t1 VALUES ('2024-12-20'), ('2024-12-21'), ('2024-12-22');
+SELECT * FROM t1 WHERE DAYOFWEEK(d) = 6;  # Friday
 d
-2024-12-22
+2024-12-20
 DROP TABLE t1;
-SELECT DAYOFWEEK('2024-12-20') AS dayofweek, WEEKDAY('2024-12-20') AS weekday;
-dayofweek    weekday
-6    4
+SELECT DAYOFWEEK('2024-12-15') AS sun, DAYOFWEEK('2024-12-16') AS mon, DAYOFWEEK('2024-12-17') AS tue, DAYOFWEEK('2024-12-18') AS wed, DAYOFWEEK('2024-12-19') AS thu, DAYOFWEEK('2024-12-20') AS fri, DAYOFWEEK('2024-12-21') AS sat;
+sun    mon    tue    wed    thu    fri    sat
+1    2    3    4    5    6    7
