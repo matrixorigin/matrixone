@@ -73,7 +73,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		return nodeID, nil
 	}
 
-	if opType != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
+	origFuncName := distFnExpr.Func.ObjName
+	if opType != metric.DistFuncOpTypes[origFuncName] {
 		return nodeID, nil
 	}
 
@@ -108,7 +109,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	params := idxDef.IndexAlgoParams
 
 	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
-			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d}`,
+			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d, "orig_func_name": "%s"}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		metaDef.IndexTableName,
@@ -119,7 +120,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		pkType.Id,
 		scanNode.TableDef.Pkey.PkeyColName,
 		keyPart,
-		partType.Id)
+		partType.Id,
+		origFuncName)
 
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewTag()

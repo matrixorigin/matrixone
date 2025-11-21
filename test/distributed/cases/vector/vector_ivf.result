@@ -39,16 +39,16 @@ ORDER BY
 distance ASC
 LIMIT 10;
 id    question    output_result    distance
-10001    安利作为外资企业，在政策和发展潜力上肯定不如受政府扶持的内资企业。安利公司怎么看？    KGg60nXKqPUu4DghSYYjSFWJEAmhNCAx    0.0
-10020    市场传言国外安利产品的价格远远低于国内的价格，而且同一产品国外的有效成分比国内的高，安利公司怎么看？    7MJJlzzJjbc8I7Fd9dlhCnu3nekJgHc4    0.7237337827682495
-10002    有人说安利历史太久了，市场已经饱和，现在再经营安利事业已经没有发展空间了，安利公司怎么看？    iyjo85Z3HbH3T0wSNlO4BuETGxfvIKHi    0.7633574604988098
-10007    有人说虽然安利事业没有门槛，但是营销人员的经营成本较高，自用产品、外出培训学习、通讯、筹办会议等都需要大量资金，实际上很难赚到钱，公司怎么看？    K7RvyQWlYbVqBACtSUJUo88PrgbGqKlT    0.7698017954826355
-10030    很多前景广阔的产品，譬如远红外产品、基因产品，安利都没有涉猎，直销龙头地位是否徒有其名？    d8nYTJ6aliGtGQgDtdPWBhBViExU0NiR    0.812960147857666
-10027    有人说安利的奖金制度已经实施了60年，陈旧没有新意，难以帮助营销人员取得成功，安利公司怎么看？    rTPzes6tHxX0IUXrGiKzuM6kjbzDyg7e    0.8761100172996521
-10035    安利公司是正规公司吗    K72bfubj2yViG4FL6Q61WxCXYUrP0lpJ    0.8840221762657166
-10017    安利业务计划是否养老不养小？    vrvh0bjXrp3suo0RTKzfuxCgxp3PJGkD    0.8925605416297913
-10036    面对直播电商的崛起，安利是怎么布局的？    39Kdoahoamcz55nm7rjU7K4jBIBJz44k    0.9025453329086304
-10044    人们在安利真的能挣到钱么？    M6SXZjCi8YHIsIMInXGxljKlRvR227dA    0.9115232825279236
+ 10001    安利作为外资企业，在政策和发展潜力上肯定不如受政府扶持的内资企业。安利公司怎么看？    KGg60nXKqPUu4DghSYYjSFWJEAmhNCAx    0.0
+10020    市场传言国外安利产品的价格远远低于国内的价格，而且同一产品国外的有效成分比国内的高，安利公司怎么看？    7MJJlzzJjbc8I7Fd9dlhCnu3nekJgHc4    0.723734118825973
+10002    有人说安利历史太久了，市场已经饱和，现在再经营安利事业已经没有发展空间了，安利公司怎么看？    iyjo85Z3HbH3T0wSNlO4BuETGxfvIKHi    0.7633576588176565
+10007    有人说虽然安利事业没有门槛，但是营销人员的经营成本较高，自用产品、外出培训学习、通讯、筹办会议等都需要大量资金，实际上很难赚到钱，公司怎么看？    K7RvyQWlYbVqBACtSUJUo88PrgbGqKlT    0.7698024136451669
+10030    很多前景广阔的产品，譬如远红外产品、基因产品，安利都没有涉猎，直销龙头地位是否徒有其名？    d8nYTJ6aliGtGQgDtdPWBhBViExU0NiR    0.8129601642683892
+10027    有人说安利的奖金制度已经实施了60年，陈旧没有新意，难以帮助营销人员取得成功，安利公司怎么看？    rTPzes6tHxX0IUXrGiKzuM6kjbzDyg7e    0.8761100539746219
+10035    安利公司是正规公司吗    K72bfubj2yViG4FL6Q61WxCXYUrP0lpJ    0.8840225164299005
+10017    安利业务计划是否养老不养小？    vrvh0bjXrp3suo0RTKzfuxCgxp3PJGkD    0.8925610630399667
+10036    面对直播电商的崛起，安利是怎么布局的？    39Kdoahoamcz55nm7rjU7K4jBIBJz44k    0.902546319063523
+10044    人们在安利真的能挣到钱么？    M6SXZjCi8YHIsIMInXGxljKlRvR227dA    0.9115231772472074
 SELECT
 id,
 question,
