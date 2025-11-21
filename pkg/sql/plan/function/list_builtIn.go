@@ -607,6 +607,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `greatest`
+	{
+		functionId: GREATEST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		// typechecking: always success
+		checkFn: leastGreatestCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return greatestFn
+				},
+			},
+		},
+	},
+
 	// function `ilike`
 	{
 		functionId: ILIKE,
@@ -1026,6 +1046,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInJsonSet().buildJsonReplace
+				},
+			},
+		},
+	},
+
+	// function `least`
+	{
+		functionId: LEAST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		// typechecking: always success
+		checkFn: leastGreatestCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return leastFn
 				},
 			},
 		},
