@@ -3765,6 +3765,91 @@ func TestDateTimeToWeekday(t *testing.T) {
 	}
 }
 
+// MICROSECOND
+
+func initMicrosecondTestCase() []tcTemp {
+	d1, _ := types.ParseDatetime("2004-04-03 10:20:30.123456", 6)
+	d2, _ := types.ParseTimestamp(time.Local, "2004-08-03 01:01:37.654321", 6)
+	t1, _ := types.ParseTime("15:30:45.123456", 6)
+	t2, _ := types.ParseTime("00:00:00.000000", 6)
+	t3, _ := types.ParseTime("23:59:59.999999", 6)
+
+	return []tcTemp{
+		{
+			info: "test datetime to microsecond",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{123456},
+				[]bool{false}),
+		},
+		{
+			info: "test timestamp to microsecond",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{d2},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{654321},
+				[]bool{false}),
+		},
+		{
+			info: "test time to microsecond",
+			typ:  types.T_time,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1, t2, t3},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{123456, 0, 999999},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test datetime to microsecond - null",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestMicrosecond(t *testing.T) {
+	testCases := initMicrosecondTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, DatetimeToMicrosecond)
+		case types.T_timestamp:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampToMicrosecond)
+		case types.T_time:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimeToMicrosecond)
+		default:
+			t.Fatalf("unsupported type for microsecond test: %v", tc.typ)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // DAYOFWEEK
 
 func initDateToDayOfWeekTestCase() []tcTemp {

@@ -453,9 +453,12 @@ const (
 	// function `dayofweek`
 	DAYOFWEEK = 360
 
+	// function `microsecond`
+	MICROSECOND = 361
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 361
+	FUNCTION_END_NUMBER = 362
 )
 
 // functionIdRegister is what function we have registered already.
@@ -594,6 +597,7 @@ var functionIdRegister = map[string]int32{
 	"date":                           DATE,
 	"time":                           TIME,
 	"hour":                           HOUR,
+	"microsecond":                    MICROSECOND,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
 	"sqrt":                           SQRT,

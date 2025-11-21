@@ -1192,6 +1192,32 @@ func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+// TimestampToMicrosecond returns the microseconds from timestamp (0-999999)
+func TimestampToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		return dt.MicroSec()
+	}, selectList)
+}
+
+// DatetimeToMicrosecond returns the microseconds from datetime (0-999999)
+func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		return v.MicroSec()
+	}, selectList)
+}
+
+// TimeToMicrosecond returns the microseconds from time (0-999999)
+func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
+		return v.MicroSec()
+	}, selectList)
+}
+
 func doBinary(orig []byte) []byte {
 	if len(orig) > types.MaxBinaryLen {
 		return orig[:types.MaxBinaryLen]
