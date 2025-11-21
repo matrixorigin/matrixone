@@ -350,6 +350,142 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
+func initTimestampAddTestCase() []tcTemp {
+	d1, _ := types.ParseDateCast("2024-12-20")
+	r1, _ := types.ParseDateCast("2024-12-25")  // +5 days
+	r11, _ := types.ParseDateCast("2024-12-21") // +1 days
+	d2, _ := types.ParseDatetime("2024-12-20 10:30:45", 6)
+	r2, _ := types.ParseDatetime("2024-12-25 10:30:45", 6) // +5 days
+	d3, _ := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
+	r3, _ := types.ParseTimestamp(time.Local, "2024-12-25 10:30:45", 6) // +5 days
+
+	return []tcTemp{
+		{
+			info: "test TimestampAdd - DATE with DAY",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{r1},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - DATETIME with DAY",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d2},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{r2},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - TIMESTAMP with DAY",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{d3},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
+				[]types.Timestamp{r3},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - VARCHAR with DAY",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"2024-12-20 10:30:45"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{r2},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - DATE with HOUR",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"HOUR"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{24},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{r11},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - null",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{types.Date(0)},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestTimestampAdd(t *testing.T) {
+	testCases := initTimestampAddTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_date:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddDate)
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddDatetime)
+		case types.T_timestamp:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddTimestamp)
+		case types.T_varchar:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddString)
+		default:
+			t.Fatalf("unsupported type for timestampadd test: %v", tc.typ)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initConcatWsTestCase() []tcTemp {
 	return []tcTemp{
 		{

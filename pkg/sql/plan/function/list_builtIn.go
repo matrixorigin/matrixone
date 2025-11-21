@@ -4672,6 +4672,97 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `timestampadd`
+	{
+		functionId: TIMESTAMPADD,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_date.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddDate
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddDatetime
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddTimestamp
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddString
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_char, types.T_int64, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_date.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddDate
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_char, types.T_int64, types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddDatetime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_char, types.T_int64, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddTimestamp
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_char, types.T_int64, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddString
+				},
+			},
+		},
+	},
+
 	// function `date_sub`
 	{
 		functionId: DATE_SUB,

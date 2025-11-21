@@ -1341,6 +1341,172 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	}, selectList)
 }
 
+// TimestampAddDate: TIMESTAMPADD(unit, interval, date)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = date (Date)
+func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	rs := vector.MustFunctionResult[types.Date](result)
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		date, null1 := dates.GetValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultDate, err := doDateAdd(date, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultDate, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampAddDatetime: TIMESTAMPADD(unit, interval, datetime)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = datetime (Datetime)
+func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	scale := ivecs[2].GetType().Scale
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		dt, null1 := datetimes.GetValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultDt, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampAddTimestamp: TIMESTAMPADD(unit, interval, timestamp)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = timestamp (Timestamp)
+func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	scale := ivecs[2].GetType().Scale
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		ts, null1 := timestamps.GetValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultTs, err := doTimestampAdd(loc, ts, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultTs, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampAddString: TIMESTAMPADD(unit, interval, datetime_string)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = datetime_string (string)
+func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+
+	dateStrings := vector.GenerateFunctionStrParameter(ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		dateStr, null1 := dateStrings.GetStrValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultDt, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")

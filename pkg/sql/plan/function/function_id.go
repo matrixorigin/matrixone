@@ -462,9 +462,12 @@ const (
 	// function `time_format`
 	TIME_FORMAT = 363
 
+	// function `timestampadd`
+	TIMESTAMPADD = 364
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 364
+	FUNCTION_END_NUMBER = 365
 )
 
 // functionIdRegister is what function we have registered already.
@@ -603,6 +606,7 @@ var functionIdRegister = map[string]int32{
 	"date":                           DATE,
 	"time":                           TIME,
 	"time_format":                    TIME_FORMAT,
+	"timestampadd":                   TIMESTAMPADD,
 	"hour":                           HOUR,
 	"microsecond":                    MICROSECOND,
 	"minute":                         MINUTE,
