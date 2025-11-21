@@ -3524,6 +3524,118 @@ func TestDateStringToMonth(t *testing.T) {
 	//TODO: Ignoring Scalar Nulls: Original code: https://github.com/m-schen/matrixone/blob/823b5524f1c6eb189ee9652013bdf86b99e5571e/pkg/sql/plan/function/builtin/unary/month_test.go#L150
 }
 
+// QUARTER
+
+func initDateToQuarterTestCase() []tcTemp {
+	// Q1: Jan, Feb, Mar
+	d1, _ := types.ParseDateCast("2024-01-15") // Q1
+	d2, _ := types.ParseDateCast("2024-02-15") // Q1
+	d3, _ := types.ParseDateCast("2024-03-15") // Q1
+	// Q2: Apr, May, Jun
+	d4, _ := types.ParseDateCast("2024-04-15") // Q2
+	d5, _ := types.ParseDateCast("2024-05-15") // Q2
+	d6, _ := types.ParseDateCast("2024-06-15") // Q2
+	// Q3: Jul, Aug, Sep
+	d7, _ := types.ParseDateCast("2024-07-15") // Q3
+	d8, _ := types.ParseDateCast("2024-08-15") // Q3
+	d9, _ := types.ParseDateCast("2024-09-15") // Q3
+	// Q4: Oct, Nov, Dec
+	d10, _ := types.ParseDateCast("2024-10-15") // Q4
+	d11, _ := types.ParseDateCast("2024-11-15") // Q4
+	d12, _ := types.ParseDateCast("2024-12-20") // Q4 (user's test case)
+
+	return []tcTemp{
+		{
+			info: "test date to quarter - all quarters",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test date to quarter - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestDateToQuarter(t *testing.T) {
+	testCases := initDateToQuarterTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToQuarter)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDateTimeToQuarterTestCase() []tcTemp {
+	// Q1: Jan, Feb, Mar
+	d1, _ := types.ParseDatetime("2024-01-15 10:30:45", 6) // Q1
+	d2, _ := types.ParseDatetime("2024-02-15 10:30:45", 6) // Q1
+	d3, _ := types.ParseDatetime("2024-03-15 10:30:45", 6) // Q1
+	// Q2: Apr, May, Jun
+	d4, _ := types.ParseDatetime("2024-04-15 10:30:45", 6) // Q2
+	d5, _ := types.ParseDatetime("2024-05-15 10:30:45", 6) // Q2
+	d6, _ := types.ParseDatetime("2024-06-15 10:30:45", 6) // Q2
+	// Q3: Jul, Aug, Sep
+	d7, _ := types.ParseDatetime("2024-07-15 10:30:45", 6) // Q3
+	d8, _ := types.ParseDatetime("2024-08-15 10:30:45", 6) // Q3
+	d9, _ := types.ParseDatetime("2024-09-15 10:30:45", 6) // Q3
+	// Q4: Oct, Nov, Dec
+	d10, _ := types.ParseDatetime("2024-10-15 10:30:45", 6) // Q4
+	d11, _ := types.ParseDatetime("2024-11-15 10:30:45", 6) // Q4
+	d12, _ := types.ParseDatetime("2024-12-20 10:30:45", 6) // Q4
+
+	return []tcTemp{
+		{
+			info: "test datetime to quarter - all quarters",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test datetime to quarter - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestDateTimeToQuarter(t *testing.T) {
+	testCases := initDateTimeToQuarterTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToQuarter)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // Year
 
 func initDateToYearTestCase() []tcTemp {

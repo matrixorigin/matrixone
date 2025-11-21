@@ -1579,6 +1579,20 @@ func DatetimeToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	}, selectList)
 }
 
+// DateToQuarter returns the quarter of the year for date (1-4)
+func DateToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
+		return uint8(v.Quarter())
+	}, selectList)
+}
+
+// DatetimeToQuarter returns the quarter of the year for datetime (1-4)
+func DatetimeToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return uint8(v.ToDate().Quarter())
+	}, selectList)
+}
+
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
