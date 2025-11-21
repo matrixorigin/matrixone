@@ -584,6 +584,7 @@ var functionIdRegister = map[string]int32{
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
+	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
 	"space":                          SPACE,

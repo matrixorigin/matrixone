@@ -1,0 +1,75 @@
+SELECT SIGN(5) AS result1;
+result1
+1
+SELECT SIGN(0) AS result2;
+result2
+0
+SELECT SIGN(-5) AS result3;
+result3
+-1
+SELECT SIGN(0.5) AS result4;
+result4
+1
+SELECT SIGN(100) AS positive;
+positive
+1
+SELECT SIGN(-100) AS negative;
+negative
+-1
+SELECT SIGN(1) AS one;
+one
+1
+SELECT SIGN(-1) AS minus_one;
+minus_one
+-1
+SELECT SIGN(NULL) AS null_result;
+null_result
+null
+SELECT SIGN(CAST(5 AS INT)) AS int_sign;
+int_sign
+1
+SELECT SIGN(CAST(5 AS BIGINT)) AS bigint_sign;
+bigint_sign
+1
+SELECT SIGN(CAST(5.5 AS FLOAT)) AS float_sign;
+float_sign
+1
+SELECT SIGN(CAST(5.5 AS DOUBLE)) AS double_sign;
+double_sign
+1
+SELECT SIGN(0.1) AS small_positive;
+small_positive
+1
+SELECT SIGN(-0.1) AS small_negative;
+small_negative
+-1
+SELECT SIGN(100.5) AS decimal_positive;
+decimal_positive
+1
+SELECT SIGN(-100.5) AS decimal_negative;
+decimal_negative
+-1
+CREATE TABLE t1(a INT, b DOUBLE);
+INSERT INTO t1 VALUES (5, 5.5), (0, 0.0), (-5, -5.5), (100, 100.5), (-100, -100.5);
+SELECT a, SIGN(a) AS sign_a, b, SIGN(b) AS sign_b FROM t1;
+a    sign_a    b    sign_b
+5    1    5.5    1
+0    0    0.0    0
+-5    -1    -5.5    -1
+100    1    100.5    1
+-100    -1    -100.5    -1
+DROP TABLE t1;
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (5), (0), (-5), (10), (-10);
+SELECT * FROM t1 WHERE SIGN(a) = 1;
+a
+5
+10
+SELECT * FROM t1 WHERE SIGN(a) = -1;
+a
+-5
+-10
+SELECT * FROM t1 WHERE SIGN(a) = 0;
+a
+0
+DROP TABLE t1;

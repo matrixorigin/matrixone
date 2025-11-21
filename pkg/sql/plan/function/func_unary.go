@@ -101,6 +101,69 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}, selectList)
 }
 
+// SIGN function implementations
+// SIGN returns 1 for positive numbers, 0 for zero, -1 for negative numbers
+func SignInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[int64, int64](ivecs, result, proc, length, func(v int64) int64 {
+		if v > 0 {
+			return 1
+		} else if v < 0 {
+			return -1
+		}
+		return 0
+	}, selectList)
+}
+
+func SignUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+		if v > 0 {
+			return 1
+		}
+		return 0
+	}, selectList)
+}
+
+func SignFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, int64](ivecs, result, proc, length, func(v float64) int64 {
+		if v > 0 {
+			return 1
+		} else if v < 0 {
+			return -1
+		}
+		return 0
+	}, selectList)
+}
+
+func signDecimal64(v types.Decimal64) int64 {
+	zero := types.Decimal64(0)
+	if v.Compare(zero) == 0 {
+		return 0
+	}
+	if v.Sign() {
+		return -1
+	}
+	return 1
+}
+
+func SignDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal64, int64](ivecs, result, proc, length, signDecimal64, selectList)
+}
+
+func signDecimal128(v types.Decimal128) int64 {
+	zero := types.Decimal128{B0_63: 0, B64_127: 0}
+	if v.Compare(zero) == 0 {
+		return 0
+	}
+	if v.Sign() {
+		return -1
+	}
+	return 1
+}
+
+func SignDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal128, int64](ivecs, result, proc, length, signDecimal128, selectList)
+}
+
 func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) ([]byte, error) {
 		_in := types.BytesToArray[T](in)

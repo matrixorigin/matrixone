@@ -69,6 +69,76 @@ func TestAbs(t *testing.T) {
 	}
 }
 
+func initSignTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test sign int64 - positive, zero, negative",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5, 0, -5, 100, -100, 1, -1},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0, -1, 1, -1, 1, -1},
+				[]bool{false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test sign uint64 - positive, zero",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{5, 0, 100, 1},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0, 1, 1},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test sign float64 - positive, zero, negative, decimal",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{5.0, 0.0, -5.0, 0.5, -0.5, 100.5, -100.5},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0, -1, 1, -1, 1, -1},
+				[]bool{false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test sign with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5, 0, -5},
+					[]bool{false, true, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0, -1},
+				[]bool{false, true, false}),
+		},
+	}
+}
+
+func TestSign(t *testing.T) {
+	testCases := initSignTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.inputs[0].typ.Oid {
+		case types.T_int64:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SignInt64)
+		case types.T_uint64:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SignUInt64)
+		case types.T_float64:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SignFloat64)
+		default:
+			t.Fatalf("unsupported type for sign test: %v", tc.inputs[0].typ.Oid)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func BenchmarkAbsInt64(b *testing.B) {
 	testCases := initAbsTestCase()
 	proc := testutil.NewProcess(b)
