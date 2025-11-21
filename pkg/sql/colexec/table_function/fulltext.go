@@ -219,7 +219,7 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 		}
 	}
 
-	if u.limit == 0 {
+	if limit == 0 {
 		// array is empty, try to get batch from SQL executor
 		scoremap, err := evaluate(u, proc, u.sacc)
 		if err != nil {
