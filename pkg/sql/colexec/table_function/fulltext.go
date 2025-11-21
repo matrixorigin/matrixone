@@ -237,7 +237,7 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 		}
 
 		// build minheap
-		if u.minheap == nil || len(u.minheap) == 0 {
+		if len(u.minheap) == 0 {
 			err = sort_topk(u, proc, u.sacc, topk)
 			if err != nil {
 				return vm.CancelResult, err
