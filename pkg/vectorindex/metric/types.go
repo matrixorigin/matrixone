@@ -26,6 +26,7 @@ type MetricType uint16
 
 const (
 	OpType_L2Distance     = "vector_l2_ops"
+	OpType_L2sqDistance   = "vector_l2sq_ops"
 	OpType_InnerProduct   = "vector_ip_ops"
 	OpType_CosineDistance = "vector_cosine_ops"
 	OpType_L1Distance     = "vector_l1_ops"
@@ -58,14 +59,10 @@ var (
 		DistFn_InnerProduct:   OpType_InnerProduct,
 		DistFn_CosineDistance: OpType_CosineDistance,
 	}
-	DistFuncInternalDistFunc = map[string]string{
-		DistFn_L2Distance:     DistIntFn_L2Distance,
-		DistFn_InnerProduct:   DistIntFn_InnerProduct,
-		DistFn_CosineDistance: DistIntFn_CosineDistance,
-	}
 
 	OpTypeToIvfMetric = map[string]MetricType{
-		OpType_L2Distance:     Metric_L2Distance,
+		OpType_L2Distance:     Metric_L2sqDistance,
+		OpType_L2sqDistance:   Metric_L2sqDistance,
 		OpType_InnerProduct:   Metric_InnerProduct,
 		OpType_CosineDistance: Metric_CosineDistance,
 		OpType_L1Distance:     Metric_L1Distance,
@@ -73,6 +70,7 @@ var (
 
 	OpTypeToUsearchMetric = map[string]usearch.Metric{
 		OpType_L2Distance:     usearch.L2sq,
+		OpType_L2sqDistance:   usearch.L2sq,
 		OpType_InnerProduct:   usearch.InnerProduct,
 		OpType_CosineDistance: usearch.Cosine,
 		/*
