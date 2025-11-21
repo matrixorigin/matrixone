@@ -32,7 +32,9 @@ SELECT CONV('2', 2, 10) AS invalid_bin;
 # Table usage
 CREATE TABLE t1(num_str VARCHAR(10), num_val INT);
 INSERT INTO t1 VALUES ('A', 10), ('FF', 255), ('1010', 10);
+-- @bvt:issue#23049
 SELECT CONV(num_str, 16, 10) AS hex_val, CONV(num_val, 10, 16) AS hex_str FROM t1;
+-- @bvt:issue
 DROP TABLE t1;
 
 # WHERE clause
