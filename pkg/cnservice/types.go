@@ -130,6 +130,13 @@ type Config struct {
 	Engine struct {
 		Type EngineType `toml:"type"`
 
+		// only prefetch the matched dbname.tablename
+		//	'^mo_catalog\.mo_tables$',
+		//	'^mysql\..*$',
+		//	'^test1\..*$',
+		//	'^test2\.t1$'
+		PrefetchOnSubscribed []string `toml:"prefetch-on-subscribed"`
+
 		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
 
