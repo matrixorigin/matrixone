@@ -1,0 +1,45 @@
+SELECT QUOTE('Don\'t') AS result1;
+result1
+'Don''t'
+SELECT QUOTE('Hello') AS basic_string;
+basic_string
+'Hello'
+SELECT QUOTE('It\'s') AS single_quote;
+single_quote
+'It''s'
+SELECT QUOTE('C:\\path') AS backslash;
+backslash
+'C:\\path'
+SELECT QUOTE('line1\nline2') AS newline;
+newline
+'line1\nline2'
+SELECT QUOTE('tab\ttest') AS tab;
+tab
+'tab\ttest'
+SELECT QUOTE('') AS empty_string;
+empty_string
+''
+SELECT QUOTE(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path');
+SELECT str, QUOTE(str) AS quoted FROM t1;
+str    quoted
+Hello    'Hello'
+Don't    'Don''t'
+It's    'It''s'
+C:\path    'C:\\path'
+DROP TABLE t1;
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s');
+SELECT * FROM t1 WHERE QUOTE(str) = QUOTE('Hello');
+str
+Hello
+DROP TABLE t1;
+SELECT QUOTE('test\x00null') AS with_null_byte;
+with_null_byte
+'testx00null'
+SELECT QUOTE('test\x1aend') AS with_ctrl_z;
+with_ctrl_z
+'testx1aend'

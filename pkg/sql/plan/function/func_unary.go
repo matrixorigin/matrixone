@@ -613,6 +613,53 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, fSingle, selectList)
 }
 
+// QuoteString quotes a string for use in SQL statements
+// Escapes single quotes by doubling them, backslashes, and control characters
+func QuoteString(str string) string {
+	var result strings.Builder
+	result.WriteByte('\'')
+	
+	for _, r := range str {
+		switch r {
+		case '\'':
+			// Escape single quote by doubling it
+			result.WriteString("''")
+		case '\\':
+			// Escape backslash
+			result.WriteString("\\\\")
+		case '\n':
+			// Escape newline
+			result.WriteString("\\n")
+		case '\r':
+			// Escape carriage return
+			result.WriteString("\\r")
+		case '\t':
+			// Escape tab
+			result.WriteString("\\t")
+		case '\x00':
+			// Escape null byte
+			result.WriteString("\\0")
+		case '\x1a':
+			// Escape Ctrl+Z (EOF in Windows)
+			result.WriteString("\\Z")
+		default:
+			// Write the character as-is
+			result.WriteRune(r)
+		}
+	}
+	
+	result.WriteByte('\'')
+	return result.String()
+}
+
+func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+		str := functionUtil.QuickBytesToStr(v)
+		quoted := QuoteString(str)
+		return functionUtil.QuickStrToBytes(quoted)
+	}, selectList)
+}
+
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
 	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
 }

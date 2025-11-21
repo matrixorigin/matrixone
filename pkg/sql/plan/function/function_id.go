@@ -438,9 +438,12 @@ const (
 	// function `ord`
 	ORD = 355
 
+	// function `quote`
+	QUOTE = 356
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 356
+	FUNCTION_END_NUMBER = 357
 )
 
 // functionIdRegister is what function we have registered already.
@@ -555,6 +558,7 @@ var functionIdRegister = map[string]int32{
 	"lpad":              LPAD,
 	"pi":                PI,
 	"position":          POSITION,
+	"quote":             QUOTE,
 	"round":             ROUND,
 	"rpad":              RPAD,
 	"strcmp":            STRCMP,
