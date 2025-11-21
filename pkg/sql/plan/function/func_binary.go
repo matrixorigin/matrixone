@@ -4457,6 +4457,106 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	return nil
 }
 
+// SecToTime: SEC_TO_TIME(seconds) - Returns the seconds argument, converted to hours, minutes, and seconds, as a TIME value.
+func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// seconds can be int64, uint64, or float64
+	secondsType := ivecs[0].GetType().Oid
+
+	// Create parameter extractor based on type
+	var getSecondsValue func(uint64) (int64, bool)
+
+	switch secondsType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		secondsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getSecondsValue = func(i uint64) (int64, bool) {
+			val, null := secondsParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		secondsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getSecondsValue = func(i uint64) (int64, bool) {
+			val, null := secondsParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		secondsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getSecondsValue = func(i uint64) (int64, bool) {
+			val, null := secondsParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", secondsType)
+	}
+
+	// MySQL TIME range: -838:59:59 to 838:59:59
+	// In seconds: -3020399 to 3020399
+	const maxTimeSeconds = 3020399 // 838*3600 + 59*60 + 59
+	const minTimeSeconds = -3020399
+
+	for i := uint64(0); i < uint64(length); i++ {
+		seconds, null := getSecondsValue(i)
+
+		if null {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check if seconds is within valid TIME range
+		if seconds > maxTimeSeconds || seconds < minTimeSeconds {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert seconds to hours, minutes, and seconds
+		// Handle negative values
+		isNegative := seconds < 0
+		if isNegative {
+			seconds = -seconds
+		}
+
+		hours := seconds / 3600
+		remainingSeconds := seconds % 3600
+		minutes := remainingSeconds / 60
+		secs := remainingSeconds % 60
+
+		// Check if hours exceed MySQL TIME limit (838:59:59)
+		// MySQL TIME range is -838:59:59 to 838:59:59
+		if hours > 838 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Create TIME value using TimeFromClock
+		// isNegative: true if the time should be negative
+		timeValue := types.TimeFromClock(isNegative, uint64(hours), uint8(minutes), uint8(secs), 0)
+
+		// Validate the resulting time
+		h := timeValue.Hour()
+		if h < 0 {
+			h = -h
+		}
+		if !types.ValidTime(uint64(h), uint64(timeValue.Minute()), uint64(timeValue.Sec())) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(timeValue, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])

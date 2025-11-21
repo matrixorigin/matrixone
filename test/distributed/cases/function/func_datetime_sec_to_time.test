@@ -1,0 +1,56 @@
+# Basic test case from requirements
+SELECT SEC_TO_TIME(2378) AS result1;
+
+# Additional test cases
+# Basic conversions
+SELECT SEC_TO_TIME(2378) AS test1;  # 00:39:38
+SELECT SEC_TO_TIME(3661) AS test2;  # 01:01:01
+SELECT SEC_TO_TIME(0) AS test3;     # 00:00:00
+SELECT SEC_TO_TIME(59) AS test4;    # 00:00:59
+SELECT SEC_TO_TIME(60) AS test5;    # 00:01:00
+SELECT SEC_TO_TIME(3600) AS test6;  # 01:00:00
+
+# Hours, minutes, seconds
+SELECT SEC_TO_TIME(1) AS one_second;
+SELECT SEC_TO_TIME(60) AS one_minute;
+SELECT SEC_TO_TIME(3600) AS one_hour;
+SELECT SEC_TO_TIME(3661) AS one_hour_one_min_one_sec;
+
+# Large values
+SELECT SEC_TO_TIME(30239) AS large_value;  # 08:23:59
+SELECT SEC_TO_TIME(302399) AS very_large;  # 84:00:00 (exceeds 838:59:59, should return NULL)
+
+# Negative values
+SELECT SEC_TO_TIME(-2378) AS negative_test;  # -00:39:38
+SELECT SEC_TO_TIME(-3661) AS negative_large; # -01:01:01
+SELECT SEC_TO_TIME(-3600) AS negative_hour;  # -01:00:00
+
+# Decimal seconds (should truncate)
+SELECT SEC_TO_TIME(2378.7) AS decimal_test;
+SELECT SEC_TO_TIME(3661.99) AS decimal_large;
+
+# NULL handling
+SELECT SEC_TO_TIME(NULL) AS null_test;
+
+# Table usage
+CREATE TABLE t1(seconds INT);
+INSERT INTO t1 VALUES (2378), (3661), (0), (3600);
+SELECT SEC_TO_TIME(seconds) AS time_value FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(seconds INT);
+INSERT INTO t1 VALUES (2378), (3661), (0), (3600);
+SELECT * FROM t1 WHERE SEC_TO_TIME(seconds) > '00:30:00';
+DROP TABLE t1;
+
+# Different numeric types
+SELECT SEC_TO_TIME(2378.0) AS float_input;
+SELECT SEC_TO_TIME(CAST(2378 AS UNSIGNED)) AS unsigned_input;
+
+# Edge cases
+SELECT SEC_TO_TIME(3020399) AS max_valid;   # 838:59:59
+SELECT SEC_TO_TIME(-3020399) AS min_valid;  # -838:59:59
+SELECT SEC_TO_TIME(3020400) AS exceeds_max; # Should return NULL
+SELECT SEC_TO_TIME(-3020400) AS exceeds_min; # Should return NULL
+
