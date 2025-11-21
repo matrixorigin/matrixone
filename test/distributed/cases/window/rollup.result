@@ -19,10 +19,10 @@ null    null
 null    3.12188466664523E7
 select col1, avg(col2) as profit from sales group by col1 with rollup;
 col1    profit
+null    1.560942333322615E7
 2000.0    4525.32321
 2001.0    3.12143213432423E7
 null    null
-null    1.560942333322615E7
 drop table sales;
 drop table if exists sales;
 create table sales(year int, quarter int, amount int);
@@ -46,6 +46,7 @@ year    quarter    amount
 2022    4    450
 select year, quarter, sum(amount) as total_sales from sales group by year, quarter with rollup;
 year    quarter    total_sales
+null    null    2200
 2021    1    100
 2021    2    150
 2021    3    200
@@ -54,7 +55,6 @@ year    quarter    total_sales
 2022    2    350
 2022    3    400
 2022    4    450
-null    null    2200
 2021    null    700
 2022    null    1500
 select year, quarter, avg(amount) as avg_sales from sales group by year, quarter with rollup;
@@ -125,13 +125,13 @@ group by
 year,
 quarter with rollup;
 year    quarter    product    total_sales
+2022    null    null    7000.00
+2023    null    null    15000.00
+null    null    null    22000.00
 2022    Q1    null    2500.00
 2022    Q2    null    4500.00
 2023    Q1    null    6500.00
 2023    Q2    null    8500.00
-2022    null    null    7000.00
-2023    null    null    15000.00
-null    null    null    22000.00
 select
 year,
 quarter,
@@ -174,9 +174,9 @@ having
 (product is not null and quarter is not null) or
 (product is null and quarter is null);
 year    quarter    product    total_sales
-null    null    null    22000.00
 2022    null    null    7000.00
 2023    null    null    15000.00
+null    null    null    22000.00
 2022    Q1    Product A    1000.00
 2022    Q1    Product B    1500.00
 2022    Q2    Product A    2000.00
@@ -392,6 +392,12 @@ group by
 i, j with rollup;
 i    j    total
 null    null    369652
+18446744073709551615    null    123217
+4294967295    null    2
+2147483647    null    123214
+13289392    null    2
+3824    null    123215
+2438294    null    2
 18446744073709551615    2147483647    123214
 4294967295    2147483647    2
 18446744073709551615    1    2
@@ -400,12 +406,6 @@ null    null    369652
 18446744073709551615    23289483    1
 3824    13289392    123215
 2438294    1    2
-18446744073709551615    null    123217
-4294967295    null    2
-2147483647    null    123214
-13289392    null    2
-3824    null    123215
-2438294    null    2
 select
 i, j, sum(k) as total
 from
@@ -414,6 +414,11 @@ group by
 j, i with rollup;
 i    j    total
 null    null    369652
+null    2147483647    123216
+null    1    4
+null    23289483    123215
+null    2    2
+null    13289392    123215
 18446744073709551615    2147483647    123214
 4294967295    2147483647    2
 18446744073709551615    1    2
@@ -422,11 +427,6 @@ null    null    369652
 18446744073709551615    23289483    1
 3824    13289392    123215
 2438294    1    2
-null    2147483647    123216
-null    1    4
-null    23289483    123215
-null    2    2
-null    13289392    123215
 select
 i, j, sum(k) as total
 from
@@ -480,13 +480,13 @@ null    null    null    220000.00
 2022    2    null    85000.00
 2021    null    null    70000.00
 2022    1    null    65000.00
-2022    2    South    45000.00
 2021    2    null    45000.00
+2022    2    South    45000.00
 2022    2    North    40000.00
 2022    1    South    35000.00
 2022    1    North    30000.00
-2021    2    South    25000.00
 2021    1    null    25000.00
+2021    2    South    25000.00
 2021    2    North    20000.00
 2021    1    South    15000.00
 2021    1    North    10000.00
@@ -502,13 +502,9 @@ year,
 quarter,
 region with rollup;
 year    quarter    region    total_sales
+Total    Total    Total    220000.00
 2021    Total    Total    70000.00
 2022    Total    Total    150000.00
-Total    Total    Total    220000.00
-2021    1    Total    25000.00
-2021    2    Total    45000.00
-2022    1    Total    65000.00
-2022    2    Total    85000.00
 2021    1    North    10000.00
 2021    1    South    15000.00
 2021    2    North    20000.00
@@ -517,6 +513,10 @@ Total    Total    Total    220000.00
 2022    1    South    35000.00
 2022    2    North    40000.00
 2022    2    South    45000.00
+2021    1    Total    25000.00
+2021    2    Total    45000.00
+2022    1    Total    65000.00
+2022    2    Total    85000.00
 select
 grouping(year) as year,
 grouping(quarter) as quarter,
@@ -532,6 +532,10 @@ year    quarter    region    total_sales
 1    1    1    220000.00
 0    1    1    70000.00
 0    1    1    150000.00
+0    0    1    25000.00
+0    0    1    45000.00
+0    0    1    65000.00
+0    0    1    85000.00
 0    0    0    10000.00
 0    0    0    15000.00
 0    0    0    20000.00
@@ -540,10 +544,6 @@ year    quarter    region    total_sales
 0    0    0    35000.00
 0    0    0    40000.00
 0    0    0    45000.00
-0    0    1    25000.00
-0    0    1    45000.00
-0    0    1    65000.00
-0    0    1    85000.00
 select
 grouping(year) as year,
 grouping(quarter) as quarter,
@@ -556,9 +556,9 @@ year,
 quarter,
 region with rollup;
 year    quarter    region    total_sales
+0    1    1    4
+0    1    1    4
 1    1    1    8
-0    1    1    4
-0    1    1    4
 0    0    1    2
 0    0    1    2
 0    0    1    2
@@ -589,16 +589,16 @@ year    quarter    region    total_sales
 2022    2    Total    40000.00
 2022    2    North    40000.00
 2022    1    South    35000.00
-2022    1    North    30000.00
-2022    1    Total    30000.00
 2022    Total    Total    30000.00
+2022    1    Total    30000.00
+2022    1    North    30000.00
 2021    2    South    25000.00
-2021    2    North    20000.00
 2021    2    Total    20000.00
+2021    2    North    20000.00
 2021    1    South    15000.00
+2021    1    Total    10000.00
 2021    1    North    10000.00
 Total    Total    Total    10000.00
-2021    1    Total    10000.00
 2021    Total    Total    10000.00
 select
 if(grouping(year), 'Total', cast(year as char)) as year,
@@ -612,9 +612,13 @@ year,
 quarter,
 region with rollup;
 year    quarter    region    total_sales
-Total    Total    Total    45000.00
 2021    Total    Total    25000.00
 2022    Total    Total    45000.00
+2021    1    Total    15000.00
+2021    2    Total    25000.00
+2022    1    Total    35000.00
+2022    2    Total    45000.00
+Total    Total    Total    45000.00
 2021    1    North    10000.00
 2021    1    South    15000.00
 2021    2    North    20000.00
@@ -623,10 +627,6 @@ Total    Total    Total    45000.00
 2022    1    South    35000.00
 2022    2    North    40000.00
 2022    2    South    45000.00
-2021    1    Total    15000.00
-2021    2    Total    25000.00
-2022    1    Total    35000.00
-2022    2    Total    45000.00
 select
 year,
 quarter,
@@ -645,13 +645,13 @@ null    null    null    220000.00
 2022    2    null    85000.00
 2021    null    null    70000.00
 2022    1    null    65000.00
-2022    2    South    45000.00
 2021    2    null    45000.00
+2022    2    South    45000.00
 2022    2    North    40000.00
 2022    1    South    35000.00
 2022    1    North    30000.00
-2021    2    South    25000.00
 2021    1    null    25000.00
+2021    2    South    25000.00
 2021    2    North    20000.00
 2021    1    South    15000.00
 2021    1    North    10000.00
@@ -667,7 +667,22 @@ year,
 quarter,
 region with rollup
 order by total_sales desc;
-[unknown result because it is related to issue#19998]
+year    quarter    region    total_sales
+All years    Quarter    null    220000.00
+2022    Quarter    null    150000.00
+2022    2    null    85000.00
+2021    Quarter    null    70000.00
+2022    1    null    65000.00
+2021    2    null    45000.00
+2022    2    South    45000.00
+2022    2    North    40000.00
+2022    1    South    35000.00
+2022    1    North    30000.00
+2021    1    null    25000.00
+2021    2    South    25000.00
+2021    2    North    20000.00
+2021    1    South    15000.00
+2021    1    North    10000.00
 drop table sales;
 drop table if exists sales_details;
 create table sales_details (
@@ -750,8 +765,8 @@ null    null    null    null    null    null    null    null    13500.00    9999
 2022    Q1    North America    USA    California    San Francisco    null    null    1500.00    2022    Q1    Q1    USA    California    San Francisco    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 2022    Q1    North America    USA    California    null    null    null    2500.00    2022    Q1    Q1    USA    California    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 2022    Q1    North America    USA    null    null    null    null    2500.00    2022    Q1    Q1    USA    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
-2022    Q1    North America    null    null    null    null    null    2500.00    2022    Q1    Q1    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 2022    Q1    Europe    null    null    null    null    null    2000.00    2022    Q1    Q1    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
+2022    Q1    North America    null    null    null    null    null    2500.00    2022    Q1    Q1    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 2022    Q1    null    null    null    null    null    null    4500.00    2022    Q1    ZZZ    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 2022    null    null    null    null    null    null    null    4500.00    2022    ZZ    ZZZ    ZZZZ    ZZZZZ    ZZZZZZ    ZZZZZZZ    ZZZZZZZZZZZZZZZZ
 drop table sales_details;
