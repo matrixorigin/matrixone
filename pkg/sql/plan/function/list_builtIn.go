@@ -6216,6 +6216,76 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimeDiff[types.Datetime]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_char, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varchar, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_text, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_varchar, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_text, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_time, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeDiffString
+				},
+			},
 		},
 	},
 

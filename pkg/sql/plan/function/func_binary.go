@@ -4191,6 +4191,85 @@ func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 	return tt, nil
 }
 
+// TimeDiffString: TIMEDIFF with string inputs - parses strings as TIME or DATETIME and returns the difference as TIME
+func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	expr1Param := vector.GenerateFunctionStrParameter(ivecs[0])
+	expr2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	scale := int32(6) // Use max scale for string inputs
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		expr1Str, null1 := expr1Param.GetStrValue(i)
+		expr2Str, null2 := expr2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse expr1 - try datetime first, then time
+		var dt1 types.Datetime
+		var err1 error
+		expr1StrVal := functionUtil.QuickBytesToStr(expr1Str)
+		dt1, err1 = types.ParseDatetime(expr1StrVal, scale)
+		if err1 != nil {
+			// If parsing as datetime fails, try as time
+			time1, err2 := types.ParseTime(expr1StrVal, scale)
+			if err2 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert time to datetime (using today's date)
+			dt1 = time1.ToDatetime(scale)
+		}
+
+		// Parse expr2 - try datetime first, then time
+		var dt2 types.Datetime
+		var err2 error
+		expr2StrVal := functionUtil.QuickBytesToStr(expr2Str)
+		dt2, err2 = types.ParseDatetime(expr2StrVal, scale)
+		if err2 != nil {
+			// If parsing as datetime fails, try as time
+			time2, err3 := types.ParseTime(expr2StrVal, scale)
+			if err3 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert time to datetime (using today's date)
+			dt2 = time2.ToDatetime(scale)
+		}
+
+		// Calculate difference: expr1 - expr2
+		resultTime, err := timeDiff[types.Datetime](dt1, dt2)
+		if err != nil {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(resultTime, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
