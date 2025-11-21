@@ -1001,6 +1001,151 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `subtime`
+	{
+		functionId: SUBTIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_time, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if parameters[1].Scale > scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_time, 0, scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_time, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if parameters[1].Scale > scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_time, 0, scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_datetime, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if parameters[1].Scale > scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_datetime, 0, scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_datetime, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if parameters[1].Scale > scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_datetime, 0, scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_timestamp, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if parameters[1].Scale > scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_timestamp, 0, scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_timestamp, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					scale := parameters[0].Scale
+					if parameters[1].Scale > scale {
+						scale = parameters[1].Scale
+					}
+					return types.New(types.T_timestamp, 0, scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_char, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varchar, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_text, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubTime
+				},
+			},
+		},
+	},
+
 	// function `conv`
 	{
 		functionId: CONV,
