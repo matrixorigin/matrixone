@@ -144,6 +144,38 @@ func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Get scale from optional parameter (default 0 for TIME type)
+	scale := int32(0)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
+		// Clamp scale to valid range [0, 6]
+		if scale < 0 {
+			scale = 0
+		} else if scale > 6 {
+			scale = 6
+		}
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	// Get current timestamp and convert to UTC time
+	// Use UTC timezone instead of session timezone
+	loc := time.UTC
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
+	dt := ts.ToDatetime(loc)
+	resultValue := dt.ToTime(scale)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 const (
 	onUpdateExpr = iota
 	defaultExpr
