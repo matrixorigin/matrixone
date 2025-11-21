@@ -977,6 +977,14 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+func TimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		hour, _, _, _, _ := v.ClockFormat()
+		// HOUR function returns 0-23, so we need to take modulo 24
+		return uint8(hour % 24)
+	}, selectList)
+}
+
 func TimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Minute())
