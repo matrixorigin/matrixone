@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -356,6 +357,41 @@ func StringSingle(val []byte) uint8 {
 func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
 		return StringSingle(v)
+	}, selectList)
+}
+
+// OrdString calculates the ORD value for a string
+// For single-byte characters: returns the byte value (same as ASCII)
+// For multibyte characters: returns (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+func OrdString(val []byte) int64 {
+	if len(val) == 0 {
+		return 0
+	}
+	
+	// Get the first character (rune) to determine its byte size
+	_, runeSize := utf8.DecodeRune(val)
+	if runeSize == 0 {
+		return 0
+	}
+	
+	// If it's a single-byte character (ASCII), return the byte value
+	if runeSize == 1 {
+		return int64(val[0])
+	}
+	
+	// For multibyte characters, calculate using the formula:
+	// (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+	var result int64
+	for i := 0; i < runeSize && i < len(val); i++ {
+		result += int64(val[i]) * int64(1<<(8*i)) // 256^i = 2^(8*i)
+	}
+	
+	return result
+}
+
+func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
+		return OrdString(v)
 	}, selectList)
 }
 

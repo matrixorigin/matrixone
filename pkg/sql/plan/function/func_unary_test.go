@@ -685,6 +685,67 @@ func TestAsciiUint(t *testing.T) {
 	}
 }
 
+// ORD
+func initOrdTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test ord single byte character",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "B", "a", "0", " "},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{65, 66, 97, 48, 32},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test ord empty string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{false}),
+		},
+		{
+			info: "test ord with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+		{
+			info: "test ord string (returns first character)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "World", "ABC"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{72, 87, 65},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestOrd(t *testing.T) {
+	testCases := initOrdTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Ord)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initBinTestCase() []tcTemp {
 	return []tcTemp{
 		{
