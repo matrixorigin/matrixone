@@ -1877,10 +1877,13 @@ func TestMinute(t *testing.T) {
 func initSecondTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
 	d2, _ := types.ParseTimestamp(time.Local, "2004-01-03 23:15:08", 6)
+	t1, _ := types.ParseTime("15:30:45", 6)
+	t2, _ := types.ParseTime("00:00:00", 6)
+	t3, _ := types.ParseTime("23:59:59", 6)
 
 	return []tcTemp{
 		{
-			info: "test hour",
+			info: "test datetime to second",
 			typ:  types.T_datetime,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_datetime.ToType(),
@@ -1892,7 +1895,7 @@ func initSecondTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
-			info: "test hour",
+			info: "test timestamp to second",
 			typ:  types.T_timestamp,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_timestamp.ToType(),
@@ -1902,6 +1905,30 @@ func initSecondTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{8},
 				[]bool{false}),
+		},
+		{
+			info: "test time to second",
+			typ:  types.T_time,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1, t2, t3},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{45, 0, 59},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test time to second - null",
+			typ:  types.T_time,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{0},
+				[]bool{true}),
 		},
 	}
 }
@@ -1920,6 +1947,11 @@ func TestSecond(t *testing.T) {
 		case types.T_timestamp:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, TimestampToSecond)
+		case types.T_time:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimeToSecond)
+		default:
+			t.Fatalf("unsupported type for second test: %v", tc.typ)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))

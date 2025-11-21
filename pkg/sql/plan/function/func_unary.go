@@ -1200,6 +1200,14 @@ func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+// TimeToSecond returns the second from time (0-59)
+func TimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		_, _, sec, _, _ := v.ClockFormat()
+		return uint8(sec)
+	}, selectList)
+}
+
 // TimestampToMicrosecond returns the microseconds from timestamp (0-999999)
 func TimestampToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
