@@ -1707,6 +1707,78 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+// weekOfYearHelper calculates the week of year for a given date.
+// WEEKOFYEAR always returns the week number for the year that the date belongs to.
+func weekOfYearHelper(d types.Date) int64 {
+	// Get the year of the input date
+	dateYear := int32(d.Year())
+
+	// Find the Thursday of the calendar week containing this date
+	delta := 4 - int32(d.DayOfWeek())
+	if delta == 4 {
+		delta = -3 // Sunday
+	}
+	thursdayDate := types.Date(int32(d) + delta)
+	thursdayYear, _, _, thursdayYday := thursdayDate.Calendar(false)
+
+	// If Thursday is in a different year than the date, we need special handling
+	if thursdayYear != dateYear {
+		if thursdayYear > dateYear {
+			// Thursday is in the next year, so this date is at the end of the current year
+			// Count how many days of this week are in the current year
+			daysInCurrentYear := 0
+			weekStart := types.Date(int32(d) - delta) // Monday of the week
+			for i := int32(0); i < 7; i++ {
+				checkDate := types.Date(int32(weekStart) + i)
+				if checkDate.Year() == uint16(dateYear) {
+					daysInCurrentYear++
+				}
+			}
+			// If at least 4 days are in the current year, it's week 53 of current year
+			// Otherwise, it's week 1 of next year, but WEEKOFYEAR returns week for date's year
+			if daysInCurrentYear >= 4 {
+				return 53
+			}
+			// If less than 4 days, it's actually week 1 of next year,
+			// but WEEKOFYEAR should return week 53 for the date's year
+			return 53
+		} else {
+			// Thursday is in the previous year, so this date is at the start of the current year
+			// This should be week 1 of current year
+			return 1
+		}
+	}
+
+	// Thursday is in the same year as the date, calculate week normally
+	return int64((thursdayYday-1)/7 + 1)
+}
+
+// DateToWeekOfYear returns the calendar week of the date as a number in the range from 1 to 53.
+// WEEKOFYEAR(date) is equivalent to WEEK(date, 3) which uses ISO 8601 week calculation.
+// WEEKOFYEAR always returns the week number for the year that the date belongs to.
+func DateToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, weekOfYearHelper, selectList)
+}
+
+// DatetimeToWeekOfYear returns the calendar week of the datetime as a number in the range from 1 to 53.
+func DatetimeToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		return weekOfYearHelper(v.ToDate())
+	}, selectList)
+}
+
+// TimestampToWeekOfYear returns the calendar week of the timestamp as a number in the range from 1 to 53.
+func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		return weekOfYearHelper(dt.ToDate())
+	}, selectList)
+}
+
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
 		return int64(v.DayOfWeek2())

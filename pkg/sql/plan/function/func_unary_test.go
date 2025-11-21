@@ -3819,6 +3819,133 @@ func TestDateToWeek(t *testing.T) {
 	}
 }
 
+// WeekOfYear
+
+func initDateToWeekOfYearTestCase() []tcTemp {
+	d11, _ := types.ParseDateCast("2008-02-20")
+	d12, _ := types.ParseDateCast("2008-01-01")
+	d13, _ := types.ParseDateCast("2008-12-31")
+	d14, _ := types.ParseDateCast("2009-01-01")
+
+	d21, _ := types.ParseDateCast("2003-12-30")
+	d22, _ := types.ParseDateCast("2004-01-02")
+	d23, _ := types.ParseDateCast("2004-12-31")
+	d24, _ := types.ParseDateCast("2005-01-01")
+
+	d31, _ := types.ParseDateCast("2001-02-16")
+	d32, _ := types.ParseDateCast("2012-06-18")
+	d33, _ := types.ParseDateCast("2015-09-25")
+	d34, _ := types.ParseDateCast("2022-12-05")
+	return []tcTemp{
+		{
+			info: "test date to weekofyear - basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d11, d12, d13, d14},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{8, 1, 53, 1},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to weekofyear - first and last week",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d21, d22, d23, d24},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{53, 1, 53, 1},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to weekofyear - normal",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d31, d32, d33, d34},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{7, 25, 39, 49},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to weekofyear - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d11},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func initDatetimeToWeekOfYearTestCase() []tcTemp {
+	dt11, _ := types.ParseDatetime("2008-02-20 10:30:45", 6)
+	dt12, _ := types.ParseDatetime("2008-01-01 00:00:00", 6)
+	dt13, _ := types.ParseDatetime("2008-12-31 23:59:59", 6)
+	dt14, _ := types.ParseDatetime("2009-01-01 00:00:00", 6)
+
+	dt21, _ := types.ParseDatetime("2003-12-30 12:00:00", 6)
+	dt22, _ := types.ParseDatetime("2004-01-02 12:00:00", 6)
+	return []tcTemp{
+		{
+			info: "test datetime to weekofyear - basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{dt11, dt12, dt13, dt14},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{8, 1, 53, 1},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to weekofyear - first and last week",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{dt21, dt22},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{53, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test datetime to weekofyear - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{dt11},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestWeekOfYear(t *testing.T) {
+	testCases := initDateToWeekOfYearTestCase()
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeekOfYear)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	testCases2 := initDatetimeToWeekOfYearTestCase()
+	for _, tc := range testCases2 {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekOfYear)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initDateTimeToWeekTestCase() []tcTemp {
 	d11, _ := types.ParseDatetime("2003-12-30 13:11:10", 6)
 	d12, _ := types.ParseDatetime("2004-01-02 19:22:10", 6)
