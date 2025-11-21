@@ -308,7 +308,7 @@ func execBackup(
 		}
 		// Remove backup protection (only if executor is available)
 		if !protectedTS.IsEmpty() && exec != nil {
-			sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','remove_checker.backup.')")
+			sql := "select mo_ctl('dn','DiskCleaner','remove_checker.backup.')"
 			_, err := exec.Exec(ctx, sql, opts)
 			if err != nil {
 				logutil.Errorf("backup: failed to remove backup protection: %v", err)

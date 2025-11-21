@@ -280,7 +280,8 @@ func TestBackupProtectionExpiration(t *testing.T) {
 
 	// Set backup protection
 	cleaner.SetBackupProtection(backupTS)
-	protectedTS, lastUpdateTime, isActive := cleaner.GetBackupProtection()
+	var lastUpdateTime time.Time
+	protectedTS, _, isActive := cleaner.GetBackupProtection()
 	assert.True(t, isActive)
 	assert.True(t, protectedTS.EQ(&backupTS))
 

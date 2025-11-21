@@ -1119,7 +1119,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 			}
 		}
 	}
-	
+
 	// Add extra cluster-level snapshot timestamps (e.g., for backup protection)
 	// Add them before sorting so we only need to sort once
 	for _, extraTS := range extraClusterTS {
@@ -1131,7 +1131,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 			)
 		}
 	}
-	
+
 	// Sort cluster snapshots
 	sort.Slice(snapshotInfo.cluster, func(i, j int) bool {
 		return snapshotInfo.cluster[i].LT(&snapshotInfo.cluster[j])

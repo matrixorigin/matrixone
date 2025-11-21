@@ -448,7 +448,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			extraTS = c.backupProtection.protectedTS
 		}
 		c.backupProtection.RUnlock()
-		
+
 		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 		if err != nil {
 			logutil.Error(
@@ -904,7 +904,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	); err != nil {
 		return
 	}
-	
+
 	// Filter out checkpoints that are protected by backup
 	c.backupProtection.RLock()
 	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
@@ -926,7 +926,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		toMergeCheckpoint = filtered
 	}
 	c.backupProtection.RUnlock()
-	
+
 	if len(toMergeCheckpoint) == 0 {
 		return
 	}
@@ -966,7 +966,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
-	
+
 	// Filter out protected files from deleteFiles
 	c.backupProtection.RLock()
 	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
@@ -1216,7 +1216,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "GetPITRs failed"
 		return
 	}
-	
+
 	// Get backup protection TS if active
 	c.backupProtection.RLock()
 	var extraTS types.TS
@@ -1224,7 +1224,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraTS = c.backupProtection.protectedTS
 	}
 	c.backupProtection.RUnlock()
-	
+
 	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp, extraTS)
 	if err != nil {
 		extraErrMsg = "GetSnapshot failed"
@@ -2087,7 +2087,7 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
-	
+
 	// Get backup protection TS if active
 	c.backupProtection.RLock()
 	var extraTS types.TS
@@ -2095,7 +2095,7 @@ func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 		extraTS = c.backupProtection.protectedTS
 	}
 	c.backupProtection.RUnlock()
-	
+
 	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 }
 
@@ -2111,7 +2111,7 @@ func (c *checkpointCleaner) GetSnapshotsLocked() (*logtail.SnapshotInfo, error) 
 		)
 	}
 	c.backupProtection.RUnlock()
-	
+
 	// Pass the protected TS to GetSnapshot, which will add it to cluster snapshots
 	if !extraTS.IsEmpty() {
 		return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
