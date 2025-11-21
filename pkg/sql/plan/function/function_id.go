@@ -425,7 +425,7 @@ const (
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 351
+	FUNCTION_END_NUMBER = 353
 )
 
 // functionIdRegister is what function we have registered already.
@@ -614,10 +614,12 @@ var functionIdRegister = map[string]int32{
 	"current_user_id":                CURRENT_USER_ID,
 	"current_user_name":              CURRENT_USER_NAME,
 	"found_rows":                     FOUND_ROWS,
+	"greatest":                       GREATEST,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
 	"last_query_id":                  LAST_QUERY_ID,
 	"last_uuid":                      LAST_QUERY_ID,
+	"least":                          LEAST,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"row_number":                     ROW_NUMBER,
