@@ -2213,6 +2213,40 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// FromDays: InMySQL: Given a day number N, returns a DATE value.
+// note: This function is the inverse of TO_DAYS. Given a day number N, FROM_DAYS(N) returns a DATE value.
+// reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_from-days
+func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	dayParams := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+	rs := vector.MustFunctionResult[types.Date](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		dayNumber, isNull := dayParams.GetValue(i)
+		if isNull {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) + ADZeroDays
+		// So FROM_DAYS(N) should reverse this:
+		// DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) = N - ADZeroDays
+		// date = ZeroDatetime + (N - ADZeroDays) days
+		daysToAdd := dayNumber - ADZeroDays
+		dt, success := types.ZeroDatetime.AddInterval(daysToAdd, types.Day, types.DateTimeType)
+		if !success {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		dateValue := dt.ToDate()
+		if err := rs.Append(dateValue, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DateTimeDiff returns t2 - t1 where t1 and t2 are datetime expressions.
 // The unit for the result is given by the unit argument.
 // The values for interval unit are "QUARTER","YEAR","MONTH", "DAY", "HOUR", "SECOND", "MICROSECOND"

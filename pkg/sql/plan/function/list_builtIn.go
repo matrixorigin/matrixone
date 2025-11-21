@@ -6084,6 +6084,27 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `from_days`
+	{
+		functionId: FROM_DAYS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_date.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInFromDays
+				},
+			},
+		},
+	},
+
 	// function `to_seconds`
 	{
 		functionId: TO_SECONDS,
