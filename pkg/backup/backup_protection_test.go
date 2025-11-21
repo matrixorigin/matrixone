@@ -146,9 +146,10 @@ func TestBackupProtectionMetadataFileFiltering(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 10)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
+	bats := bat.Split(2)
 
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	err := rel.Append(context.Background(), bat)
+	err := rel.Append(context.Background(), bats[0])
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
 
@@ -226,7 +227,7 @@ func TestBackupProtectionMetadataFileFiltering(t *testing.T) {
 	// Create a new checkpoint after backup time point
 	time.Sleep(10 * time.Millisecond) // Ensure new checkpoint has later timestamp
 	txn, rel = testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	err = rel.Append(context.Background(), bat)
+	err = rel.Append(context.Background(), bats[1])
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
 
@@ -372,10 +373,11 @@ func TestBackupProtectionCheckpointFiltering(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 10)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-
+	bats := bat.Split(3)
 	for i := 0; i < 3; i++ {
+		// Create new batch data for each iteration to avoid duplicate key errors
 		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-		err := rel.Append(context.Background(), bat)
+		err := rel.Append(context.Background(), bats[i])
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
 

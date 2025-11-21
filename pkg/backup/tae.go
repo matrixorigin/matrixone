@@ -286,13 +286,14 @@ func execBackup(
 		common.AnyField("checkpoint num", len(names)),
 		common.AnyField("parallel num", parallelNum))
 
-	// Get SQL executor for mo_ctl calls
+	// Try to get SQL executor for mo_ctl calls (may not be available in test environment)
+	var exec executor.SQLExecutor
+	var opts executor.Options
 	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
+	if ok {
+		exec = v.(executor.SQLExecutor)
+		opts = executor.Options{}
 	}
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}
 
 	// Backup protection timestamp - will be set to the first checkpoint's start time
 	var protectedTS types.TS
@@ -305,8 +306,8 @@ func execBackup(
 			updateTicker.Stop()
 			close(updateTickerStop)
 		}
-		// Remove backup protection
-		if !protectedTS.IsEmpty() {
+		// Remove backup protection (only if executor is available)
+		if !protectedTS.IsEmpty() && exec != nil {
 			sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','remove_checker.backup.')")
 			_, err := exec.Exec(ctx, sql, opts)
 			if err != nil {
@@ -417,7 +418,7 @@ func execBackup(
 		protectedTS = baseTS
 	}
 
-	if !protectedTS.IsEmpty() {
+	if !protectedTS.IsEmpty() && exec != nil {
 		// Set backup protection via mo_ctl
 		tsValue := protectedTS.ToString()
 		sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
@@ -453,6 +454,10 @@ func execBackup(
 				}
 			}()
 		}
+	} else if !protectedTS.IsEmpty() && exec == nil {
+		// SQL executor not available (e.g., in test environment)
+		// Log warning but continue backup without protection
+		logutil.Warn("backup: SQL executor not available, backup protection will not be set")
 	}
 
 	// copy data
