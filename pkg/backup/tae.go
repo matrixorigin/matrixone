@@ -558,19 +558,15 @@ func copyFileAndGetMetaFiles(
 		meta := decoder(file.Name)
 		meta.SetIdx(i)
 
-		// Filter out files that are created after backup time point
-		// For global checkpoint (start is empty or 0), check end timestamp
-		// For incremental checkpoint, check end timestamp
 		if !backup.IsEmpty() {
 			start := meta.GetStart()
 			end := meta.GetEnd()
 			// Skip if end timestamp is greater than backup time point
-			// This means the checkpoint was created after backup started
 			if !end.IsEmpty() && end.GT(&backup) {
 				logutil.Infof("[Backup] skip file %v (end %v > backup %v)", file.Name, end.ToString(), backup.ToString())
 				continue
 			}
-			// For incremental checkpoint, also check start timestamp
+			// Also check start timestamp (original logic)
 			if !start.IsEmpty() && start.GE(&backup) {
 				logutil.Infof("[Backup] skip file %v (start %v >= backup %v)", file.Name, start.ToString(), backup.ToString())
 				continue
@@ -689,77 +685,21 @@ func CopyCheckpointDir(
 		meta.SetExt("")
 		return meta
 	}
-	taeFileList, metaFiles, files, err := copyFileAndGetMetaFiles(
-		ctx, srcFs, dstFs, dir, backup, decoder, false,
+	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(
+		ctx, srcFs, dstFs, dir, backup, decoder, true,
 	)
 	if err != nil {
 		return nil, types.TS{}, err
 	}
 
-	// Filter to keep only the last global checkpoint (gckp) and last compacted checkpoint (cpt)
-	// Remove incremental checkpoints and older global checkpoints
-	var lastGCKP ioutil.TSRangeFile
-	var lastCPT ioutil.TSRangeFile
-	var lastGCKPIdx, lastCPTIdx int = -1, -1
-	var lastGCKPEnd, lastCPTEnd types.TS
-	
-	for i, metaFile := range metaFiles {
-		start := metaFile.GetStart()
-		end := metaFile.GetEnd()
-		// Global checkpoint: start is empty
-		if start.IsEmpty() {
-			if metaFile.IsCompactExt() {
-				// Compacted checkpoint (cpt)
-				if lastCPTIdx == -1 || end.GT(&lastCPTEnd) {
-					lastCPT = metaFile
-					lastCPTIdx = i
-					lastCPTEnd = *end
-				}
-			} else if metaFile.IsCKPFile() {
-				// Global checkpoint (gckp)
-				if lastGCKPIdx == -1 || end.GT(&lastGCKPEnd) {
-					lastGCKP = metaFile
-					lastGCKPIdx = i
-					lastGCKPEnd = *end
-				}
-			}
-		}
-		// Incremental checkpoints are not needed for backup
-	}
-	
-	// Only copy the last gckp and last cpt
-	filteredMetaFiles := make([]ioutil.TSRangeFile, 0, 2)
-	if lastGCKPIdx >= 0 {
-		filteredMetaFiles = append(filteredMetaFiles, lastGCKP)
-		logutil.Infof("[Backup] keep last gckp: %v (end: %v)", lastGCKP.GetName(), lastGCKPEnd.ToString())
-	}
-	if lastCPTIdx >= 0 {
-		filteredMetaFiles = append(filteredMetaFiles, lastCPT)
-		logutil.Infof("[Backup] keep last cpt: %v (end: %v)", lastCPT.GetName(), lastCPTEnd.ToString())
-	}
-	
-	// Copy the filtered metadata files
-	var checksum []byte
-	for _, metaFile := range filteredMetaFiles {
-		checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, metaFile.GetName(), dir)
-		if err != nil {
-			return nil, types.TS{}, err
-		}
-		taeFileList = append(taeFileList, &taeFile{
-			path:     dir + string(os.PathSeparator) + metaFile.GetName(),
-			size:     files[metaFile.GetIdx()].Size,
-			checksum: checksum,
-			needCopy: true,
-			ts:       backup,
-		})
-	}
-
 	// minTs is the end of the last global checkpoint, which is needed when copying gc meta
 	minTs := types.TS{}
-	if lastGCKPIdx >= 0 {
-		minTs = lastGCKPEnd
-	} else if lastCPTIdx >= 0 {
-		minTs = lastCPTEnd
+	for i := len(metaFiles) - 1; i >= 0; i-- {
+		ckpStart := metaFiles[i].GetStart()
+		if ckpStart.IsEmpty() {
+			minTs = *metaFiles[i].GetEnd()
+			break
+		}
 	}
 	return taeFileList, minTs, nil
 }
