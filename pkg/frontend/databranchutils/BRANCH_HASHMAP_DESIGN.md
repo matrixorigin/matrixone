@@ -21,6 +21,8 @@ This document captures the design decisions for the sharded `branchHashmap`. All
 - `ForEachShardParallel` replaces the old `ForEach`. `PopByEncodedKey` must be invoked via `ShardCursor` while holding the shard lock to avoid blocking other shards. `parallelism <= 0` uses `min(runtime.NumCPU(), shardCount)`; positive values are clamped to `[1, shardCount]`.
 - `ItemCount` returns the current row count using shard-local counters that are updated during insertions and removals. No iteration is required to compute the total.
 - Returned rows still decode via `DecodeRow` without changing tuple order.
+- `Project(keyCols, parallelism)` builds a new hashmap by re-encoding keys with the provided column indexes while keeping the original value payloads. Work is fanned out by shard using `ForEachShardParallel`; large shards are processed in batches to cap memory pressure. The returned hashmap is independent of the source (separate storage and locks). `parallelism` follows the same clamping rules as `ForEachShardParallel`.
+- `Migrate(keyCols, parallelism)` migrates rows into a new hashmap and removes them from the source during traversal to avoid holding double memory. Key re-encoding and batching semantics match `Project`; removal uses shard-local pop to stay non-blocking for other shards.
 
 ## Memory Management
 - Each shard pools `entryBlock` arenas so large slabs are reused. Temporary packers, key buffers, and batches sit in global `sync.Pool`s to avoid GC churn.
