@@ -444,9 +444,12 @@ const (
 	// function `soundex`
 	SOUNDEX = 357
 
+	// function `degrees`
+	DEGREES = 358
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 358
+	FUNCTION_END_NUMBER = 359
 )
 
 // functionIdRegister is what function we have registered already.
@@ -622,6 +625,7 @@ var functionIdRegister = map[string]int32{
 	"isempty":                        ISEMPTY,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
+	"degrees":                        DEGREES,
 	"atan":                           ATAN,
 	"atan2":                          ATAN2,
 	"cos":                            COS,
