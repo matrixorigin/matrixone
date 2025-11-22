@@ -698,6 +698,7 @@ var functionIdRegister = map[string]int32{
 	"exp":                            EXP,
 	"empty":                          EMPTY,
 	"length":                         LENGTH,
+	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
 	"ln":                             LN,
