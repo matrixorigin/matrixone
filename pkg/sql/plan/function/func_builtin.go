@@ -648,19 +648,83 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Generate integer parameter wrappers for all parameters
-	ps := make([]vector.FunctionParameterWrapper[int64], len(parameters))
-	for i := range parameters {
-		ps[i] = vector.GenerateFunctionFixedTypeParameter[int64](parameters[i])
+	// Create getter functions for each parameter that handle different integer types
+	getters := make([]func(uint64) (int64, bool), len(parameters))
+	for i, param := range parameters {
+		paramType := param.GetType().Oid
+		switch paramType {
+		case types.T_int8:
+			p := vector.GenerateFunctionFixedTypeParameter[int8](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_int16:
+			p := vector.GenerateFunctionFixedTypeParameter[int16](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_int32:
+			p := vector.GenerateFunctionFixedTypeParameter[int32](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_int64:
+			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return val, null
+			}
+		case types.T_uint8:
+			p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_uint16:
+			p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_uint32:
+			p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_uint64:
+			p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		default:
+			// For non-integer types, try to cast to int64
+			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return val, null
+			}
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		var resultStr string
 		hasNull := false
 
 		// Process all integer arguments
-		for _, p := range ps {
-			v, null := p.GetValue(i)
+		for _, getter := range getters {
+			v, null := getter(i)
 			if null {
 				hasNull = true
 				break
