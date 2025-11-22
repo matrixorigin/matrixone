@@ -3305,12 +3305,18 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	offParam := vector.GenerateFunctionStrParameter(ivecs[2])
 
 	// Optional fourth argument: separator (string, default ',')
-	separatorParam := vector.GenerateFunctionStrParameter(ivecs[3])
-	separatorProvided := len(ivecs) > 3 && !ivecs[3].IsConstNull()
+	var separatorParam vector.FunctionParameterWrapper[types.Varlena]
+	separatorProvided := len(ivecs) > 3
+	if separatorProvided {
+		separatorParam = vector.GenerateFunctionStrParameter(ivecs[3])
+	}
 
 	// Optional fifth argument: number_of_bits (int64, default 64)
-	numberOfBitsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
-	numberOfBitsProvided := len(ivecs) > 4 && !ivecs[4].IsConstNull()
+	var numberOfBitsParam vector.FunctionParameterWrapper[int64]
+	numberOfBitsProvided := len(ivecs) > 4
+	if numberOfBitsProvided {
+		numberOfBitsParam = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -3339,7 +3345,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 		// Get separator (default ',')
 		separator := ","
-		if separatorProvided {
+		if separatorProvided && !ivecs[3].IsConstNull() {
 			sep, nullSep := separatorParam.GetStrValue(i)
 			if !nullSep {
 				separator = functionUtil.QuickBytesToStr(sep)
@@ -3348,7 +3354,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 		// Get number_of_bits (default 64, max 64)
 		numberOfBits := int64(64)
-		if numberOfBitsProvided {
+		if numberOfBitsProvided && !ivecs[4].IsConstNull() {
 			nBits, nullNBits := numberOfBitsParam.GetValue(i)
 			if !nullNBits {
 				if nBits < 1 {
