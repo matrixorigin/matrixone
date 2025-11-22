@@ -2316,9 +2316,12 @@ func buildHashmapForTable(
 		atomicErr    atomic.Value
 		dataBat      *batch.Batch
 		tombstoneBat *batch.Batch
+		wg           sync.WaitGroup
 	)
 
 	defer func() {
+		wg.Wait()
+
 		if dataBat != nil {
 			dataBat.Clean(mp)
 		}
@@ -2341,20 +2344,22 @@ func buildHashmapForTable(
 			return nil
 		}
 
+		wg.Add(1)
+
 		return tblStuff.worker.Submit(func() {
+			defer wg.Done()
+
 			ll := bat.VectorCount()
+			var taskErr error
 			if isTombstone {
-				if err = tombstoneHashmap.PutByVectors(bat.Vecs[:ll-1], []int{0}); err != nil {
-					return
-				}
+				taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll-1], []int{0})
 			} else {
-				if err = dataHashmap.PutByVectors(bat.Vecs[:ll-1], []int{tblStuff.def.pkColIdx}); err != nil {
-					return
-				}
+				taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll-1], []int{tblStuff.def.pkColIdx})
 			}
+
 			bat.Clean(mp)
-			if err != nil {
-				atomicErr.Store(err)
+			if taskErr != nil {
+				atomicErr.Store(taskErr)
 			}
 		})
 	}
@@ -2379,11 +2384,13 @@ func buildHashmapForTable(
 				return
 			}
 
-			if err = putVectors(tombstoneBat, false); err != nil {
+			if err = putVectors(tombstoneBat, true); err != nil {
 				return
 			}
 		}
 	}
+
+	wg.Wait()
 
 	if atomicErr.Load() != nil {
 		err = atomicErr.Load().(error)
