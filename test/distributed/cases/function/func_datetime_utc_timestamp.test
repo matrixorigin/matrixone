@@ -67,6 +67,9 @@ SET TIME_ZONE = "SYSTEM";
 -- @desc:test for UTC_TIMESTAMP format pattern verification (scale 0 - no microseconds)
 -- Show original values and verify: no decimal point, fixed length
 -- Use subquery to ensure check values are based on the same value as displayed
+-- @ignore:0,1
+-- Ignore columns 0,1 (value_no_scale, value_scale_0) as they are dynamic time values
+-- Only check format patterns (has_dot, len) which are fixed values
 select 
     value_no_scale,
     value_scale_0,
@@ -90,6 +93,9 @@ from (
 -- scale(5): last 4 digits should be zeros
 -- scale(6): last 3 digits should be zeros
 -- Use subquery to ensure check values are based on the same values as displayed
+-- @ignore:0,1,2,3,4,5
+-- Ignore columns 0-5 (value_scale_1 to value_scale_6) as they are dynamic time values
+-- Only check format patterns (dot_pos, decimal_digits, last_*_digits) which are fixed values
 select 
     value_scale_1,
     value_scale_2,

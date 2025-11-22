@@ -61,7 +61,7 @@ utc_timestamp() as value_no_scale,
 utc_timestamp(0) as value_scale_0
 ) as t;
 value_no_scale    value_scale_0    has_dot_no_scale    has_dot_scale_0    len_no_scale    len_scale_0
-2025-11-22 09:54:31    2025-11-22 09:54:31    0    0    19    19
+2025-11-22 10:01:51    2025-11-22 10:01:51    0    0    19    19
 select
 value_scale_1,
 value_scale_2,
@@ -97,4 +97,4 @@ utc_timestamp(5) as value_scale_5,
 utc_timestamp(6) as value_scale_6
 ) as t;
 value_scale_1    value_scale_2    value_scale_3    value_scale_4    value_scale_5    value_scale_6    dot_pos_scale_1    dot_pos_scale_2    dot_pos_scale_3    dot_pos_scale_4    dot_pos_scale_5    dot_pos_scale_6    decimal_digits_scale_1    decimal_digits_scale_2    decimal_digits_scale_3    decimal_digits_scale_4    decimal_digits_scale_5    decimal_digits_scale_6    last_8_digits_scale_1    last_7_digits_scale_2    last_6_digits_scale_3    last_5_digits_scale_4    last_4_digits_scale_5    last_3_digits_scale_6
-2025-11-22 09:54:30.900000000    2025-11-22 09:54:30.940000000    2025-11-22 09:54:30.935000000    2025-11-22 09:54:30.935400000    2025-11-22 09:54:30.935380000    2025-11-22 09:54:30.935384000    20    20    20    20    20    20    1    2    3    4    5    6                        
+2025-11-22 10:01:50.700000000    2025-11-22 10:01:50.650000000    2025-11-22 10:01:50.652000000    2025-11-22 10:01:50.652000000    2025-11-22 10:01:50.651970000    2025-11-22 10:01:50.651976000    20    20    20    20    20    20    1    2    3    4    5    6                        
