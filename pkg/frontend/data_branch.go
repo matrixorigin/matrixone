@@ -121,6 +121,8 @@ type tableStuff struct {
 	}
 
 	worker *ants.Pool
+
+	retPool *retBatchList
 }
 
 type batchWithKind struct {
@@ -139,9 +141,7 @@ type retBatchList struct {
 	pinned map[*batch.Batch]struct{}
 }
 
-var retBatchPool = retBatchList{}
-
-func acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
+func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
@@ -187,22 +187,31 @@ func acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
 	}
 }
 
-func releaseRetBatch(bat *batch.Batch, forTombstone bool) {
+func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone bool) {
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
-	list := retBatchPool.dList
-	if forTombstone {
-		list = retBatchPool.tList
-	}
-
 	bat.CleanOnlyData()
-	list = append(list, bat)
+
+	if forTombstone {
+		retBatchPool.tList = append(retBatchPool.tList, bat)
+	} else {
+		retBatchPool.dList = append(retBatchPool.dList, bat)
+	}
 
 	delete(retBatchPool.pinned, bat)
 }
 
-func freeAllRetBatches(mp *mpool.MPool) {
+func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
+	if retBatchPool == nil {
+		return
+	}
+
+	retBatchPool.mu.Lock()
+	defer func() {
+		retBatchPool.mu.Unlock()
+	}()
+
 	for _, bat := range retBatchPool.dList {
 		bat.Clean(mp)
 	}
@@ -212,6 +221,11 @@ func freeAllRetBatches(mp *mpool.MPool) {
 	for bat, _ := range retBatchPool.pinned {
 		bat.Clean(mp)
 	}
+
+	retBatchPool.dList = nil
+	retBatchPool.tList = nil
+	retBatchPool.pinned = nil
+
 }
 
 type compositeOption struct {
@@ -369,7 +383,9 @@ func diffMergeAgency(
 	)
 
 	defer func() {
-		freeAllRetBatches(ses.proc.Mp())
+		if tblStuff.retPool != nil {
+			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+		}
 		if retBatCh != nil {
 			close(retBatCh)
 		}
@@ -505,7 +521,7 @@ func mergeDiffs(
 			}
 			replaceIntoVals.Reset()
 		}
-		releaseRetBatch(wrapped.batch, false)
+		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
 
 	return
@@ -543,7 +559,7 @@ func satisfyDiffOutputOpt(
 				for _, colIdx := range tblStuff.def.visibleIdxes {
 					vec := wrapped.batch.Vecs[colIdx]
 					if err = extractRowFromVector(
-						ctx, ses, vec, colIdx+2, row, rowIdx, true,
+						ctx, ses, vec, colIdx+2, row, rowIdx, false,
 					); err != nil {
 						return
 					}
@@ -555,13 +571,13 @@ func satisfyDiffOutputOpt(
 					break
 				}
 			}
-			releaseRetBatch(wrapped.batch, false)
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 		}
 	} else if stmt.OutputOpt.Count {
 		cnt := int64(0)
 		for wrapped := range retCh {
 			cnt += int64(wrapped.batch.RowCount())
-			releaseRetBatch(wrapped.batch, false)
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 		}
 		mrs.AddRow([]any{cnt})
 
@@ -606,7 +622,7 @@ func satisfyDiffOutputOpt(
 					replaceCnt += int(wrapped.batch.RowCount())
 				}
 			}
-			releaseRetBatch(wrapped.batch, false)
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 
 			if deleteCnt >= batchCnt {
 				if err = flushSqlValues(
@@ -849,7 +865,7 @@ func constructValsFromBatch(
 		for _, colIdx := range tblStuff.def.visibleIdxes {
 			vec := wrapped.batch.Vecs[colIdx]
 			if err = extractRowFromVector(
-				ctx, ses, vec, colIdx, row, rowIdx, true,
+				ctx, ses, vec, colIdx, row, rowIdx, false,
 			); err != nil {
 				return
 			}
@@ -879,6 +895,7 @@ func buildOutputSchema(
 		showCols []*MysqlColumn
 	)
 	ses.ClearAllMysqlResultSet()
+	ses.ClearResultBatches()
 
 	if stmt.OutputOpt == nil || stmt.OutputOpt.Limit != nil {
 		// output all rows OR
@@ -1080,6 +1097,8 @@ func getTableStuff(
 
 		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 	}
+
+	tblStuff.retPool = &retBatchList{}
 
 	return
 
@@ -1382,13 +1401,13 @@ func hashDiffIfHasLCA(
 			i, j := 0, 0
 			for i < tarVec.Length() && j < baseVec.Length() {
 				if err3 = extractRowFromVector(
-					ctx, ses, tarVec, 0, tarRow, i, true,
+					ctx, ses, tarVec, 0, tarRow, i, false,
 				); err3 != nil {
 					return
 				}
 
 				if err3 = extractRowFromVector(
-					ctx, ses, baseVec, 0, baseRow, j, true,
+					ctx, ses, baseVec, 0, baseRow, j, false,
 				); err3 != nil {
 					return
 				}
@@ -1467,7 +1486,7 @@ func hashDiffIfHasLCA(
 
 			plan2.RemoveIf(baseWrappedList, func(t batchWithKind) bool {
 				if t.batch.RowCount() == 0 {
-					releaseRetBatch(t.batch, false)
+					tblStuff.retPool.releaseRetBatch(t.batch, false)
 					return true
 				}
 				return false
@@ -1485,7 +1504,7 @@ func hashDiffIfHasLCA(
 		}
 
 		if wrapped.batch.RowCount() == 0 {
-			releaseRetBatch(wrapped.batch, false)
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			return
 		}
 
@@ -1661,13 +1680,13 @@ func compareRowInWrappedBatches(
 		)
 
 		if err = extractRowFromVector(
-			ctx, ses, vec1, 0, row1, rowIdx1, true,
+			ctx, ses, vec1, 0, row1, rowIdx1, false,
 		); err != nil {
 			return 0, err
 		}
 
 		if err = extractRowFromVector(
-			ctx, ses, vec2, 0, row2, rowIdx2, true,
+			ctx, ses, vec2, 0, row2, rowIdx2, false,
 		); err != nil {
 			return 0, err
 		}
@@ -1693,7 +1712,8 @@ func findDeleteAndUpdateBat(
 			err2      error
 			tuple     types.Tuple
 			dBat      *batch.Batch
-			tBat      = acquireRetBatch(tblStuff, true)
+			tBat1     = tblStuff.retPool.acquireRetBatch(tblStuff, true)
+			tBat2     *batch.Batch
 			updateBat *batch.Batch
 			checkRet  []databranchutils.GetResult
 		)
@@ -1708,42 +1728,42 @@ func findDeleteAndUpdateBat(
 			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
 				return err2
 			} else {
-				if err2 = vector.AppendAny(tBat.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+				if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
 					return err2
 				}
 
-				tBat.SetRowCount(tBat.Vecs[0].Length())
+				tBat1.SetRowCount(tBat1.Vecs[0].Length())
 			}
 			return nil
 		}); err2 != nil {
 			return err2
 		}
 
-		if tBat.RowCount() == 0 {
-			releaseRetBatch(tBat, true)
+		if tBat1.RowCount() == 0 {
+			tblStuff.retPool.releaseRetBatch(tBat1, true)
 			return nil
 		}
 
 		if dBat, err2 = handleDelsOnLCA(
-			ctx, ses, bh, tBat, tblStuff, branchTS.ToTimestamp(),
+			ctx, ses, bh, tBat1, tblStuff, branchTS.ToTimestamp(),
 		); err2 != nil {
 			return err2
 		}
 
 		// merge inserts and deletes on the tar
 		// this deletes is not on the lca
-		if tBat.RowCount() > 0 {
+		if tBat1.RowCount() > 0 {
 			if _, err2 = dataHashmap.PopByVectors(
-				[]*vector.Vector{tBat.Vecs[0]}, false,
+				[]*vector.Vector{tBat1.Vecs[0]}, false,
 			); err2 != nil {
 				return err2
 			}
-			releaseRetBatch(tBat, true)
+			tblStuff.retPool.releaseRetBatch(tBat1, true)
 		}
 
 		// find update
 		if dBat.RowCount() > 0 {
-			tBat = acquireRetBatch(tblStuff, false)
+			tBat2 = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 			if checkRet, err2 = dataHashmap.PopByVectors(
 				[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
 			); err2 != nil {
@@ -1754,7 +1774,7 @@ func findDeleteAndUpdateBat(
 				if check.Exists {
 					// delete on lca and insert into tar ==> update
 					if updateBat == nil {
-						updateBat = acquireRetBatch(tblStuff, false)
+						updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 					}
 
 					if tuple, _, err2 = dataHashmap.DecodeRow(check.Rows[0]); err2 != nil {
@@ -1767,14 +1787,14 @@ func findDeleteAndUpdateBat(
 
 				} else {
 					// delete on lca
-					if err2 = tBat.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
 						return err2
 					}
 				}
 			}
 
-			releaseRetBatch(dBat, true)
-			tBat.SetRowCount(tBat.Vecs[0].Length())
+			tblStuff.retPool.releaseRetBatch(dBat, false)
+			tBat2.SetRowCount(tBat2.Vecs[0].Length())
 
 			if updateBat != nil {
 				updateBat.SetRowCount(updateBat.Vecs[0].Length())
@@ -1787,7 +1807,7 @@ func findDeleteAndUpdateBat(
 
 			tmpCh <- batchWithKind{
 				name:  tblName,
-				batch: tBat,
+				batch: tBat2,
 				kind:  diffDelete,
 			}
 		}
@@ -1891,8 +1911,8 @@ func diffDataHelper(
 			checkRet  databranchutils.GetResult
 		)
 
-		tarBat = acquireRetBatch(tblStuff, false)
-		baseBat = acquireRetBatch(tblStuff, false)
+		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
 		if err2 = cursor.ForEach(func(_ []byte, rows [][]byte) error {
 			select {
@@ -1990,7 +2010,7 @@ func diffDataHelper(
 			bat   *batch.Batch
 		)
 
-		bat = acquireRetBatch(tblStuff, false)
+		bat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
 		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
 			select {
@@ -2217,7 +2237,7 @@ func handleDelsOnLCA(
 		return !exist
 	}
 
-	dBat = acquireRetBatch(tblStuff, false)
+	dBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
 	endIdx := dBat.VectorCount() - 1
 
@@ -2230,14 +2250,14 @@ func handleDelsOnLCA(
 				continue
 			}
 
-			for j := range len(colTypes) {
-				if err = dBat.Vecs[j].UnionOne(cols[j+1], int64(i), ses.proc.Mp()); err != nil {
+			for j := 1; j < len(cols); j++ {
+				if err = dBat.Vecs[j-1].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
 					return false
 				}
 			}
 
 			if tblStuff.def.pkKind != normalKind {
-				if err = dBat.Vecs[endIdx].UnionOne(tBat.Vecs[endIdx], int64(i), ses.proc.Mp()); err != nil {
+				if err = dBat.Vecs[endIdx].UnionOne(tBat.Vecs[0], int64(i), ses.proc.Mp()); err != nil {
 					return false
 				}
 			}
