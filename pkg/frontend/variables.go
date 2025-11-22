@@ -3878,12 +3878,22 @@ func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, nam
 
 		sv.Set(name, tzStr)
 	} else {
-		loc, err := time.LoadLocation(tzStr)
-		if err != nil {
-			return err
+		// Handle common timezone aliases first
+		// These work even when timezone database is not available
+		var loc *time.Location
+		switch tzStr {
+		case "utc":
+			loc = time.UTC
+			sv.Set(name, "UTC")
+		default:
+			// Try to load from system timezone database
+			var err error
+			loc, err = time.LoadLocation(tzStr)
+			if err != nil {
+				return err
+			}
+			sv.Set(name, tzStr)
 		}
-
-		sv.Set(name, tzStr)
 		sess.SetTimeZone(loc)
 	}
 
