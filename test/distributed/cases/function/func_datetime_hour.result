@@ -5,7 +5,7 @@ result2
 15
 SELECT HOUR(NOW()) AS result3;
 result3
-21
+22
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
 time_cast
 15

@@ -1,6 +1,8 @@
 # Basic test cases from requirements
 SELECT HOUR('15:30:45') AS result1;
 SELECT HOUR('2024-12-20 15:30:45') AS result2;
+
+-- @ignore:0
 SELECT HOUR(NOW()) AS result3;
 
 # Additional test cases with TIME type

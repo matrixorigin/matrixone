@@ -1,15 +1,15 @@
 SELECT ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS result1;
 result1
 null
-SELECT ADDTIME('12:30:45', '01:15:30') AS time_add_time;
+SELECT TIME(ADDTIME('12:30:45', '01:15:30')) AS time_add_time;
 time_add_time
-2025-11-21 13:46:15
-SELECT ADDTIME('23:59:59', '00:00:01') AS time_wrap;
+13:46:15
+SELECT TIME(ADDTIME('23:59:59', '00:00:01')) AS time_wrap;
 time_wrap
-2025-11-22 00:00:00
-SELECT ADDTIME('00:00:00', '25:00:00') AS time_with_days;
+00:00:00
+SELECT TIME(ADDTIME('00:00:00', '25:00:00')) AS time_with_days;
 time_with_days
-2025-11-22 01:00:00
+01:00:00
 SELECT ADDTIME('2007-12-31 23:59:59', '00:00:01') AS datetime_add_second;
 datetime_add_second
 2008-01-01 00:00:00
@@ -25,9 +25,9 @@ timestamp_add_second
 SELECT ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS string_datetime;
 string_datetime
 null
-SELECT ADDTIME('12:30:45', '01:15:30') AS string_time;
+SELECT TIME(ADDTIME('12:30:45', '01:15:30')) AS string_time;
 string_time
-2025-11-21 13:46:15
+13:46:15
 SELECT ADDTIME(NULL, '01:00:00') AS null_first;
 null_first
 null
@@ -37,12 +37,12 @@ null
 SELECT ADDTIME(NULL, NULL) AS null_both;
 null_both
 null
-SELECT ADDTIME('00:00:00', '00:00:00') AS zero_time;
+SELECT TIME(ADDTIME('00:00:00', '00:00:00')) AS zero_time;
 zero_time
-2025-11-21 00:00:00
-SELECT ADDTIME('23:59:59.999999', '00:00:00.000001') AS microsecond_precision;
+00:00:00
+SELECT TIME(ADDTIME('23:59:59.999999', '00:00:00.000001')) AS microsecond_precision;
 microsecond_precision
-2025-11-22 00:00:00
+00:00:00
 CREATE TABLE t1(dt DATETIME, t TIME);
 INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '01:00:00'), ('2024-01-01 12:00:00', '02:30:00');
 SELECT ADDTIME(dt, t) AS result FROM t1;

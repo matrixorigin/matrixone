@@ -67,7 +67,7 @@ github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck
 github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
 	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
 github.com/matrixorigin/matrixone/pkg/sql/plan/function.MakeTime
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:4089
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:5142
 github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
 	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
 github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
@@ -136,7 +136,7 @@ github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck
 github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
 	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
 github.com/matrixorigin/matrixone/pkg/sql/plan/function.MakeTime
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:4089
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:5142
 github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
 	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
 github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
