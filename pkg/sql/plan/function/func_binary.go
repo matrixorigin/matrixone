@@ -4549,6 +4549,75 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
+// YearWeekString: YEARWEEK(string, mode) - Returns year and week for a string date/datetime as YYYYWW format.
+// Tries to parse as datetime first, then as date.
+func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	dateParam := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	scale := int32(6) // Use max scale for string inputs
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dateStr, null := dateParam.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+
+		// Try to parse as datetime first
+		dt, err := types.ParseDatetime(dateStrVal, scale)
+		if err != nil {
+			// If parsing as datetime fails, try as date
+			date, err2 := types.ParseDateCast(dateStrVal)
+			if err2 != nil {
+				// Invalid date string, return NULL
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Use date for YEARWEEK calculation
+			year, week := date.YearWeek(mode)
+			result := int64(year)*100 + int64(week)
+			if err := rs.Append(result, false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Use datetime for YEARWEEK calculation
+		year, week := dt.YearWeek(mode)
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
 		return "", moerr.NewInternalErrorNoCtx("invalid unit")
