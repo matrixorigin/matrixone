@@ -50,7 +50,7 @@ func (t Time) String2(scale int32) string {
 		symbol = "-"
 	}
 	if scale > 0 {
-		msecInstr := fmt.Sprintf("%06d\n", ms)
+		msecInstr := fmt.Sprintf("%06d", ms)
 		msecInstr = msecInstr[:scale]
 		return fmt.Sprintf("%s%02d:%02d:%02d"+"."+msecInstr, symbol, h, m, s)
 	}
@@ -66,7 +66,7 @@ func (t Time) NumericString(scale int32) string {
 		symbol = "-"
 	}
 	if scale > 0 {
-		msecInstr := fmt.Sprintf("%06d\n", ms)
+		msecInstr := fmt.Sprintf("%06d", ms)
 		msecInstr = msecInstr[:scale]
 		return fmt.Sprintf("%s%02d%02d%02d"+"."+msecInstr, symbol, h, m, s)
 	}

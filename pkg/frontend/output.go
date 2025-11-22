@@ -102,12 +102,17 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_date:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
+		// Use vector's scale to format datetime, as it may be set dynamically by functions like UTC_TIMESTAMP
+		// via TempSetType, which differs from the initial ColDef.Typ.Scale (hardcoded during type checking)
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
 	case types.T_time:
+		// Use vector's scale to format time, as it may be set dynamically by functions
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIndex).String2(scale)
 	case types.T_timestamp:
+		// Use vector's scale to format timestamp, as it may be set dynamically by functions
+		// Also use session timezone for timestamp formatting
 		scale := vec.GetType().Scale
 		timeZone := ses.GetTimeZone()
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)

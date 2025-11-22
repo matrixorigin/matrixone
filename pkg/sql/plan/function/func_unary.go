@@ -938,6 +938,42 @@ func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+func TimestampToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint32](ivecs, result, proc, length, func(v types.Timestamp) uint32 {
+		return uint32(v.ToDatetime(proc.GetSessionInfo().TimeZone).MicroSec())
+	}, selectList)
+}
+
+func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, uint32](ivecs, result, proc, length, func(v types.Datetime) uint32 {
+		return uint32(v.MicroSec())
+	}, selectList)
+}
+
+func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint32](ivecs, result, proc, length, func(v types.Time) uint32 {
+		return uint32(v.MicroSec())
+	}, selectList)
+}
+
+func VarcharToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryStrToFixedWithErrorCheck[uint32](ivecs, result, proc, length, func(v string) (uint32, error) {
+		// Try to parse as TIME first (e.g., "15:30:45.123456")
+		if t, err := types.ParseTime(v, 6); err == nil {
+			return uint32(t.MicroSec()), nil
+		}
+		// Try to parse as DATETIME (e.g., "2022-07-01 10:20:30.123456")
+		if dt, err := types.ParseDatetime(v, 6); err == nil {
+			return uint32(dt.MicroSec()), nil
+		}
+		// Try to parse as TIMESTAMP
+		if ts, err := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, v, 6); err == nil {
+			return uint32(ts.ToDatetime(proc.GetSessionInfo().TimeZone).MicroSec()), nil
+		}
+		return 0, moerr.NewInvalidInputNoCtxf("invalid time/datetime value: %s", v)
+	}, selectList)
+}
+
 func doBinary(orig []byte) []byte {
 	if len(orig) > types.MaxBinaryLen {
 		return orig[:types.MaxBinaryLen]
@@ -1585,10 +1621,31 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func UTCTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opNoneParamToFixed[types.Datetime](result, proc, length, func() types.Datetime {
-		return types.UTC()
-	})
+func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	// Get scale from parameter, default to 0 if not provided (matching MySQL behavior)
+	scale := int32(0)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
+		// Validate scale range: 0-6 (matching MySQL behavior)
+		if scale < 0 {
+			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("negative precision %d specified", scale))
+		}
+		if scale > 6 {
+			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_timestamp", 6)
+		}
+	}
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	resultValue := types.UTC().TruncateToScale(scale)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func sleepSeconds(proc *process.Process, sec float64) (uint8, error) {

@@ -77,19 +77,90 @@ func TestTimestamp_String2(t *testing.T) {
 	resultStr5 := a.String2(time.UTC, 6)
 	require.NoError(t, err)
 	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr5)
+}
 
-	a, err = ParseTimestamp(time.UTC, "2012-01-01 11:11:11.123456", 3)
-	resultStr6 := a.String2(time.UTC, 0)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11", resultStr6)
+// TestTimestamp_String2_NoNewline tests that String2 method does not contain newline characters
+// This test ensures the fix for the bug where fmt.Sprintf("%06d\n", msec) included a newline
+func TestTimestamp_String2_NoNewline(t *testing.T) {
+	loc := time.UTC
+	testCases := []struct {
+		name     string
+		ts       Timestamp
+		scale    int32
+		expected string
+	}{
+		{
+			name:     "scale 6 with microsecond",
+			ts:       MustParseTimestamp(loc, "2022-07-01 10:20:30.123456", 6),
+			scale:    6,
+			expected: "2022-07-01 10:20:30.123456",
+		},
+		{
+			name:     "scale 6 with leading zeros",
+			ts:       MustParseTimestamp(loc, "2022-06-01 14:11:09.000001", 6),
+			scale:    6,
+			expected: "2022-06-01 14:11:09.000001",
+		},
+		{
+			name:     "scale 6 with all zeros",
+			ts:       MustParseTimestamp(loc, "2022-07-01 00:00:00.000000", 6),
+			scale:    6,
+			expected: "2022-07-01 00:00:00.000000",
+		},
+		{
+			name:     "scale 6 with max microseconds",
+			ts:       MustParseTimestamp(loc, "2022-12-31 23:59:59.999999", 6),
+			scale:    6,
+			expected: "2022-12-31 23:59:59.999999",
+		},
+		{
+			name:     "scale 3 truncation",
+			ts:       MustParseTimestamp(loc, "2022-07-01 10:20:30.123456", 6),
+			scale:    3,
+			expected: "2022-07-01 10:20:30.123",
+		},
+		{
+			name:     "scale 1 truncation",
+			ts:       MustParseTimestamp(loc, "2022-07-01 10:20:30.123456", 6),
+			scale:    1,
+			expected: "2022-07-01 10:20:30.1",
+		},
+		{
+			name:     "scale 0 no microseconds",
+			ts:       MustParseTimestamp(loc, "2022-07-01 10:20:30.123456", 6),
+			scale:    0,
+			expected: "2022-07-01 10:20:30",
+		},
+	}
 
-	resultStr7 := a.String2(time.UTC, 3)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123", resultStr7)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.ts.String2(loc, tc.scale)
+			// Ensure no newline character in the result
+			require.NotContains(t, result, "\n", "String2 result should not contain newline character")
+			require.NotContains(t, result, "\r", "String2 result should not contain carriage return")
+			// Verify expected output
+			require.Equal(t, tc.expected, result, "String2 output should match expected format")
+			// Verify length is correct (no extra characters)
+			if tc.scale > 0 {
+				// Format: "YYYY-MM-DD HH:MM:SS." + scale digits
+				expectedLen := 19 + 1 + int(tc.scale) // 19 for datetime, 1 for dot, scale for microseconds
+				require.Equal(t, expectedLen, len(result), "String2 result length should match expected")
+			} else {
+				// Format: "YYYY-MM-DD HH:MM:SS"
+				require.Equal(t, 19, len(result), "String2 result length should be 19 for scale 0")
+			}
+		})
+	}
+}
 
-	resultStr8 := a.String2(time.UTC, 6)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr8)
+// MustParseTimestamp is a helper function that panics on error, for use in tests
+func MustParseTimestamp(loc *time.Location, s string, scale int32) Timestamp {
+	ts, err := ParseTimestamp(loc, s, scale)
+	if err != nil {
+		panic(err)
+	}
+	return ts
 }
 
 func TestParseTimestamp(t *testing.T) {

@@ -2715,27 +2715,97 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				}
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
-				return err2
-			} else {
+			// Get scale from column metadata and format with correct scale
+			scale := int32(mysqlColumn.Decimal())
+			if scale == 0 {
+				// If column doesn't specify scale, try to infer from value
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
+				}
+			} else {
+				// Get raw Datetime value and format with column scale
+				if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
+					return err2
+				} else if dt, ok := val.(types.Datetime); ok {
+					value := dt.String2(scale)
+					err = mp.appendStringLenEnc(value)
+					if err != nil {
+						return err
+					}
+				} else {
+					// Fallback to GetString if type assertion fails
+					value, err2 := mrs.GetString(mp.ctx, r, i)
+					if err2 != nil {
+						return err2
+					}
+					err = mp.appendStringLenEnc(value)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		case defines.MYSQL_TYPE_TIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
-				return err2
-			} else {
+			// Get scale from column metadata and format with correct scale
+			scale := int32(mysqlColumn.Decimal())
+			if scale == 0 {
+				// If column doesn't specify scale, use GetString
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
+			} else {
+				// Get raw Time value and format with column scale
+				if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
+					return err2
+				} else if t, ok := val.(types.Time); ok {
+					value := t.String2(scale)
+					err = mp.appendStringLenEnc(value)
+					if err != nil {
+						return err
+					}
+				} else {
+					// Fallback to GetString if type assertion fails
+					value, err2 := mrs.GetString(mp.ctx, r, i)
+					if err2 != nil {
+						return err2
+					}
+					err = mp.appendStringLenEnc(value)
+					if err != nil {
+						return err
+					}
+				}
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			// Get scale from column metadata and use session timezone (not UTC from GetString)
+			// This ensures consistent timezone handling with appendResultSetTextRow2
+			scale := int32(mysqlColumn.Decimal())
+			// Always use session timezone for Timestamp, not UTC from GetString
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if ts, ok := val.(types.Timestamp); ok {
+				// Use session timezone instead of UTC from GetString
+				// This matches the behavior in appendResultSetTextRow2
+				value := ts.String2(mp.ses.GetTimeZone(), scale)
+				err = mp.appendStringLenEnc(value)
+				if err != nil {
+					return err
+				}
 			} else {
+				// Fallback to GetString if type assertion fails (will use UTC)
+				// Note: This is a fallback case, ideally we should always have types.Timestamp here
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
@@ -3223,27 +3293,24 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			value, err := GetDatetime(colSlices, r, i)
-			if err != nil {
-				return err
+			// Prioritize vector type scale over column metadata, as functions like UTC_TIMESTAMP
+			// set the scale dynamically via TempSetType, which may differ from the initial
+			// ColDef.Typ.Scale (which is set during type checking and may use default values)
+			vec := colSlices.dataSet.Vecs[i]
+			scale := vec.GetType().Scale
+			// If vector doesn't have scale, fall back to column metadata
+			if scale == 0 {
+				scale = int32(mysqlColumn.Decimal())
 			}
-			err = AppendStringLenEnc(mp, value)
-			if err != nil {
-				return err
-			}
-		case defines.MYSQL_TYPE_TIME:
-			value, err := GetTime(colSlices, r, i)
-			if err != nil {
-				return err
-			}
-			err = AppendStringLenEnc(mp, value)
-			if err != nil {
-				return err
-			}
-		case defines.MYSQL_TYPE_TIMESTAMP:
-			typ := colSlices.GetType(i)
-			switch typ.Oid {
-			case types.T_datetime:
+			// Always re-format with correct scale to ensure consistent output format
+			if vec.GetType().Oid == types.T_datetime {
+				dt := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, int(r))
+				value := dt.String2(scale)
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			} else {
 				value, err := GetDatetime(colSlices, r, i)
 				if err != nil {
 					return err
@@ -3252,8 +3319,26 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				if err != nil {
 					return err
 				}
-			default:
-				value, err := GetTimestamp(colSlices, r, i, mp.ses.GetTimeZone())
+			}
+		case defines.MYSQL_TYPE_TIME:
+			// Prioritize vector type scale over column metadata, as functions may set the scale
+			// dynamically via TempSetType, which may differ from the initial ColDef.Typ.Scale
+			vec := colSlices.dataSet.Vecs[i]
+			scale := vec.GetType().Scale
+			// If vector doesn't have scale, fall back to column metadata
+			if scale == 0 {
+				scale = int32(mysqlColumn.Decimal())
+			}
+			// Always re-format with correct scale to ensure consistent output format
+			if vec.GetType().Oid == types.T_time {
+				t := vector.GetFixedAtNoTypeCheck[types.Time](vec, int(r))
+				value := t.String2(scale)
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			} else {
+				value, err := GetTime(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3261,6 +3346,35 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				if err != nil {
 					return err
 				}
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			// Prioritize vector type scale over column metadata, as functions may set the scale
+			// dynamically via TempSetType, which may differ from the initial ColDef.Typ.Scale
+			vec := colSlices.dataSet.Vecs[i]
+			scale := vec.GetType().Scale
+			// If vector doesn't have scale, fall back to column metadata
+			if scale == 0 {
+				scale = int32(mysqlColumn.Decimal())
+			}
+			// Always re-format with correct scale to ensure consistent output format
+			typ := colSlices.GetType(i)
+			var value string
+			switch typ.Oid {
+			case types.T_datetime:
+				dt := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, int(r))
+				value = dt.String2(scale)
+			case types.T_timestamp:
+				ts := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, int(r))
+				value = ts.String2(mp.ses.GetTimeZone(), scale)
+			default:
+				value, err = GetTimestamp(colSlices, r, i, mp.ses.GetTimeZone())
+				if err != nil {
+					return err
+				}
+			}
+			err = AppendStringLenEnc(mp, value)
+			if err != nil {
+				return err
 			}
 		case defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_JSON:
 			value, err := GetStringBased(colSlices, r, i)

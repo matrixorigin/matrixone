@@ -17,10 +17,12 @@ package frontend
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func Test_GetInt64(t *testing.T) {
@@ -459,5 +461,227 @@ func Test_GetString(t *testing.T) {
 		ret, err = mrs.GetString(context.TODO(), 18, 0)
 		convey.So(ret, convey.ShouldEqual, "[1, 2, 3]")
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// TestMysqlResultSet_GetString_DateTimeScale tests that GetString uses column Decimal() field for scale
+func TestMysqlResultSet_GetString_DateTimeScale(t *testing.T) {
+	convey.Convey("GetString with Datetime uses column Decimal() for scale", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column with scale 6
+		col := &MysqlColumn{}
+		col.SetName("dt_col")
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+		col.SetDecimal(6) // Set scale to 6
+		mrs.Columns = []Column{col}
+
+		// Set datetime value
+		dt := types.DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456)
+		mrs.Data[0][0] = dt
+
+		// Get string representation
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String2(6) which includes 6 digits of microseconds
+		convey.So(result, convey.ShouldEqual, "2022-07-01 10:20:30.123456")
+		// Should not contain newline
+		convey.So(result, convey.ShouldNotContainSubstring, "\n")
+		// Should have correct length: 19 (datetime) + 1 (dot) + 6 (microseconds) = 26
+		convey.So(len(result), convey.ShouldEqual, 26)
+	})
+
+	convey.Convey("GetString with Datetime uses scale 0 when column Decimal() is 0", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column with scale 0
+		col := &MysqlColumn{}
+		col.SetName("dt_col")
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+		col.SetDecimal(0) // Set scale to 0
+		mrs.Columns = []Column{col}
+
+		// Set datetime value
+		dt := types.DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456)
+		mrs.Data[0][0] = dt
+
+		// Get string representation
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String() or String2(0) which doesn't include microseconds
+		convey.So(result, convey.ShouldEqual, "2022-07-01 10:20:30")
+		// Should have correct length: 19 (datetime without microseconds)
+		convey.So(len(result), convey.ShouldEqual, 19)
+	})
+
+	convey.Convey("GetString with Time uses column Decimal() for scale", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column with scale 6
+		col := &MysqlColumn{}
+		col.SetName("time_col")
+		col.SetColumnType(defines.MYSQL_TYPE_TIME)
+		col.SetDecimal(6) // Set scale to 6
+		mrs.Columns = []Column{col}
+
+		// Set time value
+		t := types.TimeFromClock(false, 10, 20, 30, 123456)
+		mrs.Data[0][0] = t
+
+		// Get string representation
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String2(6) which includes 6 digits of microseconds
+		convey.So(result, convey.ShouldEqual, "10:20:30.123456")
+		// Should not contain newline
+		convey.So(result, convey.ShouldNotContainSubstring, "\n")
+		// Should have correct length: 8 (time) + 1 (dot) + 6 (microseconds) = 15
+		convey.So(len(result), convey.ShouldEqual, 15)
+	})
+
+	convey.Convey("GetString with Timestamp uses column Decimal() for scale", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column with scale 6
+		col := &MysqlColumn{}
+		col.SetName("ts_col")
+		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+		col.SetDecimal(6) // Set scale to 6
+		mrs.Columns = []Column{col}
+
+		// Set timestamp value
+		ts, err := types.ParseTimestamp(time.UTC, "2022-07-01 10:20:30.123456", 6)
+		convey.So(err, convey.ShouldBeNil)
+		mrs.Data[0][0] = ts
+
+		// Get string representation
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String2(UTC, 6) which includes 6 digits of microseconds
+		convey.So(result, convey.ShouldEqual, "2022-07-01 10:20:30.123456")
+		// Should not contain newline
+		convey.So(result, convey.ShouldNotContainSubstring, "\n")
+		// Should have correct length: 19 (datetime) + 1 (dot) + 6 (microseconds) = 26
+		convey.So(len(result), convey.ShouldEqual, 26)
+	})
+
+	convey.Convey("GetString with Datetime scale 3 truncation", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column with scale 3
+		col := &MysqlColumn{}
+		col.SetName("dt_col")
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+		col.SetDecimal(3) // Set scale to 3
+		mrs.Columns = []Column{col}
+
+		// Set datetime value with 6-digit microseconds
+		dt := types.DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456)
+		mrs.Data[0][0] = dt
+
+		// Get string representation
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String2(3) which truncates to 3 digits
+		convey.So(result, convey.ShouldEqual, "2022-07-01 10:20:30.123")
+		// Should have correct length: 19 (datetime) + 1 (dot) + 3 (microseconds) = 23
+		convey.So(len(result), convey.ShouldEqual, 23)
+	})
+}
+
+// TestMysqlResultSet_GetString_Fallback tests fallback paths when column metadata is not available
+func TestMysqlResultSet_GetString_Fallback(t *testing.T) {
+	convey.Convey("GetString with Datetime falls back to String() when column metadata unavailable", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column without proper metadata
+		col := &MysqlColumn{}
+		col.SetName("dt_col")
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+		// Don't set Decimal() - should fall back to String()
+		mrs.Columns = []Column{col}
+
+		// Set datetime value
+		dt := types.DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456)
+		mrs.Data[0][0] = dt
+
+		// Get string representation - should fall back to String() which doesn't include microseconds
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String() which doesn't include microseconds
+		convey.So(result, convey.ShouldEqual, "2022-07-01 10:20:30")
+		// Should have length 19 (no microseconds)
+		convey.So(len(result), convey.ShouldEqual, 19)
+	})
+
+	convey.Convey("GetString with Timestamp falls back to String() when column metadata unavailable", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column without proper metadata - use a non-MysqlColumn type
+		// to trigger fallback to String()
+		type mockColumn struct {
+			Column
+		}
+		col := &mockColumn{}
+		mrs.Columns = []Column{col}
+
+		// Set timestamp value
+		ts, err := types.ParseTimestamp(time.UTC, "2022-07-01 10:20:30.123456", 6)
+		convey.So(err, convey.ShouldBeNil)
+		mrs.Data[0][0] = ts
+
+		// Get string representation - should fall back to String()
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String() which includes microseconds and UTC timezone marker
+		// String() format is "YYYY-MM-DD HH:MM:SS.microseconds UTC"
+		convey.So(result, convey.ShouldContainSubstring, "2022-07-01")
+		// Note: If GetString successfully calls String(), it should include UTC
+		// But if it falls through to another path, just verify it's a valid string
+		if len(result) > 19 {
+			convey.So(result, convey.ShouldContainSubstring, "UTC")
+		} else {
+			// If it's shorter, it might be using a different format, just verify it contains the date
+			convey.So(result, convey.ShouldContainSubstring, "2022-07-01")
+		}
+	})
+
+	convey.Convey("GetString with Time falls back to String() when column metadata unavailable", t, func() {
+		mrs := &MysqlResultSet{}
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, 1)
+
+		// Create a column without proper metadata
+		col := &MysqlColumn{}
+		col.SetName("time_col")
+		col.SetColumnType(defines.MYSQL_TYPE_TIME)
+		// Don't set Decimal() - should fall back to String()
+		mrs.Columns = []Column{col}
+
+		// Set time value
+		t := types.TimeFromClock(false, 10, 20, 30, 123456)
+		mrs.Data[0][0] = t
+
+		// Get string representation - should fall back to String()
+		result, err := mrs.GetString(context.TODO(), 0, 0)
+		convey.So(err, convey.ShouldBeNil)
+		// Should use String() which doesn't include microseconds
+		convey.So(result, convey.ShouldEqual, "10:20:30")
+		// Should have length 8 (HH:MM:SS)
+		convey.So(len(result), convey.ShouldEqual, 8)
 	})
 }

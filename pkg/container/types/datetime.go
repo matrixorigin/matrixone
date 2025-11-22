@@ -64,7 +64,7 @@ func (dt Datetime) String2(scale int32) string {
 	hour, minute, sec := dt.Clock()
 	if scale > 0 {
 		msec := int64(dt) % MicroSecsPerSec
-		msecInstr := fmt.Sprintf("%06d\n", msec)
+		msecInstr := fmt.Sprintf("%06d", msec)
 		msecInstr = msecInstr[:scale]
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
