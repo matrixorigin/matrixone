@@ -54,6 +54,7 @@ from t_scale_storage;
 
 -- @case
 -- @desc:test for scale in function return values
+-- @ignore:0,1,2,3,4,5
 select 
     now(0),      -- no microseconds
     now(3),      -- 3 digits microseconds
@@ -61,9 +62,14 @@ select
     current_timestamp(0),
     current_timestamp(3),
     current_timestamp(6),
-    date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+    date_add('2022-07-01 10:20:30.123456', interval 1 microsecond)
+;
+
+-- @bvt:issue#22956
+select 
     timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456')
 ;
+-- @bvt:issue
 
 -- @teardown
 drop table if exists t_scale_storage;

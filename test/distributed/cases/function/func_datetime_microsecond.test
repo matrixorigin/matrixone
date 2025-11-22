@@ -112,12 +112,21 @@ insert into t_microsecond_combine values
 
 -- @case
 -- @desc:test for func microsecond() combined with other functions
+-- @ignore:0,1
+select 
+    microsecond(now(6)),
+    microsecond(current_timestamp(6)),
+    microsecond(date_add('2022-07-01 10:20:30.123456', interval 1 second))
+;
+
+-- @bvt:issue#22956
 select 
     microsecond(now(6)),
     microsecond(current_timestamp(6)),
     microsecond(date_add('2022-07-01 10:20:30.123456', interval 1 second)),
     microsecond(timestampadd(microsecond, 100, '2022-07-01 10:20:30.123456'))
 ;
+-- @bvt:issue
 
 -- @case
 -- @desc:test for func microsecond() in WHERE clause

@@ -46,7 +46,11 @@ now(6),      -- 6 digits microseconds (not 9)
 current_timestamp(0),
 current_timestamp(3),
 current_timestamp(6),
-date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+date_add('2022-07-01 10:20:30.123456', interval 1 microsecond)
+;
+now(0)    now(3)    now(6)    current_timestamp(0)    current_timestamp(3)    current_timestamp(6)    date_add(2022-07-01 10:20:30.123456, interval(1, microsecond))
+2025-11-22 18:31:43    2025-11-22 18:31:43.036000000    2025-11-22 18:31:43.035904000    2025-11-22 18:31:43    2025-11-22 18:31:43.036000000    2025-11-22 18:31:43.035904000    2022-07-01 10:20:30.123457000
+select
 timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456')
 ;
 invalid input: column microsecond does not exist

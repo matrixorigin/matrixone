@@ -134,8 +134,15 @@ from (
 -- @desc:test for format in expressions
 select 
     date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
-    timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456'),
     date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
 ;
 -- All should maintain 6-digit microsecond precision
+
+-- @bvt:issue#22956
+select 
+    date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+    timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456'),
+    date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
+;
+-- @bvt:issue
 

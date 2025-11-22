@@ -98,7 +98,13 @@ utc_timestamp(3) as value_utc_timestamp_3,
 utc_timestamp(6) as value_utc_timestamp_6
 ) as t;
 value_now_0    value_now_3    value_now_6    value_current_timestamp_0    value_current_timestamp_3    value_current_timestamp_6    value_utc_timestamp_no_scale    value_utc_timestamp_0    value_utc_timestamp_3    value_utc_timestamp_6    has_dot_now_0    dot_pos_now_3    dot_pos_now_6    has_dot_current_timestamp_0    dot_pos_current_timestamp_3    dot_pos_current_timestamp_6    has_dot_utc_timestamp_no_scale    has_dot_utc_timestamp_0    dot_pos_utc_timestamp_3    dot_pos_utc_timestamp_6    len_now_0    decimal_digits_now_3    decimal_digits_now_6    len_current_timestamp_0    decimal_digits_current_timestamp_3    decimal_digits_current_timestamp_6    len_utc_timestamp_no_scale    len_utc_timestamp_0    decimal_digits_utc_timestamp_3    decimal_digits_utc_timestamp_6    last_6_digits_now_3    last_3_digits_now_6    last_6_digits_current_timestamp_3    last_3_digits_current_timestamp_6    last_6_digits_utc_timestamp_3    last_3_digits_utc_timestamp_6
-2025-11-22 10:07:22    2025-11-22 10:07:22.169000000    2025-11-22 10:07:22.169330000    2025-11-22 10:07:22    2025-11-22 10:07:22.169000000    2025-11-22 10:07:22.169330000    2025-11-22 10:07:22    2025-11-22 10:07:22    2025-11-22 10:07:22.170000000    2025-11-22 10:07:22.170446000    0    20    20    0    20    20    0    0    20    20    19    3    6    19    3    6    19    19    3    6                        
+2025-11-22 10:29:18    2025-11-22 10:29:17.718000000    2025-11-22 10:29:17.717544000    2025-11-22 10:29:18    2025-11-22 10:29:17.718000000    2025-11-22 10:29:17.717544000    2025-11-22 10:29:18    2025-11-22 10:29:18    2025-11-22 10:29:17.719000000    2025-11-22 10:29:17.718784000    0    20    20    0    20    20    0    0    20    20    19    3    6    19    3    6    19    19    3    6                        
+select
+date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
+;
+date_add(2022-07-01 10:20:30.123456, interval(1, microsecond))    date_sub(2022-07-01 10:20:30.123456, interval(1, microsecond))
+2022-07-01 10:20:30.123457000    2022-07-01 10:20:30.123455000
 select
 date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
 timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456'),

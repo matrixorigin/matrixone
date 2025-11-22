@@ -122,6 +122,13 @@ insert into t_microsecond_combine values
 select
 microsecond(now(6)),
 microsecond(current_timestamp(6)),
+microsecond(date_add('2022-07-01 10:20:30.123456', interval 1 second))
+;
+microsecond(now(6))    microsecond(current_timestamp(6))    microsecond(date_add(2022-07-01 10:20:30.123456, interval(1, second)))
+294892    294892    123456
+select
+microsecond(now(6)),
+microsecond(current_timestamp(6)),
 microsecond(date_add('2022-07-01 10:20:30.123456', interval 1 second)),
 microsecond(timestampadd(microsecond, 100, '2022-07-01 10:20:30.123456'))
 ;

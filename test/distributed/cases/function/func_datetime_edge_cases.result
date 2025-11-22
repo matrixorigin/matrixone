@@ -80,6 +80,12 @@ microsecond(2022-07-01 10:20:30.123)    microsecond(2022-07-01 10:20:30.12)    m
 123000    120000    100000    123456    123456
 select
 microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
+microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond))
+;
+microsecond(date_add(2022-07-01 10:20:30.999999, interval(1, microsecond)))    microsecond(date_sub(2022-07-01 10:20:30.000000, interval(1, microsecond)))
+0    999999
+select
+microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
 microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond)),
 microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
 ;

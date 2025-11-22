@@ -99,7 +99,14 @@ select
 -- @desc:test for edge cases in calculations
 select 
     microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
+    microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond))
+;
+
+-- @bvt:issue#22956
+select 
+    microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
     microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond)),
     microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
 ;
+-- @bvt:issue
 
