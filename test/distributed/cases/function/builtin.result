@@ -642,6 +642,34 @@ select * from t1 where second(a) between 10 and 36;
 a    b
 2011-01-31 12:32:11    1979-10-22 00:00:00
 drop table if exists t1;
+drop table if exists t2;
+create table t2(microsecond_a datetime(6), microsecond_b timestamp(6));
+insert into t2 values("2022-07-01 10:20:30.123456", "2011-01-31 12:00:00.654321");
+insert into t2 values("2011-01-31 12:32:11.000000", "1979-10-22 15:30:45.999999");
+insert into t2 values("2022-06-01 14:11:09.000001", "2022-07-01 00:00:00.000000");
+insert into t2 values("2022-12-31 23:59:59.999999", "2011-01-31 12:00:00.123456");
+insert into t2 values(NULL, "2022-08-01 23:10:11.500000");
+insert into t2 values("2011-01-31 12:00:00.000000", NULL);
+select microsecond(microsecond_a),microsecond(microsecond_b) from t2;
+microsecond(microsecond_a)    microsecond(microsecond_b)
+123456    654321
+0    999999
+1    0
+999999    123456
+null    500000
+0    null
+select * from t2 where microsecond(microsecond_a)>=microsecond(microsecond_b);
+microsecond_a    microsecond_b
+2022-06-01 14:11:09.000001000    2022-07-01 00:00:00
+2022-12-31 23:59:59.999999000    2011-01-31 12:00:00.123456000
+select * from t2 where microsecond(microsecond_a) between 0 and 999999;
+microsecond_a    microsecond_b
+2022-07-01 10:20:30.123456000    2011-01-31 12:00:00.654321000
+2011-01-31 12:32:11    1979-10-22 15:30:45.999999000
+2022-06-01 14:11:09.000001000    2022-07-01 00:00:00
+2022-12-31 23:59:59.999999000    2011-01-31 12:00:00.123456000
+2011-01-31 12:00:00    null
+drop table if exists t2;
 drop table if exists t1;
 create table t1(a int, b int);
 select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);

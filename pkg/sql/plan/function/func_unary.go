@@ -938,6 +938,42 @@ func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+func TimestampToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint32](ivecs, result, proc, length, func(v types.Timestamp) uint32 {
+		return uint32(v.ToDatetime(proc.GetSessionInfo().TimeZone).MicroSec())
+	}, selectList)
+}
+
+func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, uint32](ivecs, result, proc, length, func(v types.Datetime) uint32 {
+		return uint32(v.MicroSec())
+	}, selectList)
+}
+
+func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint32](ivecs, result, proc, length, func(v types.Time) uint32 {
+		return uint32(v.MicroSec())
+	}, selectList)
+}
+
+func VarcharToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryStrToFixedWithErrorCheck[uint32](ivecs, result, proc, length, func(v string) (uint32, error) {
+		// Try to parse as TIME first (e.g., "15:30:45.123456")
+		if t, err := types.ParseTime(v, 6); err == nil {
+			return uint32(t.MicroSec()), nil
+		}
+		// Try to parse as DATETIME (e.g., "2022-07-01 10:20:30.123456")
+		if dt, err := types.ParseDatetime(v, 6); err == nil {
+			return uint32(dt.MicroSec()), nil
+		}
+		// Try to parse as TIMESTAMP
+		if ts, err := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, v, 6); err == nil {
+			return uint32(ts.ToDatetime(proc.GetSessionInfo().TimeZone).MicroSec()), nil
+		}
+		return 0, moerr.NewInvalidInputNoCtxf("invalid time/datetime value: %s", v)
+	}, selectList)
+}
+
 func doBinary(orig []byte) []byte {
 	if len(orig) > types.MaxBinaryLen {
 		return orig[:types.MaxBinaryLen]

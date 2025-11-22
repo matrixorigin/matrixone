@@ -1529,6 +1529,110 @@ func TestSecond(t *testing.T) {
 	}
 }
 
+func initMicrosecondTestCase() []tcTemp {
+	d1, _ := types.ParseDatetime("2004-04-03 10:20:00.000000", 6)
+	d2, _ := types.ParseDatetime("2004-04-03 10:20:00.123456", 6)
+	d3, _ := types.ParseDatetime("2004-04-03 10:20:00.999999", 6)
+	ts1, _ := types.ParseTimestamp(time.Local, "2004-01-03 23:15:08.000000", 6)
+	ts2, _ := types.ParseTimestamp(time.Local, "2004-01-03 23:15:08.654321", 6)
+	ts3, _ := types.ParseTimestamp(time.Local, "2004-01-03 23:15:08.000001", 6)
+
+	return []tcTemp{
+		{
+			info: "test microsecond - zero microseconds",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{0},
+				[]bool{false}),
+		},
+		{
+			info: "test microsecond - 123456 microseconds",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d2},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{123456},
+				[]bool{false}),
+		},
+		{
+			info: "test microsecond - max microseconds (999999)",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d3},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{999999},
+				[]bool{false}),
+		},
+		{
+			info: "test microsecond - timestamp zero microseconds",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{ts1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{0},
+				[]bool{false}),
+		},
+		{
+			info: "test microsecond - timestamp 654321 microseconds",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{ts2},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{654321},
+				[]bool{false}),
+		},
+		{
+			info: "test microsecond - timestamp 1 microsecond",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{ts3},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{1},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestMicrosecond(t *testing.T) {
+	testCases := initMicrosecondTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, DatetimeToMicrosecond)
+		case types.T_timestamp:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampToMicrosecond)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initBinaryTestCase() []tcTemp {
 	return []tcTemp{
 		{

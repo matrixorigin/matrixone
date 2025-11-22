@@ -446,6 +446,26 @@ drop table if exists t1;
 
 -- @suite
 -- @setup
+drop table if exists t2;
+create table t2(microsecond_a datetime(6), microsecond_b timestamp(6));
+insert into t2 values("2022-07-01 10:20:30.123456", "2011-01-31 12:00:00.654321");
+insert into t2 values("2011-01-31 12:32:11.000000", "1979-10-22 15:30:45.999999");
+insert into t2 values("2022-06-01 14:11:09.000001", "2022-07-01 00:00:00.000000");
+insert into t2 values("2022-12-31 23:59:59.999999", "2011-01-31 12:00:00.123456");
+insert into t2 values(NULL, "2022-08-01 23:10:11.500000");
+insert into t2 values("2011-01-31 12:00:00.000000", NULL);
+
+-- @case
+-- @desc:test for func microsecond() select
+select microsecond(microsecond_a),microsecond(microsecond_b) from t2;
+select * from t2 where microsecond(microsecond_a)>=microsecond(microsecond_b);
+select * from t2 where microsecond(microsecond_a) between 0 and 999999;
+
+-- @teardown
+drop table if exists t2;
+
+-- @suite
+-- @setup
 drop table if exists t1;
 create table t1(a int, b int);
 select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);

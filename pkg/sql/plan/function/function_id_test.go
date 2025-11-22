@@ -245,6 +245,7 @@ var predefinedFunids = map[int]int{
 	HOUR:              219,
 	MINUTE:            220,
 	SECOND:            221,
+	MICROSECOND:       351,
 	TO_DAYS:           222,
 	TO_SECONDS:        223,
 
@@ -404,7 +405,7 @@ var predefinedFunids = map[int]int{
 
 	MO_TUPLE_EXPR: 350,
 
-	FUNCTION_END_NUMBER: 351,
+	FUNCTION_END_NUMBER: 354,
 }
 
 func Test_funids(t *testing.T) {
