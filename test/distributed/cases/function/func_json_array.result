@@ -41,13 +41,13 @@ CREATE TABLE t1(a INT, b VARCHAR(10), c FLOAT);
 INSERT INTO t1 VALUES (1, 'a', 1.5), (2, 'b', 2.5), (3, 'c', 3.5);
 SELECT JSON_ARRAY(a, b, c) AS json_array FROM t1;
 json_array
-[1, "a", []]
-[2, "b", []]
-[3, "c", []]
+[1, "a", 1.5]
+[2, "b", 2.5]
+[3, "c", 3.5]
 DROP TABLE t1;
 CREATE TABLE t1(id INT, name VARCHAR(10));
 INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
-SELECT * FROM t1 WHERE JSON_ARRAY(id, name) IS NOT NULL;
+SELECT * FROM t1 WHERE JSON_ARRAY(id, name) IS NOT NULL ORDER BY id;
 id    name
 1    Alice
 2    Bob

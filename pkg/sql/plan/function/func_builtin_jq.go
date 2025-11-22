@@ -800,9 +800,9 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		case types.T_uint64:
 			encodeIntArray[uint64](op, params[i], ulen)
 		case types.T_float32:
-			encodeFloatArrayArray[float32](op, params[i], ulen)
+			encodeFloatScalar[float32](op, params[i], ulen)
 		case types.T_float64:
-			encodeFloatArrayArray[float64](op, params[i], ulen)
+			encodeFloatScalar[float64](op, params[i], ulen)
 		case types.T_decimal64:
 			encodeDecimalArray[types.Decimal64](op, params[i], ulen)
 		case types.T_decimal128:
@@ -891,6 +891,18 @@ func encodeIntArray[T constraints.Integer](op *opBuiltInJsonArray, v *vector.Vec
 			op.enc[i].w.WriteString("null")
 		} else {
 			op.enc[i].w.Write(strconv.AppendInt(op.enc[i].buf[:0], int64(v), 10))
+		}
+	}
+}
+
+func encodeFloatScalar[T constraints.Float](op *opBuiltInJsonArray, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[T](v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			op.enc[i].encodeFloat64(float64(v))
 		}
 	}
 }
