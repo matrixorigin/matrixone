@@ -525,9 +525,12 @@ const (
 	// function `elt`
 	ELT = 384
 
+	// function `export_set`
+	EXPORT_SET = 385
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 385
+	FUNCTION_END_NUMBER = 386
 )
 
 // functionIdRegister is what function we have registered already.
@@ -836,6 +839,7 @@ var functionIdRegister = map[string]int32{
 	"weekofyear":                     WEEKOFYEAR,
 	"yearweek":                       YEARWEEK,
 	"elt":                            ELT,
+	"export_set":                     EXPORT_SET,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,

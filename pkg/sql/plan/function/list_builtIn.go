@@ -460,6 +460,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `export_set`
+	{
+		functionId: EXPORT_SET,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    exportSetCheck,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExportSet
+				},
+			},
+		},
+	},
+
 	// function `field`
 	{
 		functionId: FIELD,

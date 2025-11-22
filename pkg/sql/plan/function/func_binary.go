@@ -3203,6 +3203,185 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 	return nil
 }
 
+func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
+	// EXPORT_SET(bits, on, off[, separator[, number_of_bits]])
+	// Minimum 3 arguments, maximum 5 arguments
+	if len(inputs) < 3 || len(inputs) > 5 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// First argument (bits) must be numeric
+	// Check if it's a numeric type (integer, float, or decimal)
+	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	if !isNumeric && inputs[0].Oid != types.T_any {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[0] = types.T_int64.ToType()
+		} else {
+			castTypes[0] = inputs[0]
+		}
+	} else {
+		castTypes[0] = inputs[0]
+	}
+
+	// Second and third arguments (on, off) must be strings
+	for i := 1; i <= 2; i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	// Optional fourth argument (separator) must be string
+	if len(inputs) >= 4 {
+		if !inputs[3].Oid.IsMySQLString() && inputs[3].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[3]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[3] = types.T_varchar.ToType()
+			} else {
+				castTypes[3] = inputs[3]
+			}
+		} else {
+			castTypes[3] = inputs[3]
+		}
+	}
+
+	// Optional fifth argument (number_of_bits) must be numeric
+	if len(inputs) >= 5 {
+		if !inputs[4].Oid.IsInteger() && inputs[4].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[4]}, []types.T{types.T_int64})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[4] = types.T_int64.ToType()
+			} else {
+				castTypes[4] = inputs[4]
+			}
+		} else {
+			castTypes[4] = inputs[4]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
+func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// First argument: bits (numeric)
+	bitsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	// Second argument: on (string)
+	onParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	// Third argument: off (string)
+	offParam := vector.GenerateFunctionStrParameter(ivecs[2])
+
+	// Optional fourth argument: separator (string, default ',')
+	separatorParam := vector.GenerateFunctionStrParameter(ivecs[3])
+	separatorProvided := len(ivecs) > 3 && !ivecs[3].IsConstNull()
+
+	// Optional fifth argument: number_of_bits (int64, default 64)
+	numberOfBitsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+	numberOfBitsProvided := len(ivecs) > 4 && !ivecs[4].IsConstNull()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		bits, nullBits := bitsParam.GetValue(i)
+		if nullBits {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		on, nullOn := onParam.GetStrValue(i)
+		off, nullOff := offParam.GetStrValue(i)
+		if nullOn || nullOff {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Get separator (default ',')
+		separator := ","
+		if separatorProvided {
+			sep, nullSep := separatorParam.GetStrValue(i)
+			if !nullSep {
+				separator = functionUtil.QuickBytesToStr(sep)
+			}
+		}
+
+		// Get number_of_bits (default 64, max 64)
+		numberOfBits := int64(64)
+		if numberOfBitsProvided {
+			nBits, nullNBits := numberOfBitsParam.GetValue(i)
+			if !nullNBits {
+				if nBits < 1 {
+					numberOfBits = 1
+				} else if nBits > 64 {
+					numberOfBits = 64
+				} else {
+					numberOfBits = nBits
+				}
+			}
+		}
+
+		// Convert bits to uint64 for bit operations
+		bitsUint := uint64(bits)
+
+		// Build the result string
+		var parts []string
+		for j := int64(0); j < numberOfBits; j++ {
+			if (bitsUint>>uint(j))&1 == 1 {
+				parts = append(parts, functionUtil.QuickBytesToStr(on))
+			} else {
+				parts = append(parts, functionUtil.QuickBytesToStr(off))
+			}
+		}
+
+		resultStr := strings.Join(parts, separator)
+		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 1 {
 		// if the first param's type is time type. return failed.

@@ -1,0 +1,335 @@
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 4) AS result1;
+result1
+Y,N,Y,N
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 4) AS export_set_basic;
+export_set_basic
+Y,N,Y,N
+SELECT EXPORT_SET(5, 'Y', 'N') AS export_set_default_sep;
+internal error: panic runtime error: index out of range [3] with length 3: 
+runtime.goPanicIndex
+	/usr/local/go/src/runtime/panic.go:115
+github.com/matrixorigin/matrixone/pkg/sql/plan/function.ExportSet
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:3308
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).doFold
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionReset.go:171
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:576
+github.com/matrixorigin/matrixone/pkg/sql/colexec.getReadonlyResultFromExpression
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:67
+github.com/matrixorigin/matrixone/pkg/sql/colexec.GetReadonlyResultFromExpression
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:57
+github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).constantFold
+	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:190
+github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).Apply
+	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:80
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).exploreNode
+	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:87
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).optimize
+	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:73
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
+	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:65
+github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2079
+github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
+	/home/fengttt/m/matrixone/pkg/frontend/computation_wrapper.go:210
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2953
+github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
+github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
+github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
+github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
+	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
+github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
+	/home/fengttt/m/matrixone/pkg/frontend/routine_manager.go:384
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleRequest
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:527
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:495
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleLoop
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:212
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleConn
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:208
+runtime.goexit
+	/usr/local/go/src/runtime/asm_amd64.s:1693
+SELECT EXPORT_SET(5, 'Y', 'N', ',') AS export_set_default_bits;
+internal error: panic runtime error: index out of range [4] with length 4: 
+runtime.goPanicIndex
+	/usr/local/go/src/runtime/panic.go:115
+github.com/matrixorigin/matrixone/pkg/sql/plan/function.ExportSet
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:3312
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).doFold
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionReset.go:171
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:576
+github.com/matrixorigin/matrixone/pkg/sql/colexec.getReadonlyResultFromExpression
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:67
+github.com/matrixorigin/matrixone/pkg/sql/colexec.GetReadonlyResultFromExpression
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:57
+github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).constantFold
+	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:190
+github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).Apply
+	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:80
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).exploreNode
+	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:87
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).optimize
+	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:73
+github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
+	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:65
+github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2079
+github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
+	/home/fengttt/m/matrixone/pkg/frontend/computation_wrapper.go:210
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2953
+github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
+github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
+github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
+github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
+	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
+github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
+	/home/fengttt/m/matrixone/pkg/frontend/routine_manager.go:384
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleRequest
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:527
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:495
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleLoop
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:212
+github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleConn
+	/home/fengttt/m/matrixone/pkg/frontend/server.go:208
+runtime.goexit
+	/usr/local/go/src/runtime/asm_amd64.s:1693
+SELECT EXPORT_SET(0, 'Y', 'N', ',', 4) AS export_set_zero;
+export_set_zero
+N,N,N,N
+SELECT EXPORT_SET(15, 'Y', 'N', ',', 4) AS export_set_all_ones;
+export_set_all_ones
+Y,Y,Y,Y
+SELECT EXPORT_SET(1, 'Y', 'N', ',', 4) AS export_set_one;
+export_set_one
+Y,N,N,N
+SELECT EXPORT_SET(8, 'Y', 'N', ',', 4) AS export_set_eight;
+export_set_eight
+N,N,N,Y
+SELECT EXPORT_SET(5, 'Y', 'N', '|', 4) AS export_set_pipe;
+export_set_pipe
+Y|N|Y|N
+SELECT EXPORT_SET(5, 'Y', 'N', '-', 4) AS export_set_dash;
+export_set_dash
+Y-N-Y-N
+SELECT EXPORT_SET(5, 'Y', 'N', '', 4) AS export_set_empty_sep;
+export_set_empty_sep
+YNYN
+SELECT EXPORT_SET(5, 'Y', 'N', ' ', 4) AS export_set_space;
+export_set_space
+Y N Y N
+SELECT EXPORT_SET(5, 'ON', 'OFF', ',', 4) AS export_set_on_off;
+export_set_on_off
+ON,OFF,ON,OFF
+SELECT EXPORT_SET(5, '1', '0', ',', 4) AS export_set_1_0;
+export_set_1_0
+1,0,1,0
+SELECT EXPORT_SET(5, 'true', 'false', ',', 4) AS export_set_true_false;
+export_set_true_false
+true,false,true,false
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 1) AS export_set_1_bit;
+export_set_1_bit
+Y
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 2) AS export_set_2_bits;
+export_set_2_bits
+Y,N
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 8) AS export_set_8_bits;
+export_set_8_bits
+Y,N,Y,N,N,N,N,N
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 64) AS export_set_64_bits;
+export_set_64_bits
+Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
+SELECT EXPORT_SET(255, 'Y', 'N', ',', 8) AS export_set_255;
+export_set_255
+Y,Y,Y,Y,Y,Y,Y,Y
+SELECT EXPORT_SET(256, 'Y', 'N', ',', 9) AS export_set_256;
+export_set_256
+N,N,N,N,N,N,N,N,Y
+SELECT EXPORT_SET(-1, 'Y', 'N', ',', 8) AS export_set_neg_one;
+export_set_neg_one
+Y,Y,Y,Y,Y,Y,Y,Y
+SELECT EXPORT_SET(NULL, 'Y', 'N', ',', 4) AS export_set_null_bits;
+export_set_null_bits
+null
+SELECT EXPORT_SET(5, NULL, 'N', ',', 4) AS export_set_null_on;
+export_set_null_on
+null
+SELECT EXPORT_SET(5, 'Y', NULL, ',', 4) AS export_set_null_off;
+export_set_null_off
+null
+SELECT EXPORT_SET(5, 'Y', 'N', NULL, 4) AS export_set_null_sep;
+export_set_null_sep
+Y,N,Y,N
+SELECT EXPORT_SET(5, 'Y', 'N', ',', NULL) AS export_set_null_bits_count;
+export_set_null_bits_count
+Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
+CREATE TABLE t1(bits INT, on_str VARCHAR(10), off_str VARCHAR(10));
+INSERT INTO t1 VALUES (5, 'Y', 'N'), (10, 'ON', 'OFF'), (15, '1', '0');
+SELECT bits, EXPORT_SET(bits, on_str, off_str, ',', 4) AS result FROM t1;
+internal error: panic type mismatch: casting INT vector to []int64: 
+github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:107
+github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:101
+github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:42
+github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:56
+github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
+github.com/matrixorigin/matrixone/pkg/sql/plan/function.ExportSet
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:3299
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
+github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:76
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/home/fengttt/m/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/output/output.go:55
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
+	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:71
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
+	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:59
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:198
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:490
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:276
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:395
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:375
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:522
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile2.go:250
+github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
+	/home/fengttt/m/matrixone/pkg/frontend/result_row_stmt.go:87
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2994
+github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
+github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
+github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
+github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
+	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
+github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
+	/home/fengttt/m/matrixone/pkg/frontend/routine_manager.go:384
+DROP TABLE t1;
+CREATE TABLE t1(bits INT);
+INSERT INTO t1 VALUES (5), (10), (15);
+SELECT * FROM t1 WHERE EXPORT_SET(bits, 'Y', 'N', ',', 4) LIKE 'Y%';
+internal error: panic type mismatch: casting INT vector to []int64: 
+github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:107
+github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:101
+github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:42
+github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:56
+github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
+github.com/matrixorigin/matrixone/pkg/sql/plan/function.ExportSet
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:3299
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:600
+github.com/matrixorigin/matrixone/pkg/sql/colexec/filter.(*Filter).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/filter/filter.go:93
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/home/fengttt/m/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:62
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/home/fengttt/m/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:62
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/home/fengttt/m/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/output/output.go:55
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
+	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:71
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
+	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:59
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:198
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:490
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:276
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:395
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:375
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:522
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile2.go:250
+github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
+	/home/fengttt/m/matrixone/pkg/frontend/result_row_stmt.go:87
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2994
+github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
+DROP TABLE t1;
+SELECT EXPORT_SET(0, 'Y', 'N', ',', 0) AS export_set_zero_bits;
+export_set_zero_bits
+N
+SELECT EXPORT_SET(0, 'Y', 'N', ',', 1) AS export_set_one_bit_zero;
+export_set_one_bit_zero
+N
