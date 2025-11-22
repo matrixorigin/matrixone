@@ -8036,6 +8036,112 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `inet_aton`
+	{
+		functionId: INET_ATON,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetAton
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_char},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetAton
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_text},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetAton
+				},
+			},
+		},
+	},
+
+	// function `inet_ntoa`
+	{
+		functionId: INET_NTOA,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_uint64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_uint32},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId:      3,
+				args:            []types.T{types.T_int32},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+		},
+	},
+
 	// function `connection_id`
 	{
 		functionId: CONNECTION_ID,

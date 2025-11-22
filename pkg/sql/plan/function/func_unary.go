@@ -1614,6 +1614,180 @@ func isIPv4Mapped(ip net.IP) bool {
 		ip[8] == 0 && ip[9] == 0 && ip[10] == 0xff && ip[11] == 0xff
 }
 
+// InetAton converts an IPv4 address string to an unsigned integer.
+// Returns NULL for invalid addresses.
+// Formula: a.b.c.d = a*256^3 + b*256^2 + c*256 + d
+func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[uint64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[uint64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL for all rows
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				ip4 := ip.To4()
+				if ip4 == nil {
+					// Not IPv4: return NULL
+					nulls.AddRange(rsNull, 0, uint64(length))
+				} else {
+					// Convert to uint32: a.b.c.d = a*256^3 + b*256^2 + c*256 + d
+					resultVal := uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
+					rowCount := uint64(length)
+					for i := uint64(0); i < rowCount; i++ {
+						rss[i] = resultVal
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL
+				rsNull.Add(i)
+			} else {
+				ip4 := ip.To4()
+				if ip4 == nil {
+					// Not IPv4: return NULL
+					rsNull.Add(i)
+				} else {
+					// Convert to uint32
+					rss[i] = uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
+				}
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			// Invalid IP: return NULL
+			rsNull.Add(i)
+		} else {
+			ip4 := ip.To4()
+			if ip4 == nil {
+				// Not IPv4: return NULL
+				rsNull.Add(i)
+			} else {
+				// Convert to uint32
+				rss[i] = uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
+			}
+		}
+	}
+	return nil
+}
+
+// InetNtoa converts an unsigned integer to an IPv4 address string.
+// Returns NULL for invalid input.
+// Supports uint64, uint32, int64, int32 types.
+func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	argType := ivecs[0].GetType()
+
+	switch argType.Oid {
+	case types.T_uint64:
+		return opUnaryFixedToStr[uint64](ivecs, result, proc, length, func(val uint64) string {
+			ipVal := uint32(val & 0xFFFFFFFF)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	case types.T_uint32:
+		return opUnaryFixedToStr[uint32](ivecs, result, proc, length, func(val uint32) string {
+			ip := net.IPv4(
+				byte(val>>24),
+				byte(val>>16&0xFF),
+				byte(val>>8&0xFF),
+				byte(val&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	case types.T_int64:
+		return opUnaryFixedToStr[int64](ivecs, result, proc, length, func(val int64) string {
+			// Treat as unsigned
+			ipVal := uint32(uint64(val) & 0xFFFFFFFF)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	case types.T_int32:
+		return opUnaryFixedToStr[int32](ivecs, result, proc, length, func(val int32) string {
+			// Treat as unsigned
+			ipVal := uint32(val)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	default:
+		// Fallback to uint64
+		return opUnaryFixedToStr[uint64](ivecs, result, proc, length, func(val uint64) string {
+			ipVal := uint32(val & 0xFFFFFFFF)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	}
+}
+
 // UnhexString returns a string representation of a hexadecimal value.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
 func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
