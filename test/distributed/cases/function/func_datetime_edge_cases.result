@@ -1,0 +1,86 @@
+drop table if exists t_edge_boundary;
+create table t_edge_boundary (
+id int,
+dt_min datetime(6),
+dt_max datetime(6),
+ts_min timestamp(6),
+ts_max timestamp(6)
+);
+insert into t_edge_boundary values
+(1, '1000-01-01 00:00:00.000000', '9999-12-31 23:59:59.999999', '1970-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
+select
+microsecond(dt_min),  -- should return 0
+microsecond(dt_max),  -- should return 999999
+microsecond(ts_min),  -- should return 0
+microsecond(ts_max)   -- should return 999999
+from t_edge_boundary;
+microsecond(dt_min)    microsecond(dt_max)    microsecond(ts_min)    microsecond(ts_max)
+0    999999    0    999999
+select
+microsecond('2022-07-01 10:20:30.000000'),  -- 0
+microsecond('2022-07-01 10:20:30.000001'),  -- 1
+microsecond('2022-07-01 10:20:30.999998'),  -- 999998
+microsecond('2022-07-01 10:20:30.999999')   -- 999999
+;
+microsecond(2022-07-01 10:20:30.000000)    microsecond(2022-07-01 10:20:30.000001)    microsecond(2022-07-01 10:20:30.999998)    microsecond(2022-07-01 10:20:30.999999)
+0    1    999998    999999
+drop table if exists t_edge_boundary;
+drop table if exists t_edge_null;
+create table t_edge_null (
+id int,
+dt datetime(6),
+ts timestamp(6),
+t time(6)
+);
+insert into t_edge_null values
+(1, NULL, NULL, NULL),
+(2, '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456', '10:20:30.123456');
+select
+microsecond(NULL),
+microsecond(ifnull(NULL, '2022-07-01 10:20:30.123456')),
+microsecond(coalesce(NULL, NULL, '2022-07-01 10:20:30.123456'))
+;
+microsecond(null)    microsecond(ifnull(null, 2022-07-01 10:20:30.123456))    microsecond(coalesce(null, null, 2022-07-01 10:20:30.123456))
+null    123456    123456
+select microsecond(dt), microsecond(ts), microsecond(t) from t_edge_null where id = 1;
+microsecond(dt)    microsecond(ts)    microsecond(t)
+null    null    null
+select * from t_edge_null where microsecond(dt) is null;
+id    dt    ts    t
+1    null    null    null
+select * from t_edge_null where microsecond(dt) is not null;
+id    dt    ts    t
+2    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30.123456000    10:20:30.123456000
+drop table if exists t_edge_null;
+select microsecond('invalid');
+invalid input: invalid time/datetime value: invalid
+select microsecond('');
+microsecond()
+0
+select microsecond('2022-13-01 10:20:30.123456');  -- invalid month
+invalid input: invalid time/datetime value: 2022-13-01 10:20:30.123456
+select microsecond('2022-07-32 10:20:30.123456');  -- invalid date
+invalid input: invalid time/datetime value: 2022-07-32 10:20:30.123456
+select
+microsecond('2022-07-01 10:20:30'),  -- should return 0
+microsecond('10:20:30'),              -- should return 0
+microsecond('2022-07-01'),            -- should return 0 or NULL
+microsecond('10:20')                 -- should return 0 or NULL
+;
+microsecond(2022-07-01 10:20:30)    microsecond(10:20:30)    microsecond(2022-07-01)    microsecond(10:20)
+0    0    0    0
+select
+microsecond('2022-07-01 10:20:30.123'),
+microsecond('2022-07-01 10:20:30.12'),
+microsecond('2022-07-01 10:20:30.1'),
+microsecond('2022-07-01 10:20:30.123456'),
+microsecond('10:20:30.123456')
+;
+microsecond(2022-07-01 10:20:30.123)    microsecond(2022-07-01 10:20:30.12)    microsecond(2022-07-01 10:20:30.1)    microsecond(2022-07-01 10:20:30.123456)    microsecond(10:20:30.123456)
+123000    120000    100000    123456    123456
+select
+microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
+microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond)),
+microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
+;
+invalid input: column microsecond does not exist

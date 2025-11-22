@@ -1,0 +1,105 @@
+-- @suite
+-- @setup
+drop table if exists t_edge_boundary;
+create table t_edge_boundary (
+    id int,
+    dt_min datetime(6),
+    dt_max datetime(6),
+    ts_min timestamp(6),
+    ts_max timestamp(6)
+);
+
+insert into t_edge_boundary values
+(1, '1000-01-01 00:00:00.000000', '9999-12-31 23:59:59.999999', '1970-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
+
+-- @case
+-- @desc:test for boundary values
+-- Minimum and maximum datetime values
+select 
+    microsecond(dt_min),  -- should return 0
+    microsecond(dt_max),  -- should return 999999
+    microsecond(ts_min),  -- should return 0
+    microsecond(ts_max)   -- should return 999999
+from t_edge_boundary;
+
+-- @case
+-- @desc:test for boundary microsecond values
+select 
+    microsecond('2022-07-01 10:20:30.000000'),  -- 0
+    microsecond('2022-07-01 10:20:30.000001'),  -- 1
+    microsecond('2022-07-01 10:20:30.999998'),  -- 999998
+    microsecond('2022-07-01 10:20:30.999999')   -- 999999
+;
+
+-- @teardown
+drop table if exists t_edge_boundary;
+
+-- @suite
+-- @setup
+drop table if exists t_edge_null;
+create table t_edge_null (
+    id int,
+    dt datetime(6),
+    ts timestamp(6),
+    t time(6)
+);
+
+insert into t_edge_null values
+(1, NULL, NULL, NULL),
+(2, '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456', '10:20:30.123456');
+
+-- @case
+-- @desc:test for NULL value handling
+-- NULL values in various scenarios
+select 
+    microsecond(NULL),
+    microsecond(ifnull(NULL, '2022-07-01 10:20:30.123456')),
+    microsecond(coalesce(NULL, NULL, '2022-07-01 10:20:30.123456'))
+;
+
+select microsecond(dt), microsecond(ts), microsecond(t) from t_edge_null where id = 1;
+
+-- @case
+-- @desc:test for NULL in WHERE clause
+select * from t_edge_null where microsecond(dt) is null;
+select * from t_edge_null where microsecond(dt) is not null;
+
+-- @teardown
+drop table if exists t_edge_null;
+
+-- @suite
+-- @case
+-- @desc:test for invalid input handling
+-- Invalid inputs should return NULL or error appropriately
+select microsecond('invalid');
+select microsecond('');
+select microsecond('2022-13-01 10:20:30.123456');  -- invalid month
+select microsecond('2022-07-32 10:20:30.123456');  -- invalid date
+
+-- @case
+-- @desc:test for input without microsecond part
+select 
+    microsecond('2022-07-01 10:20:30'),  -- should return 0
+    microsecond('10:20:30'),              -- should return 0
+    microsecond('2022-07-01'),            -- should return 0 or NULL
+    microsecond('10:20')                 -- should return 0 or NULL
+;
+
+-- @case
+-- @desc:test for microsecond extraction from different formats
+select 
+    microsecond('2022-07-01 10:20:30.123'),
+    microsecond('2022-07-01 10:20:30.12'),
+    microsecond('2022-07-01 10:20:30.1'),
+    microsecond('2022-07-01 10:20:30.123456'),
+    microsecond('10:20:30.123456')
+;
+
+-- @case
+-- @desc:test for edge cases in calculations
+select 
+    microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
+    microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond)),
+    microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
+;
+

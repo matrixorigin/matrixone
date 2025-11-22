@@ -1,0 +1,161 @@
+drop table if exists t_microsecond_basic;
+create table t_microsecond_basic(
+id int,
+dt datetime(6),
+ts timestamp(6),
+t time(6),
+dt_str varchar(50),
+ts_str varchar(50),
+t_str varchar(50)
+);
+insert into t_microsecond_basic values
+(1, '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456', '10:20:30.123456', '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456', '10:20:30.123456'),
+(2, '2022-07-01 10:20:30.000000', '2022-07-01 10:20:30.000000', '10:20:30.000000', '2022-07-01 10:20:30.000000', '2022-07-01 10:20:30.000000', '10:20:30.000000'),
+(3, '2022-07-01 10:20:30.999999', '2022-07-01 10:20:30.999999', '10:20:30.999999', '2022-07-01 10:20:30.999999', '2022-07-01 10:20:30.999999', '10:20:30.999999'),
+(4, '2022-07-01 10:20:30.000001', '2022-07-01 10:20:30.000001', '10:20:30.000001', '2022-07-01 10:20:30.000001', '2022-07-01 10:20:30.000001', '10:20:30.000001'),
+(5, '2022-07-01 10:20:30.999998', '2022-07-01 10:20:30.999998', '10:20:30.999998', '2022-07-01 10:20:30.999998', '2022-07-01 10:20:30.999998', '10:20:30.999998'),
+(6, NULL, NULL, NULL, NULL, NULL, NULL);
+select microsecond(dt), microsecond(ts), microsecond(t) from t_microsecond_basic where id <= 5;
+microsecond(dt)    microsecond(ts)    microsecond(t)
+123456    123456    123456
+0    0    0
+999999    999999    999999
+1    1    1
+999998    999998    999998
+select microsecond(dt_str), microsecond(ts_str), microsecond(t_str) from t_microsecond_basic where id <= 5;
+microsecond(dt_str)    microsecond(ts_str)    microsecond(t_str)
+123456    123456    123456
+0    0    0
+999999    999999    999999
+1    1    1
+999998    999998    999998
+select microsecond('2022-07-01 10:20:30.000000');  -- 0
+microsecond(2022-07-01 10:20:30.000000)
+0
+select microsecond('2022-07-01 10:20:30.999999');  -- 999999
+microsecond(2022-07-01 10:20:30.999999)
+999999
+select microsecond('2022-07-01 10:20:30.000001');  -- 1
+microsecond(2022-07-01 10:20:30.000001)
+1
+select microsecond('2022-07-01 10:20:30.999998');  -- 999998
+microsecond(2022-07-01 10:20:30.999998)
+999998
+select microsecond('10:20:30.000000');
+microsecond(10:20:30.000000)
+0
+select microsecond('10:20:30.999999');
+microsecond(10:20:30.999999)
+999999
+select microsecond(NULL);
+microsecond(null)
+null
+select microsecond(dt) from t_microsecond_basic where id = 6;
+microsecond(dt)
+null
+select microsecond(ts) from t_microsecond_basic where id = 6;
+microsecond(ts)
+null
+select microsecond(t) from t_microsecond_basic where id = 6;
+microsecond(t)
+null
+select microsecond('2022-07-01 10:20:30');
+microsecond(2022-07-01 10:20:30)
+0
+select microsecond('10:20:30');
+microsecond(10:20:30)
+0
+select microsecond(dt) from t_microsecond_basic where dt = '2022-07-01 10:20:30.000000';
+microsecond(dt)
+0
+drop table if exists t_microsecond_basic;
+drop table if exists t_microsecond_scale;
+create table t_microsecond_scale (
+id int,
+dt0 datetime(0),
+dt3 datetime(3),
+dt6 datetime(6),
+ts0 timestamp(0),
+ts3 timestamp(3),
+ts6 timestamp(6),
+t0 time(0),
+t3 time(3),
+t6 time(6)
+);
+insert into t_microsecond_scale values (
+1,
+'2022-07-01 10:20:30',
+'2022-07-01 10:20:30.123',
+'2022-07-01 10:20:30.123456',
+'2022-07-01 10:20:30',
+'2022-07-01 10:20:30.123',
+'2022-07-01 10:20:30.123456',
+'10:20:30',
+'10:20:30.123',
+'10:20:30.123456'
+);
+select
+microsecond(dt0),  -- should return 0
+microsecond(dt3),  -- should return 123000
+microsecond(dt6),  -- should return 123456
+microsecond(ts0),
+microsecond(ts3),
+microsecond(ts6),
+microsecond(t0),
+microsecond(t3),
+microsecond(t6)
+from t_microsecond_scale;
+microsecond(dt0)    microsecond(dt3)    microsecond(dt6)    microsecond(ts0)    microsecond(ts3)    microsecond(ts6)    microsecond(t0)    microsecond(t3)    microsecond(t6)
+0    123000    123456    0    123000    123456    0    123000    123456
+drop table if exists t_microsecond_scale;
+drop table if exists t_microsecond_combine;
+create table t_microsecond_combine (
+id int,
+dt datetime(6),
+ts timestamp(6)
+);
+insert into t_microsecond_combine values
+(1, '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456'),
+(2, '2022-07-01 10:20:30.654321', '2022-07-01 10:20:30.654321'),
+(3, '2022-07-01 10:20:30.000001', '2022-07-01 10:20:30.000001'),
+(4, '2022-07-01 10:20:30.999999', '2022-07-01 10:20:30.999999');
+select
+microsecond(now(6)),
+microsecond(current_timestamp(6)),
+microsecond(date_add('2022-07-01 10:20:30.123456', interval 1 second)),
+microsecond(timestampadd(microsecond, 100, '2022-07-01 10:20:30.123456'))
+;
+invalid input: column microsecond does not exist
+select * from t_microsecond_combine
+where microsecond(dt) between 100000 and 200000;
+id    dt    ts
+1    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30.123456000
+select * from t_microsecond_combine
+where microsecond(dt) >= microsecond(ts);
+id    dt    ts
+1    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30.123456000
+2    2022-07-01 10:20:30.654321000    2022-07-01 10:20:30.654321000
+3    2022-07-01 10:20:30.000001000    2022-07-01 10:20:30.000001000
+4    2022-07-01 10:20:30.999999000    2022-07-01 10:20:30.999999000
+select * from t_microsecond_combine
+order by microsecond(dt) desc;
+id    dt    ts
+4    2022-07-01 10:20:30.999999000    2022-07-01 10:20:30.999999000
+2    2022-07-01 10:20:30.654321000    2022-07-01 10:20:30.654321000
+1    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30.123456000
+3    2022-07-01 10:20:30.000001000    2022-07-01 10:20:30.000001000
+select * from t_microsecond_combine
+order by microsecond(dt) asc;
+id    dt    ts
+3    2022-07-01 10:20:30.000001000    2022-07-01 10:20:30.000001000
+1    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30.123456000
+2    2022-07-01 10:20:30.654321000    2022-07-01 10:20:30.654321000
+4    2022-07-01 10:20:30.999999000    2022-07-01 10:20:30.999999000
+select microsecond(dt), count(*) from t_microsecond_combine
+group by microsecond(dt);
+microsecond(dt)    count(*)
+123456    1
+654321    1
+1    1
+999999    1
+drop table if exists t_microsecond_combine;

@@ -1,0 +1,107 @@
+drop table if exists t_format_test;
+create table t_format_test (
+id int,
+dt0 datetime(0),
+dt3 datetime(3),
+dt6 datetime(6),
+ts0 timestamp(0),
+ts6 timestamp(6),
+t0 time(0),
+t6 time(6)
+);
+insert into t_format_test values (
+1,
+'2022-07-01 10:20:30',
+'2022-07-01 10:20:30.123',
+'2022-07-01 10:20:30.123456',
+'2022-07-01 10:20:30',
+'2022-07-01 10:20:30.123456',
+'10:20:30',
+'10:20:30.123456'
+);
+select * from t_format_test;
+id    dt0    dt3    dt6    ts0    ts6    t0    t6
+1    2022-07-01 10:20:30    2022-07-01 10:20:30.123000000    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30    2022-07-01 10:20:30.123456000    10:20:30    10:20:30.123456000
+select
+dt0, dt3, dt6,
+ts0, ts6,
+t0, t6
+from t_format_test;
+dt0    dt3    dt6    ts0    ts6    t0    t6
+2022-07-01 10:20:30    2022-07-01 10:20:30.123000000    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30    2022-07-01 10:20:30.123456000    10:20:30    10:20:30.123456000
+drop table if exists t_format_test;
+drop table if exists t_format_timezone;
+create table t_format_timezone (
+id int,
+ts6 timestamp(6)
+);
+set time_zone = 'UTC';
+insert into t_format_timezone values (1, '2022-07-01 11:11:11.123456');
+set time_zone = 'UTC';
+select ts6 from t_format_timezone;
+ts6
+2022-07-01 11:11:11.123456000
+set time_zone = '+08:00';
+select ts6 from t_format_timezone;
+ts6
+2022-07-01 19:11:11.123456000
+drop table if exists t_format_timezone;
+set time_zone = '+00:00';
+select
+value_now_0,
+value_now_3,
+value_now_6,
+value_current_timestamp_0,
+value_current_timestamp_3,
+value_current_timestamp_6,
+value_utc_timestamp_no_scale,
+value_utc_timestamp_0,
+value_utc_timestamp_3,
+value_utc_timestamp_6,
+locate('.', value_now_0) as has_dot_now_0,
+locate('.', value_now_3) as dot_pos_now_3,
+locate('.', value_now_6) as dot_pos_now_6,
+locate('.', value_current_timestamp_0) as has_dot_current_timestamp_0,
+locate('.', value_current_timestamp_3) as dot_pos_current_timestamp_3,
+locate('.', value_current_timestamp_6) as dot_pos_current_timestamp_6,
+locate('.', value_utc_timestamp_no_scale) as has_dot_utc_timestamp_no_scale,
+locate('.', value_utc_timestamp_0) as has_dot_utc_timestamp_0,
+locate('.', value_utc_timestamp_3) as dot_pos_utc_timestamp_3,
+locate('.', value_utc_timestamp_6) as dot_pos_utc_timestamp_6,
+char_length(value_now_0) as len_now_0,
+char_length(value_now_3) - locate('.', value_now_3) as decimal_digits_now_3,
+char_length(value_now_6) - locate('.', value_now_6) as decimal_digits_now_6,
+char_length(value_current_timestamp_0) as len_current_timestamp_0,
+char_length(value_current_timestamp_3) - locate('.', value_current_timestamp_3) as decimal_digits_current_timestamp_3,
+char_length(value_current_timestamp_6) - locate('.', value_current_timestamp_6) as decimal_digits_current_timestamp_6,
+char_length(value_utc_timestamp_no_scale) as len_utc_timestamp_no_scale,
+char_length(value_utc_timestamp_0) as len_utc_timestamp_0,
+char_length(value_utc_timestamp_3) - locate('.', value_utc_timestamp_3) as decimal_digits_utc_timestamp_3,
+char_length(value_utc_timestamp_6) - locate('.', value_utc_timestamp_6) as decimal_digits_utc_timestamp_6,
+substring(value_now_3, locate('.', value_now_3) + 4) as last_6_digits_now_3,
+substring(value_now_6, locate('.', value_now_6) + 7) as last_3_digits_now_6,
+substring(value_current_timestamp_3, locate('.', value_current_timestamp_3) + 4) as last_6_digits_current_timestamp_3,
+substring(value_current_timestamp_6, locate('.', value_current_timestamp_6) + 7) as last_3_digits_current_timestamp_6,
+substring(value_utc_timestamp_3, locate('.', value_utc_timestamp_3) + 4) as last_6_digits_utc_timestamp_3,
+substring(value_utc_timestamp_6, locate('.', value_utc_timestamp_6) + 7) as last_3_digits_utc_timestamp_6
+from (
+select
+now(0) as value_now_0,
+now(3) as value_now_3,
+now(6) as value_now_6,
+current_timestamp(0) as value_current_timestamp_0,
+current_timestamp(3) as value_current_timestamp_3,
+current_timestamp(6) as value_current_timestamp_6,
+utc_timestamp() as value_utc_timestamp_no_scale,
+utc_timestamp(0) as value_utc_timestamp_0,
+utc_timestamp(3) as value_utc_timestamp_3,
+utc_timestamp(6) as value_utc_timestamp_6
+) as t;
+value_now_0    value_now_3    value_now_6    value_current_timestamp_0    value_current_timestamp_3    value_current_timestamp_6    value_utc_timestamp_no_scale    value_utc_timestamp_0    value_utc_timestamp_3    value_utc_timestamp_6    has_dot_now_0    dot_pos_now_3    dot_pos_now_6    has_dot_current_timestamp_0    dot_pos_current_timestamp_3    dot_pos_current_timestamp_6    has_dot_utc_timestamp_no_scale    has_dot_utc_timestamp_0    dot_pos_utc_timestamp_3    dot_pos_utc_timestamp_6    len_now_0    decimal_digits_now_3    decimal_digits_now_6    len_current_timestamp_0    decimal_digits_current_timestamp_3    decimal_digits_current_timestamp_6    len_utc_timestamp_no_scale    len_utc_timestamp_0    decimal_digits_utc_timestamp_3    decimal_digits_utc_timestamp_6    last_6_digits_now_3    last_3_digits_now_6    last_6_digits_current_timestamp_3    last_3_digits_current_timestamp_6    last_6_digits_utc_timestamp_3    last_3_digits_utc_timestamp_6
+2025-11-22 10:07:22    2025-11-22 10:07:22.169000000    2025-11-22 10:07:22.169330000    2025-11-22 10:07:22    2025-11-22 10:07:22.169000000    2025-11-22 10:07:22.169330000    2025-11-22 10:07:22    2025-11-22 10:07:22    2025-11-22 10:07:22.170000000    2025-11-22 10:07:22.170446000    0    20    20    0    20    20    0    0    20    20    19    3    6    19    3    6    19    19    3    6                        
+select
+date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456'),
+date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
+;
+invalid input: column microsecond does not exist

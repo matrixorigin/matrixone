@@ -1,0 +1,82 @@
+drop table if exists t_scale_storage;
+create table t_scale_storage (
+id int,
+dt0 datetime(0),
+dt1 datetime(1),
+dt2 datetime(2),
+dt3 datetime(3),
+dt4 datetime(4),
+dt5 datetime(5),
+dt6 datetime(6),
+ts0 timestamp(0),
+ts6 timestamp(6),
+t0 time(0),
+t6 time(6)
+);
+insert into t_scale_storage values (
+1,
+'2022-07-01 10:20:30',
+'2022-07-01 10:20:30.1',
+'2022-07-01 10:20:30.12',
+'2022-07-01 10:20:30.123',
+'2022-07-01 10:20:30.1234',
+'2022-07-01 10:20:30.12345',
+'2022-07-01 10:20:30.123456',
+'2022-07-01 10:20:30',
+'2022-07-01 10:20:30.123456',
+'10:20:30',
+'10:20:30.123456'
+);
+select * from t_scale_storage;
+id    dt0    dt1    dt2    dt3    dt4    dt5    dt6    ts0    ts6    t0    t6
+1    2022-07-01 10:20:30    2022-07-01 10:20:30.100000000    2022-07-01 10:20:30.120000000    2022-07-01 10:20:30.123000000    2022-07-01 10:20:30.123400000    2022-07-01 10:20:30.123450000    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30    2022-07-01 10:20:30.123456000    10:20:30    10:20:30.123456000
+select
+dt0 = dt6,  -- should be true (ignoring microsecond part)
+dt3 = dt6,  -- should be false (microsecond part different)
+dt6 = '2022-07-01 10:20:30.123456',
+dt6 > '2022-07-01 10:20:30.123455',
+dt6 < '2022-07-01 10:20:30.123457'
+from t_scale_storage;
+dt0 = dt6    dt3 = dt6    dt6 = 2022-07-01 10:20:30.123456    dt6 > 2022-07-01 10:20:30.123455    dt6 < 2022-07-01 10:20:30.123457
+false    false    true    true    true
+select
+now(0),      -- no microseconds
+now(3),      -- 3 digits microseconds
+now(6),      -- 6 digits microseconds (not 9)
+current_timestamp(0),
+current_timestamp(3),
+current_timestamp(6),
+date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456')
+;
+invalid input: column microsecond does not exist
+drop table if exists t_scale_storage;
+drop table if exists t_scale_comparison;
+create table t_scale_comparison (
+id int,
+dt0 datetime(0),
+dt3 datetime(3),
+dt6 datetime(6),
+ts0 timestamp(0),
+ts6 timestamp(6)
+);
+insert into t_scale_comparison values
+(1, '2022-07-01 10:20:30', '2022-07-01 10:20:30.123', '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30', '2022-07-01 10:20:30.123456'),
+(2, '2022-07-01 10:20:30', '2022-07-01 10:20:30.000', '2022-07-01 10:20:30.000000', '2022-07-01 10:20:30', '2022-07-01 10:20:30.000000');
+select
+dt0 = dt6,
+ts0 = ts6,
+dt0 = '2022-07-01 10:20:30',
+dt6 = '2022-07-01 10:20:30.000000'
+from t_scale_comparison where id = 1;
+dt0 = dt6    ts0 = ts6    dt0 = 2022-07-01 10:20:30    dt6 = 2022-07-01 10:20:30.000000
+false    false    true    false
+select * from t_scale_comparison
+where dt6 = '2022-07-01 10:20:30.123456';
+id    dt0    dt3    dt6    ts0    ts6
+1    2022-07-01 10:20:30    2022-07-01 10:20:30.123000000    2022-07-01 10:20:30.123456000    2022-07-01 10:20:30    2022-07-01 10:20:30.123456000
+select * from t_scale_comparison
+where dt0 = dt6;
+id    dt0    dt3    dt6    ts0    ts6
+2    2022-07-01 10:20:30    2022-07-01 10:20:30    2022-07-01 10:20:30    2022-07-01 10:20:30    2022-07-01 10:20:30
+drop table if exists t_scale_comparison;

@@ -1,0 +1,145 @@
+-- @suite
+-- @setup
+drop table if exists t_microsecond_basic;
+create table t_microsecond_basic(
+    id int,
+    dt datetime(6),
+    ts timestamp(6),
+    t time(6),
+    dt_str varchar(50),
+    ts_str varchar(50),
+    t_str varchar(50)
+);
+
+insert into t_microsecond_basic values
+(1, '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456', '10:20:30.123456', '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456', '10:20:30.123456'),
+(2, '2022-07-01 10:20:30.000000', '2022-07-01 10:20:30.000000', '10:20:30.000000', '2022-07-01 10:20:30.000000', '2022-07-01 10:20:30.000000', '10:20:30.000000'),
+(3, '2022-07-01 10:20:30.999999', '2022-07-01 10:20:30.999999', '10:20:30.999999', '2022-07-01 10:20:30.999999', '2022-07-01 10:20:30.999999', '10:20:30.999999'),
+(4, '2022-07-01 10:20:30.000001', '2022-07-01 10:20:30.000001', '10:20:30.000001', '2022-07-01 10:20:30.000001', '2022-07-01 10:20:30.000001', '10:20:30.000001'),
+(5, '2022-07-01 10:20:30.999998', '2022-07-01 10:20:30.999998', '10:20:30.999998', '2022-07-01 10:20:30.999998', '2022-07-01 10:20:30.999998', '10:20:30.999998'),
+(6, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- @case
+-- @desc:test for func microsecond() with different input types
+select microsecond(dt), microsecond(ts), microsecond(t) from t_microsecond_basic where id <= 5;
+select microsecond(dt_str), microsecond(ts_str), microsecond(t_str) from t_microsecond_basic where id <= 5;
+
+-- @case
+-- @desc:test for func microsecond() with boundary values
+select microsecond('2022-07-01 10:20:30.000000');  -- 0
+select microsecond('2022-07-01 10:20:30.999999');  -- 999999
+select microsecond('2022-07-01 10:20:30.000001');  -- 1
+select microsecond('2022-07-01 10:20:30.999998');  -- 999998
+select microsecond('10:20:30.000000');
+select microsecond('10:20:30.999999');
+
+-- @case
+-- @desc:test for func microsecond() with NULL values
+select microsecond(NULL);
+select microsecond(dt) from t_microsecond_basic where id = 6;
+select microsecond(ts) from t_microsecond_basic where id = 6;
+select microsecond(t) from t_microsecond_basic where id = 6;
+
+-- @case
+-- @desc:test for func microsecond() without microsecond part
+select microsecond('2022-07-01 10:20:30');
+select microsecond('10:20:30');
+select microsecond(dt) from t_microsecond_basic where dt = '2022-07-01 10:20:30.000000';
+
+-- @teardown
+drop table if exists t_microsecond_basic;
+
+-- @suite
+-- @setup
+drop table if exists t_microsecond_scale;
+create table t_microsecond_scale (
+    id int,
+    dt0 datetime(0),
+    dt3 datetime(3),
+    dt6 datetime(6),
+    ts0 timestamp(0),
+    ts3 timestamp(3),
+    ts6 timestamp(6),
+    t0 time(0),
+    t3 time(3),
+    t6 time(6)
+);
+
+insert into t_microsecond_scale values (
+    1,
+    '2022-07-01 10:20:30',
+    '2022-07-01 10:20:30.123',
+    '2022-07-01 10:20:30.123456',
+    '2022-07-01 10:20:30',
+    '2022-07-01 10:20:30.123',
+    '2022-07-01 10:20:30.123456',
+    '10:20:30',
+    '10:20:30.123',
+    '10:20:30.123456'
+);
+
+-- @case
+-- @desc:test for func microsecond() with different scale values
+select 
+    microsecond(dt0),  -- should return 0
+    microsecond(dt3),  -- should return 123000
+    microsecond(dt6),  -- should return 123456
+    microsecond(ts0),
+    microsecond(ts3),
+    microsecond(ts6),
+    microsecond(t0),
+    microsecond(t3),
+    microsecond(t6)
+from t_microsecond_scale;
+
+-- @teardown
+drop table if exists t_microsecond_scale;
+
+-- @suite
+-- @setup
+drop table if exists t_microsecond_combine;
+create table t_microsecond_combine (
+    id int,
+    dt datetime(6),
+    ts timestamp(6)
+);
+
+insert into t_microsecond_combine values
+(1, '2022-07-01 10:20:30.123456', '2022-07-01 10:20:30.123456'),
+(2, '2022-07-01 10:20:30.654321', '2022-07-01 10:20:30.654321'),
+(3, '2022-07-01 10:20:30.000001', '2022-07-01 10:20:30.000001'),
+(4, '2022-07-01 10:20:30.999999', '2022-07-01 10:20:30.999999');
+
+-- @case
+-- @desc:test for func microsecond() combined with other functions
+select 
+    microsecond(now(6)),
+    microsecond(current_timestamp(6)),
+    microsecond(date_add('2022-07-01 10:20:30.123456', interval 1 second)),
+    microsecond(timestampadd(microsecond, 100, '2022-07-01 10:20:30.123456'))
+;
+
+-- @case
+-- @desc:test for func microsecond() in WHERE clause
+select * from t_microsecond_combine 
+where microsecond(dt) between 100000 and 200000;
+
+select * from t_microsecond_combine 
+where microsecond(dt) >= microsecond(ts);
+
+-- @case
+-- @desc:test for func microsecond() in ORDER BY clause
+select * from t_microsecond_combine 
+order by microsecond(dt) desc;
+
+select * from t_microsecond_combine 
+order by microsecond(dt) asc;
+
+-- @case
+-- @desc:test for func microsecond() in GROUP BY clause
+select microsecond(dt), count(*) from t_microsecond_combine 
+group by microsecond(dt);
+
+-- @teardown
+drop table if exists t_microsecond_combine;
+
