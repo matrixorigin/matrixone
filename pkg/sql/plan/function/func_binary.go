@@ -3295,8 +3295,115 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// First argument: bits (numeric)
-	bitsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+	// First argument: bits (numeric) - handle different numeric types
+	bitsType := ivecs[0].GetType().Oid
+	var bitsUint uint64
+	var nullBits bool
+
+	// Create appropriate parameter wrapper based on type (once, outside loop)
+	var getBitsValue func(uint64) (uint64, bool)
+	switch bitsType {
+	case types.T_int8:
+		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int16:
+		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int32:
+		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint8:
+		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint16:
+		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint32:
+		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return val, false
+		}
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	default:
+		// Fallback to int64
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	}
 
 	// Second argument: on (string)
 	onParam := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -3326,7 +3433,9 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		bits, nullBits := bitsParam.GetValue(i)
+		// Extract bits value using the appropriate getter
+		bitsUint, nullBits = getBitsValue(i)
+
 		if nullBits {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3366,9 +3475,6 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				}
 			}
 		}
-
-		// Convert bits to uint64 for bit operations
-		bitsUint := uint64(bits)
 
 		// Build the result string
 		var parts []string
