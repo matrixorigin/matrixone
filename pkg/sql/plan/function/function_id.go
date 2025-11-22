@@ -531,9 +531,18 @@ const (
 	// function `make_set`
 	MAKE_SET = 386
 
+	// function `compress`
+	COMPRESS = 387
+
+	// function `uncompress`
+	UNCOMPRESS = 388
+
+	// function `uncompressed_length`
+	UNCOMPRESSED_LENGTH = 389
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 387
+	FUNCTION_END_NUMBER = 390
 )
 
 // functionIdRegister is what function we have registered already.
@@ -676,6 +685,9 @@ var functionIdRegister = map[string]int32{
 	"aes_decrypt":                    AES_DECRYPT,
 	"aes_encrypt":                    AES_ENCRYPT,
 	"addtime":                        ADDTIME,
+	"compress":                       COMPRESS,
+	"uncompress":                     UNCOMPRESS,
+	"uncompressed_length":            UNCOMPRESSED_LENGTH,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,

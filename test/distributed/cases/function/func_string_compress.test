@@ -1,0 +1,75 @@
+# Basic test case from requirements
+SELECT UNCOMPRESS(COMPRESS('Hello World')) AS result1;
+
+# Additional test cases
+# Basic compression and decompression
+SELECT COMPRESS('Hello World') AS compressed;
+SELECT UNCOMPRESS(COMPRESS('Hello World')) AS decompressed;
+
+# Empty string
+SELECT COMPRESS('') AS empty_compressed;
+SELECT UNCOMPRESS(COMPRESS('')) AS empty_decompressed;
+
+# Long strings
+SELECT UNCOMPRESS(COMPRESS('This is a very long string that should be compressed effectively')) AS long_string;
+
+# Special characters
+SELECT UNCOMPRESS(COMPRESS('Hello@#$%^&*()')) AS special_chars;
+SELECT UNCOMPRESS(COMPRESS('MatrixOne数据库')) AS unicode_chars;
+
+# NULL handling
+SELECT COMPRESS(NULL) AS null_input;
+SELECT UNCOMPRESS(NULL) AS null_compressed;
+SELECT UNCOMPRESS('invalid') AS invalid_compressed;
+
+# Table usage
+CREATE TABLE t1(plaintext VARCHAR(100));
+INSERT INTO t1 VALUES ('Hello'), ('World'), ('MatrixOne');
+-- @bvt:issue#23021
+SELECT plaintext, COMPRESS(plaintext) AS compressed FROM t1;
+-- @bvt:issue
+SELECT plaintext, UNCOMPRESS(COMPRESS(plaintext)) AS decompressed FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(plaintext VARCHAR(100));
+INSERT INTO t1 VALUES ('Hello'), ('World'), ('MatrixOne');
+SELECT * FROM t1 WHERE UNCOMPRESS(COMPRESS(plaintext)) = 'Hello';
+DROP TABLE t1;
+
+# Multiple COMPRESS operations
+-- @bvt:issue#23021
+SELECT COMPRESS('text1') AS comp1, COMPRESS('text2') AS comp2, COMPRESS('text3') AS comp3;
+-- @bvt:issue
+
+# Round-trip test with different data types
+SELECT UNCOMPRESS(COMPRESS('12345')) AS numeric_string;
+SELECT UNCOMPRESS(COMPRESS('2024-01-01')) AS date_string;
+
+# Test that compressed data is different from original
+SELECT COMPRESS('Hello World') != 'Hello World' AS compressed_different;
+
+# Test compression ratio (compressed should be smaller for repetitive data)
+SELECT LENGTH(COMPRESS('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')) < LENGTH('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') AS compression_works;
+
+# UNCOMPRESSED_LENGTH function
+SELECT UNCOMPRESSED_LENGTH(COMPRESS('Hello World')) AS result1;
+SELECT UNCOMPRESSED_LENGTH(COMPRESS('Hello World')) AS length1;
+SELECT LENGTH('Hello World') = UNCOMPRESSED_LENGTH(COMPRESS('Hello World')) AS length_match;
+
+# UNCOMPRESSED_LENGTH with different strings
+SELECT UNCOMPRESSED_LENGTH(COMPRESS('')) AS empty_length;
+SELECT UNCOMPRESSED_LENGTH(COMPRESS('This is a very long string')) AS long_length;
+SELECT UNCOMPRESSED_LENGTH(COMPRESS('MatrixOne数据库')) AS unicode_length;
+
+# UNCOMPRESSED_LENGTH with NULL
+SELECT UNCOMPRESSED_LENGTH(NULL) AS null_input;
+SELECT UNCOMPRESSED_LENGTH('invalid') AS invalid_compressed;
+
+# UNCOMPRESSED_LENGTH in table
+CREATE TABLE t1(plaintext VARCHAR(100));
+INSERT INTO t1 VALUES ('Hello'), ('World'), ('MatrixOne');
+SELECT plaintext, UNCOMPRESSED_LENGTH(COMPRESS(plaintext)) AS original_length FROM t1;
+SELECT plaintext, LENGTH(plaintext) = UNCOMPRESSED_LENGTH(COMPRESS(plaintext)) AS length_correct FROM t1;
+DROP TABLE t1;
+

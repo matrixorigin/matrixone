@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -2334,6 +2335,107 @@ func TestFromBase64(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func initCompressTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test compress - basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Hello World"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{false}),
+		},
+		{
+			info: "test compress - empty string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{false}),
+		},
+		{
+			info: "test compress - null input",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text"}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{true}),
+		},
+		{
+			info: "test compress - long string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"This is a very long string that should be compressed effectively"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{false}),
+		},
+	}
+}
+
+func TestCompress(t *testing.T) {
+	testCases := initCompressTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Compress)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initUncompressTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test uncompress - null input",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_blob.ToType(), []string{""}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		},
+		{
+			info: "test uncompress - invalid compressed data",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_blob.ToType(), []string{"invalid"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		},
+	}
+}
+
+func TestUncompress(t *testing.T) {
+	testCases := initUncompressTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Uncompress)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	// Test round-trip: compress then uncompress
+	proc2 := testutil.NewProcess(t)
+	plaintext := "Hello World"
+
+	// Compress
+	compressInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{plaintext}, []bool{false}),
+	}
+	compressExpect := NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{false})
+	compressTC := NewFunctionTestCase(proc2, compressInputs, compressExpect, Compress)
+	compressSuccess, compressInfo := compressTC.Run()
+	require.True(t, compressSuccess, fmt.Sprintf("compress failed: %s", compressInfo))
+
+	// Get compressed result
+	compressedVec := compressTC.GetResultVectorDirectly()
+	compressedParam := vector.GenerateFunctionStrParameter(compressedVec)
+	compressedBytes, _ := compressedParam.GetStrValue(0)
+
+	// Uncompress
+	uncompressInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_blob.ToType(), []string{string(compressedBytes)}, []bool{false}),
+	}
+	uncompressExpect := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{plaintext}, []bool{false})
+	uncompressTC := NewFunctionTestCase(proc2, uncompressInputs, uncompressExpect, Uncompress)
+	uncompressSuccess, uncompressInfo := uncompressTC.Run()
+	require.True(t, uncompressSuccess, fmt.Sprintf("uncompress failed: %s", uncompressInfo))
 }
 
 func initBlobLengthTestCase() []tcTemp {

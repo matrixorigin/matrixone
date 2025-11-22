@@ -15,6 +15,8 @@
 package function
 
 import (
+	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -22,6 +24,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -1449,6 +1452,139 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
+// Compress: COMPRESS(string) - Compresses a string using zlib compression
+// MySQL format: 4-byte length (little-endian) + compressed data
+func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Compress using zlib (flate)
+		var buf bytes.Buffer
+		writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
+		if err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, err = writer.Write(data)
+		if err != nil {
+			writer.Close()
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		err = writer.Close()
+		if err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		compressed := buf.Bytes()
+
+		// MySQL format: 4-byte length (little-endian) + compressed data
+		originalLen := uint32(len(data))
+		result := make([]byte, 4+len(compressed))
+		binary.LittleEndian.PutUint32(result[0:4], originalLen)
+		copy(result[4:], compressed)
+
+		if err := rs.AppendBytes(result, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Uncompress: UNCOMPRESS(string) - Uncompresses a string compressed by COMPRESS()
+// Reads 4-byte length, then decompresses the rest
+func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check minimum length (4 bytes for length + at least 1 byte for compressed data)
+		if len(data) < 5 {
+			// Not a valid compressed string, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Read 4-byte length (little-endian)
+		originalLen := binary.LittleEndian.Uint32(data[0:4])
+		compressed := data[4:]
+
+		// Decompress using zlib (flate)
+		reader := flate.NewReader(bytes.NewReader(compressed))
+		decompressed := make([]byte, originalLen)
+		n, err := reader.Read(decompressed)
+		reader.Close()
+
+		if err != nil && err != io.EOF {
+			// Decompression failed, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check if we got the expected length
+		if uint32(n) != originalLen {
+			// Length mismatch, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(decompressed, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryStrToFixed[int64](ivecs, result, proc, length, strLength, selectList)
 }
@@ -1606,6 +1742,48 @@ func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		data, nullData := source.GetStrValue(i)
 		keyData, nullKey := key.GetStrValue(i)
 		if err := decodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// UncompressedLength: UNCOMPRESSED_LENGTH(compressed_string) - Returns the length that the compressed string had before being compressed
+// Reads the first 4 bytes (little-endian) from the compressed string
+func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check minimum length (at least 4 bytes for the length field)
+		if len(data) < 4 {
+			// Not a valid compressed string, return NULL
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Read 4-byte length (little-endian)
+		originalLen := binary.LittleEndian.Uint32(data[0:4])
+		if err := rs.Append(int64(originalLen), false); err != nil {
 			return err
 		}
 	}
