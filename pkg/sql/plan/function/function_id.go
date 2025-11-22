@@ -673,6 +673,8 @@ var functionIdRegister = map[string]int32{
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
 	"acos":                           ACOS,
+	"aes_decrypt":                    AES_DECRYPT,
+	"aes_encrypt":                    AES_ENCRYPT,
 	"addtime":                        ADDTIME,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,

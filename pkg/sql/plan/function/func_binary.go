@@ -17,6 +17,8 @@ package function
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -5869,4 +5871,170 @@ func castBinaryArrayToInt(array []uint8) int64 {
 		result += int64(value) << uint(8*(len(array)-i-1))
 	}
 	return result
+}
+
+// generateAESKey generates a 16-byte AES key from the input key using SHA1
+// MySQL's AES_ENCRYPT uses SHA1 hash of the key, taking the first 16 bytes
+func generateAESKey(key []byte) []byte {
+	hash := sha1.Sum(key)
+	return hash[:16] // AES-128 requires 16-byte key
+}
+
+// pkcs7Padding adds PKCS7 padding to the data
+func pkcs7Padding(data []byte, blockSize int) []byte {
+	padding := blockSize - len(data)%blockSize
+	padtext := make([]byte, padding)
+	for i := range padtext {
+		padtext[i] = byte(padding)
+	}
+	return append(data, padtext...)
+}
+
+// pkcs7Unpadding removes PKCS7 padding from the data
+func pkcs7Unpadding(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+	}
+	padding := int(data[len(data)-1])
+	if padding > len(data) || padding == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+	}
+	// Verify padding
+	for i := len(data) - padding; i < len(data); i++ {
+		if data[i] != byte(padding) {
+			return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+		}
+	}
+	return data[:len(data)-padding], nil
+}
+
+// encryptECB encrypts data using AES-128-ECB mode
+func encryptECB(plaintext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add PKCS7 padding
+	padded := pkcs7Padding(plaintext, aes.BlockSize)
+
+	// Encrypt each block independently (ECB mode)
+	ciphertext := make([]byte, len(padded))
+	for i := 0; i < len(padded); i += aes.BlockSize {
+		block.Encrypt(ciphertext[i:i+aes.BlockSize], padded[i:i+aes.BlockSize])
+	}
+
+	return ciphertext, nil
+}
+
+// decryptECB decrypts data using AES-128-ECB mode
+func decryptECB(ciphertext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check that ciphertext length is a multiple of block size
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
+	}
+
+	// Decrypt each block independently (ECB mode)
+	plaintext := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
+	}
+
+	// Remove PKCS7 padding
+	return pkcs7Unpadding(plaintext)
+}
+
+// AESEncrypt: AES_ENCRYPT(str, key_str) - Encrypts a string using AES encryption
+func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		str, nullStr := strParam.GetStrValue(i)
+		key, nullKey := keyParam.GetStrValue(i)
+
+		if nullStr || nullKey {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Generate AES key from the key string
+		aesKey := generateAESKey(key)
+
+		// Encrypt using AES-128-ECB
+		ciphertext, err := encryptECB(str, aesKey)
+		if err != nil {
+			// On error, return NULL (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(ciphertext, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// AESDecrypt: AES_DECRYPT(crypt_str, key_str) - Decrypts an encrypted string using AES decryption
+func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	cryptParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		crypt, nullCrypt := cryptParam.GetStrValue(i)
+		key, nullKey := keyParam.GetStrValue(i)
+
+		if nullCrypt || nullKey {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Generate AES key from the key string
+		aesKey := generateAESKey(key)
+
+		// Decrypt using AES-128-ECB
+		plaintext, err := decryptECB(crypt, aesKey)
+		if err != nil {
+			// On error, return NULL (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(plaintext, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
