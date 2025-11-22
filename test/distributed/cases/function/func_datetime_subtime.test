@@ -3,9 +3,9 @@ SELECT SUBTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS result1;
 
 # Additional test cases
 # TIME - TIME
-SELECT SUBTIME('15:30:45', '01:15:30') AS time_sub_time;
-SELECT SUBTIME('15:30:45', '00:00:00') AS time_sub_zero;
-SELECT SUBTIME('00:00:00', '00:00:01') AS zero_sub_second;
+SELECT TIME(SUBTIME('15:30:45', '01:15:30')) AS time_sub_time;
+SELECT TIME(SUBTIME('15:30:45', '00:00:00')) AS time_sub_zero;
+SELECT TIME(SUBTIME('00:00:00', '00:00:01')) AS zero_sub_second;
 
 # DATETIME - TIME
 SELECT SUBTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS datetime_sub_time;
@@ -17,15 +17,15 @@ SELECT SUBTIME(TIMESTAMP('2007-12-31 23:59:59'), '1 1:1:1') AS timestamp_sub_tim
 
 # String inputs
 SELECT SUBTIME('2007-12-31 23:59:59', '1 1:1:1') AS string_datetime;
-SELECT SUBTIME('15:30:45', '01:15:30') AS string_time;
+SELECT TIME(SUBTIME('15:30:45', '01:15:30')) AS string_time;
 
 # Negative results (when subtracting larger time)
-SELECT SUBTIME('01:00:00', '02:00:00') AS negative_result;
+SELECT TIME(SUBTIME('01:00:00', '02:00:00')) AS negative_result;
 SELECT SUBTIME('2007-12-31 00:00:00', '1 0:0:0') AS negative_datetime;
 
 # With microseconds
 SELECT SUBTIME('2007-12-31 23:59:59.999999', '0 0:0:0.000001') AS with_microseconds;
-SELECT SUBTIME('15:30:45.500000', '00:00:00.200000') AS time_with_microseconds;
+SELECT TIME(SUBTIME('15:30:45.500000', '00:00:00.200000')) AS time_with_microseconds;
 
 # NULL handling
 SELECT SUBTIME(NULL, '01:00:00') AS null_expr1;
