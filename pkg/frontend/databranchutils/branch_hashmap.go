@@ -52,7 +52,7 @@ type BranchHashmap interface {
 	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
 	// from ForEachShardParallel. It mirrors PopByVectors semantics.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
-	// PopByEncodedFullValues removes rows by reconstructing the key from a full
+	// PopByEncodedFullValue PopByEncodedFullValues removes rows by reconstructing the key from a full
 	// encoded row payload. The full row must match the value encoding used by
 	// PutByVectors. It mirrors PopByEncodedKey semantics.
 	PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error)
@@ -465,6 +465,10 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 
 func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error) {
 	var result GetResult
+
+	if bh.ItemCount() == 0 {
+		return result, nil
+	}
 
 	bh.metaMu.RLock()
 	if bh.closed {
