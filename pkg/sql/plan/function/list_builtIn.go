@@ -8236,6 +8236,100 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `is_ipv4_compat`
+	{
+		functionId: IS_IPV4_COMPAT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varbinary},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4Compat
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_binary},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4Compat
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_blob},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4Compat
+				},
+			},
+		},
+	},
+
+	// function `is_ipv4_mapped`
+	{
+		functionId: IS_IPV4_MAPPED,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varbinary},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4Mapped
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_binary},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4Mapped
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_blob},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4Mapped
+				},
+			},
+		},
+	},
+
 	// function `connection_id`
 	{
 		functionId: CONNECTION_ID,

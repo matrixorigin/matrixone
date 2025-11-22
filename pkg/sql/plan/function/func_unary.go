@@ -1958,6 +1958,209 @@ func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return nil
 }
 
+// isIPv4Compat checks if an IPv6 address is IPv4-compatible (::a.b.c.d)
+// IPv4-compatible addresses have the first 12 bytes as zeros
+func isIPv4Compat(ip net.IP) bool {
+	if len(ip) != 16 {
+		return false
+	}
+	// Check for :: prefix (first 12 bytes are zeros)
+	return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0 &&
+		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
+		ip[8] == 0 && ip[9] == 0 && ip[10] == 0 && ip[11] == 0 &&
+		// Last 4 bytes should not be all zeros (0.0.0.0 is not considered IPv4-compatible)
+		!(ip[12] == 0 && ip[13] == 0 && ip[14] == 0 && ip[15] == 0)
+}
+
+// IsIPv4Compat returns 1 if the argument is a valid IPv4-compatible IPv6 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+// The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
+func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			var resultVal int64
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Compat(ip) {
+					resultVal = 1
+				} else {
+					resultVal = 0
+				}
+			} else {
+				// Invalid length: not a valid IPv6 binary representation
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Compat(ip) {
+					rss[i] = 1
+				} else {
+					rss[i] = 0
+				}
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		if len(v1) == 16 {
+			ip := net.IP(v1)
+			if isIPv4Compat(ip) {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
+// IsIPv4Mapped returns 1 if the argument is a valid IPv4-mapped IPv6 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+// The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
+// IPv4-mapped addresses have the format ::ffff:a.b.c.d
+func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			var resultVal int64
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Mapped(ip) {
+					resultVal = 1
+				} else {
+					resultVal = 0
+				}
+			} else {
+				// Invalid length: not a valid IPv6 binary representation
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Mapped(ip) {
+					rss[i] = 1
+				} else {
+					rss[i] = 0
+				}
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		if len(v1) == 16 {
+			ip := net.IP(v1)
+			if isIPv4Mapped(ip) {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
 // UnhexString returns a string representation of a hexadecimal value.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
 func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
