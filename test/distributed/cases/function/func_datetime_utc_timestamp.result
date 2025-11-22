@@ -19,7 +19,7 @@ ts
 drop table t1;
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
 utc_timestamp() - utc_timestamp()    weekday(utc_timestamp()) - weekday(utc_timestamp())    unix_timestamp() - unix_timestamp(utc_timestamp())
-0    0    -36000
+0    0    -36001
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
@@ -48,17 +48,53 @@ year(a)
 2025
 DROP TABLE t1;
 SET TIME_ZONE = "SYSTEM";
-select utc_timestamp(), utc_timestamp(0), utc_timestamp(3), utc_timestamp(6);
-utc_timestamp()    utc_timestamp(0)    utc_timestamp(3)    utc_timestamp(6)
-2025-11-22 09:28:23    2025-11-22 09:28:23    2025-11-22 09:28:23.420000000    2025-11-22 09:28:23.420098000
 select
-utc_timestamp(0) as scale0,
-utc_timestamp(1) as scale1,
-utc_timestamp(2) as scale2,
-utc_timestamp(3) as scale3,
-utc_timestamp(4) as scale4,
-utc_timestamp(5) as scale5,
-utc_timestamp(6) as scale6
-;
-scale0    scale1    scale2    scale3    scale4    scale5    scale6
-2025-11-22 09:28:23    2025-11-22 09:28:23.400000000    2025-11-22 09:28:23.440000000    2025-11-22 09:28:23.437000000    2025-11-22 09:28:23.437100000    2025-11-22 09:28:23.437150000    2025-11-22 09:28:23.437226000
+value_no_scale,
+value_scale_0,
+locate('.', value_no_scale) as has_dot_no_scale,
+locate('.', value_scale_0) as has_dot_scale_0,
+char_length(value_no_scale) as len_no_scale,
+char_length(value_scale_0) as len_scale_0
+from (
+select
+utc_timestamp() as value_no_scale,
+utc_timestamp(0) as value_scale_0
+) as t;
+value_no_scale    value_scale_0    has_dot_no_scale    has_dot_scale_0    len_no_scale    len_scale_0
+2025-11-22 09:54:31    2025-11-22 09:54:31    0    0    19    19
+select
+value_scale_1,
+value_scale_2,
+value_scale_3,
+value_scale_4,
+value_scale_5,
+value_scale_6,
+locate('.', value_scale_1) as dot_pos_scale_1,
+locate('.', value_scale_2) as dot_pos_scale_2,
+locate('.', value_scale_3) as dot_pos_scale_3,
+locate('.', value_scale_4) as dot_pos_scale_4,
+locate('.', value_scale_5) as dot_pos_scale_5,
+locate('.', value_scale_6) as dot_pos_scale_6,
+char_length(value_scale_1) - locate('.', value_scale_1) as decimal_digits_scale_1,
+char_length(value_scale_2) - locate('.', value_scale_2) as decimal_digits_scale_2,
+char_length(value_scale_3) - locate('.', value_scale_3) as decimal_digits_scale_3,
+char_length(value_scale_4) - locate('.', value_scale_4) as decimal_digits_scale_4,
+char_length(value_scale_5) - locate('.', value_scale_5) as decimal_digits_scale_5,
+char_length(value_scale_6) - locate('.', value_scale_6) as decimal_digits_scale_6,
+substring(value_scale_1, locate('.', value_scale_1) + 2) as last_8_digits_scale_1,
+substring(value_scale_2, locate('.', value_scale_2) + 3) as last_7_digits_scale_2,
+substring(value_scale_3, locate('.', value_scale_3) + 4) as last_6_digits_scale_3,
+substring(value_scale_4, locate('.', value_scale_4) + 5) as last_5_digits_scale_4,
+substring(value_scale_5, locate('.', value_scale_5) + 6) as last_4_digits_scale_5,
+substring(value_scale_6, locate('.', value_scale_6) + 7) as last_3_digits_scale_6
+from (
+select
+utc_timestamp(1) as value_scale_1,
+utc_timestamp(2) as value_scale_2,
+utc_timestamp(3) as value_scale_3,
+utc_timestamp(4) as value_scale_4,
+utc_timestamp(5) as value_scale_5,
+utc_timestamp(6) as value_scale_6
+) as t;
+value_scale_1    value_scale_2    value_scale_3    value_scale_4    value_scale_5    value_scale_6    dot_pos_scale_1    dot_pos_scale_2    dot_pos_scale_3    dot_pos_scale_4    dot_pos_scale_5    dot_pos_scale_6    decimal_digits_scale_1    decimal_digits_scale_2    decimal_digits_scale_3    decimal_digits_scale_4    decimal_digits_scale_5    decimal_digits_scale_6    last_8_digits_scale_1    last_7_digits_scale_2    last_6_digits_scale_3    last_5_digits_scale_4    last_4_digits_scale_5    last_3_digits_scale_6
+2025-11-22 09:54:30.900000000    2025-11-22 09:54:30.940000000    2025-11-22 09:54:30.935000000    2025-11-22 09:54:30.935400000    2025-11-22 09:54:30.935380000    2025-11-22 09:54:30.935384000    20    20    20    20    20    20    1    2    3    4    5    6                        

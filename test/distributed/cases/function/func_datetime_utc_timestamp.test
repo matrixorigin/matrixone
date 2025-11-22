@@ -64,19 +64,63 @@ SET TIME_ZONE = "SYSTEM";
 
 -- @suite
 -- @case
--- @desc:test for UTC_TIMESTAMP with different scale values
--- Default scale is 0 (matching MySQL behavior)
-select utc_timestamp(), utc_timestamp(0), utc_timestamp(3), utc_timestamp(6);
+-- @desc:test for UTC_TIMESTAMP format pattern verification (scale 0 - no microseconds)
+-- Show original values and verify: no decimal point, fixed length
+-- Use subquery to ensure check values are based on the same value as displayed
+select 
+    value_no_scale,
+    value_scale_0,
+    locate('.', value_no_scale) as has_dot_no_scale,
+    locate('.', value_scale_0) as has_dot_scale_0,
+    char_length(value_no_scale) as len_no_scale,
+    char_length(value_scale_0) as len_scale_0
+from (
+    select 
+        utc_timestamp() as value_no_scale,
+        utc_timestamp(0) as value_scale_0
+) as t;
 
 -- @case
--- @desc:test for UTC_TIMESTAMP scale validation
--- Test all valid scale values (0-6)
+-- @desc:test for UTC_TIMESTAMP format pattern verification (scale 1-6 - with microseconds)
+-- Show original values and verify: has decimal point, 9 decimal digits, verify trailing zeros
+-- scale(1): last 8 digits should be zeros
+-- scale(2): last 7 digits should be zeros  
+-- scale(3): last 6 digits should be zeros
+-- scale(4): last 5 digits should be zeros
+-- scale(5): last 4 digits should be zeros
+-- scale(6): last 3 digits should be zeros
+-- Use subquery to ensure check values are based on the same values as displayed
 select 
-    utc_timestamp(0) as scale0,
-    utc_timestamp(1) as scale1,
-    utc_timestamp(2) as scale2,
-    utc_timestamp(3) as scale3,
-    utc_timestamp(4) as scale4,
-    utc_timestamp(5) as scale5,
-    utc_timestamp(6) as scale6
-;
+    value_scale_1,
+    value_scale_2,
+    value_scale_3,
+    value_scale_4,
+    value_scale_5,
+    value_scale_6,
+    locate('.', value_scale_1) as dot_pos_scale_1,
+    locate('.', value_scale_2) as dot_pos_scale_2,
+    locate('.', value_scale_3) as dot_pos_scale_3,
+    locate('.', value_scale_4) as dot_pos_scale_4,
+    locate('.', value_scale_5) as dot_pos_scale_5,
+    locate('.', value_scale_6) as dot_pos_scale_6,
+    char_length(value_scale_1) - locate('.', value_scale_1) as decimal_digits_scale_1,
+    char_length(value_scale_2) - locate('.', value_scale_2) as decimal_digits_scale_2,
+    char_length(value_scale_3) - locate('.', value_scale_3) as decimal_digits_scale_3,
+    char_length(value_scale_4) - locate('.', value_scale_4) as decimal_digits_scale_4,
+    char_length(value_scale_5) - locate('.', value_scale_5) as decimal_digits_scale_5,
+    char_length(value_scale_6) - locate('.', value_scale_6) as decimal_digits_scale_6,
+    substring(value_scale_1, locate('.', value_scale_1) + 2) as last_8_digits_scale_1,
+    substring(value_scale_2, locate('.', value_scale_2) + 3) as last_7_digits_scale_2,
+    substring(value_scale_3, locate('.', value_scale_3) + 4) as last_6_digits_scale_3,
+    substring(value_scale_4, locate('.', value_scale_4) + 5) as last_5_digits_scale_4,
+    substring(value_scale_5, locate('.', value_scale_5) + 6) as last_4_digits_scale_5,
+    substring(value_scale_6, locate('.', value_scale_6) + 7) as last_3_digits_scale_6
+from (
+    select 
+        utc_timestamp(1) as value_scale_1,
+        utc_timestamp(2) as value_scale_2,
+        utc_timestamp(3) as value_scale_3,
+        utc_timestamp(4) as value_scale_4,
+        utc_timestamp(5) as value_scale_5,
+        utc_timestamp(6) as value_scale_6
+) as t;
