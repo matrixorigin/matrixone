@@ -543,4 +543,28 @@ func Test_BuiltInChar(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+
+	// Test CHAR with UTF-8 multi-byte character (Chinese character "中")
+	{
+		tc := tcTemp{
+			info: "select char(228, 184, 173)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{228},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{184},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{173},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"中"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
 }

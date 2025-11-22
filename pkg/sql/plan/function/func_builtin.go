@@ -719,7 +719,7 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		var resultStr string
+		var resultBytes []byte
 		hasNull := false
 
 		// Process all integer arguments
@@ -729,14 +729,18 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				hasNull = true
 				break
 			}
-			// Convert integer to character (rune)
-			// MySQL CHAR function uses ASCII/Unicode code points
-			if v < 0 || v > 0x10FFFF {
-				// Invalid Unicode code point, skip or use replacement character
-				// MySQL behavior: NULL or empty string for invalid codes
-				continue
+			// Convert integer to byte value (0-255)
+			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
+			// For example: CHAR(228, 184, 173) returns "中" (the UTF-8 bytes for U+4E2D)
+			if v < 0 {
+				// Negative values are treated as 0
+				resultBytes = append(resultBytes, 0)
+			} else if v > 255 {
+				// Values > 255 are treated modulo 256
+				resultBytes = append(resultBytes, byte(v&0xFF))
+			} else {
+				resultBytes = append(resultBytes, byte(v))
 			}
-			resultStr += string(rune(v))
 		}
 
 		if hasNull {
@@ -744,7 +748,8 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return err
 			}
 		} else {
-			if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			// Convert byte slice to string (UTF-8 decoding happens automatically)
+			if err := rs.AppendBytes(resultBytes, false); err != nil {
 				return err
 			}
 		}

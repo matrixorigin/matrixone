@@ -317,7 +317,7 @@ CHAR(65, 66, 67)
 ABC
 SELECT CHAR(228, 184, 173);  -- UTF-8 bytes for '中'
 CHAR(228, 184, 173)
-ä¸­
+中
 CREATE TABLE t_strcmp (
 id INT PRIMARY KEY,
 val1 VARCHAR(100),
