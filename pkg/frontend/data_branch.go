@@ -57,9 +57,6 @@ const (
 )
 
 const (
-	//diffAddedLine   = "I"
-	//diffRemovedLine = "D"
-
 	diffInsert = "INSERT"
 	diffDelete = "DELETE"
 	diffUpdate = "UPDATE"
@@ -74,13 +71,6 @@ const (
 
 const (
 	batchCnt = objectio.BlockMaxRows * 10
-)
-
-const (
-	mergeDiffOutputNone = iota
-	mergeDiffOutputSQLs
-	mergeDiffOutputRows
-	mergeDiffOutputBatch
 )
 
 var bufferPool = sync.Pool{
@@ -760,17 +750,17 @@ func flushSqlValues(
 	}
 
 	initDeleteFromBuf := func() {
-		if len(tblStuff.expandedPKColIdxes) == 1 {
+		if len(tblStuff.def.pkColIdxes) == 1 {
 			sqlBuffer.WriteString(fmt.Sprintf(
 				"delete from %s.%s where %s in (",
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
-				tblStuff.baseRel.GetTableDef(ctx).Cols[tblStuff.expandedPKColIdxes[0]].Name,
+				tblStuff.def.colNames[tblStuff.def.pkColIdx],
 			))
 		} else {
-			pkNames := make([]string, len(tblStuff.expandedPKColIdxes))
-			for i, pkColIdx := range tblStuff.expandedPKColIdxes {
-				pkNames[i] = tblStuff.baseRel.GetTableDef(ctx).Cols[pkColIdx].Name
+			pkNames := make([]string, len(tblStuff.def.pkColIdxes))
+			for i, pkColIdx := range tblStuff.def.pkColIdxes {
+				pkNames[i] = tblStuff.def.colNames[pkColIdx]
 			}
 			sqlBuffer.WriteString(fmt.Sprintf(
 				"delete from %s.%s where (%s) in (",
@@ -822,8 +812,8 @@ func constructValsFromBatch(
 		}
 
 		replaceIntoValsBuffer.WriteString("(")
-		for j := 2; j < len(row); j++ {
-			formatValIntoString(ses, row[j], tblStuff.neededColTypes[j-2], replaceIntoValsBuffer)
+		for j, idx := range tblStuff.def.visibleIdxes {
+			formatValIntoString(ses, row[j], tblStuff.def.colTypes[idx], replaceIntoValsBuffer)
 			if j != len(row)-1 {
 				replaceIntoValsBuffer.WriteString(",")
 			}
@@ -837,16 +827,16 @@ func constructValsFromBatch(
 			deleteFromValsBuffer.WriteString(",")
 		}
 
-		if len(tblStuff.expandedPKColIdxes) > 1 {
+		if len(tblStuff.def.pkColIdxes) > 1 {
 			deleteFromValsBuffer.WriteString("(")
 		}
-		for idx, colIdx := range tblStuff.expandedPKColIdxes {
-			formatValIntoString(ses, row[colIdx+2], tblStuff.neededColTypes[colIdx], deleteFromValsBuffer)
-			if idx != len(tblStuff.expandedPKColIdxes)-1 {
+		for idx, colIdx := range tblStuff.def.pkColIdxes {
+			formatValIntoString(ses, row[colIdx+2], tblStuff.def.colTypes[colIdx], deleteFromValsBuffer)
+			if idx != len(tblStuff.def.pkColIdxes)-1 {
 				deleteFromValsBuffer.WriteString(",")
 			}
 		}
-		if len(tblStuff.expandedPKColIdxes) > 1 {
+		if len(tblStuff.def.pkColIdxes) > 1 {
 			deleteFromValsBuffer.WriteString(")")
 		}
 	}
@@ -902,13 +892,13 @@ func buildOutputSchema(
 		showCols[1].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 		showCols[1].SetName("flag")
 
-		for i := range tblStuff.colNames {
+		for _, idx := range tblStuff.def.visibleIdxes {
 			nCol := new(MysqlColumn)
-			if err = convertEngineTypeToMysqlType(ctx, tblStuff.neededColTypes[i].Oid, nCol); err != nil {
+			if err = convertEngineTypeToMysqlType(ctx, tblStuff.def.colTypes[idx].Oid, nCol); err != nil {
 				return
 			}
 
-			nCol.SetName(tblStuff.colNames[i])
+			nCol.SetName(tblStuff.def.colNames[idx])
 			showCols = append(showCols, nCol)
 		}
 
@@ -1355,7 +1345,7 @@ func hashDiffIfHasLCA(
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		if err2 := mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, tblStuff.pkColIdx, ses.proc.Mp(),
+			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1376,7 +1366,7 @@ func hashDiffIfHasLCA(
 		}
 
 		if err2 = mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, tblStuff.pkColIdx, ses.proc.Mp(),
+			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1385,8 +1375,8 @@ func hashDiffIfHasLCA(
 			var (
 				tarRow  = make([]any, 1)
 				baseRow = make([]any, 1)
-				tarVec  = tarWrapped.batch.Vecs[tblStuff.pkColIdx]
-				baseVec = baseWrapped.batch.Vecs[tblStuff.pkColIdx]
+				tarVec  = tarWrapped.batch.Vecs[tblStuff.def.pkColIdx]
+				baseVec = baseWrapped.batch.Vecs[tblStuff.def.pkColIdx]
 			)
 
 			i, j := 0, 0
@@ -1403,7 +1393,10 @@ func hashDiffIfHasLCA(
 					return
 				}
 
-				cmp := types.CompareValues(tarRow[0], baseRow[0], tblStuff.pkColType.Oid)
+				cmp := types.CompareValues(
+					tarRow[0], baseRow[0],
+					tblStuff.def.colTypes[tblStuff.def.pkColIdx].Oid,
+				)
 				if cmp == 0 {
 					// conflict
 					// tar and base both deleted on pk1 => empty
@@ -1432,7 +1425,7 @@ func hashDiffIfHasLCA(
 					} else {
 						// copt.conflictOpt == tree.CONFLICT_FAIL
 						buf := acquireBuffer()
-						formatValIntoString(ses, tarRow[0], tblStuff.pkColType, buf)
+						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
 
 						err3 = moerr.NewInternalErrorNoCtxf(
 							"conflict: %s %s and %s %s on pk(%v)",
@@ -1752,7 +1745,7 @@ func findDeleteAndUpdateBat(
 		if dBat.RowCount() > 0 {
 			tBat = acquireRetBatch(tblStuff, false)
 			if checkRet, err2 = dataHashmap.PopByVectors(
-				[]*vector.Vector{dBat.Vecs[tblStuff.pkColIdx]}, false,
+				[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
 			); err2 != nil {
 				return err2
 			}
@@ -1809,18 +1802,10 @@ func findDeleteAndUpdateBat(
 }
 
 func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuff tableStuff) error {
-	for j, idx := range tblStuff.neededColIdxes {
+	for j, val := range tuple {
 		vec := bat.Vecs[j]
 		if err := vector.AppendAny(
-			vec, tuple[idx], false, ses.proc.Mp(),
-		); err != nil {
-			return err
-		}
-	}
-
-	if tblStuff.pkKind != normalKind {
-		if err := vector.AppendAny(
-			bat.Vecs[bat.VectorCount()-1], tuple[tblStuff.pkColIdx], false, ses.proc.Mp(),
+			vec, val, false, ses.proc.Mp(),
 		); err != nil {
 			return err
 		}
@@ -1839,9 +1824,9 @@ func checkConflictAndAppendToBat(
 		switch copt.conflictOpt.Opt {
 		case tree.CONFLICT_FAIL:
 			buf := acquireBuffer()
-			for i, idx := range tblStuff.expandedPKColIdxes {
-				formatValIntoString(ses, tarTuple[idx], tblStuff.neededColTypes[i], buf)
-				if i < len(tblStuff.expandedPKColIdxes)-1 {
+			for i, idx := range tblStuff.def.pkColIdxes {
+				formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf)
+				if i < len(tblStuff.def.pkColIdxes)-1 {
 					buf.WriteString(",")
 				}
 			}
@@ -1881,16 +1866,11 @@ func diffDataHelper(
 	// if no pk, we cannot use the fake pk to probe.
 	// must probe with full columns
 
-	if tblStuff.pkKind == fakeKind {
+	if tblStuff.def.pkKind == fakeKind {
 		var (
-			keyIdxes   = tblStuff.expandedPKColIdxes
+			keyIdxes   = tblStuff.def.visibleIdxes
 			newHashmap databranchutils.BranchHashmap
 		)
-
-		ll := len(keyIdxes)
-
-		keyIdxes = append(keyIdxes, ll)   // fake pk
-		keyIdxes = append(keyIdxes, ll+1) // commit ts
 
 		if newHashmap, err = baseDataHashmap.Migrate(keyIdxes, -1); err != nil {
 			return err
@@ -1922,7 +1902,7 @@ func diffDataHelper(
 			}
 
 			for _, row := range rows {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(row, false); err2 != nil {
+				if checkRet, err2 = baseDataHashmap.PopByEncodedFullValue(row, false); err2 != nil {
 					return err2
 				}
 
@@ -1938,7 +1918,7 @@ func diffDataHelper(
 				} else {
 					// both has the key, we continue compare the left columns,
 					// if all columns are equal, exactly the same row, ignore.
-					if tblStuff.pkKind == fakeKind {
+					if tblStuff.def.pkKind == fakeKind {
 						// all columns already compared.
 						// ignore
 					} else {
@@ -1951,14 +1931,14 @@ func diffDataHelper(
 						}
 
 						notSame := false
-						for j, idx := range tblStuff.neededColIdxes {
-							if slices.Index(tblStuff.expandedPKColIdxes, idx) != -1 {
+						for _, idx := range tblStuff.def.visibleIdxes {
+							if slices.Index(tblStuff.def.pkColIdxes, idx) != -1 {
 								// pk columns already compared
 								continue
 							}
 
 							if types.CompareValues(
-								tarTuple[idx], baseTuple[idx], tblStuff.neededColTypes[j].Oid,
+								tarTuple[idx], baseTuple[idx], tblStuff.def.colTypes[idx].Oid,
 							) != 0 {
 								notSame = true
 								break
@@ -2105,8 +2085,8 @@ func handleDelsOnLCA(
 		lcaTblDef  = tblStuff.lcaRel.GetTableDef(ctx)
 		baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
 
-		colTypes           = tblStuff.neededColTypes
-		expandedPKColIdxes = tblStuff.expandedPKColIdxes
+		colTypes           = tblStuff.def.colTypes
+		expandedPKColIdxes = tblStuff.def.pkColIdxes
 	)
 
 	defer func() {
@@ -2239,6 +2219,8 @@ func handleDelsOnLCA(
 
 	dBat = acquireRetBatch(tblStuff, false)
 
+	endIdx := dBat.VectorCount() - 1
+
 	sels := make([]int64, 0, 100)
 	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
 		for i := range rowCnt {
@@ -2250,6 +2232,12 @@ func handleDelsOnLCA(
 
 			for j := range len(colTypes) {
 				if err = dBat.Vecs[j].UnionOne(cols[j+1], int64(i), ses.proc.Mp()); err != nil {
+					return false
+				}
+			}
+
+			if tblStuff.def.pkKind != normalKind {
+				if err = dBat.Vecs[endIdx].UnionOne(tBat.Vecs[endIdx], int64(i), ses.proc.Mp()); err != nil {
 					return false
 				}
 			}
@@ -2354,12 +2342,13 @@ func buildHashmapForTable(
 		}
 
 		return tblStuff.worker.Submit(func() {
+			ll := bat.VectorCount()
 			if isTombstone {
-				if err = tombstoneHashmap.PutByVectors(bat.Vecs, []int{0}); err != nil {
+				if err = tombstoneHashmap.PutByVectors(bat.Vecs[:ll-1], []int{0}); err != nil {
 					return
 				}
 			} else {
-				if err = dataHashmap.PutByVectors(bat.Vecs, []int{tblStuff.pkColIdx}); err != nil {
+				if err = dataHashmap.PutByVectors(bat.Vecs[:ll-1], []int{tblStuff.def.pkColIdx}); err != nil {
 					return
 				}
 			}
