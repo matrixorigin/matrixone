@@ -132,17 +132,18 @@ from (
 
 -- @case
 -- @desc:test for format in expressions
+-- Cast to char to ensure consistent format (JDBC returns 9 digits for datetime type, but 6 digits for char type)
 select 
-    date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
-    date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
+    cast(date_add('2022-07-01 10:20:30.123456', interval 1 microsecond) as char),
+    cast(date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond) as char)
 ;
 -- All should maintain 6-digit microsecond precision
 
 -- @bvt:issue#22956
 select 
-    date_add('2022-07-01 10:20:30.123456', interval 1 microsecond),
+    cast(date_add('2022-07-01 10:20:30.123456', interval 1 microsecond) as char),
     timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456'),
-    date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond)
+    cast(date_sub('2022-07-01 10:20:30.123456', interval 1 microsecond) as char)
 ;
 -- @bvt:issue
 

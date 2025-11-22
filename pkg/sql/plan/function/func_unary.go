@@ -1633,7 +1633,7 @@ func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("negative precision %d specified", scale))
 		}
 		if scale > 6 {
-			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("too-big precision %d specified for 'utc_timestamp'. maximum is 6", scale))
+			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_timestamp", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))

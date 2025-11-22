@@ -125,4 +125,26 @@ from (
         utc_timestamp(4) as value_scale_4,
         utc_timestamp(5) as value_scale_5,
         utc_timestamp(6) as value_scale_6
-) as t;
+    ) as t;
+
+-- @suite
+-- @case
+-- @desc:test for UTC_TIMESTAMP invalid scale parameter (should return error)
+-- Test that invalid scale values (< 0 or > 6) return appropriate errors
+-- @error:negative precision
+select utc_timestamp(-1);
+
+-- @case
+-- @desc:test for UTC_TIMESTAMP invalid scale parameter (should return error)
+-- @error:too-big precision
+select utc_timestamp(7);
+
+-- @case
+-- @desc:test for UTC_TIMESTAMP invalid scale parameter (should return error)
+-- @error:too-big precision
+select utc_timestamp(8);
+
+-- @case
+-- @desc:test for UTC_TIMESTAMP invalid scale parameter (should return error)
+-- @error:too-big precision
+select utc_timestamp(10);
