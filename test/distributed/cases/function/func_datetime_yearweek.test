@@ -1,0 +1,59 @@
+# Basic test case from requirements
+SELECT YEARWEEK('1987-01-01') AS result1;
+
+# Additional test cases
+# Basic usage
+SELECT YEARWEEK('1987-01-01') AS yearweek;
+SELECT YEARWEEK('2008-02-20') AS yearweek_feb;
+SELECT YEARWEEK('2008-12-31') AS yearweek_dec;
+
+# With different modes
+SELECT YEARWEEK('1987-01-01', 0) AS yearweek_mode0;
+SELECT YEARWEEK('1987-01-01', 1) AS yearweek_mode1;
+SELECT YEARWEEK('1987-01-01', 2) AS yearweek_mode2;
+SELECT YEARWEEK('1987-01-01', 3) AS yearweek_mode3;
+
+# With DATETIME type
+SELECT YEARWEEK('1987-01-01 10:30:45') AS yearweek_datetime;
+SELECT YEARWEEK('2008-02-20 12:00:00', 0) AS yearweek_datetime_mode0;
+
+# With TIMESTAMP type
+SELECT YEARWEEK(TIMESTAMP('1987-01-01 10:30:45')) AS yearweek_timestamp;
+
+# Edge cases - year boundaries
+SELECT YEARWEEK('2003-12-30') AS yearweek_2003_dec;
+SELECT YEARWEEK('2004-01-02') AS yearweek_2004_jan;
+SELECT YEARWEEK('2004-12-31') AS yearweek_2004_dec;
+SELECT YEARWEEK('2005-01-01') AS yearweek_2005_jan;
+
+# Table usage
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('1987-01-01'), ('2008-02-20'), ('2008-12-31');
+SELECT d, YEARWEEK(d) AS yearweek FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('1987-01-01'), ('2008-06-15'), ('2008-12-31');
+SELECT * FROM t1 WHERE YEARWEEK(d) > 200800;
+DROP TABLE t1;
+
+# NULL handling
+SELECT YEARWEEK(NULL) AS null_result;
+SELECT YEARWEEK('1987-01-01', NULL) AS null_mode;
+
+# Compare with WEEK and YEAR functions
+SELECT YEARWEEK('1987-01-01') AS yearweek_result, 
+       YEAR('1987-01-01') AS year_result, 
+       WEEK('1987-01-01', 0) AS week_result;
+
+# Different dates throughout the year
+SELECT YEARWEEK('2008-01-15') AS jan_week;
+SELECT YEARWEEK('2008-06-15') AS jun_week;
+SELECT YEARWEEK('2008-09-15') AS sep_week;
+SELECT YEARWEEK('2008-12-15') AS dec_week;
+
+# With expressions
+SELECT YEARWEEK(CURRENT_DATE()) AS current_yearweek;
+SELECT YEARWEEK(DATE_ADD('1987-01-01', INTERVAL 7 DAY)) AS week_after;
+

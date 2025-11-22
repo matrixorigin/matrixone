@@ -6760,6 +6760,85 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `yearweek`
+	{
+		functionId: YEARWEEK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			if len(inputs) == 2 && inputs[1].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDate
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_date, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDate
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDatetime
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_datetime, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDatetime
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekTimestamp
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_timestamp, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekTimestamp
+				},
+			},
+		},
+	},
+
 	// function `year`
 	{
 		functionId: YEAR,

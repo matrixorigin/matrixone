@@ -3820,6 +3820,141 @@ var validDatetimeUnit = map[string]struct{}{
 	"year_month":         {},
 }
 
+// YearWeekDate: YEARWEEK(date, mode) - Returns year and week for a date as YYYYWW format.
+// If mode is not provided, defaults to 0.
+func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		date, null := dates.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		year, week := date.YearWeek(mode)
+		// YEARWEEK returns year*100 + week
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekDatetime: YEARWEEK(datetime, mode) - Returns year and week for a datetime as YYYYWW format.
+func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt, null := datetimes.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		year, week := dt.YearWeek(mode)
+		// YEARWEEK returns year*100 + week
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekTimestamp: YEARWEEK(timestamp, mode) - Returns year and week for a timestamp as YYYYWW format.
+func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ts, null := timestamps.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt := ts.ToDatetime(loc)
+		year, week := dt.YearWeek(mode)
+		// YEARWEEK returns year*100 + week
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
 		return "", moerr.NewInternalErrorNoCtx("invalid unit")
