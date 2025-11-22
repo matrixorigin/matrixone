@@ -21,6 +21,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
@@ -1784,6 +1785,93 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 		// Read 4-byte length (little-endian)
 		originalLen := binary.LittleEndian.Uint32(data[0:4])
 		if err := rs.Append(int64(originalLen), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// RandomBytes: RANDOM_BYTES(len) - Returns a binary string of len random bytes
+// Uses crypto/rand for cryptographically secure random bytes
+// Handles both int64 and uint64 parameter types
+func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	paramType := parameters[0].GetType().Oid
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var lenVal int64
+		var null bool
+
+		// Handle different numeric types
+		switch paramType {
+		case types.T_int64:
+			lenParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+			val, nullVal := lenParam.GetValue(i)
+			lenVal = val
+			null = nullVal
+		case types.T_uint64:
+			lenParam := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
+			val, nullVal := lenParam.GetValue(i)
+			if val > uint64(9223372036854775807) { // Max int64
+				lenVal = 1025 // Force > 1024 to return NULL
+			} else {
+				lenVal = int64(val)
+			}
+			null = nullVal
+		default:
+			// Fallback to int64
+			lenParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+			val, nullVal := lenParam.GetValue(i)
+			lenVal = val
+			null = nullVal
+		}
+
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Validate length (must be positive, MySQL allows 1 to 1024)
+		if lenVal < 1 {
+			// Return NULL for invalid length (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// MySQL limits RANDOM_BYTES to max 1024 bytes
+		if lenVal > 1024 {
+			// Return NULL for length > 1024 (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Generate random bytes using crypto/rand
+		randomBytes := make([]byte, lenVal)
+		_, err := rand.Read(randomBytes)
+		if err != nil {
+			// On error, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(randomBytes, false); err != nil {
 			return err
 		}
 	}

@@ -73,3 +73,31 @@ SELECT plaintext, UNCOMPRESSED_LENGTH(COMPRESS(plaintext)) AS original_length FR
 SELECT plaintext, LENGTH(plaintext) = UNCOMPRESSED_LENGTH(COMPRESS(plaintext)) AS length_correct FROM t1;
 DROP TABLE t1;
 
+# RANDOM_BYTES function
+-- @ignore:0
+SELECT HEX(RANDOM_BYTES(16)) AS result1;
+
+SELECT LENGTH(RANDOM_BYTES(16)) AS length_check;
+SELECT LENGTH(RANDOM_BYTES(32)) AS length_32;
+
+# RANDOM_BYTES with different lengths
+SELECT LENGTH(RANDOM_BYTES(1)) AS len1;
+SELECT LENGTH(RANDOM_BYTES(8)) AS len8;
+SELECT LENGTH(RANDOM_BYTES(64)) AS len64;
+SELECT LENGTH(RANDOM_BYTES(1024)) AS len1024;
+
+# RANDOM_BYTES with NULL and invalid inputs
+SELECT RANDOM_BYTES(NULL) AS null_input;
+SELECT RANDOM_BYTES(0) AS zero_length;
+SELECT RANDOM_BYTES(-1) AS negative_length;
+SELECT RANDOM_BYTES(1025) AS too_large;
+
+# RANDOM_BYTES generates different values
+SELECT RANDOM_BYTES(16) != RANDOM_BYTES(16) AS different_values;
+
+# RANDOM_BYTES in table
+CREATE TABLE t1(len_val INT);
+INSERT INTO t1 VALUES (8), (16), (32);
+SELECT len_val, LENGTH(RANDOM_BYTES(len_val)) AS random_length FROM t1;
+DROP TABLE t1;
+

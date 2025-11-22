@@ -2669,6 +2669,37 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// random_bytes
+	{
+		functionId: RANDOM_BYTES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RandomBytes
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return RandomBytes
+				},
+			},
+		},
+	},
+
 	// strcmp
 	{
 		functionId: STRCMP,
