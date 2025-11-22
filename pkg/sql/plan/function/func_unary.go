@@ -1788,6 +1788,176 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 }
 
+// IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			var resultVal int64
+			if ip != nil && ip.To4() != nil {
+				// Valid IPv4 address
+				resultVal = 1
+			} else {
+				// Not a valid IPv4 address
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip != nil && ip.To4() != nil {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip != nil && ip.To4() != nil {
+			rss[i] = 1
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
+// IsIPv6 returns 1 if the argument is a valid IPv6 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			var resultVal int64
+			if ip != nil && ip.To4() == nil {
+				// Valid IPv6 address (not IPv4)
+				resultVal = 1
+			} else {
+				// Not a valid IPv6 address (could be IPv4 or invalid)
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip != nil && ip.To4() == nil {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip != nil && ip.To4() == nil {
+			rss[i] = 1
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
 // UnhexString returns a string representation of a hexadecimal value.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
 func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {

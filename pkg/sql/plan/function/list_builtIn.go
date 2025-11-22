@@ -8142,6 +8142,100 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `is_ipv4`
+	{
+		functionId: IS_IPV4,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_char},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_text},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv4
+				},
+			},
+		},
+	},
+
+	// function `is_ipv6`
+	{
+		functionId: IS_IPV6,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv6
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_char},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv6
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_text},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsIPv6
+				},
+			},
+		},
+	},
+
 	// function `connection_id`
 	{
 		functionId: CONNECTION_ID,

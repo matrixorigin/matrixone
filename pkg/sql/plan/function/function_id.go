@@ -558,9 +558,15 @@ const (
 	// function `inet_ntoa`
 	INET_NTOA = 395
 
+	// function `is_ipv4`
+	IS_IPV4 = 396
+
+	// function `is_ipv6`
+	IS_IPV6 = 397
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 396
+	FUNCTION_END_NUMBER = 398
 )
 
 // functionIdRegister is what function we have registered already.
@@ -712,6 +718,8 @@ var functionIdRegister = map[string]int32{
 	"inet6_ntoa":                     INET6_NTOA,
 	"inet_aton":                      INET_ATON,
 	"inet_ntoa":                      INET_NTOA,
+	"is_ipv4":                        IS_IPV4,
+	"is_ipv6":                        IS_IPV6,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
