@@ -3821,8 +3821,9 @@ var gSysVarsDefs = map[string]SystemVariable{
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
-	tzStr := val.(string)
-	tzStr = strings.TrimSpace(strings.ToLower(tzStr))
+	originalTzStr := val.(string)
+	originalTzStr = strings.TrimSpace(originalTzStr)
+	tzStr := strings.ToLower(originalTzStr)
 	if tzStr == "system" {
 		sv.Set(name, "SYSTEM")
 		sess.SetTimeZone(time.Local)
@@ -3883,16 +3884,20 @@ func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, nam
 		var loc *time.Location
 		switch tzStr {
 		case "utc":
+			// UTC is a special case - Go's time.LoadLocation("UTC") works without timezone database
+			// but time.LoadLocation("utc") requires it. Use time.UTC directly to avoid dependency.
 			loc = time.UTC
 			sv.Set(name, "UTC")
 		default:
 			// Try to load from system timezone database
+			// IANA timezone names are case-sensitive (e.g., "Asia/Shanghai", "America/New_York")
+			// We use the original case as provided by the user
 			var err error
-			loc, err = time.LoadLocation(tzStr)
+			loc, err = time.LoadLocation(originalTzStr)
 			if err != nil {
 				return err
 			}
-			sv.Set(name, tzStr)
+			sv.Set(name, originalTzStr)
 		}
 		sess.SetTimeZone(loc)
 	}
