@@ -48,3 +48,17 @@ year(a)
 2025
 DROP TABLE t1;
 SET TIME_ZONE = "SYSTEM";
+select utc_timestamp(), utc_timestamp(0), utc_timestamp(3), utc_timestamp(6);
+utc_timestamp()    utc_timestamp(0)    utc_timestamp(3)    utc_timestamp(6)
+2025-11-22 09:28:23    2025-11-22 09:28:23    2025-11-22 09:28:23.420000000    2025-11-22 09:28:23.420098000
+select
+utc_timestamp(0) as scale0,
+utc_timestamp(1) as scale1,
+utc_timestamp(2) as scale2,
+utc_timestamp(3) as scale3,
+utc_timestamp(4) as scale4,
+utc_timestamp(5) as scale5,
+utc_timestamp(6) as scale6
+;
+scale0    scale1    scale2    scale3    scale4    scale5    scale6
+2025-11-22 09:28:23    2025-11-22 09:28:23.400000000    2025-11-22 09:28:23.440000000    2025-11-22 09:28:23.437000000    2025-11-22 09:28:23.437100000    2025-11-22 09:28:23.437150000    2025-11-22 09:28:23.437226000

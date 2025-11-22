@@ -61,3 +61,22 @@ DROP TABLE t1;
 
 # reset
 SET TIME_ZONE = "SYSTEM";
+
+-- @suite
+-- @case
+-- @desc:test for UTC_TIMESTAMP with different scale values
+-- Default scale is 0 (matching MySQL behavior)
+select utc_timestamp(), utc_timestamp(0), utc_timestamp(3), utc_timestamp(6);
+
+-- @case
+-- @desc:test for UTC_TIMESTAMP scale validation
+-- Test all valid scale values (0-6)
+select 
+    utc_timestamp(0) as scale0,
+    utc_timestamp(1) as scale1,
+    utc_timestamp(2) as scale2,
+    utc_timestamp(3) as scale3,
+    utc_timestamp(4) as scale4,
+    utc_timestamp(5) as scale5,
+    utc_timestamp(6) as scale6
+;

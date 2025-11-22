@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -3527,12 +3530,73 @@ func TestPi(t *testing.T) {
 }
 
 func initUTCTimestampTestCase() []tcTemp {
+	// For time-related functions, we use placeholder values since the actual values are dynamic
+	// We'll validate scale and type in the test function itself
+	placeholderDt := types.Datetime(0) // Placeholder value, actual value will be checked in test
+
 	return []tcTemp{
 		{
-			info: "test UTCTimestamp",
-			//TODO: Validate: Original Code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/utctimestamp_test.go#L24
-			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{}, []bool{})},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{}, []bool{}),
+			info: "test UTCTimestamp - no parameter (default scale 0, matching MySQL)",
+			// No parameters - should default to scale 0 (matching MySQL behavior)
+			inputs: []FunctionTestInput{},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 0), false,
+				[]types.Datetime{placeholderDt}, []bool{false}),
+		},
+		{
+			info: "test UTCTimestamp - scale 0 (no fractional seconds)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 0), false,
+				[]types.Datetime{placeholderDt}, []bool{false}),
+		},
+		{
+			info: "test UTCTimestamp - scale 3 (millisecond precision)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 3), false,
+				[]types.Datetime{placeholderDt}, []bool{false}),
+		},
+		{
+			info: "test UTCTimestamp - scale 6 (microsecond precision)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{6}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false,
+				[]types.Datetime{placeholderDt}, []bool{false}),
+		},
+		{
+			info: "test UTCTimestamp - multiple values with scale 6",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{6, 6, 6}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false,
+				[]types.Datetime{placeholderDt, placeholderDt, placeholderDt}, []bool{false, false, false}),
+		},
+		{
+			info: "test UTCTimestamp - invalid scale (negative, should return error)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 0), true, // should error
+				[]types.Datetime{placeholderDt}, []bool{false}),
+		},
+		{
+			info: "test UTCTimestamp - invalid scale (too large, should return error)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{7}, []bool{false}), // scale > 6
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 0), true, // should error
+				[]types.Datetime{placeholderDt}, []bool{false}),
+		},
+		{
+			info: "test UTCTimestamp - invalid scale (9, should return error)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{9}, []bool{false}), // scale > 6
+			},
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 0), true, // should error
+				[]types.Datetime{placeholderDt}, []bool{false}),
 		},
 	}
 }
@@ -3542,9 +3606,108 @@ func TestUTCTimestamp(t *testing.T) {
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		// For UTC_TIMESTAMP, we can't compare exact values since it returns current time
+		// Instead, we'll directly call the function and validate scale and type
+
+		// Prepare inputs
+		mp := proc.Mp()
+		inputs := make([]*vector.Vector, len(tc.inputs))
+		for i, input := range tc.inputs {
+			typ := input.typ
+			var nsp *nulls.Nulls = nil
+			if len(input.nullList) != 0 {
+				nsp = nulls.NewWithSize(len(input.nullList))
+				for j, b := range input.nullList {
+					if b {
+						nsp.Set(uint64(j))
+					}
+				}
+			}
+			inputs[i] = newVectorByType(mp, typ, input.values, nsp)
+		}
+
+		// Determine expected length
+		length := 1
+		if len(inputs) > 0 {
+			length = inputs[0].Length()
+		}
+
+		// Create result wrapper with expected type
+		result := vector.NewFunctionResultWrapper(tc.expect.typ, mp)
+		err := result.PreExtendAndReset(length)
+		require.NoError(t, err, fmt.Sprintf("case '%s': PreExtendAndReset failed", tc.info))
+
+		// Execute the function
+		err = UTCTimestamp(inputs, result, proc, length, nil)
+
+		// Check if we expect an error for invalid scale cases
+		if tc.info == "test UTCTimestamp - invalid scale (negative, should return error)" ||
+			tc.info == "test UTCTimestamp - invalid scale (too large, should return error)" ||
+			tc.info == "test UTCTimestamp - invalid scale (9, should return error)" {
+			// For invalid scale cases, we expect an error
+			require.Error(t, err, fmt.Sprintf("case '%s': UTCTimestamp should return error for invalid scale", tc.info))
+			if err != nil {
+				// Verify error message contains "precision" or "utc_timestamp"
+				errMsg := err.Error()
+				require.True(t,
+					strings.Contains(errMsg, "precision") || strings.Contains(errMsg, "utc_timestamp"),
+					fmt.Sprintf("case '%s': error message should contain 'precision' or 'utc_timestamp', got: %s", tc.info, errMsg))
+			}
+			continue // Skip further validation for error cases
+		}
+
+		require.NoError(t, err, fmt.Sprintf("case '%s': UTCTimestamp execution failed", tc.info))
+
+		// Get result vector
+		resultVec := result.GetResultVector()
+		require.NotNil(t, resultVec, fmt.Sprintf("case '%s': result vector should not be nil", tc.info))
+
+		// Verify the scale is correctly set
+		actualScale := resultVec.GetType().Scale
+		expectedScale := tc.expect.typ.Scale
+		require.Equal(t, expectedScale, actualScale,
+			fmt.Sprintf("case '%s': expected scale %d but got %d", tc.info, expectedScale, actualScale))
+
+		// Verify the result type is Datetime
+		require.Equal(t, types.T_datetime, resultVec.GetType().Oid,
+			fmt.Sprintf("case '%s': expected type T_datetime but got %s", tc.info, resultVec.GetType().Oid))
+
+		// Verify all returned values are valid (non-zero) Datetime values
+		if resultVec.Length() > 0 {
+			for i := 0; i < resultVec.Length(); i++ {
+				if !resultVec.GetNulls().Contains(uint64(i)) {
+					dt := vector.GetFixedAtNoTypeCheck[types.Datetime](resultVec, i)
+					// Verify the datetime value is reasonable (not zero, and not too far in the past/future)
+					// UTC timestamp should be after year 2000 and before year 2100
+					minDatetime := types.DatetimeFromClock(2000, 1, 1, 0, 0, 0, 0)
+					maxDatetime := types.DatetimeFromClock(2100, 1, 1, 0, 0, 0, 0)
+					require.GreaterOrEqual(t, int64(dt), int64(minDatetime),
+						fmt.Sprintf("case '%s': datetime value should be after 2000-01-01", tc.info))
+					require.Less(t, int64(dt), int64(maxDatetime),
+						fmt.Sprintf("case '%s': datetime value should be before 2100-01-01", tc.info))
+
+					// Verify truncation is applied correctly for non-6 scales
+					if actualScale < 6 {
+						// The microseconds part should be truncated according to scale
+						const MicroSecsPerSec = 1000000 // 10^6
+						micros := int64(dt) % MicroSecsPerSec
+						// For scale 0, micros should be 0 (rounded)
+						// For scale 3, micros should be divisible by 1000 (milliseconds)
+						// etc.
+						if actualScale == 0 {
+							// For scale 0, the microseconds part should be rounded to 0
+							// TruncateToScale should round to nearest second
+							require.Equal(t, int64(0), micros,
+								fmt.Sprintf("case '%s': for scale 0, microseconds should be rounded to 0, got %d", tc.info, micros))
+						} else if actualScale == 3 {
+							// For scale 3, microseconds should be divisible by 1000 (milliseconds)
+							require.Equal(t, int64(0), micros%1000,
+								fmt.Sprintf("case '%s': for scale 3, last 3 digits should be 0, got %d", tc.info, micros%1000))
+						}
+					}
+				}
+			}
+		}
 	}
 }
 

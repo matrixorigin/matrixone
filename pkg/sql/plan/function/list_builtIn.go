@@ -5065,14 +5065,33 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: UTC_TIMESTAMP,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			if len(inputs) == 1 && inputs[0].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					// Default scale is 0 (matching MySQL behavior)
+					// The actual scale will be set in the function implementation based on the parameter value
+					scale := int32(0)
+					if len(parameters) == 1 && parameters[0].Oid == types.T_int64 {
+						// Scale is provided as a parameter, but we can't get the actual value here
+						// during type checking. Default to 0, the actual scale will be validated
+						// and set in the function implementation.
+						scale = 0
+					}
+					typ := types.T_datetime.ToType()
+					typ.Scale = scale
+					return typ
 				},
 				newOp: func() executeLogicOfOverload {
 					return UTCTimestamp
