@@ -907,27 +907,6 @@ func encodeFloatScalar[T constraints.Float](op *opBuiltInJsonArray, v *vector.Ve
 	}
 }
 
-func encodeFloatArrayArray[T constraints.Float](op *opBuiltInJsonArray, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionStrParameter(v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetStrValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			vv := types.BytesToArray[T](v)
-			op.enc[i].w.WriteByte('[')
-			for j, val := range vv {
-				if j > 0 {
-					op.enc[i].w.WriteByte(',')
-				}
-				ff := float64(val)
-				op.enc[i].encodeFloat64(ff)
-			}
-			op.enc[i].w.WriteByte(']')
-		}
-	}
-}
-
 func encodeDecimalArray[T types.DecimalWithFormat](op *opBuiltInJsonArray, v *vector.Vector, length uint64) {
 	p := vector.GenerateFunctionFixedTypeParameter[T](v)
 	fromTyp := v.GetType()
