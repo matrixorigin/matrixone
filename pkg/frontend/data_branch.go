@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -139,6 +140,26 @@ type retBatchList struct {
 	tList []*batch.Batch
 
 	pinned map[*batch.Batch]struct{}
+	debug  map[*batch.Batch]retBatchDebug
+
+	dataVecCnt    int
+	tombVecCnt    int
+	dataTypes     []types.Type
+	tombstoneType types.Type
+}
+
+type retBatchDebug struct {
+	acquire string
+	release string
+}
+
+func typeMatched(vec *vector.Vector, typ types.Type) bool {
+	if vec == nil {
+		return false
+	}
+
+	t := vec.GetType()
+	return t.Oid == typ.Oid && t.Width == typ.Width && t.Scale == typ.Scale
 }
 
 func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
@@ -152,44 +173,94 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if retBatchPool.pinned == nil {
 		retBatchPool.pinned = make(map[*batch.Batch]struct{})
 	}
+	if retBatchPool.debug == nil {
+		retBatchPool.debug = make(map[*batch.Batch]retBatchDebug)
+	}
 
-	defer func() {
-		retBatchPool.pinned[bat] = struct{}{}
-	}()
+	if retBatchPool.dataVecCnt == 0 {
+		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
+		retBatchPool.tombVecCnt = 1
+		retBatchPool.dataTypes = tblStuff.def.colTypes
+		retBatchPool.tombstoneType = tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	}
 
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
-			pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
-			bat = batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(pkType)
-			return bat
+			bat = batch.NewWithSize(retBatchPool.tombVecCnt)
+			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType)
+			goto done
 		}
 
 		bat = retBatchPool.tList[0]
 		retBatchPool.tList = retBatchPool.tList[1:]
+
+		if bat.VectorCount() != retBatchPool.tombVecCnt {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: unexpected tombstone vec count %d, expect %d", bat.VectorCount(), retBatchPool.tombVecCnt))
+		}
+		if !typeMatched(bat.Vecs[0], retBatchPool.tombstoneType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone vec type mismatch, got %v expect %v", bat.Vecs[0].GetType(), retBatchPool.tombstoneType))
+		}
+
 		bat.CleanOnlyData()
-		return bat
+		goto done
 
 	} else {
 		if len(retBatchPool.dList) == 0 {
-			bat = batch.NewWithSize(len(tblStuff.def.colNames))
+			bat = batch.NewWithSize(retBatchPool.dataVecCnt)
 			for i := range tblStuff.def.colNames {
-				bat.Vecs[i] = vector.NewVec(tblStuff.def.colTypes[i])
+				bat.Vecs[i] = vector.NewVec(retBatchPool.dataTypes[i])
 			}
-			return bat
+			goto done
 		}
 
 		bat = retBatchPool.dList[0]
 		retBatchPool.dList = retBatchPool.dList[1:]
 
-		bat.CleanOnlyData()
-		return bat
+		if bat.VectorCount() != retBatchPool.dataVecCnt {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: unexpected data vec count %d, expect %d", bat.VectorCount(), retBatchPool.dataVecCnt))
+		}
+
+		for i := 0; i < retBatchPool.dataVecCnt; i++ {
+			if !typeMatched(bat.Vecs[i], retBatchPool.dataTypes[i]) {
+				panic(moerr.NewInternalErrorNoCtxf("retBatchPool: data vec[%d] type mismatch, got %v expect %v", i, bat.Vecs[i].GetType(), retBatchPool.dataTypes[i]))
+			}
+			bat.Vecs[i].CleanOnlyData()
+		}
+
+		goto done
 	}
+
+done:
+	retBatchPool.pinned[bat] = struct{}{}
+	retBatchPool.debug[bat] = retBatchDebug{acquire: string(debug.Stack())}
+	return bat
 }
 
 func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone bool) {
+	if retBatchPool == nil {
+		panic(moerr.NewInternalErrorNoCtx("retBatchPool is nil"))
+	}
+
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
+
+	trace := retBatchPool.debug[bat]
+
+	if _, ok := retBatchPool.pinned[bat]; !ok {
+		msg := "retBatchPool: release unknown or already released batch"
+		if trace.acquire != "" || trace.release != "" {
+			msg = fmt.Sprintf("%s (acquired at: %s) (last release at: %s)", msg, trace.acquire, trace.release)
+		}
+		panic(moerr.NewInternalErrorNoCtx(msg))
+	}
+
+	expectCnt := retBatchPool.dataVecCnt
+	if forTombstone {
+		expectCnt = retBatchPool.tombVecCnt
+	}
+	if bat.VectorCount() != expectCnt {
+		panic(moerr.NewInternalErrorNoCtxf("retBatchPool: release vec count %d, expect %d", bat.VectorCount(), expectCnt))
+	}
 
 	bat.CleanOnlyData()
 
@@ -197,6 +268,11 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 		retBatchPool.tList = append(retBatchPool.tList, bat)
 	} else {
 		retBatchPool.dList = append(retBatchPool.dList, bat)
+	}
+
+	retBatchPool.debug[bat] = retBatchDebug{
+		acquire: trace.acquire,
+		release: string(debug.Stack()),
 	}
 
 	delete(retBatchPool.pinned, bat)
@@ -225,6 +301,7 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 	retBatchPool.dList = nil
 	retBatchPool.tList = nil
 	retBatchPool.pinned = nil
+	retBatchPool.debug = nil
 
 }
 
@@ -380,14 +457,18 @@ func diffMergeAgency(
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
 		retBatCh  = make(chan batchWithKind, 10)
+		waited    bool
 	)
 
 	defer func() {
-		if tblStuff.retPool != nil {
-			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
-		}
 		if retBatCh != nil {
 			close(retBatCh)
+		}
+		if !waited {
+			wg.Wait()
+		}
+		if tblStuff.retPool != nil {
+			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		}
 	}()
 
@@ -430,6 +511,7 @@ func diffMergeAgency(
 
 	close(retBatCh)
 	retBatCh = nil
+	waited = true
 
 	wg.Wait()
 
@@ -483,6 +565,11 @@ func mergeDiffs(
 	)
 
 	defer func() {
+		releaseBuffer(replaceIntoVals)
+		releaseBuffer(deleteFromVals)
+	}()
+
+	defer func() {
 		cancel()
 	}()
 
@@ -522,6 +609,22 @@ func mergeDiffs(
 			replaceIntoVals.Reset()
 		}
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+	}
+
+	if deleteCnt > 0 {
+		if err = flushSqlValues(
+			ctx, ses, bh, tblStuff, deleteFromVals, true, nil,
+		); err != nil {
+			return
+		}
+	}
+
+	if replaceCnt > 0 {
+		if err = flushSqlValues(
+			ctx, ses, bh, tblStuff, replaceIntoVals, false, nil,
+		); err != nil {
+			return
+		}
 	}
 
 	return
@@ -864,10 +967,11 @@ func constructValsFromBatch(
 	for rowIdx := range wrapped.batch.RowCount() {
 		for _, colIdx := range tblStuff.def.visibleIdxes {
 			vec := wrapped.batch.Vecs[colIdx]
-			if err = extractRowFromVector(
-				ctx, ses, vec, colIdx, row, rowIdx, false,
-			); err != nil {
-				return
+			if vec.GetNulls().Contains(uint64(rowIdx)) {
+				row[colIdx] = nil
+			} else {
+				bb := vec.GetRawBytesAt(rowIdx)
+				row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
 			}
 		}
 
@@ -1392,30 +1496,19 @@ func hashDiffIfHasLCA(
 
 		checkConflict := func(tarWrapped, baseWrapped batchWithKind) (sels1, sels2 []int64, err3 error) {
 			var (
-				tarRow  = make([]any, 1)
-				baseRow = make([]any, 1)
+				cmp     int
 				tarVec  = tarWrapped.batch.Vecs[tblStuff.def.pkColIdx]
 				baseVec = baseWrapped.batch.Vecs[tblStuff.def.pkColIdx]
 			)
 
 			i, j := 0, 0
 			for i < tarVec.Length() && j < baseVec.Length() {
-				if err3 = extractRowFromVector(
-					ctx, ses, tarVec, 0, tarRow, i, false,
+				if cmp, err3 = compareSingleValInVector(
+					ctx, ses, i, j, tarVec, baseVec,
 				); err3 != nil {
 					return
 				}
 
-				if err3 = extractRowFromVector(
-					ctx, ses, baseVec, 0, baseRow, j, false,
-				); err3 != nil {
-					return
-				}
-
-				cmp := types.CompareValues(
-					tarRow[0], baseRow[0],
-					tblStuff.def.colTypes[tblStuff.def.pkColIdx].Oid,
-				)
 				if cmp == 0 {
 					// conflict
 					// tar and base both deleted on pk1 => empty
@@ -1443,11 +1536,18 @@ func hashDiffIfHasLCA(
 						j++
 					} else {
 						// copt.conflictOpt == tree.CONFLICT_FAIL
+						tarRow := make([]any, 1)
+						if err3 = extractRowFromVector(
+							ctx, ses, tarVec, 0, tarRow, i, false,
+						); err3 != nil {
+							return
+						}
+
 						buf := acquireBuffer()
 						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
 
 						err3 = moerr.NewInternalErrorNoCtxf(
-							"conflict: %s %s and %s %s on pk(%v)",
+							"conflict: %s %s and %s %s on pk(%v) with different values",
 							tarWrapped.name, tarWrapped.kind,
 							baseWrapped.name, baseWrapped.kind, buf.String(),
 						)
@@ -1484,14 +1584,6 @@ func hashDiffIfHasLCA(
 				}
 			}
 
-			plan2.RemoveIf(baseWrappedList, func(t batchWithKind) bool {
-				if t.batch.RowCount() == 0 {
-					tblStuff.retPool.releaseRetBatch(t.batch, false)
-					return true
-				}
-				return false
-			})
-
 			return
 		}
 
@@ -1499,9 +1591,25 @@ func hashDiffIfHasLCA(
 			return
 		}
 
+		baseDeleteBatches = plan2.RemoveIf(baseDeleteBatches, func(t batchWithKind) bool {
+			if t.batch.RowCount() == 0 {
+				tblStuff.retPool.releaseRetBatch(t.batch, false)
+				return true
+			}
+			return false
+		})
+
 		if err2 = foo(baseUpdateBatches); err2 != nil {
 			return
 		}
+
+		baseUpdateBatches = plan2.RemoveIf(baseUpdateBatches, func(t batchWithKind) bool {
+			if t.batch.RowCount() == 0 {
+				tblStuff.retPool.releaseRetBatch(t.batch, false)
+				return true
+			}
+			return false
+		})
 
 		if wrapped.batch.RowCount() == 0 {
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
@@ -1546,6 +1654,7 @@ func hashDiffIfHasLCA(
 				atomicErr.Store(err3)
 			}
 		}); err2 != nil {
+			wg.Done()
 			return
 		}
 		return nil
@@ -1571,10 +1680,11 @@ func hashDiffIfHasLCA(
 				} else {
 					err2 = handleTarDeleteAndUpdates(wrapped)
 				}
-				if err2 != nil {
-					cancel()
-					break
-				}
+			}
+
+			if err2 != nil {
+				cancel()
+				break
 			}
 		}
 
@@ -1671,31 +1781,18 @@ func compareRowInWrappedBatches(
 		}
 
 		var (
-			err  error
-			row1 = make([]any, 1)
-			row2 = make([]any, 1)
-
 			vec1 = wrapped1.batch.Vecs[i]
 			vec2 = wrapped2.batch.Vecs[i]
 		)
 
-		if err = extractRowFromVector(
-			ctx, ses, vec1, 0, row1, rowIdx1, false,
+		if cmp, err := compareSingleValInVector(
+			ctx, ses, rowIdx1, rowIdx2, vec1, vec2,
 		); err != nil {
 			return 0, err
-		}
-
-		if err = extractRowFromVector(
-			ctx, ses, vec2, 0, row2, rowIdx2, false,
-		); err != nil {
-			return 0, err
-		}
-
-		if cmp := types.CompareValues(
-			row1[0], row2[0], tblStuff.def.colTypes[i].Oid,
-		); cmp != 0 {
+		} else if cmp != 0 {
 			return cmp, nil
 		}
+
 	}
 
 	return 0, nil
@@ -1824,8 +1921,9 @@ func findDeleteAndUpdateBat(
 func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuff tableStuff) error {
 	for j, val := range tuple {
 		vec := bat.Vecs[j]
+
 		if err := vector.AppendAny(
-			vec, val, false, ses.proc.Mp(),
+			vec, val, val == nil, ses.proc.Mp(),
 		); err != nil {
 			return err
 		}
@@ -1854,7 +1952,10 @@ func checkConflictAndAppendToBat(
 			msg := buf.String()
 			releaseBuffer(buf)
 			return moerr.NewInternalErrorNoCtxf(
-				"conflict, both insert pk(%v) with different values", msg,
+				"conflict: %s %s and %s %s on pk(%v) with different values",
+				tblStuff.tarRel.GetTableName(), diffInsert,
+				tblStuff.baseRel.GetTableName(), diffInsert,
+				msg,
 			)
 		case tree.CONFLICT_SKIP:
 			return
@@ -3048,4 +3149,142 @@ func constructBranchDAG(
 	})
 
 	return databranchutils.NewDAG(rowData), nil
+}
+
+func compareSingleValInVector(
+	ctx context.Context,
+	ses *Session,
+	rowIdx1 int,
+	rowIdx2 int,
+	vec1 *vector.Vector,
+	vec2 *vector.Vector,
+) (int, error) {
+
+	if !vec1.GetType().Eq(*vec2.GetType()) {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"type not matched: %v <-> %v",
+			vec1.GetType().String(), vec2.GetType().String(),
+		)
+	}
+
+	if vec1.IsConst() {
+		rowIdx1 = 0
+	}
+	if vec2.IsConst() {
+		rowIdx2 = 0
+	}
+
+	// Use raw values to avoid format conversions in extractRowFromVector.
+	switch vec1.GetType().Oid {
+	case types.T_json:
+		val1 := types.DecodeJson(copyBytes(vec1.GetBytesAt(rowIdx1), false))
+		val2 := types.DecodeJson(copyBytes(vec2.GetBytesAt(rowIdx2), false))
+		return types.CompareValues(val1, val2, types.T_json), nil
+	case types.T_bool:
+		val1 := vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_bool), nil
+	case types.T_bit:
+		val1 := vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_bit), nil
+	case types.T_int8:
+		val1 := vector.GetFixedAtNoTypeCheck[int8](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[int8](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_int8), nil
+	case types.T_uint8:
+		val1 := vector.GetFixedAtNoTypeCheck[uint8](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[uint8](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_uint8), nil
+	case types.T_int16:
+		val1 := vector.GetFixedAtNoTypeCheck[int16](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[int16](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_int16), nil
+	case types.T_uint16:
+		val1 := vector.GetFixedAtNoTypeCheck[uint16](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[uint16](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_uint16), nil
+	case types.T_int32:
+		val1 := vector.GetFixedAtNoTypeCheck[int32](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[int32](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_int32), nil
+	case types.T_uint32:
+		val1 := vector.GetFixedAtNoTypeCheck[uint32](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[uint32](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_uint32), nil
+	case types.T_int64:
+		val1 := vector.GetFixedAtNoTypeCheck[int64](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[int64](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_int64), nil
+	case types.T_uint64:
+		val1 := vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_uint64), nil
+	case types.T_float32:
+		val1 := vector.GetFixedAtNoTypeCheck[float32](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[float32](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_float32), nil
+	case types.T_float64:
+		val1 := vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_float64), nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+		val1 := copyBytes(vec1.GetBytesAt(rowIdx1), false)
+		val2 := copyBytes(vec2.GetBytesAt(rowIdx2), false)
+		return types.CompareValues(val1, val2, vec1.GetType().Oid), nil
+	case types.T_array_float32:
+		val1 := vector.GetArrayAt[float32](vec1, rowIdx1)
+		val2 := vector.GetArrayAt[float32](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_array_float32), nil
+	case types.T_array_float64:
+		val1 := vector.GetArrayAt[float64](vec1, rowIdx1)
+		val2 := vector.GetArrayAt[float64](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_array_float64), nil
+	case types.T_date:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Date](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Date](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_date), nil
+	case types.T_datetime:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Datetime](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Datetime](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_datetime), nil
+	case types.T_time:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Time](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_time), nil
+	case types.T_timestamp:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_timestamp), nil
+	case types.T_decimal64:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_decimal64), nil
+	case types.T_decimal128:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_decimal128), nil
+	case types.T_uuid:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Uuid](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_uuid), nil
+	case types.T_Rowid:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Rowid](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Rowid](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_Rowid), nil
+	case types.T_Blockid:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Blockid](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Blockid](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_Blockid), nil
+	case types.T_TS:
+		val1 := vector.GetFixedAtNoTypeCheck[types.TS](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.TS](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_TS), nil
+	case types.T_enum:
+		val1 := vector.GetFixedAtNoTypeCheck[types.Enum](vec1, rowIdx1)
+		val2 := vector.GetFixedAtNoTypeCheck[types.Enum](vec2, rowIdx2)
+		return types.CompareValues(val1, val2, types.T_enum), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("compareSingleValInVector : unsupported type %d", vec1.GetType().Oid)
+	}
 }
