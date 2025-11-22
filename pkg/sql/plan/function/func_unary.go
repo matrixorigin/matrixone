@@ -32,6 +32,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
@@ -49,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -1355,6 +1357,261 @@ func hexEncodeInt64(xs int64) string {
 
 func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
+}
+
+// Inet6Aton converts an IPv6 or IPv4 address string to a binary representation.
+// IPv4 addresses return 4 bytes, IPv6 addresses return 16 bytes.
+// Invalid addresses return NULL.
+func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL for all rows
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				var resultBytes []byte
+				if ip4 := ip.To4(); ip4 != nil {
+					// IPv4: return 4 bytes
+					resultBytes = ip4
+				} else {
+					// IPv6: return 16 bytes
+					resultBytes = ip
+				}
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+			} else {
+				var resultBytes []byte
+				if ip4 := ip.To4(); ip4 != nil {
+					resultBytes = ip4
+				} else {
+					resultBytes = ip
+				}
+				if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			// Invalid IP: return NULL
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+		} else {
+			var resultBytes []byte
+			if ip4 := ip.To4(); ip4 != nil {
+				resultBytes = ip4
+			} else {
+				resultBytes = ip
+			}
+			if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Inet6Ntoa converts a binary representation of an IPv6 or IPv4 address to a string.
+// Input can be 4 bytes (IPv4) or 16 bytes (IPv6).
+// Invalid input returns NULL.
+func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			var resultStr string
+			if len(v1) == 4 {
+				// IPv4: 4 bytes
+				ip := net.IP(v1)
+				resultStr = ip.String()
+			} else if len(v1) == 16 {
+				// IPv6: 16 bytes
+				ip := net.IP(v1)
+				// Check if it's an IPv4-mapped IPv6 address (::ffff:x.x.x.x)
+				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+					resultStr = ip4.String()
+				} else {
+					resultStr = ip.String()
+				}
+			} else {
+				// Invalid length: return NULL for all rows
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(resultStr)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			var resultStr string
+			if len(v1) == 4 {
+				ip := net.IP(v1)
+				resultStr = ip.String()
+			} else if len(v1) == 16 {
+				ip := net.IP(v1)
+				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+					resultStr = ip4.String()
+				} else {
+					resultStr = ip.String()
+				}
+			} else {
+				// Invalid length: return NULL
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(resultStr)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		var resultStr string
+		if len(v1) == 4 {
+			ip := net.IP(v1)
+			resultStr = ip.String()
+		} else if len(v1) == 16 {
+			ip := net.IP(v1)
+			if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+				resultStr = ip4.String()
+			} else {
+				resultStr = ip.String()
+			}
+		} else {
+			// Invalid length: return NULL
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(resultStr)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isIPv4Mapped checks if an IPv6 address is IPv4-mapped (::ffff:x.x.x.x)
+func isIPv4Mapped(ip net.IP) bool {
+	if len(ip) != 16 {
+		return false
+	}
+	// Check for ::ffff: prefix
+	return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0 &&
+		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
+		ip[8] == 0 && ip[9] == 0 && ip[10] == 0xff && ip[11] == 0xff
 }
 
 // UnhexString returns a string representation of a hexadecimal value.
