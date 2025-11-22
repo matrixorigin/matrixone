@@ -34,17 +34,13 @@ SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
 # Table usage
 CREATE TABLE t1(h INT, m INT, s INT);
 INSERT INTO t1 VALUES (12, 15, 30), (0, 0, 0), (23, 59, 59);
--- @bvt:issue#22973
 SELECT MAKETIME(h, m, s) AS time_value FROM t1;
--- @bvt:issue
 DROP TABLE t1;
 
 # WHERE clause
 CREATE TABLE t1(h INT, m INT, s INT);
 INSERT INTO t1 VALUES (12, 15, 30), (10, 30, 45), (20, 0, 0);
--- @bvt:issue#22973
 SELECT * FROM t1 WHERE MAKETIME(h, m, s) > '12:00:00';
--- @bvt:issue
 DROP TABLE t1;
 
 # Different numeric types

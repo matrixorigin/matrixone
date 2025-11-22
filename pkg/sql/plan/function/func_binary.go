@@ -5138,7 +5138,25 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 
 	// Setup hour parameter extractor
 	switch hourType {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int16:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int32:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int64:
 		hourParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 		getHourValue = func(i uint64) (int64, bool) {
 			val, null := hourParam.GetValue(i)
@@ -5162,7 +5180,25 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 
 	// Setup minute parameter extractor
 	switch minuteType {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int16:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int32:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int64:
 		minuteParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 		getMinuteValue = func(i uint64) (int64, bool) {
 			val, null := minuteParam.GetValue(i)
@@ -5186,7 +5222,25 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 
 	// Setup second parameter extractor
 	switch secondType {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int16:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int32:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 		getSecondValue = func(i uint64) (int64, bool) {
 			val, null := secondParam.GetValue(i)
