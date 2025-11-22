@@ -1,0 +1,175 @@
+#NULL
+SELECT VAR_SAMP(null);
+
+#DATATYPE
+create table t1(a tinyint, b SMALLINT, c BIGINT, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,10), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
+insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
+insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-03-12 10:03:12", "2032-03-12 13:04:12", "abr23c", "3dcf");
+insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
+insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
+select VAR_SAMP(a) from t1;
+select VAR_SAMP(b) from t1;
+select VAR_SAMP(c) from t1;
+select VAR_SAMP(d) from t1;
+select VAR_SAMP(e) from t1;
+select VAR_SAMP(f) from t1;
+select VAR_SAMP(g) from t1;
+
+select VAR_SAMP(h) from t1;
+select VAR_SAMP(i) from t1;
+select VAR_SAMP(k) from t1;
+select VAR_SAMP(l) from t1;
+select VAR_SAMP(m) from t1;
+select VAR_SAMP(n) from t1;
+drop table t1;
+
+#EXTREME VALUE, DISTINCT
+select VAR_SAMP(99999999999999999.99999);
+select VAR_SAMP(999999999999999933193939.99999);
+select VAR_SAMP(9999999999999999999999999999999999.9999999999999);
+select VAR_SAMP(-99999999999999999.99999);
+select VAR_SAMP(-999999999999999933193939.99999);
+select VAR_SAMP(-9999999999999999999999999999999999.9999999999999);
+create table t1(a bigint);
+select VAR_SAMP(a) from t1;
+insert into t1 values(null),(null),(null),(null);
+select VAR_SAMP(a) from t1;
+insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
+select VAR_SAMP(a) from t1;
+drop table t1;
+create table t1 ( a int not null default 1, big bigint );
+insert into t1 (big) values (-1),(1234567890167),(92233720368547),(18446744073709515);
+select * from t1;
+select distinct VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1;
+select VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1 group by a;
+insert into t1 (big) values (184467440737615);
+select * from t1;
+select VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1;
+select VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1 group by a;
+drop table t1;
+
+#HAVING, DISTINCT#HAVING,DISTINCT
+CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
+INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
+select Fld1, VAR_SAMP(Fld2) as q from t1 group by Fld1 having q is not null;
+select Fld1, VAR_SAMP(Fld2) from t1 group by Fld1 having VAR_SAMP(Fld2) is not null;
+select Fld1, VAR_SAMP(Fld2) from t1 group by Fld1 having avg(Fld2) is not null;
+select Fld1, VAR_SAMP(Fld2) from t1 group by Fld1 having variance(Fld2) is not null;
+drop table t1;
+
+#比较操作
+SELECT VAR_SAMP(1)<VAR_SAMP(2);
+
+#DISTINCT, 算式操作
+CREATE TABLE t1(i INT);
+INSERT INTO t1 VALUES (NULL),(1);
+SELECT VAR_SAMP(i)+0 as splus0, i+0 as plain FROM t1 GROUP BY i ;
+DROP TABLE t1;
+
+#VAR_SAMP basic test
+SELECT VAR_SAMP(col) AS result FROM (SELECT 1 AS col UNION SELECT 2 UNION SELECT 3) AS t;
+
+#VAR_SAMP with GROUP BY
+CREATE TABLE t1 (id int(11),value1 float(10,2));
+INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00), (2,13.00);
+select id, VAR_SAMP(value1) from t1 group by id;
+drop table t1;
+
+#VAR_SAMP comparison with VAR_POP
+CREATE TABLE t1 (value float);
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5);
+select VAR_POP(value) as pop, VAR_SAMP(value) as samp from t1;
+drop table t1;
+
+#VAR_SAMP with single value (should return NULL or 0)
+CREATE TABLE t1 (value int);
+INSERT INTO t1 VALUES (5);
+select VAR_SAMP(value) from t1;
+drop table t1;
+
+#VAR_SAMP with empty table
+CREATE TABLE t1 (value int);
+select VAR_SAMP(value) from t1;
+drop table t1;
+
+drop database if exists test;
+create database test;
+use test;
+
+-- decimal 128
+drop table if exists decimal01;
+create table decimal01(col1 decimal(10,1));
+insert into decimal01 values(1234124.2134324321);
+insert into decimal01 values(23413432.32423);
+insert into decimal01 values(0);
+insert into decimal01 values(-13421.34234);
+select VAR_SAMP(col1) from decimal01;
+drop table decimal01;
+
+drop table if exists decimal02;
+create table decimal02(col1 decimal(38,0));
+insert into decimal02 values(12312312312314565789874569874512456879);
+insert into decimal02 values(99999999999999999999999999999999999999);
+insert into decimal02 values(10000000000000000000000000000000000000);
+insert into decimal02 values(32482438247328742831193201993219039203);
+insert into decimal02 values(99999999999999999999999999999999999999.73289342);
+insert into decimal02 values(-298432432433242412313123321231321313);
+insert into decimal02 values(-34243214324324342321313321321342342343.123143);
+insert into decimal02 values(-0.12813218391321939921391929391293912);
+select * from decimal02;
+select VAR_SAMP(col1) from decimal02;
+drop table decimal02;
+
+drop table if exists test02;
+create table test02(col1 decimal(37));
+insert into test02 values(9999999999999999999999999999999999999.123141);
+insert into test02 values(1122312131421321313131314356569876544.9);
+insert into test02 values(-2121313214325334213213257654323234324.90);
+insert into test02 values(-123.2314123412321);
+insert into test02 values(9932129321093029302930290439029432423.5);
+select * from test02;
+select VAR_SAMP(col1) from test02;
+drop table test02;
+
+drop table if exists test03;
+create table test03(a decimal(38,2));
+insert into test03 values(9999999999999999999999999999999.1);
+insert into test03 values(-0.00001);
+insert into test03 values(NULL);
+select VAR_SAMP(a) from test03;
+drop table test03;
+
+-- decimal 64
+drop table if exists test04;
+create table test04(a decimal(38,20));
+insert into test04 values(123123242399999900.22231134568909999999);
+insert into test04 values(999999999999999999.11111111111112222222);
+insert into test04 values(100000000000000000.00000000000000000001);
+insert into test04 values(-999999999999999999.9);
+insert into test04 values(-0.00000000000000000001);
+select * from test04;
+select VAR_SAMP(a) from test04;
+drop table test04;
+
+drop table if exists test05;
+create table test05(a decimal(20,10));
+insert into test05 values(-9999999999.192012);
+insert into test05 values(9999999999.9102938129);
+insert into test05 values(7382184932.3892039843);
+insert into test05 values(0.3029302394);
+select * from test05;
+select VAR_SAMP(a) from test05;
+drop table test05;
+
+drop table if exists test06;
+create table test06(a decimal(20,10));
+insert into test06 values(-9999999999.192012);
+insert into test06 values(9999999999.9102938129);
+insert into test06 values(NULL);
+insert into test06 values(0.3029302394);
+select * from test06;
+select VAR_SAMP(a) from test06;
+drop table test06;
+
+drop database test;
+
