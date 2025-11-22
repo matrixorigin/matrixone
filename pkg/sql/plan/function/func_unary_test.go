@@ -2438,6 +2438,78 @@ func TestUncompress(t *testing.T) {
 	require.True(t, uncompressSuccess, fmt.Sprintf("uncompress failed: %s", uncompressInfo))
 }
 
+func initValidatePasswordStrengthTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test validate_password_strength - weak password",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"weak"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			info: "test validate_password_strength - medium password",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Password123"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{50}, []bool{false}),
+		},
+		{
+			info: "test validate_password_strength - strong password",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Password123!"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{100}, []bool{false}),
+		},
+		{
+			info: "test validate_password_strength - very strong password",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"VeryStrongP@ssw0rd123!"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{100}, []bool{false}),
+		},
+		{
+			info: "test validate_password_strength - empty string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			info: "test validate_password_strength - null input",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"password"}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		{
+			info: "test validate_password_strength - short password",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			info: "test validate_password_strength - only lowercase",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"password123"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{25}, []bool{false}),
+		},
+	}
+}
+
+func TestValidatePasswordStrength(t *testing.T) {
+	testCases := initValidatePasswordStrengthTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, ValidatePasswordStrength)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initBlobLengthTestCase() []tcTemp {
 	return []tcTemp{
 		{

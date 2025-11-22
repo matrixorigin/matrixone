@@ -2700,6 +2700,47 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// validate_password_strength
+	{
+		functionId: VALIDATE_PASSWORD_STRENGTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ValidatePasswordStrength
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ValidatePasswordStrength
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ValidatePasswordStrength
+				},
+			},
+		},
+	},
+
 	// strcmp
 	{
 		functionId: STRCMP,

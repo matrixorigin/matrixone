@@ -543,9 +543,12 @@ const (
 	// function `random_bytes`
 	RANDOM_BYTES = 390
 
+	// function `validate_password_strength`
+	VALIDATE_PASSWORD_STRENGTH = 391
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 391
+	FUNCTION_END_NUMBER = 392
 )
 
 // functionIdRegister is what function we have registered already.
@@ -692,6 +695,7 @@ var functionIdRegister = map[string]int32{
 	"uncompress":                     UNCOMPRESS,
 	"uncompressed_length":            UNCOMPRESSED_LENGTH,
 	"random_bytes":                   RANDOM_BYTES,
+	"validate_password_strength":     VALIDATE_PASSWORD_STRENGTH,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,

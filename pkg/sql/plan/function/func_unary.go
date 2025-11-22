@@ -1879,6 +1879,138 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// validatePasswordStrength calculates password strength score (0-100)
+// Scoring based on:
+// - Length (longer is better)
+// - Presence of uppercase letters
+// - Presence of lowercase letters
+// - Presence of numbers
+// - Presence of special characters
+// - Mix of different character types
+// Returns 0, 25, 50, 75, or 100 (MySQL behavior)
+func validatePasswordStrength(password string) int64 {
+	if len(password) == 0 {
+		return 0
+	}
+
+	hasUpper := false
+	hasLower := false
+	hasDigit := false
+	hasSpecial := false
+
+	for _, r := range password {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+
+	// Count character types
+	typeCount := 0
+	if hasUpper {
+		typeCount++
+	}
+	if hasLower {
+		typeCount++
+	}
+	if hasDigit {
+		typeCount++
+	}
+	if hasSpecial {
+		typeCount++
+	}
+
+	length := len(password)
+	score := int64(0)
+
+	// Length scoring
+	if length >= 16 {
+		score += 30
+	} else if length >= 12 {
+		score += 20
+	} else if length >= 8 {
+		score += 10
+	} else if length < 4 {
+		// Very short passwords get minimal score
+		score = 0
+	}
+
+	// Character type scoring - more types = higher score
+	if typeCount >= 4 {
+		score += 50 // All 4 types
+	} else if typeCount >= 3 {
+		score += 30 // 3 types
+	} else if typeCount >= 2 {
+		score += 15 // 2 types
+	} else if typeCount >= 1 {
+		score += 5 // 1 type only
+	}
+
+	// Additional bonus for length when combined with multiple types
+	if length >= 8 && typeCount >= 3 {
+		score += 10
+	}
+	if length >= 12 && typeCount >= 4 {
+		score += 10
+	}
+
+	// Cap at 100
+	if score > 100 {
+		score = 100
+	}
+
+	// Round to nearest 25 (MySQL behavior: returns 0, 25, 50, 75, or 100)
+	if score < 12 {
+		return 0
+	} else if score < 37 {
+		return 25
+	} else if score < 62 {
+		return 50
+	} else if score < 87 {
+		return 75
+	}
+	return 100
+}
+
+// ValidatePasswordStrength: VALIDATE_PASSWORD_STRENGTH(str) - Returns an integer to indicate how strong the password is
+// Returns 0 (weak) to 100 (strong), typically in increments of 25
+func ValidatePasswordStrength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		password := string(data)
+		strength := validatePasswordStrength(password)
+		if err := rs.Append(strength, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
 		return v.Month()

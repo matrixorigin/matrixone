@@ -101,3 +101,39 @@ INSERT INTO t1 VALUES (8), (16), (32);
 SELECT len_val, LENGTH(RANDOM_BYTES(len_val)) AS random_length FROM t1;
 DROP TABLE t1;
 
+# VALIDATE_PASSWORD_STRENGTH function
+SELECT VALIDATE_PASSWORD_STRENGTH('password') AS result1;
+
+# Additional test cases
+# Weak passwords
+SELECT VALIDATE_PASSWORD_STRENGTH('weak') AS weak;
+SELECT VALIDATE_PASSWORD_STRENGTH('abc') AS short;
+SELECT VALIDATE_PASSWORD_STRENGTH('') AS empty;
+
+# Medium passwords
+SELECT VALIDATE_PASSWORD_STRENGTH('password123') AS medium1;
+SELECT VALIDATE_PASSWORD_STRENGTH('Password123') AS medium2;
+
+# Strong passwords
+SELECT VALIDATE_PASSWORD_STRENGTH('Password123!') AS strong1;
+SELECT VALIDATE_PASSWORD_STRENGTH('MyP@ssw0rd') AS strong2;
+
+# Very strong passwords
+SELECT VALIDATE_PASSWORD_STRENGTH('VeryStrongP@ssw0rd123!') AS very_strong;
+SELECT VALIDATE_PASSWORD_STRENGTH('N0Tweak$_@123!') AS very_strong2;
+
+# NULL handling
+SELECT VALIDATE_PASSWORD_STRENGTH(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(password VARCHAR(100));
+INSERT INTO t1 VALUES ('weak'), ('Password123'), ('Password123!'), ('VeryStrongP@ssw0rd123!');
+SELECT password, VALIDATE_PASSWORD_STRENGTH(password) AS strength FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(password VARCHAR(100));
+INSERT INTO t1 VALUES ('weak'), ('Password123'), ('Password123!'), ('VeryStrongP@ssw0rd123!');
+SELECT * FROM t1 WHERE VALIDATE_PASSWORD_STRENGTH(password) >= 50;
+DROP TABLE t1;
+
