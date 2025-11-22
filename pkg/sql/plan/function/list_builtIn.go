@@ -460,6 +460,32 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `make_set`
+	{
+		functionId: MAKE_SET,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    makeSetCheck,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					// Return type is varchar (or the widest string type)
+					for _, p := range parameters[1:] {
+						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+							return types.T_blob.ToType()
+						}
+					}
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeSet
+				},
+			},
+		},
+	},
+
 	// function `export_set`
 	{
 		functionId: EXPORT_SET,
