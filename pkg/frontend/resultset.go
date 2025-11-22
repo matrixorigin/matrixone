@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -476,8 +477,42 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 	case uint:
 		return strconv.FormatUint(uint64(v), 10), nil
 	case types.Time:
+		// Get scale from column metadata (Decimal field stores the scale)
+		if cindex < uint64(len(mrs.Columns)) {
+			col := mrs.Columns[cindex]
+			mysqlCol, ok := col.(*MysqlColumn)
+			if ok {
+				scale := int32(mysqlCol.Decimal())
+				return v.String2(scale), nil
+			}
+		}
 		return v.String(), nil
 	case types.Datetime:
+		// Get scale from column metadata (Decimal field stores the scale)
+		if cindex < uint64(len(mrs.Columns)) {
+			col := mrs.Columns[cindex]
+			mysqlCol, ok := col.(*MysqlColumn)
+			if ok {
+				scale := int32(mysqlCol.Decimal())
+				return v.String2(scale), nil
+			}
+		}
+		return v.String(), nil
+	case types.Timestamp:
+		// Get scale from column metadata (Decimal field stores the scale)
+		// Note: MysqlResultSet doesn't store session information, so we use UTC timezone as fallback.
+		// The actual timezone conversion is handled in appendResultSetTextRow2 which has session context.
+		// For GetString, UTC is a reasonable default since Timestamp values are typically stored in UTC.
+		if cindex < uint64(len(mrs.Columns)) {
+			col := mrs.Columns[cindex]
+			mysqlCol, ok := col.(*MysqlColumn)
+			if ok {
+				scale := int32(mysqlCol.Decimal())
+				// Use UTC timezone since we don't have session context in MysqlResultSet
+				// The session timezone is applied in mysql_protocol.go's appendResultSetTextRow2
+				return v.String2(time.UTC, scale), nil
+			}
+		}
 		return v.String(), nil
 	case bytejson.ByteJson:
 		return v.String(), nil

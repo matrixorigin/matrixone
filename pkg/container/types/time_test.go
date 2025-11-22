@@ -75,6 +75,159 @@ func TestTime_StringAndString2(t *testing.T) {
 	}
 }
 
+// TestTime_String2_NoNewline tests that String2 method does not contain newline characters
+// This test ensures the fix for the bug where fmt.Sprintf("%06d\n", msec) included a newline
+func TestTime_String2_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name     string
+		t        Time
+		scale    int32
+		expected string
+	}{
+		{
+			name:     "scale 6 with microsecond",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    6,
+			expected: "10:20:30.123456",
+		},
+		{
+			name:     "scale 6 with leading zeros",
+			t:        TimeFromClock(false, 14, 11, 9, 1),
+			scale:    6,
+			expected: "14:11:09.000001",
+		},
+		{
+			name:     "scale 6 with all zeros",
+			t:        TimeFromClock(false, 0, 0, 0, 0),
+			scale:    6,
+			expected: "00:00:00.000000",
+		},
+		{
+			name:     "scale 6 with max microseconds",
+			t:        TimeFromClock(false, 23, 59, 59, 999999),
+			scale:    6,
+			expected: "23:59:59.999999",
+		},
+		{
+			name:     "scale 3 truncation",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    3,
+			expected: "10:20:30.123",
+		},
+		{
+			name:     "scale 1 truncation",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    1,
+			expected: "10:20:30.1",
+		},
+		{
+			name:     "scale 0 no microseconds",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    0,
+			expected: "10:20:30",
+		},
+		{
+			name:     "negative time scale 6",
+			t:        TimeFromClock(true, 10, 20, 30, 123456),
+			scale:    6,
+			expected: "-10:20:30.123456",
+		},
+		{
+			name:     "negative time scale 3",
+			t:        TimeFromClock(true, 10, 20, 30, 123456),
+			scale:    3,
+			expected: "-10:20:30.123",
+		},
+		{
+			name:     "negative time scale 0",
+			t:        TimeFromClock(true, 10, 20, 30, 123456),
+			scale:    0,
+			expected: "-10:20:30",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.t.String2(tc.scale)
+			// Ensure no newline character in the result
+			require.NotContains(t, result, "\n", "String2 result should not contain newline character")
+			require.NotContains(t, result, "\r", "String2 result should not contain carriage return")
+			// Verify expected output
+			require.Equal(t, tc.expected, result, "String2 output should match expected format")
+			// Verify length is correct (no extra characters)
+			if tc.scale > 0 {
+				// Format: "[sign]HH:MM:SS." + scale digits
+				signLen := 0
+				if tc.t < 0 {
+					signLen = 1 // minus sign
+				}
+				expectedLen := signLen + 8 + 1 + int(tc.scale) // 8 for HH:MM:SS, 1 for dot, scale for microseconds
+				require.Equal(t, expectedLen, len(result), "String2 result length should match expected")
+			} else {
+				// Format: "[sign]HH:MM:SS"
+				signLen := 0
+				if tc.t < 0 {
+					signLen = 1 // minus sign
+				}
+				expectedLen := signLen + 8 // 8 for HH:MM:SS
+				require.Equal(t, expectedLen, len(result), "String2 result length should match expected")
+			}
+		})
+	}
+}
+
+// TestTime_NumericString_NoNewline tests that NumericString method does not contain newline characters
+func TestTime_NumericString_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name     string
+		t        Time
+		scale    int32
+		expected string
+	}{
+		{
+			name:     "scale 6 with microsecond",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    6,
+			expected: "102030.123456",
+		},
+		{
+			name:     "scale 6 with leading zeros",
+			t:        TimeFromClock(false, 14, 11, 9, 1),
+			scale:    6,
+			expected: "141109.000001",
+		},
+		{
+			name:     "scale 3 truncation",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    3,
+			expected: "102030.123",
+		},
+		{
+			name:     "scale 0 no microseconds",
+			t:        TimeFromClock(false, 10, 20, 30, 123456),
+			scale:    0,
+			expected: "102030",
+		},
+		{
+			name:     "negative time scale 6",
+			t:        TimeFromClock(true, 10, 20, 30, 123456),
+			scale:    6,
+			expected: "-102030.123456",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.t.NumericString(tc.scale)
+			// Ensure no newline character in the result
+			require.NotContains(t, result, "\n", "NumericString result should not contain newline character")
+			require.NotContains(t, result, "\r", "NumericString result should not contain carriage return")
+			// Verify expected output
+			require.Equal(t, tc.expected, result, "NumericString output should match expected format")
+		})
+	}
+}
+
 func TestTime_ParseTimeFromString(t *testing.T) {
 	testCases := []struct {
 		name     string

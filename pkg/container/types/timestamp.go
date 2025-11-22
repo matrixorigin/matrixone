@@ -71,7 +71,7 @@ func (ts Timestamp) String2(loc *time.Location, scale int32) string {
 	hour, minute, sec := t.Clock()
 	if scale > 0 {
 		msec := t.Nanosecond() / 1000
-		msecInstr := fmt.Sprintf("%06d\n", msec)
+		msecInstr := fmt.Sprintf("%06d", msec)
 		msecInstr = msecInstr[:scale]
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)

@@ -422,3 +422,77 @@ func TestDatetime_TruncateToScale(t *testing.T) {
 	expected = DatetimeFromClock(2024, 1, 16, 0, 0, 0, 0)
 	require.Equal(t, expected, truncated, "scale 0 should round to next day")
 }
+
+// TestDatetime_String2_NoNewline tests that String2 method does not contain newline characters
+// This test ensures the fix for the bug where fmt.Sprintf("%06d\n", msec) included a newline
+func TestDatetime_String2_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name     string
+		dt       Datetime
+		scale    int32
+		expected string
+	}{
+		{
+			name:     "scale 6 with microsecond",
+			dt:       DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456),
+			scale:    6,
+			expected: "2022-07-01 10:20:30.123456",
+		},
+		{
+			name:     "scale 6 with leading zeros",
+			dt:       DatetimeFromClock(2022, 6, 1, 14, 11, 9, 1),
+			scale:    6,
+			expected: "2022-06-01 14:11:09.000001",
+		},
+		{
+			name:     "scale 6 with all zeros",
+			dt:       DatetimeFromClock(2022, 7, 1, 0, 0, 0, 0),
+			scale:    6,
+			expected: "2022-07-01 00:00:00.000000",
+		},
+		{
+			name:     "scale 6 with max microseconds",
+			dt:       DatetimeFromClock(2022, 12, 31, 23, 59, 59, 999999),
+			scale:    6,
+			expected: "2022-12-31 23:59:59.999999",
+		},
+		{
+			name:     "scale 3 truncation",
+			dt:       DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456),
+			scale:    3,
+			expected: "2022-07-01 10:20:30.123",
+		},
+		{
+			name:     "scale 1 truncation",
+			dt:       DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456),
+			scale:    1,
+			expected: "2022-07-01 10:20:30.1",
+		},
+		{
+			name:     "scale 0 no microseconds",
+			dt:       DatetimeFromClock(2022, 7, 1, 10, 20, 30, 123456),
+			scale:    0,
+			expected: "2022-07-01 10:20:30",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.dt.String2(tc.scale)
+			// Ensure no newline character in the result
+			require.NotContains(t, result, "\n", "String2 result should not contain newline character")
+			require.NotContains(t, result, "\r", "String2 result should not contain carriage return")
+			// Verify expected output
+			require.Equal(t, tc.expected, result, "String2 output should match expected format")
+			// Verify length is correct (no extra characters)
+			if tc.scale > 0 {
+				// Format: "YYYY-MM-DD HH:MM:SS." + scale digits
+				expectedLen := 19 + 1 + int(tc.scale) // 19 for datetime, 1 for dot, scale for microseconds
+				require.Equal(t, expectedLen, len(result), "String2 result length should match expected")
+			} else {
+				// Format: "YYYY-MM-DD HH:MM:SS"
+				require.Equal(t, 19, len(result), "String2 result length should be 19 for scale 0")
+			}
+		})
+	}
+}
