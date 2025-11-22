@@ -1,0 +1,51 @@
+# Basic test case from requirements
+SELECT ELT(1, 'ej', 'Heja', 'hej', 'foo') AS result1;
+
+# Additional test cases
+# Basic usage
+SELECT ELT(1, 'ej', 'Heja', 'hej', 'foo') AS elt1;
+SELECT ELT(2, 'ej', 'Heja', 'hej', 'foo') AS elt2;
+SELECT ELT(3, 'ej', 'Heja', 'hej', 'foo') AS elt3;
+SELECT ELT(4, 'ej', 'Heja', 'hej', 'foo') AS elt4;
+
+# Out of range
+SELECT ELT(0, 'ej', 'Heja', 'hej', 'foo') AS elt0;
+SELECT ELT(5, 'ej', 'Heja', 'hej', 'foo') AS elt5;
+SELECT ELT(-1, 'ej', 'Heja', 'hej', 'foo') AS elt_neg;
+
+# NULL handling
+SELECT ELT(NULL, 'ej', 'Heja', 'hej', 'foo') AS elt_null;
+SELECT ELT(1, NULL, 'Heja', 'hej', 'foo') AS elt_str_null;
+SELECT ELT(2, 'ej', NULL, 'hej', 'foo') AS elt_str_null2;
+
+# Single argument (should return NULL)
+SELECT ELT(1, 'single') AS elt_single;
+
+# Table usage
+CREATE TABLE t1(id INT, s1 VARCHAR(10), s2 VARCHAR(10), s3 VARCHAR(10));
+INSERT INTO t1 VALUES (1, 'a', 'b', 'c'), (2, 'x', 'y', 'z'), (3, '1', '2', '3');
+SELECT id, ELT(id, s1, s2, s3) AS elt_result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(id INT, s1 VARCHAR(10), s2 VARCHAR(10));
+INSERT INTO t1 VALUES (1, 'a', 'b'), (2, 'x', 'y'), (3, '1', '2');
+SELECT * FROM t1 WHERE ELT(1, s1, s2) = 'a';
+DROP TABLE t1;
+
+# Different numeric types for index
+SELECT ELT(1, 'a', 'b', 'c') AS int64_index;
+SELECT ELT(CAST(2 AS INT), 'a', 'b', 'c') AS int_index;
+
+# Many arguments
+SELECT ELT(1, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j') AS elt_many;
+SELECT ELT(10, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j') AS elt_many_last;
+
+# Empty strings
+SELECT ELT(1, '', 'b', 'c') AS elt_empty;
+SELECT ELT(2, 'a', '', 'c') AS elt_empty2;
+
+# Unicode strings
+SELECT ELT(1, '你好', '世界', '测试') AS elt_unicode;
+SELECT ELT(2, 'Hello', 'World', 'Test') AS elt_ascii;
+

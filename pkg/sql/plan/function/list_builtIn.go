@@ -434,6 +434,32 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `elt`
+	{
+		functionId: ELT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    eltCheck,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					// Return type is varchar (or the widest string type)
+					for _, p := range parameters[1:] {
+						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+							return types.T_blob.ToType()
+						}
+					}
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Elt
+				},
+			},
+		},
+	},
+
 	// function `field`
 	{
 		functionId: FIELD,
