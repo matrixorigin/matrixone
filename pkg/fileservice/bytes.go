@@ -25,9 +25,7 @@ import (
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
-	deallocated uint32
-	_refs       atomic.Int32
-	refs        *atomic.Int32
+	refs        atomic.Int32
 }
 
 func (b *Bytes) Size() int64 {
@@ -35,6 +33,9 @@ func (b *Bytes) Size() int64 {
 }
 
 func (b *Bytes) Bytes() []byte {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Bytes: memory was already deallocated.")
+	}
 	return b.bytes
 }
 
@@ -44,25 +45,29 @@ func (b *Bytes) Slice(length int) fscache.Data {
 }
 
 func (b *Bytes) Retain() {
-	if b.refs != nil {
-		b.refs.Add(1)
-	}
+	b.refs.Add(1)
 }
 
 func (b *Bytes) Release() {
-	if b.refs != nil {
-		if n := b.refs.Add(-1); n == 0 {
-			if b.deallocator != nil &&
-				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
-				b.deallocator.Deallocate(malloc.NoHints)
-			}
-		}
-	} else {
-		if b.deallocator != nil &&
-			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+	n := b.refs.Add(-1)
+	if n == 0 {
+		// set bytes to nil
+		b.bytes = nil
+		if b.deallocator != nil {
 			b.deallocator.Deallocate(malloc.NoHints)
+			b.deallocator = nil
 		}
+	} else if n < 0 {
+		panic("Bytes.Release: double free")
 	}
+}
+
+func NewBytes(data []byte) *Bytes {
+	bytes := &Bytes{
+		bytes: data,
+	}
+	bytes.refs.Store(1)
+	return bytes
 }
 
 type bytesAllocator struct {
@@ -80,8 +85,7 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 		bytes:       slice,
 		deallocator: dec,
 	}
-	bytes._refs.Store(1)
-	bytes.refs = &bytes._refs
+	bytes.refs.Store(1)
 	return bytes
 }
 
