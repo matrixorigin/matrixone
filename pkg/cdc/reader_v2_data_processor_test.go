@@ -64,17 +64,6 @@ func (s *dataProcessorRecordingSinker) Sink(ctx context.Context, data *DecoderOu
 	s.mu.Unlock()
 }
 
-func (s *dataProcessorRecordingSinker) reset() {
-	s.mu.Lock()
-	s.err = nil
-	s.rollbackErr = nil
-	s.commitErr = nil
-	s.beginErr = nil
-	s.sinkCalls = nil
-	s.mu.Unlock()
-	s.resetOps()
-}
-
 func (s *dataProcessorRecordingSinker) sinkCallsSnapshot() []*DecoderOutput {
 	s.mu.Lock()
 	defer s.mu.Unlock()

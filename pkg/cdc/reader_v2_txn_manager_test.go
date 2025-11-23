@@ -89,10 +89,6 @@ type recordingSinker struct {
 	rollbackErr error
 	commitErr   error
 	beginErr    error
-	// optional artificial delays for slow-path simulation
-	delayBegin    time.Duration
-	delayCommit   time.Duration
-	delayRollback time.Duration
 }
 
 func newRecordingSinker() *recordingSinker {

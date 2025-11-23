@@ -1108,7 +1108,7 @@ func (u *CDCWatermarkUpdater) RemoveCachedWM(
 			zap.String("key", key.String()),
 			zap.Error(err),
 		)
-		err = nil
+		// Continue even if flush fails
 	}
 	job := NewRemoveCachedWMJob(ctx, key)
 	if _, err = u.queue.Enqueue(job); err != nil {

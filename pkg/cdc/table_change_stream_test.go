@@ -101,11 +101,6 @@ func (m *watermarkUpdaterStub) withUpdateError(fn func(call int) error) *waterma
 	return m
 }
 
-func (m *watermarkUpdaterStub) withNotify(ch chan struct{}) *watermarkUpdaterStub {
-	m.updateNotifies = ch
-	return m
-}
-
 func (m *watermarkUpdaterStub) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
 	if m.skipRemove {
 		return nil
@@ -139,12 +134,6 @@ func (m *watermarkUpdaterStub) GetFromCache(ctx context.Context, key *WatermarkK
 		return types.TS{}, moerr.NewInternalError(ctx, "watermark not found")
 	}
 	return ts, nil
-}
-
-func (m *watermarkUpdaterStub) setGetFromCacheError(err error) {
-	m.getFromCacheHook = func() error {
-		return err
-	}
 }
 
 func (m *watermarkUpdaterStub) setGetFromCacheHook(fn func() error) {
@@ -198,13 +187,6 @@ func (m *watermarkUpdaterStub) keyString(key *WatermarkKey) string {
 		return ""
 	}
 	return key.TaskId + ":" + key.DBName + ":" + key.TableName
-}
-
-func (m *watermarkUpdaterStub) loadWatermark(key *WatermarkKey) (types.TS, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ts, ok := m.watermarks[m.keyString(key)]
-	return ts, ok
 }
 
 func readGaugeValue(t *testing.T, gauge prometheus.Gauge) float64 {
@@ -1979,24 +1961,6 @@ func withHarnessEndTs(ts types.TS) tableStreamHarnessOption {
 func withHarnessFrequency(freq time.Duration) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.frequency = freq
-	}
-}
-
-func withHarnessInitSnapshotSplitTxn(v bool) tableStreamHarnessOption {
-	return func(cfg *tableStreamHarnessConfig) {
-		cfg.initSnapshotSplitTxn = v
-	}
-}
-
-func withHarnessTableDef(def *plan.TableDef) tableStreamHarnessOption {
-	return func(cfg *tableStreamHarnessConfig) {
-		cfg.tableDef = def
-	}
-}
-
-func withHarnessTableInfo(info *DbTableInfo) tableStreamHarnessOption {
-	return func(cfg *tableStreamHarnessConfig) {
-		cfg.tableInfo = info
 	}
 }
 

@@ -87,10 +87,6 @@ func (h *collectorBlockingHandle) Close() error {
 	return nil
 }
 
-func (h *collectorBlockingHandle) injectError(err error) {
-	h.err.Store(err)
-}
-
 func TestChangeType_String(t *testing.T) {
 	tests := []struct {
 		name     string
