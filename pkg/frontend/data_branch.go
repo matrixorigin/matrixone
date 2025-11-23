@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,7 +72,7 @@ const (
 )
 
 const (
-	batchCnt = objectio.BlockMaxRows * 10
+	batchCnt = objectio.BlockMaxRows / 10
 )
 
 var bufferPool = sync.Pool{
@@ -1357,7 +1358,7 @@ func getTableStuff(
 	}
 
 	tarTblDef = tblStuff.tarRel.GetTableDef(ctx)
-	baseTblDef = tblStuff.tarRel.GetTableDef(ctx)
+	baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
 
 	if !isSchemaEquivalent(tarTblDef, baseTblDef) {
 		err = moerr.NewInternalErrorNoCtx("the target table schema is not equivalent to the base table.")
@@ -1574,7 +1575,7 @@ func diffOnBase(
 	finalTblStuff.tarRel = tmpPair1.tarRel
 	finalTblStuff.baseRel = tmpPair2.tarRel
 	finalTblStuff.tarSnap = tmpPair1.tarSnap
-	finalTblStuff.tarSnap = tmpPair2.tarSnap
+	finalTblStuff.baseSnap = tmpPair2.tarSnap
 
 	return hashDiff(ctx, ses, bh, finalTblStuff, finalDagInfo, retCh, copt, tarHandle, baseHandle)
 }
@@ -2621,6 +2622,20 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		return
 	}
 
+	var scratch [64]byte
+
+	writeInt := func(v int64) {
+		buf.Write(strconv.AppendInt(scratch[:0], v, 10))
+	}
+
+	writeUint := func(v uint64) {
+		buf.Write(strconv.AppendUint(scratch[:0], v, 10))
+	}
+
+	writeFloat := func(v float64, bitSize int) {
+		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
+	}
+
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
 		T_varbinary, types.T_binary, types.T_array_float32, types.T_array_float64:
@@ -2649,9 +2664,26 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString(val.(types.Decimal128).Format(t.Scale))
 	case types.T_decimal256:
 		buf.WriteString(val.(types.Decimal256).Format(t.Scale))
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8,
-		types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
-		buf.WriteString(fmt.Sprintf("%v", val))
+	case types.T_uint8:
+		writeUint(uint64(val.(uint8)))
+	case types.T_uint16:
+		writeUint(uint64(val.(uint16)))
+	case types.T_uint32:
+		writeUint(uint64(val.(uint32)))
+	case types.T_uint64:
+		writeUint(val.(uint64))
+	case types.T_int8:
+		writeInt(int64(val.(int8)))
+	case types.T_int16:
+		writeInt(int64(val.(int16)))
+	case types.T_int32:
+		writeInt(int64(val.(int32)))
+	case types.T_int64:
+		writeInt(val.(int64))
+	case types.T_float32:
+		writeFloat(float64(val.(float32)), 32)
+	case types.T_float64:
+		writeFloat(val.(float64), 64)
 	}
 }
 
@@ -2701,7 +2733,7 @@ func buildHashmapForTable(
 
 		wg.Add(1)
 
-		return tblStuff.worker.Submit(func() {
+		if err = tblStuff.worker.Submit(func() {
 			defer wg.Done()
 
 			ll := bat.VectorCount()
@@ -2716,7 +2748,11 @@ func buildHashmapForTable(
 			if taskErr != nil {
 				atomicErr.Store(taskErr)
 			}
-		})
+		}); err != nil {
+			wg.Done()
+		}
+
+		return err
 	}
 
 	for _, handle := range handles {
