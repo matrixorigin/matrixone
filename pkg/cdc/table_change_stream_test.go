@@ -29,9 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewTableChangeStream(t *testing.T) {
@@ -174,7 +178,7 @@ func TestTableChangeStream_ForceNextInterval(t *testing.T) {
 }
 
 // Helper function to create a test stream with minimal setup
-func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo) *TableChangeStream {
+func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo, opts ...TableChangeStreamOption) *TableChangeStream {
 	sinker := &mockDataProcessorSinker{mockSinker: &mockSinker{}}
 	updater := newMockWatermarkUpdater()
 	packerPool := fileservice.NewPool(
@@ -202,7 +206,155 @@ func createTestStream(mp *mpool.MPool, tableInfo *DbTableInfo) *TableChangeStrea
 		nil, nil, mp, packerPool,
 		1, "task1", tableInfo, sinker, updater, tableDef,
 		false, &sync.Map{}, types.TS{}, types.TS{}, false, 0,
+		opts...,
 	)
+}
+
+func readGaugeValue(t *testing.T, gauge prometheus.Gauge) float64 {
+	t.Helper()
+	var metric dto.Metric
+	require.NoError(t, gauge.Write(&metric))
+	return metric.GetGauge().GetValue()
+}
+
+func readCounterValue(t *testing.T, counter prometheus.Counter) float64 {
+	t.Helper()
+	var metric dto.Metric
+	require.NoError(t, counter.Write(&metric))
+	return metric.GetCounter().GetValue()
+}
+
+func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db_warn",
+		SourceTblName: "t_warn",
+	}
+
+	stream := createTestStream(
+		mp,
+		tableInfo,
+		WithWatermarkStallThreshold(time.Minute),
+		WithNoProgressWarningInterval(time.Nanosecond),
+	)
+
+	tableLabel := stream.progressTracker.tableKey()
+	beforeCounter := readCounterValue(t, v2.CdcTableNoProgressCounter.WithLabelValues(tableLabel))
+	beforeStuck := readGaugeValue(t, v2.CdcTableStuckGauge.WithLabelValues(tableLabel))
+	assert.Equal(t, 0.0, beforeStuck)
+
+	fromTs := types.BuildTS(100, 0)
+	err := stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
+	assert.NoError(t, err)
+	assert.False(t, stream.noProgressSince.IsZero(), "noProgressSince should be initialized")
+
+	afterCounter := readCounterValue(t, v2.CdcTableNoProgressCounter.WithLabelValues(tableLabel))
+	assert.Equal(t, beforeCounter+1, afterCounter)
+
+	afterStuck := readGaugeValue(t, v2.CdcTableStuckGauge.WithLabelValues(tableLabel))
+	assert.Equal(t, 1.0, afterStuck)
+
+	stream.onWatermarkAdvanced()
+	assert.True(t, stream.noProgressSince.IsZero(), "noProgressSince should reset after progress")
+	assert.True(t, stream.lastNoProgressWarning.IsZero(), "last warning timestamp should reset")
+
+	resetStuck := readGaugeValue(t, v2.CdcTableStuckGauge.WithLabelValues(tableLabel))
+	assert.Equal(t, 0.0, resetStuck)
+}
+
+func TestTableChangeStream_HandleSnapshotNoProgress_ThresholdExceeded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db_err",
+		SourceTblName: "t_err",
+	}
+
+	stream := createTestStream(
+		mp,
+		tableInfo,
+		WithWatermarkStallThreshold(10*time.Millisecond),
+		WithNoProgressWarningInterval(time.Nanosecond),
+	)
+
+	stream.noProgressSince = time.Now().Add(-2 * stream.watermarkStallThreshold)
+
+	fromTs := types.BuildTS(200, 0)
+	err := stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
+	assert.Error(t, err)
+	assert.True(t, stream.retryable, "stalled snapshot should mark stream retryable")
+	assert.Contains(t, err.Error(), "snapshot timestamp stuck")
+
+	// Clean up metric state for subsequent tests
+	stream.onWatermarkAdvanced()
+}
+
+func TestTableChangeStream_HandleSnapshotNoProgress_WarningThrottle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db_throttle",
+		SourceTblName: "t_throttle",
+	}
+
+	const interval = 50 * time.Millisecond
+
+	stream := createTestStream(
+		mp,
+		tableInfo,
+		WithWatermarkStallThreshold(time.Minute),
+		WithNoProgressWarningInterval(interval),
+	)
+
+	fromTs := types.BuildTS(300, 0)
+
+	err := stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
+	require.NoError(t, err)
+	require.False(t, stream.lastNoProgressWarning.IsZero(), "first warning timestamp should be recorded")
+	firstWarning := stream.lastNoProgressWarning
+
+	err = stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
+	require.NoError(t, err, "second invocation before interval should still be treated as warning")
+	assert.Equal(t, firstWarning, stream.lastNoProgressWarning, "warning timestamp should not advance before interval elapses")
+
+	waitStart := time.Now()
+	for time.Since(firstWarning) < interval {
+		if time.Since(waitStart) > 20*interval {
+			t.Fatalf("warning interval did not elapse within timeout (waited %v)", time.Since(waitStart))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	err = stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
+	require.NoError(t, err)
+	assert.True(t, stream.lastNoProgressWarning.After(firstWarning), "warning timestamp should advance after interval")
+
+	stream.onWatermarkAdvanced()
+}
+
+func TestTableChangeStream_HandleSnapshotNoProgress_Defaults(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db_default",
+		SourceTblName: "t_default",
+	}
+
+	stream := createTestStream(mp, tableInfo)
+
+	assert.Equal(t, defaultWatermarkStallThreshold, stream.watermarkStallThreshold)
+	assert.Equal(t, defaultNoProgressWarningInterval, stream.noProgressWarningInterval)
+
+	fromTs := types.BuildTS(400, 0)
+	err := stream.handleSnapshotNoProgress(context.Background(), fromTs, fromTs)
+	assert.NoError(t, err)
+
+	stream.onWatermarkAdvanced()
 }
 
 // ============================================================================
