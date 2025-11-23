@@ -21,7 +21,6 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -140,7 +139,7 @@ type retBatchList struct {
 	tList []*batch.Batch
 
 	pinned map[*batch.Batch]struct{}
-	debug  map[*batch.Batch]retBatchDebug
+	//debug  map[*batch.Batch]retBatchDebug
 
 	dataVecCnt    int
 	tombVecCnt    int
@@ -148,10 +147,10 @@ type retBatchList struct {
 	tombstoneType types.Type
 }
 
-type retBatchDebug struct {
-	acquire string
-	release string
-}
+//type retBatchDebug struct {
+//	acquire string
+//	release string
+//}
 
 func typeMatched(vec *vector.Vector, typ types.Type) bool {
 	if vec == nil {
@@ -173,9 +172,9 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if retBatchPool.pinned == nil {
 		retBatchPool.pinned = make(map[*batch.Batch]struct{})
 	}
-	if retBatchPool.debug == nil {
-		retBatchPool.debug = make(map[*batch.Batch]retBatchDebug)
-	}
+	//if retBatchPool.debug == nil {
+	//	retBatchPool.debug = make(map[*batch.Batch]retBatchDebug)
+	//}
 
 	if retBatchPool.dataVecCnt == 0 {
 		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
@@ -232,7 +231,7 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 
 done:
 	retBatchPool.pinned[bat] = struct{}{}
-	retBatchPool.debug[bat] = retBatchDebug{acquire: string(debug.Stack())}
+	//retBatchPool.debug[bat] = retBatchDebug{acquire: string(debug.Stack())}
 	return bat
 }
 
@@ -244,13 +243,13 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
-	trace := retBatchPool.debug[bat]
+	//trace := retBatchPool.debug[bat]
 
 	if _, ok := retBatchPool.pinned[bat]; !ok {
 		msg := "retBatchPool: release unknown or already released batch"
-		if trace.acquire != "" || trace.release != "" {
-			msg = fmt.Sprintf("%s (acquired at: %s) (last release at: %s)", msg, trace.acquire, trace.release)
-		}
+		//if trace.acquire != "" || trace.release != "" {
+		//	msg = fmt.Sprintf("%s (acquired at: %s) (last release at: %s)", msg, trace.acquire, trace.release)
+		//}
 		panic(moerr.NewInternalErrorNoCtx(msg))
 	}
 
@@ -270,10 +269,10 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 		retBatchPool.dList = append(retBatchPool.dList, bat)
 	}
 
-	retBatchPool.debug[bat] = retBatchDebug{
-		acquire: trace.acquire,
-		release: string(debug.Stack()),
-	}
+	//retBatchPool.debug[bat] = retBatchDebug{
+	//	acquire: trace.acquire,
+	//	release: string(debug.Stack()),
+	//}
 
 	delete(retBatchPool.pinned, bat)
 }
@@ -301,7 +300,7 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 	retBatchPool.dList = nil
 	retBatchPool.tList = nil
 	retBatchPool.pinned = nil
-	retBatchPool.debug = nil
+	//retBatchPool.debug = nil
 
 }
 
@@ -454,6 +453,7 @@ func diffMergeAgency(
 	}
 
 	var (
+		done      bool
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
 		retBatCh  = make(chan batchWithKind, 10)
@@ -474,6 +474,14 @@ func diffMergeAgency(
 
 	if diffStmt != nil {
 		if err = buildOutputSchema(ctx, ses, diffStmt, tblStuff); err != nil {
+			return
+		}
+
+		if done, err = tryDiffAsCSV(ctx, ses, bh, diffStmt, tblStuff); err != nil {
+			return
+		}
+
+		if done {
 			return
 		}
 	}
@@ -562,6 +570,7 @@ func mergeDiffs(
 
 		replaceIntoVals = acquireBuffer()
 		deleteFromVals  = acquireBuffer()
+		firstErr        error
 	)
 
 	defer func() {
@@ -577,10 +586,22 @@ func mergeDiffs(
 	// so the batch we received is conflict-free.
 	for wrapped := range retCh {
 
+		if firstErr != nil || ctx.Err() != nil {
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			cancel()
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			continue
+		}
+
 		if err = constructValsFromBatch(
 			ctx, ses, tblStuff, wrapped, deleteFromVals, replaceIntoVals,
 		); err != nil {
-			return
+			firstErr = err
+			cancel()
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			continue
 		}
 
 		if wrapped.kind == diffDelete {
@@ -594,7 +615,8 @@ func mergeDiffs(
 			if err = flushSqlValues(
 				ctx, ses, bh, tblStuff, deleteFromVals, true, nil,
 			); err != nil {
-				return
+				firstErr = err
+				cancel()
 			}
 			deleteFromVals.Reset()
 		}
@@ -604,7 +626,8 @@ func mergeDiffs(
 			if err = flushSqlValues(
 				ctx, ses, bh, tblStuff, replaceIntoVals, false, nil,
 			); err != nil {
-				return
+				firstErr = err
+				cancel()
 			}
 			replaceIntoVals.Reset()
 		}
@@ -615,7 +638,9 @@ func mergeDiffs(
 		if err = flushSqlValues(
 			ctx, ses, bh, tblStuff, deleteFromVals, true, nil,
 		); err != nil {
-			return
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
@@ -623,10 +648,15 @@ func mergeDiffs(
 		if err = flushSqlValues(
 			ctx, ses, bh, tblStuff, replaceIntoVals, false, nil,
 		); err != nil {
-			return
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
+	if firstErr != nil {
+		return firstErr
+	}
 	return
 }
 
@@ -642,7 +672,9 @@ func satisfyDiffOutputOpt(
 ) (err error) {
 
 	var (
-		mrs = ses.GetMysqlResultSet()
+		mrs      = ses.GetMysqlResultSet()
+		first    error
+		hitLimit bool
 	)
 
 	defer func() {
@@ -650,8 +682,22 @@ func satisfyDiffOutputOpt(
 	}()
 
 	if stmt.OutputOpt == nil || stmt.OutputOpt.Limit != nil {
-
 		for wrapped := range retCh {
+			if first != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+			if hitLimit {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+			if ctx.Err() != nil {
+				first = ctx.Err()
+				cancel()
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
 			for rowIdx := range wrapped.batch.RowCount() {
 				var (
 					row = make([]any, len(tblStuff.def.visibleIdxes)+2)
@@ -671,6 +717,9 @@ func satisfyDiffOutputOpt(
 				mrs.AddRow(row)
 				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
 					int64(mrs.GetRowCount()) >= *stmt.OutputOpt.Limit {
+					// hit limit, cancel producers but keep draining the channel
+					hitLimit = true
+					cancel()
 					break
 				}
 			}
@@ -679,6 +728,17 @@ func satisfyDiffOutputOpt(
 	} else if stmt.OutputOpt.Count {
 		cnt := int64(0)
 		for wrapped := range retCh {
+			if first != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+			if ctx.Err() != nil {
+				first = ctx.Err()
+				cancel()
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
 			cnt += int64(wrapped.batch.RowCount())
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 		}
@@ -713,11 +773,25 @@ func satisfyDiffOutputOpt(
 		}
 
 		for wrapped := range retCh {
+			if first != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+			if ctx.Err() != nil {
+				first = ctx.Err()
+				cancel()
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
 			if wrapped.name == tblStuff.tarRel.GetTableName() {
 				if err = constructValsFromBatch(
 					ctx, ses, tblStuff, wrapped, deleteFromValsBuffer, replaceIntoValsBuffer,
 				); err != nil {
-					return err
+					first = err
+					cancel()
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					continue
 				}
 				if wrapped.kind == diffDelete {
 					deleteCnt += int(wrapped.batch.RowCount())
@@ -731,7 +805,9 @@ func satisfyDiffOutputOpt(
 				if err = flushSqlValues(
 					ctx, ses, bh, tblStuff, deleteFromValsBuffer, true, writeFile,
 				); err != nil {
-					return
+					first = err
+					cancel()
+					continue
 				}
 
 				deleteCnt = 0
@@ -742,7 +818,9 @@ func satisfyDiffOutputOpt(
 				if err = flushSqlValues(
 					ctx, ses, bh, tblStuff, replaceIntoValsBuffer, false, writeFile,
 				); err != nil {
-					return
+					first = err
+					cancel()
+					continue
 				}
 
 				replaceCnt = 0
@@ -750,9 +828,37 @@ func satisfyDiffOutputOpt(
 			}
 		}
 
+		if first != nil {
+			return first
+		}
+
+		if deleteCnt > 0 {
+			if err = flushSqlValues(
+				ctx, ses, bh, tblStuff, deleteFromValsBuffer, true, writeFile,
+			); err != nil {
+				first = err
+				cancel()
+			}
+		}
+
+		if replaceCnt > 0 {
+			if err = flushSqlValues(
+				ctx, ses, bh, tblStuff, replaceIntoValsBuffer, false, writeFile,
+			); err != nil {
+				first = err
+				cancel()
+			}
+		}
+
 		mrs.AddRow([]any{fullFilePath, fileHint})
 	}
 
+	if first != nil {
+		return first
+	}
+	if hitLimit {
+		return trySaveQueryResult(context.Background(), ses, mrs)
+	}
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
@@ -789,15 +895,19 @@ func prepareFSForDiffAsFile(
 		fileName += ".csv"
 	}
 
-	if asSQLFile {
-		hint = fmt.Sprintf(
-			"DELETE FROM %s.%s, REPLACE INTO %s.%s",
-			tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
-			tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
-		)
+	fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+
+	if !asSQLFile {
+		// csv file
+		hint = newDiffCSVExportParam().String()
+		return
 	}
 
-	fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+	hint = fmt.Sprintf(
+		"DELETE FROM %s.%s, REPLACE INTO %s.%s",
+		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
+		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
+	)
 
 	var (
 		targetFS   fileservice.FileService
@@ -1051,39 +1161,81 @@ func buildOutputSchema(
 	return nil
 }
 
-func constructDiffCSVContent(
-	ctx context.Context, ses *Session, bat *batch.Batch,
-) ([]byte, string, error) {
+func tryDiffAsCSV(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.DataBranchDiff,
+	tblStuff tableStuff,
+) (bool, error) {
 
-	var (
-		result     *BatchByte
-		spiltRules string
+	if stmt.OutputOpt == nil {
+		return false, nil
+	}
+
+	if len(stmt.OutputOpt.DirPath) == 0 {
+		return false, nil
+	}
+
+	sql := fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s.%s",
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
 	)
 
-	if bat == nil || bat.RowCount() == 0 {
-		return nil, "", nil
+	if tblStuff.baseSnap != nil {
+		sql += fmt.Sprintf("{snapshot='%s'}", tblStuff.baseSnap.ExtraInfo.Name)
 	}
 
-	exportCfg := &ExportConfig{
-		userConfig: newDiffCSVExportParam(),
-		service:    ses.GetService(),
-	}
-	initDiffCSVExportConfig(exportCfg, len(bat.Vecs))
+	var (
+		err          error
+		sqlRet       executor.Result
+		hint         string
+		fullFilePath string
+	)
 
-	spiltRules = exportCfg.userConfig.String()
-
-	byteChan := make(chan *BatchByte, 1)
-	constructByte(ctx, ses, bat, 0, byteChan, exportCfg)
-
-	result = <-byteChan
-	if result == nil {
-		return nil, "", moerr.NewInternalError(ctx, "failed to construct csv content")
-	}
-	if result.err != nil {
-		return nil, "", result.err
+	if sqlRet, err = runSql(ctx, ses, bh, sql); err != nil {
+		return false, err
 	}
 
-	return result.writeByte, spiltRules, nil
+	if len(sqlRet.Batches) != 1 &&
+		sqlRet.Batches[0].RowCount() != 1 &&
+		sqlRet.Batches[0].VectorCount() != 1 {
+		return false, moerr.NewInternalErrorNoCtxf("cannot get count(*) of base table")
+	}
+
+	if vector.GetFixedAtWithTypeCheck[uint64](sqlRet.Batches[0].Vecs[0], 0) != 0 {
+		return false, nil
+	}
+
+	sqlRet.Close()
+
+	snap := ""
+	if tblStuff.tarSnap != nil {
+		snap = fmt.Sprintf("{snapshot='%s'}", tblStuff.tarSnap.ExtraInfo.Name)
+	}
+
+	if fullFilePath, hint, _, _, err = prepareFSForDiffAsFile(
+		ctx, ses, stmt, tblStuff, false,
+	); err != nil {
+		return false, err
+	}
+
+	// output as csv
+	sql = fmt.Sprintf("SELECT * FROM %s.%s%s INTO OUTFILE %s %s",
+		tblStuff.tarRel.GetTableDef(ctx).DbName,
+		tblStuff.tarRel.GetTableDef(ctx).Name,
+		snap, fullFilePath, hint,
+	)
+
+	if sqlRet, err = runSql(ctx, ses, bh, sql); err != nil {
+		return false, err
+	}
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddRow([]any{fullFilePath, hint})
+
+	return true, trySaveQueryResult(ctx, ses, mrs)
 }
 
 func newDiffCSVExportParam() *tree.ExportParam {
@@ -1099,31 +1251,6 @@ func newDiffCSVExportParam() *tree.ExportParam {
 		Lines:   tree.NewLines("", "\n"),
 		Header:  false,
 	}
-}
-
-func initDiffCSVExportConfig(ep *ExportConfig, columnCount int) {
-	if columnCount <= 0 {
-		ep.Symbol = nil
-		ep.ColumnFlag = nil
-		return
-	}
-	ep.Symbol = make([][]byte, columnCount)
-	ep.ColumnFlag = make([]bool, columnCount)
-
-	fieldTerminated := tree.DefaultFieldsTerminated
-	if ep.userConfig != nil && ep.userConfig.Fields != nil && ep.userConfig.Fields.Terminated != nil {
-		fieldTerminated = ep.userConfig.Fields.Terminated.Value
-	}
-
-	lineTerminated := "\n"
-	if ep.userConfig != nil && ep.userConfig.Lines != nil && ep.userConfig.Lines.TerminatedBy != nil {
-		lineTerminated = ep.userConfig.Lines.TerminatedBy.Value
-	}
-
-	for i := 0; i < columnCount-1; i++ {
-		ep.Symbol[i] = []byte(fieldTerminated)
-	}
-	ep.Symbol[columnCount-1] = []byte(lineTerminated)
 }
 
 func getTableStuff(
@@ -1663,6 +1790,7 @@ func hashDiffIfHasLCA(
 	stepHandler := func(forBase bool) (err2 error) {
 		var (
 			tmpCh = make(chan batchWithKind, 1)
+			first error
 		)
 
 		if err2 = asyncDelsAndUpdatesHandler(forBase, tmpCh); err2 != nil {
@@ -1670,10 +1798,17 @@ func hashDiffIfHasLCA(
 		}
 
 		for wrapped := range tmpCh {
+			if first != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
 			select {
 			case <-ctx.Done():
+				first = ctx.Err()
 				cancel()
-				break
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
 			default:
 				if forBase {
 					err2 = handleBaseDeleteAndUpdates(wrapped)
@@ -1683,21 +1818,22 @@ func hashDiffIfHasLCA(
 			}
 
 			if err2 != nil {
+				first = err2
 				cancel()
-				break
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			}
 		}
 
 		wg.Wait()
-		if err2 != nil {
-			return
+		if first != nil {
+			return first
 		}
 
 		if atomicErr.Load() != nil {
 			return atomicErr.Load().(error)
 		}
 
-		return
+		return first
 	}
 
 	// phase 1: handle base dels and updates on lca
@@ -1815,6 +1951,16 @@ func findDeleteAndUpdateBat(
 			checkRet  []databranchutils.GetResult
 		)
 
+		send := func(bwk batchWithKind) error {
+			select {
+			case <-ctx.Done():
+				tblStuff.retPool.releaseRetBatch(bwk.batch, false)
+				return ctx.Err()
+			case tmpCh <- bwk:
+				return nil
+			}
+		}
+
 		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
 			select {
 			case <-ctx.Done():
@@ -1895,17 +2041,21 @@ func findDeleteAndUpdateBat(
 
 			if updateBat != nil {
 				updateBat.SetRowCount(updateBat.Vecs[0].Length())
-				tmpCh <- batchWithKind{
+				if err2 = send(batchWithKind{
 					name:  tblName,
 					batch: updateBat,
 					kind:  diffUpdate,
+				}); err2 != nil {
+					return err2
 				}
 			}
 
-			tmpCh <- batchWithKind{
+			if err2 = send(batchWithKind{
 				name:  tblName,
 				batch: tBat2,
 				kind:  diffDelete,
+			}); err2 != nil {
+				return err2
 			}
 		}
 
